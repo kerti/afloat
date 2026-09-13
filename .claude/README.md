@@ -15,7 +15,7 @@ The rules the agents follow are in [`CLAUDE.md`](../CLAUDE.md).
 | `settings.local.json` | Session start | Yours, gitignored. Personal approvals + commit attribution. Copy from `settings.local.json.example` |
 | `agents/*.md` | On delegation | One role per file; `model` and `effort` in the frontmatter are the only thing that actually binds those choices |
 | `hooks/session-start.sh` | Session start | Orients; fast-forwards `main` only when already on `main` and clean |
-| `hooks/pre-push-gate.sh` | Before every Bash call | Denies `git push` when `make check` fails — currently a no-op until the Makefile has a `check` target |
+| `hooks/pre-push-gate.sh` | Before every Bash call | Denies `git push` when `make check` fails |
 | `hooks/format-file.sh` | After Edit/Write | Formats what was just written (gofmt / prettier+eslint / ktlint, whichever tool exists) |
 
 No `agent-gate.sh` yet — hold off wiring a permission prompt on every subagent spawn until the

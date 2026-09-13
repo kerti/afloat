@@ -1,9 +1,8 @@
 #!/bin/sh
 # PreToolUse(Bash) hook - refuse to push a red tree.
 #
-# Until the Makefile has a `check` target (BOOTSTRAP.md §11), this is a no-op -
-# there is nothing to gate on yet. Only `git push` is gated; every other Bash
-# command passes straight through.
+# No-op on a clone without a Makefile `check` target. Only `git push` is gated;
+# every other Bash command passes straight through.
 #
 # Reads the tool call as JSON on stdin; emits a permissionDecision of "deny"
 # (with the reason) when check fails, and nothing at all when it passes.

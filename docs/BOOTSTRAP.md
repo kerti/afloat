@@ -70,7 +70,7 @@ Inherited wholesale from Balances-v2 where it exists there, which is most of it.
 Recharts, i18next, Vitest, Playwright, MSW. Node 22 (`.nvmrc`). Mobile-first; installable PWA with an
 app-shell service worker (no push in MVP — see §10).
 
-**Go backend** — Go 1.26. Migrations embedded via `//go:embed` and applied by the binary, mirroring
+**Go backend** — Go 1.27.x. Migrations embedded via `//go:embed` and applied by the binary, mirroring
 Balances.
 
 **Kotlin backend** — Temurin 21 via SDKMAN, Gradle Kotlin DSL, Spring Boot 4.1.1, Kotest on the JUnit5

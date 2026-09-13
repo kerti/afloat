@@ -1,0 +1,156 @@
+# ---------------------------------------------------------------------------
+# Operating system / editor / tooling noise
+# ---------------------------------------------------------------------------
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# ---------------------------------------------------------------------------
+# Obsidian
+# ---------------------------------------------------------------------------
+.obsidian/
+.trash/
+*.canvas
+workspace.json
+workspace-mobile.json
+
+# ---------------------------------------------------------------------------
+# IDEs / editors
+# ---------------------------------------------------------------------------
+.idea/
+*.iml
+.vscode/
+!.vscode/extensions.json
+!.vscode/launch.json
+!.vscode/settings.json
+*.swp
+*.swo
+*~
+
+# ---------------------------------------------------------------------------
+# Environment / secrets / local config
+# ---------------------------------------------------------------------------
+.env
+.env.*
+!.env.example
+*.local
+*.pem
+*.key
+
+# ---------------------------------------------------------------------------
+# Logs / caches
+# ---------------------------------------------------------------------------
+*.log
+logs/
+.cache/
+tmp/
+temp/
+
+# ---------------------------------------------------------------------------
+# Go backend
+# ---------------------------------------------------------------------------
+# Compiled binaries and test artifacts
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+/bin/
+/dist/
+
+# Go workspace / tooling
+go.work
+go.work.sum
+
+# Test & coverage output
+coverage.out
+coverage.html
+*.cover
+*.coverprofile
+profile.cov
+
+# Dependency vendor directory (uncomment if you prefer not to vendor)
+# /vendor/
+
+# ---------------------------------------------------------------------------
+# Java / Kotlin backend
+# ---------------------------------------------------------------------------
+*.class
+*.jar
+*.war
+*.ear
+*.nar
+*.zip
+*.tar.gz
+hs_err_pid*
+replay_pid*
+
+# Build output
+/build/
+/out/
+/target/
+**/target/
+**/build/
+!src/**/build/
+
+# Keep Gradle wrapper jar tracked
+!gradle/wrapper/gradle-wrapper.jar
+
+# Gradle
+.gradle/
+**/.gradle/
+/out/
+*.hprof
+
+# Maven
+.mvn/timing.properties
+.mvn/wrapper/maven-wrapper.jar
+
+# Kotlin
+.kotlin/
+
+# ---------------------------------------------------------------------------
+# JavaScript / TypeScript (React frontend)
+# ---------------------------------------------------------------------------
+node_modules/
+**/node_modules/
+.pnp
+.pnp.js
+.yarn/
+.yarn/cache
+.yarn/unplugged
+.yarn/build-state.yml
+.yarn/install-state.gz
+
+# Build output
+dist/
+build/
+.next/
+.nuxt/
+out/
+*.tsbuildinfo
+.eslintcache
+.stylelintcache
+
+# Package manager debug logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.pnpm-debug.log*
+
+# Testing / coverage
+coverage/
+.nyc_output/
+
+# Vite / CRA
+.vite/
+.cache/

@@ -41,7 +41,7 @@ make doctor   # what's installed, what's missing
 make help     # every target
 ```
 
-Toolchain, per `BOOTSTRAP.md` §3: Go 1.26, Temurin 21, Node 22 (`.nvmrc`), Docker.
+Toolchain, per `BOOTSTRAP.md` §3: Go 1.27.x, Temurin 21, Node 22 (`.nvmrc`), Docker.
 
 ## Docs
 

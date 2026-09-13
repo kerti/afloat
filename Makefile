@@ -58,7 +58,10 @@ claude-install:
 # Report on the parts of the environment the Makefile can't install for you.
 # Versions are the ones BOOTSTRAP.md §3 pins. Never fails - a readout, not a gate.
 doctor:
-	@printf '%-16s' 'go';           command -v go     >/dev/null 2>&1 && go version | awk '{print $$3 " (want go1.26)"}' || echo 'MISSING (Go 1.26)'
+	@printf '%-16s' 'go';           if command -v go >/dev/null 2>&1; then \
+	  v=$$(go env GOVERSION); \
+	  case "$$v" in go1.27|go1.27.*) echo "$$v";; *) echo "$$v - BOOTSTRAP.md pins Go 1.27.x";; esac; \
+	else echo 'MISSING (Go 1.27.x)'; fi
 	@printf '%-16s' 'node';         if command -v node >/dev/null 2>&1; then \
 	  v=$$(node --version); want=$$(cat .nvmrc); \
 	  case "$$v" in v$$want.*) echo "$$v";; *) echo "$$v - .nvmrc pins $$want (nvm use)";; esac; \

@@ -44,9 +44,10 @@ change log.
 
 | # | Decision | Stage |
 |---|---|---|
-| [0001](go/0001-chi-router-and-oapi-codegen-strict-handlers.md) | chi as the HTTP router, with oapi-codegen strict handlers | `draft` |
-| [0002](go/0002-pgx-and-sqlc-for-typed-postgres-access.md) | pgx and sqlc for typed Postgres access | `draft` |
-| [0003](go/0003-config-logging-and-validation.md) | Config, logging and validation | `draft` |
+| [0001](go/0001-chi-router-and-oapi-codegen-strict-handlers.md) | chi as the HTTP router, with oapi-codegen strict handlers | implemented |
+| [0002](go/0002-pgx-and-sqlc-for-typed-postgres-access.md) | pgx and sqlc for typed Postgres access | implemented |
+| [0003](go/0003-config-logging-and-validation.md) | Config, logging and validation | implemented |
+| [0004](go/0004-testing-strategy.md) | Testing strategy | implemented |
 
 ### `kotlin/`
 

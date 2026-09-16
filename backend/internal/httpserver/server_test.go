@@ -7,8 +7,10 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/kerti/afloat/backend/internal/api"
+	"github.com/kerti/afloat/backend/internal/auth"
 	"github.com/kerti/afloat/backend/internal/db"
 	"github.com/kerti/afloat/backend/internal/system"
 )
@@ -18,11 +20,16 @@ type fakeQuerier struct{ db.Querier }
 func (fakeQuerier) Ping(context.Context) (int32, error) { return 1, nil }
 
 func newTestServer() http.Handler {
-	return New(Deps{System: system.New(system.Deps{
-		Querier:      fakeQuerier{},
-		Version:      "test",
-		LocalEnabled: true,
-	})})
+	q := fakeQuerier{}
+	return New(Deps{
+		System: system.New(system.Deps{Querier: q, Version: "test", LocalEnabled: true}),
+		Auth: auth.New(auth.Deps{
+			Querier:            q,
+			SessionTTL:         30 * 24 * time.Hour,
+			SessionMaxLifetime: 90 * 24 * time.Hour,
+			CookieSecure:       true,
+		}),
+	})
 }
 
 // The contract's servers entry is /api, so every route lives under that prefix.
@@ -39,6 +46,7 @@ func TestRoutesAreMountedUnderAPI(t *testing.T) {
 		{http.MethodGet, "/api/auth/methods", http.StatusOK},
 		{http.MethodGet, "/api/me", http.StatusUnauthorized},
 		{http.MethodPost, "/api/auth/logout", http.StatusNoContent},
+		{http.MethodPost, "/api/auth/local/login", http.StatusBadRequest}, // no body
 		{http.MethodGet, "/health", http.StatusNotFound},
 		{http.MethodGet, "/api/nope", http.StatusNotFound},
 	} {
@@ -97,7 +105,10 @@ func TestBodyIsCapped(t *testing.T) {
 // A panicking handler must not take the process down and drop every other
 // in-flight request with it.
 func TestPanicIsRecovered(t *testing.T) {
-	srv := New(Deps{System: system.New(system.Deps{Querier: panicQuerier{}, LocalEnabled: true})})
+	srv := New(Deps{
+		System: system.New(system.Deps{Querier: panicQuerier{}, LocalEnabled: true}),
+		Auth:   auth.New(auth.Deps{Querier: panicQuerier{}}),
+	})
 
 	rec := httptest.NewRecorder()
 	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/health", nil))

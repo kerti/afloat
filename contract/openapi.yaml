@@ -1,0 +1,371 @@
+openapi: 3.0.3
+
+# Hand-written and authoritative (BOOTSTRAP.md §6, PRD N6/N7a). The Go server
+# interfaces, the Kotlin interfaces and the frontend's TypeScript types are all
+# generated from this file; never hand-edit generated output.
+#
+# 3.0.3 rather than 3.1 deliberately: oapi-codegen and the kotlin-spring
+# generator both have mature 3.0 support, and 3.1's JSON-Schema alignment buys
+# nothing this contract needs.
+#
+# Auth and session semantics deliberately mirror Balances (its ADR-0017,
+# ADR-0027, ADR-0039), so a household running both apps meets the same login,
+# the same session behaviour and the same error envelope in each. Afloat still
+# knows nothing about Balances at runtime (VISION.md §5) — this is shared shape,
+# not an integration.
+
+info:
+  title: Afloat
+  version: 0.1.0
+  description: |
+    Household spending-trajectory API.
+
+    Scaffold step 2 (BOOTSTRAP.md §11): health check and authentication only —
+    enough to prove the generator chain across Go, Kotlin and TypeScript.
+    Household founding, invitation acceptance and every domain resource land in
+    step 9 and are deliberately absent here.
+  license:
+    name: AGPL-3.0-only
+    url: https://www.gnu.org/licenses/agpl-3.0.html
+
+servers:
+  - url: /api
+
+tags:
+  - name: system
+    description: Instance liveness and pre-auth configuration. Unauthenticated.
+  - name: auth
+    description: Local email + password sessions (BOOTSTRAP.md §5).
+
+security:
+  - sessionCookie: []
+
+paths:
+  /health:
+    get:
+      tags: [system]
+      operationId: getHealth
+      summary: Liveness and readiness of this instance.
+      security: []
+      responses:
+        '200':
+          description: The instance is serving and its database is reachable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+        '503':
+          description: A dependency is unreachable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+
+  /auth/methods:
+    get:
+      tags: [system]
+      operationId: getAuthMethods
+      summary: Which identity providers this instance has enabled.
+      description: |
+        The pre-auth config surface: the SPA reads it before rendering a login
+        screen and shows only the methods that are live. In MVP `local` is the
+        only one that can be true; the field exists so enabling Google later is
+        additive on the client too.
+      security: []
+      responses:
+        '200':
+          description: The enabled providers.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthMethods'
+
+  /auth/local/login:
+    post:
+      tags: [auth]
+      operationId: localLogin
+      summary: Exchange email and password for a server-side session.
+      description: |
+        Namespaced `local` from day one so a future `/auth/google/*` is purely
+        additive (PRD §4.1).
+
+        On success the response carries a host-only session cookie
+        (BOOTSTRAP.md §5): no `Domain` attribute, `HttpOnly`, `Secure`,
+        `SameSite=Lax`. The body is empty — the client follows with `GET /me`.
+
+        Every failure mode — unknown email, a User with no credential, wrong
+        password — returns the same `INVALID_CREDENTIALS`, and the server pays
+        the hashing cost even when no credential exists, so neither the code nor
+        the timing enumerates accounts.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LocalLoginRequest'
+      responses:
+        '204':
+          description: Authenticated. A session cookie is set.
+          headers:
+            Set-Cookie:
+              schema:
+                type: string
+              description: The session cookie. Attributes per BOOTSTRAP.md §5.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /auth/logout:
+    post:
+      tags: [auth]
+      operationId: logout
+      summary: Destroy the current server-side session.
+      description: |
+        Provider-agnostic, and idempotent: calling it without a session is a
+        success, not an error, so a client clearing a stale cookie never has to
+        special-case the result. Revocation is the session row's deletion.
+      responses:
+        '204':
+          description: The session is destroyed and the cookie cleared.
+          headers:
+            Set-Cookie:
+              schema:
+                type: string
+              description: The session cookie, expired.
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /me:
+    get:
+      tags: [auth]
+      operationId: getMe
+      summary: The signed-in User and their Household's settings.
+      description: |
+        The client's first call after a successful login, and its session probe
+        on load. A 401 means "show the login screen".
+      responses:
+        '200':
+          description: The session is valid.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Me'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+components:
+  securitySchemes:
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      # Deliberately not Balances' bare `session`: the two apps are host-only
+      # cookies on separate hostnames today, but a self-hoster putting both
+      # behind one hostname would have them overwrite each other.
+      name: afloat_session
+
+  schemas:
+    Health:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [ok, degraded]
+        version:
+          type: string
+          description: Build identifier of the running instance.
+          example: 0.1.0-a1b2c3d
+      additionalProperties: false
+
+    AuthMethods:
+      type: object
+      required: [local, google]
+      properties:
+        local:
+          type: boolean
+          description: Email + password. The only method in MVP.
+        google:
+          type: boolean
+          description: Always false in MVP; planned, not built (PRD §4.1).
+      additionalProperties: false
+
+    LocalLoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+          maxLength: 320
+        password:
+          type: string
+          format: password
+          minLength: 1
+          maxLength: 4096
+      additionalProperties: false
+
+    Me:
+      type: object
+      description: |
+        The User's own fields (PRD S4) plus the Household settings the client
+        needs to render anything (PRD S3). One call, because every screen needs
+        both and they change rarely.
+      required:
+        - id
+        - household_id
+        - email
+        - display_name
+        - locale
+        - time_zone
+        - household_display_name
+        - reporting_currency
+        - period_start_day
+        - day_starts_at
+        - allowance_mode
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: UUIDv7.
+        household_id:
+          type: string
+          format: uuid
+          description: |
+            A User belongs to exactly one Household and the binding is
+            irreversible (PRD S1).
+        email:
+          type: string
+          format: email
+        display_name:
+          type: string
+          minLength: 1
+          maxLength: 255
+        locale:
+          $ref: '#/components/schemas/Locale'
+        time_zone:
+          type: string
+          description: IANA time zone identifier.
+          example: Asia/Jakarta
+        household_display_name:
+          type: string
+          minLength: 1
+          maxLength: 255
+        reporting_currency:
+          type: string
+          description: ISO 4217 code. Default IDR.
+          minLength: 3
+          maxLength: 3
+          example: IDR
+        period_start_day:
+          type: integer
+          description: Day of month a Budget Period opens. Default 1.
+          minimum: 1
+          maximum: 28
+        day_starts_at:
+          type: string
+          description: |
+            Local time a Period Day rolls over, `HH:MM`. Default 04:00. The
+            server does all Period Day arithmetic; the client never derives it
+            (BOOTSTRAP.md §4).
+          pattern: '^([01][0-9]|2[0-3]):[0-5][0-9]$'
+          example: '04:00'
+        expected_monthly_income:
+          type: string
+          nullable: true
+          description: |
+            Decimal serialised as a string (PRD N2). Nullable — the Household
+            may never supply one.
+          example: '25000000.0000'
+        allowance_mode:
+          type: string
+          enum: [adaptive, flat]
+          description: Default adaptive.
+      additionalProperties: false
+
+    Locale:
+      type: string
+      description: |
+        Both locales are real from day one (PRD N12a); the frontend owns every
+        user-facing string.
+      enum: [en-GB, id-ID]
+
+    Error:
+      type: object
+      description: |
+        The one error envelope both backends emit (PRD N7), identical in shape
+        to Balances ADR-0027. It carries **codes, not messages** — the frontend
+        looks `code` up in its i18n catalogue and interpolates `args`. There is
+        deliberately no `message` field: shipping English beside the code invites
+        copy drift between the two.
+      required: [code]
+      properties:
+        code:
+          $ref: '#/components/schemas/ErrorCode'
+        args:
+          type: object
+          description: |
+            Interpolation values for the catalogue string, keyed to its
+            placeholders. JSON primitives only, never nested — the frontend
+            passes them straight to `t(key, args)`.
+          additionalProperties: true
+      additionalProperties: false
+
+    ErrorCode:
+      type: string
+      description: |
+        `SCREAMING_SNAKE_CASE`, matching Balances ADR-0027 where a code means the
+        same thing. Closed set, extended as endpoints land; an unknown code
+        falls back to the client's generic string.
+
+        `VALIDATION` carries `{field, rule}` in `args` and reports only the
+        first failing field, as in Balances.
+      enum:
+        - VALIDATION
+        - INVALID_JSON_BODY
+        - INVALID_CREDENTIALS
+        - TOO_MANY_ATTEMPTS
+        - UNAUTHORIZED
+        - CROSS_SITE_REQUEST_BLOCKED
+        - INTERNAL
+
+  responses:
+    BadRequest:
+      description: Malformed body, or a field that failed validation.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Unauthorized:
+      description: No valid session, or credentials that do not authenticate.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    TooManyRequests:
+      description: |
+        Login backoff (per-IP and per-email). `Retry-After` carries the wait in
+        seconds. Backoff, never a hard lockout — a hard lock is a self-host
+        footgun.
+      headers:
+        Retry-After:
+          schema:
+            type: integer
+          description: Seconds to wait before retrying.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    InternalError:
+      description: Unexpected server-side failure.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'

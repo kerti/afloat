@@ -106,6 +106,11 @@ Both backends must satisfy all of these identically.
 - **Period Day is computed server-side only.** `day_starts_at` plus per-User `time_zone` is real
   arithmetic; if the frontend also derives it, the two disagree at 03:59.
 - **Soft delete everywhere:** nullable `deleted_at`. Hard delete is not exposed.
+  - *Scope: Household-scoped domain data.* Instance-local auth state — `sessions`, `credentials`,
+    `invitations` — is exempt and hard-deletes. Session revocation **is** the row delete; a
+    soft-deleted session is a live session that merely looks dead, and every read of the table would
+    have to remember the filter. Taking this literally while writing `V0001__baseline.sql` produces a
+    logout that does not log anyone out.
 - **Tenancy:** every query touching Household-scoped data filters `household_id` **in SQL**, not only
   in middleware.
 - **Constraints:** `CHECK (amount <> 0)` on expenses — negatives are valid (refunds with no recorded
@@ -133,6 +138,79 @@ user row with no credential).
 
 **No email in MVP.** Invitations are a one-time link generated and displayed in the UI, delivered by
 whatever means the founder likes. Password reset is a CLI command on the instance.
+
+### 5.1 Session and credential mechanics
+
+Settled against Balances' implementation (its ADR-0017, ADR-0027, ADR-0039) so a household running
+both apps meets the same login and the same session behaviour in each. Afloat still knows nothing
+about Balances at runtime (`VISION.md` §5) — this is shared shape, not an integration. Where Afloat
+departs, the reason is below; departures are the interesting part, so don't quietly re-converge.
+
+**Password hashing: Argon2id**, `m=19456` KiB (19 MiB), `t=2`, `p=1`, 16-byte random salt, 32-byte
+key. Stored as a PHC string (`$argon2id$v=19$m=...,t=...,p=...$salt$hash`), so the cost parameters
+travel with each hash and can be retuned with no migration. These are OWASP's current floor and
+Balances' exact values. Kotlin uses Spring Security's `Argon2PasswordEncoder` configured to match —
+**a hash written by either backend must verify in the other**, and that is worth a conformance test,
+for the same reason the money encoding is (§4): both backends can be internally consistent and still
+disagree, and the contract cannot see it.
+
+**Password policy is a floor only:** minimum length plus a common-password denylist. No composition
+rules. Cap the maximum length too, and put a body-size limit on JSON routes in both backends —
+Balances caps only its file-upload handlers.
+
+**Session tokens are hashed at rest.** The cookie carries a 256-bit random, URL-safe value; the
+`sessions` primary key is its SHA-256. A database leak yields nothing usable. Hash before every read
+and write; the cookie keeps the plaintext, or the next lookup never matches.
+
+**Sliding TTL, with an absolute cap — this is a departure.** Balances refreshes `expires_at` on every
+authenticated request and never consults `created_at`, so a stolen cookie stays valid for as long as
+the attacker keeps using it and the 30 days never arrive. Afloat keeps the sliding window and adds an
+absolute lifetime checked against `created_at`. Re-authenticating a few times a year is not friction
+worth a permanent session for.
+
+**Touch the session on a threshold, not on every request — also a departure.** Balances issues an
+`UPDATE` per authenticated request, which makes every `GET` a write on the one table read by every
+request. Only refresh when more than half the TTL has elapsed: same observable behaviour, a fraction
+of the writes, no row bloat. Capture is the hot path (PRD Q-11) and the PWA re-probes on every resume.
+
+**Login must not enumerate accounts.** Unknown email, a User with no credential, and a wrong password
+all return one `INVALID_CREDENTIALS`; the comparison is constant-time; and a request for an
+address with no account still pays the full hashing cost, so timing cannot distinguish present from
+absent either. All three, not two of three.
+
+**Login backoff lives in Postgres — a departure, and the load-bearing one.** Per-IP and per-email
+exponential backoff, capped, returning `429` with `Retry-After`. Backoff, never a hard lockout: a
+lockout on a self-hosted household app is a footgun. Balances keeps the limiter in process memory,
+which is right for one backend and wrong for two — duplicated stateful logic is exactly the class of
+divergence contract conformance cannot catch (§4's Jackson footgun again). Two backends could
+disagree on the backoff curve, on key normalisation, or on eviction, and every contract test would
+still pass. A table keyed by ip/email with a `backoff_until` is identical by construction, testable,
+and survives a restart, which the in-memory version does not.
+
+**Revoke every session on a password reset.** The reset is the "assume it was compromised" lever;
+delete the user's sessions inside the same transaction before minting the new one.
+
+**A second CSRF layer behind `SameSite=Lax`.** Reject a non-safe-method request whose
+`Sec-Fetch-Site` or `Origin` names another site, before it reaches a handler —
+`CROSS_SITE_REQUEST_BLOCKED`, 403.
+
+**`Secure` on the session cookie is configurable only so local dev over HTTP works.** It defaults to
+true; no deployment document suggests otherwise.
+
+### 5.2 Wire shape
+
+`/auth/local/*` is namespaced from day one so Google arrives as `/auth/google/*` without moving the
+password routes. Login returns **204** with the cookie and no body; the client then calls `GET /me`.
+That looks like a wasted round trip and isn't: Google arrives as a redirect that cannot return a body,
+so the client needs the fetch-after-auth path regardless, and one post-auth path beats two.
+
+**The session cookie is `afloat_session`, not Balances' bare `session`** — the one place sameness is
+actively harmful. Host-only cookies don't collide across hostnames, but a self-hoster putting both
+apps behind one hostname on different paths would have them silently overwrite each other.
+
+The error envelope is Balances ADR-0027 exactly: `{"code": "SCREAMING_SNAKE", "args": {...}}`, no
+`message` field, `args` values JSON primitives only. `VALIDATION` carries `{field, rule}` and reports
+the first failing field only.
 
 ## 6. The API contract
 

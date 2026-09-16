@@ -8,10 +8,18 @@ file grows as real targets land.
 - `make setup` — fresh clone: `hooks-install` (pre-commit pii-guard, seeds the gitignored
   `.pii-patterns`) + `claude-install` (hook executable bits, seeds `.claude/settings.local.json`).
 - `make doctor` — toolchain readout against `BOOTSTRAP.md` §3. Never fails.
-- `make check` — the pre-push gate `pre-push-gate.sh` runs. Every surface (`backend/`,
-  `backend-kotlin/`, `frontend/`) currently skips. A surface that exists but has no steps in `check`
-  **fails** — so the scaffold step that creates a backend or the frontend must also wire its
-  lint/test steps into `check`, and into `ci.yml` once that exists (the two must mirror step for step).
+- `make check` — the pre-push gate `pre-push-gate.sh` runs. `backend/` is wired (lint, build,
+  `go test -race`); `backend-kotlin/` and `frontend/` still skip. A surface that exists but has no
+  steps in `check` **fails** — so the scaffold step that creates a backend or the frontend must also
+  wire its lint/test steps into `check`, and into `.github/workflows/ci.yml` in the same commit (the
+  two mirror step for step).
+- `make lint-install` — installs the `GOLANGCI_VERSION` pinned in the `Makefile`. Optional locally if
+  your own `golangci-lint` already matches; CI runs exactly this, so bump the pin in one place.
+- **CI** (`.github/workflows/ci.yml`, on `pull_request` and pushes to `main`) has two jobs: `check`
+  runs `make check`, and `migrations` runs `make test-migration-runners` + `make test-migrations`,
+  which need docker and minutes and so stay out of the local gate. It sets
+  `AFLOAT_REQUIRE_TEST_DB=1`, which turns the integration tests' docker-missing skip into a failure —
+  a runner that has docker must never report green on a suite that never ran.
 
 **Expected later, per `BOOTSTRAP.md`:**
 

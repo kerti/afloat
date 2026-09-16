@@ -52,6 +52,40 @@ hyphen in a Postgres identifier has to be double-quoted at every use site.
 Stated because the values alone read as an oversight, and the next person to tidy `afloat-go` down to
 `afloat` for consistency would be undoing a decision rather than finding one.
 
+### Local ports
+
+| Service | Port |
+|---|---|
+| Frontend (Vite dev server) | `5181` |
+| Go backend | `5182` |
+| Kotlin backend | `5183` |
+| Postgres | `5184` |
+| Postgres, throwaway test container | `5185` |
+
+**The two backends must differ.** Not a tidiness preference — Afloat's premise is two implementations
+of one contract, so parity work means running both at once. A shared port makes the project's central
+workflow impossible.
+
+Chosen against three constraints, which matter more than the specific numbers:
+
+1. **Never a service's default.** `8080`, `5173`, `5432`, `3000`, `8000` are what every project
+   reaches for first, which is exactly why they collide. Spring defaults to `8080`; it gets `5183`.
+2. **Never `5000` or `7000`.** macOS binds both for AirPlay Receiver, and the resulting failure
+   blames your app.
+3. **Between 1024 and 32767.** Above that is the ephemeral range — 49152+ on macOS, 32768+ on Linux
+   — where an outbound connection can transiently hold the port, so a bind fails at random and does
+   not reproduce. Afloat's Postgres was briefly on `55432`: exactly this bug, waiting.
+
+Contiguous because one fact is easier to hold than five, and `5181` sits above Vite's `5173` so it
+still reads as the frontend. Go takes the lower backend number, matching *canonical* everywhere else.
+
+**This is Afloat's own allocation and claims nothing about any other project.** No registry, no
+reserved block, no assumption that a neighbouring repository has heard of this table. Afloat and
+Balances are standalone (`VISION.md` §5); a genuinely shared convention would have to be written down
+on both sides to be one at all, and that is not a coupling either app is asking for. Every port here
+is overridable — `AFLOAT_DB_PORT`, `AFLOAT_TEST_DB_PORT` — so a collision with something else on the
+machine is a variable, not a patch.
+
 **Go does not mirror the Kotlin group.** Go's convention is the repository path; the JVM's is
 reverse-DNS of a domain you own. A vanity import path (`kerti.dev/afloat`) would couple `go get` to
 the landing page staying up, for no benefit.

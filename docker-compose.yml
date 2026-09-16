@@ -18,11 +18,12 @@ name: afloat
 services:
   postgres:
     image: postgres:18-alpine
-    # Not 5432: a developer machine that already runs Postgres for something
-    # else should not have to stop it to work on Afloat. Override with
-    # AFLOAT_DB_PORT if 55432 is also taken.
+    # 5184, not 5432: a machine already running Postgres for something else
+    # should not have to stop it to work on Afloat. See BOOTSTRAP.md §1 for why
+    # this number and not a higher one — anything above 32767 lands in the
+    # ephemeral range and fails to bind at random. Override with AFLOAT_DB_PORT.
     ports:
-      - "${AFLOAT_DB_PORT:-55432}:5432"
+      - "${AFLOAT_DB_PORT:-5184}:5432"
     environment:
       POSTGRES_USER: "${AFLOAT_DB_USER:-afloat}"
       POSTGRES_PASSWORD: "${AFLOAT_DB_PASSWORD:-afloat}"

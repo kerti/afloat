@@ -48,6 +48,10 @@ while goose silently leaves the Go database on the old schema. See `BOOTSTRAP.md
 
 Toolchain, per `BOOTSTRAP.md` §3: Go 1.27.x, Temurin 21, Node 22 (`.nvmrc`), Docker.
 
+Local ports — frontend `5181`, Go backend `5182`, Kotlin backend `5183`, Postgres `5184`. Deliberately
+none of the usual defaults, and the two backends differ because parity work runs both at once
+(`BOOTSTRAP.md` §1).
+
 ## Docs
 
 - [`docs/VISION.md`](docs/VISION.md) — why Afloat exists and what it refuses to be.

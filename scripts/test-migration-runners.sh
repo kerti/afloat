@@ -22,7 +22,7 @@ set -uo pipefail
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$repo_root"
 
-PORT=${AFLOAT_DB_PORT:-55432}
+PORT=${AFLOAT_DB_PORT:-5184}
 USER=${AFLOAT_DB_USER:-afloat}
 PASSWORD=${AFLOAT_DB_PASSWORD:-afloat}
 export PGPASSWORD=$PASSWORD
@@ -31,7 +31,7 @@ command -v psql >/dev/null 2>&1 || PATH="/opt/homebrew/opt/libpq/bin:$PATH"
 for tool in docker go psql; do
   command -v "$tool" >/dev/null 2>&1 || { echo "test-migration-runners: $tool not found" >&2; exit 1; }
 done
-pg_isready -h localhost -p "$PORT" -q || { echo "test-migration-runners: nothing on port $PORT — run 'make db-up'" >&2; exit 1; }
+pg_isready -h localhost -p "$PORT" -q || { echo "test-migration-runners: nothing on port $PORT - run 'make db-up'" >&2; exit 1; }
 
 pass=0
 fail=0

@@ -20,10 +20,10 @@ repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$repo_root"
 
 CONTAINER=afloat-migration-test
-# Deliberately NOT the compose instance's 55432. This script owns a throwaway
+# Deliberately NOT the compose instance's 5184. This script owns a throwaway
 # container of its own, and sharing the port means a failed bind here silently
 # falls through to the long-lived database instead.
-PORT=${AFLOAT_TEST_DB_PORT:-55433}
+PORT=${AFLOAT_TEST_DB_PORT:-5185}
 export PGPASSWORD=test
 
 # Homebrew keeps libpq off the default PATH because it conflicts with the

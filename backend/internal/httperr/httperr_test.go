@@ -2,11 +2,10 @@ package httperr
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
-
-	"github.com/go-playground/validator/v10"
 )
 
 func TestWriteEnvelopeShape(t *testing.T) {
@@ -49,7 +48,7 @@ type loginBody struct {
 }
 
 func TestWriteValidationReportsFirstFieldAndRule(t *testing.T) {
-	err := validator.New().Struct(loginBody{Email: "not-an-email", Password: "short"})
+	err := Validator().Struct(loginBody{Email: "not-an-email", Password: "short"})
 	if err == nil {
 		t.Fatal("expected the fixture to fail validation")
 	}
@@ -74,6 +73,46 @@ func TestWriteValidationReportsFirstFieldAndRule(t *testing.T) {
 	}
 	if body.Args["rule"] != "email" {
 		t.Errorf("rule = %q, want email", body.Args["rule"])
+	}
+}
+
+// A multi-word field must report its snake_case JSON name. "email" passes with
+// or without the tag-name func registered, so it proves nothing on its own —
+// this is the case that caught it.
+func TestWriteValidationUsesJSONFieldNames(t *testing.T) {
+	type body struct {
+		DisplayName string `json:"display_name" validate:"required"`
+	}
+
+	rec := httptest.NewRecorder()
+	WriteValidation(rec, Validator().Struct(body{}))
+
+	var got struct {
+		Args map[string]string `json:"args"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("body is not JSON: %v", err)
+	}
+	if got.Args["field"] != "display_name" {
+		t.Errorf("field = %q, want display_name (the contract speaks snake_case)", got.Args["field"])
+	}
+}
+
+// A handler that adds context to the failure must not lose the field and rule.
+func TestWriteValidationSeesThroughWrapping(t *testing.T) {
+	wrapped := fmt.Errorf("decode login body: %w", Validator().Struct(loginBody{Email: "nope", Password: "short"}))
+
+	rec := httptest.NewRecorder()
+	WriteValidation(rec, wrapped)
+
+	var got struct {
+		Args map[string]string `json:"args"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("body is not JSON: %v", err)
+	}
+	if got.Args["field"] != "email" || got.Args["rule"] != "email" {
+		t.Errorf("args = %v, want field=email rule=email through the wrapping", got.Args)
 	}
 }
 

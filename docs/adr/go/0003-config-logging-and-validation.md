@@ -49,3 +49,7 @@ handlers stay free of hand-written `if x == "" ` chains that drift from the spec
   installed as the default logger in `main` before anything else runs.
 - Validation failures map to `VALIDATION` in `internal/httperr`, first failing field only, matching
   the contract and the Kotlin side.
+- **Handlers use `httperr.Validator()`, never `validator.New()`.** The shared instance registers a
+  tag-name function so a failure reports the JSON field name; without it `DisplayName` is reported as
+  `displayname` and the frontend looks up a catalogue key that does not exist. A single-word field
+  like `email` hides the bug, which is how it survived its first test.

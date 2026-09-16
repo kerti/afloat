@@ -5,7 +5,7 @@ both backends must agree on is **not** an ADR here — it belongs in [`../BOOTST
 which is the cross-cutting scaffold sheet. Only put an ADR in `go/` or `kotlin/` when it's a choice
 specific to that backend's implementation (a library, a framework idiom, an internal package shape).
 
-No ADRs exist yet in either track — this file is the index and the convention, ready for the first one.
+The `go/` track opens at step 5; `kotlin/` is still empty and opens at step 6.
 
 ## How an ADR changes
 
@@ -44,6 +44,9 @@ change log.
 
 | # | Decision | Stage |
 |---|---|---|
+| [0001](go/0001-chi-router-and-oapi-codegen-strict-handlers.md) | chi as the HTTP router, with oapi-codegen strict handlers | `draft` |
+| [0002](go/0002-pgx-and-sqlc-for-typed-postgres-access.md) | pgx and sqlc for typed Postgres access | `draft` |
+| [0003](go/0003-config-logging-and-validation.md) | Config, logging and validation | `draft` |
 
 ### `kotlin/`
 

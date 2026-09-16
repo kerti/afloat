@@ -1,0 +1,16 @@
+# Generates the Go server interface and types from contract/openapi.yaml, which
+# is hand-written and authoritative (BOOTSTRAP.md §6). The output is committed
+# and never hand-edited; `make check` regenerates and diffs.
+#
+# strict-server: handlers take a typed request and return a typed response, so a
+# status the contract does not declare is a compile error rather than something
+# a conformance test finds later (docs/adr/go/0001).
+package: api
+output: internal/api/api.gen.go
+generate:
+  chi-server: true
+  strict-server: true
+  models: true
+  embedded-spec: false
+output-options:
+  skip-prune: true

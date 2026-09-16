@@ -1,0 +1,42 @@
+package httpserver
+
+import (
+	"log/slog"
+	"net/http"
+	"time"
+
+	"github.com/go-chi/chi/v5/middleware"
+)
+
+// requestLogger records method, path, status and duration — and nothing else.
+//
+// Never the body, never query values, never the session cookie. PRD N6 forbids
+// telemetry of any kind, and a log line carrying an Expense description is
+// telemetry that happens to be written to disk (docs/adr/go/0003).
+func requestLogger(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ww := middleware.NewWrapResponseWriter(w, r.ProtoMajor)
+		started := time.Now()
+
+		next.ServeHTTP(ww, r)
+
+		slog.Info("request",
+			"method", r.Method,
+			"path", r.URL.Path,
+			"status", ww.Status(),
+			"duration_ms", time.Since(started).Milliseconds(),
+			"request_id", middleware.GetReqID(r.Context()),
+		)
+	})
+}
+
+// maxBodyBytes caps the request body before any handler decodes it, so an
+// oversized or endless body is refused rather than buffered.
+func maxBodyBytes(n int64) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			r.Body = http.MaxBytesReader(w, r.Body, n)
+			next.ServeHTTP(w, r)
+		})
+	}
+}

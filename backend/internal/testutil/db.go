@@ -6,6 +6,7 @@ package testutil
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -40,11 +41,18 @@ type TestDB struct {
 // NewTestDB starts the shared container on first call and returns a clean
 // database. Skips the test if docker is unavailable, so `go test ./...` on a
 // machine without it reports honestly rather than failing.
+//
+// A skip is the wrong answer where docker is guaranteed: CI would go green on
+// an integration suite that never ran. Setting AFLOAT_REQUIRE_TEST_DB=1 turns
+// the skip into a failure, and ci.yml sets it.
 func NewTestDB(t *testing.T) *TestDB {
 	t.Helper()
 
 	once.Do(func() { sharedDB, sharedErr = startShared() })
 	if sharedErr != nil {
+		if os.Getenv("AFLOAT_REQUIRE_TEST_DB") == "1" {
+			t.Fatalf("testutil: no test database, and AFLOAT_REQUIRE_TEST_DB=1 (%v)", sharedErr)
+		}
 		t.Skipf("testutil: no test database (%v)", sharedErr)
 	}
 

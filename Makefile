@@ -1,5 +1,5 @@
 .PHONY: help setup hooks-install claude-install doctor check gen-goose-migrations test-migrations \
-        db-up db-down db-reset test-migration-runners gen-oapi gen-sqlc gen check-go
+        db-up db-down db-reset test-migration-runners gen-oapi gen-sqlc gen check-go lint-install
 
 # `make` with no target prints help.
 .DEFAULT_GOAL := help
@@ -16,6 +16,11 @@ GOOSE_DIR := backend/internal/migrations
 # generates into a scratch directory and compares, so the gate reports drift
 # instead of silently repairing it.
 GOOSE_OUT ?= $(GOOSE_DIR)
+
+# One version for the lint gate, so a local pass and a CI pass mean the same
+# thing. .github/workflows/ci.yml installs exactly this via `make lint-install`;
+# bump it here and CI follows.
+GOLANGCI_VERSION := v2.13.2
 
 help:
 	@echo "afloat - make targets (run 'make <target>')"
@@ -39,6 +44,7 @@ help:
 	@echo "  test-migrations         apply db/migrations to a throwaway Postgres and assert"
 	@echo "  test-migration-runners  run Flyway and goose for real and compare the two schemas"
 	@echo "  check                   pre-push gate: pass/fail per surface"
+	@echo "  lint-install            install the pinned golangci-lint (the version CI uses)"
 
 # ---- first run -------------------------------------------------------------
 # Idempotent - safe to re-run, and worth re-running after a pull that touches
@@ -157,13 +163,19 @@ db-reset:
 
 # ---- workflow --------------------------------------------------------------
 # Pre-push gate: .claude/hooks/pre-push-gate.sh runs this before every
-# `git push`. Once .github/workflows/ci.yml exists it must mirror it step for
-# step, so green locally ~ green in CI.
+# `git push`. .github/workflows/ci.yml mirrors it step for step, so green
+# locally ~ green in CI - a surface wired into one is wired into both.
 #
 # Nothing is scaffolded yet, so every surface skips. A surface that exists but
 # has no steps here FAILS rather than skipping: otherwise the step that
 # scaffolds a backend would ship an ungated one and this would stay green.
 # Replace a surface's FAIL branch with its real lint/test steps as it lands.
+# Install the pinned linter into $(go env GOPATH)/bin. Optional locally (brew's
+# copy is fine if it matches); CI calls it so the gate is reproducible.
+lint-install:
+	@go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_VERSION)
+	@echo "ok golangci-lint $(GOLANGCI_VERSION) -> $$(go env GOPATH)/bin"
+
 # Lint and test for the Go backend. Kept as its own target so it can be run
 # directly while working; check calls it.
 # golangci-lint covers gofmt, goimports, go vet and more (docs/adr/go/0004), so

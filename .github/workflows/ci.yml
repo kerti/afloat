@@ -1,0 +1,93 @@
+# The remote half of the pre-push gate. `check` must mirror `make check` step
+# for step (Makefile "workflow" section, docs/agents/dev.md): green locally ~
+# green here, and a surface wired into one is wired into the other in the same
+# commit. As backends land, they gain steps in `make check` — not jobs here.
+#
+# `migrations` is the exception, and deliberately so: both migration targets
+# need docker and minutes, which is why `make check` leaves them out locally.
+# CI has both, so nothing merges on an unproven schema.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: check (mirrors make check)
+    runs-on: ubuntu-latest
+    env:
+      # The Go integration tests skip themselves when docker is missing, which
+      # on a runner that has docker would mean a green suite that never ran.
+      # See backend/internal/testutil/db.go.
+      AFLOAT_REQUIRE_TEST_DB: "1"
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+
+      # The pinned version from the Makefile, so the lint gate is the same one
+      # twice. check-go falls back to gofmt+vet when the binary is absent rather
+      # than failing, so prove it is really on PATH before trusting the gate.
+      - name: Install golangci-lint
+        run: make lint-install
+
+      - name: Verify golangci-lint is on PATH
+        run: golangci-lint --version
+
+      - run: make check
+
+      # make check reports one line per surface and swallows the detail. On a
+      # failure, re-run the parts that can fail, verbosely, so the log says what
+      # broke instead of which target to run locally.
+      - name: Diagnostics
+        if: failure()
+        run: |
+          ./scripts/check-generated.sh || true
+          make check-go || true
+
+  migrations:
+    name: migrations (both runners, real schema)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      # test-migration-runners runs goose via `go run`; test-migrations does not
+      # need Go, but shares the job.
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+
+      - name: Ensure psql
+        run: |
+          if ! command -v psql >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y postgresql-client
+          fi
+          psql --version
+
+      - name: Start Postgres
+        run: make db-up
+
+      # Flyway and goose against their own database, schemas compared.
+      - run: make test-migration-runners
+
+      # The SQL itself: defaults, CHECKs, soft-delete indexes, cascades, undo.
+      # Throwaway container of its own, so it does not touch the one above.
+      - run: make test-migrations
+
+      - name: Postgres logs
+        if: failure()
+        run: docker compose logs --tail=50 postgres

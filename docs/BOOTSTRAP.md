@@ -318,6 +318,10 @@ ledgers.
   cascade behaviour, and that the undo drops what the migration created. It runs the SQL through
   `psql` rather than through either runner, so it is meaningful before either backend exists. It
   needs docker, which is why `check` does not gate on it.
+- `make gen` runs every generator; `make check` calls `scripts/check-generated.sh`, which regenerates
+  into a scratch directory and compares rather than regenerating in place and running `git diff`.
+  That obvious version is wrong twice: it repairs a hand-edit instead of reporting it, and `git diff`
+  says nothing about files git does not yet track. Both were real bugs here.
 - `make test-migration-runners` (`scripts/test-migration-runners.sh`) runs the **runners** instead:
   Flyway against `db/migrations/` into `afloat_kotlin`, goose against the generated files into
   `afloat_go`, then compares a fingerprint of every table, constraint and index in both (excluding

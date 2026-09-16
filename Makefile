@@ -1,5 +1,5 @@
 .PHONY: help setup hooks-install claude-install doctor check gen-goose-migrations test-migrations \
-        db-up db-down db-reset test-migration-runners
+        db-up db-down db-reset test-migration-runners gen-oapi gen-sqlc gen check-go
 
 # `make` with no target prints help.
 .DEFAULT_GOAL := help
@@ -32,6 +32,9 @@ help:
 	@echo "  db-reset                destroy and recreate both databases from scratch"
 	@echo ""
 	@echo "Workflow:"
+	@echo "  gen                     run every generator (contract, sqlc, goose)"
+	@echo "  gen-oapi                regenerate Go server interfaces from contract/openapi.yaml"
+	@echo "  gen-sqlc                regenerate typed queries from db/migrations + backend/queries"
 	@echo "  gen-goose-migrations    regenerate the Go backend's embedded goose migrations"
 	@echo "  test-migrations         apply db/migrations to a throwaway Postgres and assert"
 	@echo "  test-migration-runners  run Flyway and goose for real and compare the two schemas"
@@ -100,6 +103,19 @@ doctor:
 gen-goose-migrations:
 	@./scripts/gen-goose-migrations.sh $(GOOSE_OUT)
 
+# The contract leads (BOOTSTRAP.md §6): these read contract/openapi.yaml and
+# db/migrations, never the other way round. Output is committed and never
+# hand-edited; check regenerates and diffs.
+gen-oapi:
+	@cd backend && go tool oapi-codegen -config oapi-codegen.yaml ../contract/openapi.yaml
+	@echo 'ok backend/internal/api/api.gen.go'
+
+gen-sqlc:
+	@cd backend && go tool sqlc generate
+	@echo 'ok backend/internal/db'
+
+gen: gen-oapi gen-sqlc gen-goose-migrations
+
 # Schema behaviour against a real Postgres: defaults, CHECKs, the soft-delete
 # aware indexes, cascade behaviour, and that the undo drops what the migration
 # created. Needs docker; not part of check for that reason.
@@ -147,6 +163,14 @@ db-reset:
 # has no steps here FAILS rather than skipping: otherwise the step that
 # scaffolds a backend would ship an ungated one and this would stay green.
 # Replace a surface's FAIL branch with its real lint/test steps as it lands.
+# Lint and test for the Go backend. Kept as its own target so it can be run
+# directly while working; check calls it.
+check-go:
+	@cd backend && \
+	  unformatted=$$(gofmt -l . | grep -v '\.gen\.go$$' || true); \
+	  if [ -n "$$unformatted" ]; then echo 'FAIL gofmt:'; echo "$$unformatted"; exit 1; fi
+	@cd backend && go vet ./... && go build ./... && go test ./...
+
 check:
 	@fail=0; \
 	printf '%-32s' 'goose migrations'; \
@@ -154,11 +178,19 @@ check:
 	else \
 	  tmp=$$(mktemp -d); \
 	  if ./scripts/gen-goose-migrations.sh "$$tmp" >/dev/null 2>&1 \
-	     && diff -rq "$$tmp" $(GOOSE_DIR) >/dev/null 2>&1; then echo 'in sync'; \
+	     && diff -rq -x '*.go' "$$tmp" $(GOOSE_DIR) >/dev/null 2>&1; then echo 'in sync'; \
 	  else echo 'FAIL - stale or hand-edited; run make gen-goose-migrations'; fail=1; fi; \
 	  rm -rf "$$tmp"; \
 	fi; \
-	for s in $(SURFACES); do \
+	printf '%-32s' 'generated code'; \
+	if [ ! -e backend/go.mod ]; then echo '- skipped (not scaffolded yet)'; \
+	elif ./scripts/check-generated.sh >/dev/null 2>&1; then echo 'in sync'; \
+	else echo 'FAIL - see: ./scripts/check-generated.sh'; fail=1; fi; \
+	printf '%-32s' 'backend/go.mod'; \
+	if [ ! -e backend/go.mod ]; then echo '- skipped (not scaffolded yet)'; \
+	elif $(MAKE) --no-print-directory check-go >/dev/null 2>&1; then echo 'ok'; \
+	else echo 'FAIL - see: make check-go'; fail=1; fi; \
+	for s in backend-kotlin/build.gradle.kts frontend/package.json; do \
 	  printf '%-32s' "$$s"; \
 	  if [ -e "$$s" ]; then echo 'FAIL - exists, but check has no steps for it'; fail=1; \
 	  else echo '- skipped (not scaffolded yet)'; fi; \

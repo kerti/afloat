@@ -164,3 +164,9 @@ coverage/
 # Vite / CRA
 .vite/
 .cache/
+
+# Scratch output from scripts/check-generated.sh, which regenerates into a
+# throwaway location rather than over the committed files.
+backend/.oapi-check.yaml
+backend/.sqlc-check.yaml
+backend/.sqlc-check-out/

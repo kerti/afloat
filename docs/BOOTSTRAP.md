@@ -58,6 +58,7 @@ afloat/
 │   ├── migrations/V0001__*.sql     # CANONICAL, Flyway-native
 │   └── undo/U0001__*.sql           # goose Down source only — NOT a Flyway location
 ├── docs/{adr/{go,kotlin},brand,qa}/
+├── scripts/                        # repo tooling the Makefile shells out to
 ├── docker-compose.yml              # profiles: go | kotlin, one Postgres, two databases
 └── Makefile
 ```
@@ -253,8 +254,14 @@ ledgers.
 | `db/undo/U0001__name.sql` | Down only. Source for the goose generator. |
 | `backend/internal/migrations/00001_name.sql` | **Generated**, committed, `//go:embed`ed. |
 
-- `make gen-goose-migrations` concatenates each `V`/`U` pair into the goose file with the markers
-  inserted. CI runs it and `git diff --exit-code`.
+- `make gen-goose-migrations` (`scripts/gen-goose-migrations.sh`) concatenates each `V`/`U` pair into
+  the goose file with the markers inserted. `make check` regenerates into a scratch directory and
+  diffs, so a stale generated file and a hand-edited one both fail the same way; CI mirrors it.
+- `make test-migrations` (`scripts/test-migrations.sh`) applies the canonical SQL to a throwaway
+  Postgres and asserts the schema behaves — defaults, every `CHECK`, the soft-delete-aware indexes,
+  cascade behaviour, and that the undo drops what the migration created. It runs the SQL through
+  `psql` rather than through either runner, so it is meaningful before either backend exists. It
+  needs docker, which is why `check` does not gate on it.
 - Kotlin: Gradle `processResources` copies `db/migrations/` into
   `src/main/resources/db/migration`, so Flyway's default classpath location applies — the same
   mechanism already planned for `frontend/dist`.
@@ -262,6 +269,38 @@ ledgers.
   feature; keeping the files outside the scanned path avoids a Teams-required error and sets correct
   expectations: `flyway undo` is not available, and the undo files exist solely to feed goose.
 - Both binaries self-migrate on boot, mirroring Balances.
+
+### 7.1 Migrations are editable in place until the first non-resettable database
+
+Until then, a schema change **edits `V0001__baseline.sql` and its `U0001` in place** and regenerates;
+it does not add `V0002`. Pre-release, a tidy baseline is worth more than an accurate archaeology of
+how it got that way, and nothing downstream has a history to preserve yet.
+
+**The trigger is a database you cannot drop — not a version number.** Balances reached for `v1.0.0`
+first and then corrected it (its ADR-0033, amended 2026-07-02): immutability begins at the first
+deployment to something non-resettable, *whatever* version that happens to carry, and squashing stays
+permitted for migrations that only ever ran in resettable environments. The number was only ever a
+proxy for the thing that matters.
+
+For Afloat the binding case is not a tag at all. `demo.` and `preview.` stay resettable as long as
+they actually reset. **The Household that starts using Afloat for real is the non-resettable one**,
+and that will happen months before anything is tagged. From that day, `V0001` is frozen and every
+change is a new `V####`, whatever the version string says.
+
+**While the freedom lasts, an in-place edit is only half a step — the other half is dropping both
+databases.** The two ledgers do not fail the same way, and one does not fail at all:
+
+- **Flyway (Kotlin) fails loudly.** It recomputes each applied migration's checksum against
+  `flyway_schema_history`, finds the mismatch, and refuses to start. Impossible to miss.
+- **goose (Go) does not fail at all.** It tracks version numbers and nothing else, so it sees
+  version 1 already applied, skips the file, and leaves the database on the **old** schema while the
+  code expects the new one.
+
+So an edit that Kotlin refuses to start against is one Go will happily run on the wrong schema. Never
+edit in place without resetting both databases; `make db-reset` (step 4) exists to make that one
+command rather than a thing to remember. The goose half of this is asserted from its schema
+(`goose_db_version` records `version_id`, `is_applied`, `tstamp` and no checksum) and should be
+confirmed the first time goose actually runs, at step 5.
 
 ## 8. Frontend delivery
 

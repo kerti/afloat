@@ -38,10 +38,19 @@ How the two are kept honest:
 ```sh
 make setup    # git hooks (pii-guard) + Claude Code hooks
 make doctor   # what's installed, what's missing
+make db-up    # Postgres: one instance, two databases
 make help     # every target
 ```
 
+Until a release exists, a schema change **edits `db/migrations/V0001__baseline.sql` in place** rather
+than adding a `V0002` — and always alongside `make db-reset`, because Flyway then refuses to start
+while goose silently leaves the Go database on the old schema. See `BOOTSTRAP.md` §7.1.
+
 Toolchain, per `BOOTSTRAP.md` §3: Go 1.27.x, Temurin 21, Node 22 (`.nvmrc`), Docker.
+
+Local ports — frontend `5181`, Go backend `5182`, Kotlin backend `5183`, Postgres `5184`. Deliberately
+none of the usual defaults, and the two backends differ because parity work runs both at once
+(`BOOTSTRAP.md` §1).
 
 ## Docs
 

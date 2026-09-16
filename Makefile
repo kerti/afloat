@@ -1,4 +1,5 @@
-.PHONY: help setup hooks-install claude-install doctor check gen-goose-migrations test-migrations
+.PHONY: help setup hooks-install claude-install doctor check gen-goose-migrations test-migrations \
+        db-up db-down db-reset test-migration-runners
 
 # `make` with no target prints help.
 .DEFAULT_GOAL := help
@@ -25,9 +26,15 @@ help:
 	@echo "  claude-install          arm the Claude Code hooks + seed personal settings"
 	@echo "  doctor                  report what's installed and what's missing"
 	@echo ""
+	@echo "Database:"
+	@echo "  db-up                   start Postgres (one instance, two databases)"
+	@echo "  db-down                 stop Postgres, keeping its data"
+	@echo "  db-reset                destroy and recreate both databases from scratch"
+	@echo ""
 	@echo "Workflow:"
 	@echo "  gen-goose-migrations    regenerate the Go backend's embedded goose migrations"
 	@echo "  test-migrations         apply db/migrations to a throwaway Postgres and assert"
+	@echo "  test-migration-runners  run Flyway and goose for real and compare the two schemas"
 	@echo "  check                   pre-push gate: pass/fail per surface"
 
 # ---- first run -------------------------------------------------------------
@@ -98,6 +105,38 @@ gen-goose-migrations:
 # created. Needs docker; not part of check for that reason.
 test-migrations:
 	@./scripts/test-migrations.sh
+
+# Runs the RUNNERS, not the SQL: proves Flyway and goose agree on the schema,
+# which test-migrations cannot catch (a generator that drops a statement, or a
+# runner that disagrees about what is applied). Needs db-up first.
+test-migration-runners:
+	@./scripts/test-migration-runners.sh
+
+# ---- database --------------------------------------------------------------
+# One Postgres instance, two databases (BOOTSTRAP.md §3). The backends live
+# behind the `go` and `kotlin` compose profiles and do not exist yet, so a plain
+# `up` starts Postgres alone.
+db-up:
+	@docker compose up -d
+	@printf 'waiting for postgres'
+	@for i in $$(seq 1 60); do \
+	  if [ "$$(docker inspect -f '{{.State.Health.Status}}' afloat-postgres-1 2>/dev/null)" = healthy ]; then \
+	    echo ' ok'; exit 0; fi; \
+	  printf '.'; sleep 1; \
+	done; echo ' TIMED OUT'; docker compose logs --tail=20 postgres; exit 1
+
+db-down:
+	@docker compose down
+	@echo 'ok postgres stopped (data kept - use db-reset to destroy it)'
+
+# The other half of the in-place migration policy (BOOTSTRAP.md §7.1). Editing
+# V0001 in place leaves Flyway refusing to start and goose silently skipping, so
+# the edit is only safe paired with throwing both databases away. This is that
+# command, and the reason the policy is safe to follow.
+db-reset:
+	@docker compose down -v
+	@$(MAKE) --no-print-directory db-up
+	@echo 'ok both databases recreated empty - re-run your migrations'
 
 # ---- workflow --------------------------------------------------------------
 # Pre-push gate: .claude/hooks/pre-push-gate.sh runs this before every

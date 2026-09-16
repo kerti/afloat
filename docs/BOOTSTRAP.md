@@ -31,6 +31,61 @@ Settled first because it gates every identifier in the project.
 | Demo | `demo.afloat.kerti.dev` |
 | Preview | `preview.afloat.kerti.dev` |
 
+**Bare or suffixed is decided by the namespace, not by the language.** The table above looks
+inconsistent — `backend/` is bare while its image is `afloat-go`; Kotlin takes a `-kotlin` suffix in
+the tree but is bare as the Gradle root project. One rule produces all of it: **suffix where the name
+would be ambiguous in its own namespace, go bare where it would not.**
+
+- **In the repo tree**, `backend/` is the canonical implementation and the tree's default, so bare
+  reads as *the* backend and `-kotlin` marks the exception.
+- **In a flat global namespace** — a Docker registry, a Postgres instance — `afloat` already means
+  the project, so neither backend may claim it and both are suffixed. Go is not privileged here;
+  there is no tree for it to be the default of.
+- **Inside `backend-kotlin/`**, Kotlin is bare again (`rootProject.name = "afloat"`): IntelliJ opens
+  that directory alone, so no Go is in scope to disambiguate from.
+- **In a per-file namespace** — Compose service names, for instance — `postgres`, `go` and `kotlin`
+  are unambiguous and stay bare, even though the images they build are `afloat-go` / `afloat-kotlin`.
+
+Separator follows the same logic: hyphen everywhere, underscore only for the databases, because a
+hyphen in a Postgres identifier has to be double-quoted at every use site.
+
+Stated because the values alone read as an oversight, and the next person to tidy `afloat-go` down to
+`afloat` for consistency would be undoing a decision rather than finding one.
+
+### Local ports
+
+| Service | Port |
+|---|---|
+| Frontend (Vite dev server) | `5181` |
+| Go backend | `5182` |
+| Kotlin backend | `5183` |
+| Postgres | `5184` |
+| Postgres, throwaway test container | `5185` |
+
+**The two backends must differ.** Not a tidiness preference — Afloat's premise is two implementations
+of one contract, so parity work means running both at once. A shared port makes the project's central
+workflow impossible.
+
+Chosen against three constraints, which matter more than the specific numbers:
+
+1. **Never a service's default.** `8080`, `5173`, `5432`, `3000`, `8000` are what every project
+   reaches for first, which is exactly why they collide. Spring defaults to `8080`; it gets `5183`.
+2. **Never `5000` or `7000`.** macOS binds both for AirPlay Receiver, and the resulting failure
+   blames your app.
+3. **Between 1024 and 32767.** Above that is the ephemeral range — 49152+ on macOS, 32768+ on Linux
+   — where an outbound connection can transiently hold the port, so a bind fails at random and does
+   not reproduce. Afloat's Postgres was briefly on `55432`: exactly this bug, waiting.
+
+Contiguous because one fact is easier to hold than five, and `5181` sits above Vite's `5173` so it
+still reads as the frontend. Go takes the lower backend number, matching *canonical* everywhere else.
+
+**This is Afloat's own allocation and claims nothing about any other project.** No registry, no
+reserved block, no assumption that a neighbouring repository has heard of this table. Afloat and
+Balances are standalone (`VISION.md` §5); a genuinely shared convention would have to be written down
+on both sides to be one at all, and that is not a coupling either app is asking for. Every port here
+is overridable — `AFLOAT_DB_PORT`, `AFLOAT_TEST_DB_PORT` — so a collision with something else on the
+machine is a variable, not a patch.
+
 **Go does not mirror the Kotlin group.** Go's convention is the repository path; the JVM's is
 reverse-DNS of a domain you own. A vanity import path (`kerti.dev/afloat`) would couple `go get` to
 the landing page staying up, for no benefit.
@@ -56,7 +111,8 @@ afloat/
 │   └── testdata/trajectory.json    # shared calculation fixture — see §6
 ├── db/
 │   ├── migrations/V0001__*.sql     # CANONICAL, Flyway-native
-│   └── undo/U0001__*.sql           # goose Down source only — NOT a Flyway location
+│   ├── undo/U0001__*.sql           # goose Down source only — NOT a Flyway location
+│   └── init/                       # container first-boot only — creates the second database
 ├── docs/{adr/{go,kotlin},brand,qa}/
 ├── scripts/                        # repo tooling the Makefile shells out to
 ├── docker-compose.yml              # profiles: go | kotlin, one Postgres, two databases
@@ -262,6 +318,13 @@ ledgers.
   cascade behaviour, and that the undo drops what the migration created. It runs the SQL through
   `psql` rather than through either runner, so it is meaningful before either backend exists. It
   needs docker, which is why `check` does not gate on it.
+- `make test-migration-runners` (`scripts/test-migration-runners.sh`) runs the **runners** instead:
+  Flyway against `db/migrations/` into `afloat_kotlin`, goose against the generated files into
+  `afloat_go`, then compares a fingerprint of every table, constraint and index in both (excluding
+  each runner's own ledger) and requires them identical. This is the gate `test-migrations` cannot
+  be: it is what catches a generator that drops a statement, or the two runners disagreeing about
+  what has already been applied. Flyway runs from its official image and goose via `go run`, so
+  neither backend needs to exist.
 - Kotlin: Gradle `processResources` copies `db/migrations/` into
   `src/main/resources/db/migration`, so Flyway's default classpath location applies — the same
   mechanism already planned for `frontend/dist`.
@@ -297,10 +360,16 @@ databases.** The two ledgers do not fail the same way, and one does not fail at 
   code expects the new one.
 
 So an edit that Kotlin refuses to start against is one Go will happily run on the wrong schema. Never
-edit in place without resetting both databases; `make db-reset` (step 4) exists to make that one
-command rather than a thing to remember. The goose half of this is asserted from its schema
-(`goose_db_version` records `version_id`, `is_applied`, `tstamp` and no checksum) and should be
-confirmed the first time goose actually runs, at step 5.
+edit in place without resetting both databases — `make db-reset` is that command, and is what makes
+this policy safe to follow rather than a trap.
+
+**Both halves are observed, not reasoned about.** `scripts/test-migration-runners.sh` appends a
+column to `V0001`, regenerates, and re-runs both runners against databases already holding version 1:
+Flyway reports `Migration checksum mismatch for migration version 0001` and refuses; goose reports
+`no migrations to run` and the column is absent from `afloat_go` afterwards. The schemas confirm why —
+`flyway_schema_history` carries a `checksum` column and `goose_db_version` has only `version_id`,
+`is_applied` and `tstamp`. The test asserts all of it, so if either runner ever changes behaviour,
+this section fails rather than quietly becoming wrong.
 
 ## 8. Frontend delivery
 

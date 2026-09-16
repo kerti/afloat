@@ -37,6 +37,11 @@ whole scaffold sheet. If the two ever disagree, `BOOTSTRAP.md` wins and this fil
 - **Trajectory:** computed server-side in both backends. The client formats and floors for display but
   derives nothing. `contract/testdata/trajectory.json` is the shared fixture both backends' unit tests
   read — a formula change updates the fixture and both backends' tests together.
+- **Migrations, pre-release:** a schema change **edits `V0001__baseline.sql` and `U0001` in place**
+  and regenerates — it does not add `V0002`. That freedom ends at the first database nobody can drop
+  (your own Household's, long before any tag), not at a version number. Always reset both databases
+  after an in-place edit: Flyway refuses to start on the checksum mismatch, but goose has no
+  checksum, skips the file, and silently leaves Go on the old schema. `BOOTSTRAP.md` §7.1.
 - **Migrations:** `db/migrations/V####__name.sql` is canonical (Flyway-native, up only). `db/undo/`
   holds the goose-Down source, generated into `backend/internal/migrations/` by
   `make gen-goose-migrations` — never hand-edit the generated goose file. See `BOOTSTRAP.md` §7 for why

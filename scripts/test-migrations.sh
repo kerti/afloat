@@ -20,7 +20,10 @@ repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$repo_root"
 
 CONTAINER=afloat-migration-test
-PORT=${PGPORT_TEST:-55432}
+# Deliberately NOT the compose instance's 55432. This script owns a throwaway
+# container of its own, and sharing the port means a failed bind here silently
+# falls through to the long-lived database instead.
+PORT=${AFLOAT_TEST_DB_PORT:-55433}
 export PGPASSWORD=test
 
 # Homebrew keeps libpq off the default PATH because it conflicts with the
@@ -36,15 +39,31 @@ cleanup() { docker rm -f "$CONTAINER" >/dev/null 2>&1 || true; }
 trap cleanup EXIT
 
 docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
-docker run -d --rm --name "$CONTAINER" \
+# Mounted at /var/lib/postgresql, not .../data — Postgres 18 refuses the old
+# layout (see docker-compose.yml).
+if ! docker run -d --rm --name "$CONTAINER" \
   -e POSTGRES_PASSWORD=test -e POSTGRES_DB=afloat_test \
-  -p "$PORT":5432 postgres:18-alpine >/dev/null
+  -p "$PORT":5432 postgres:18-alpine >/dev/null; then
+  echo "test-migrations: could not start a container on port $PORT (already in use?)" >&2
+  echo "  set AFLOAT_TEST_DB_PORT to something free." >&2
+  exit 1
+fi
 
 for _ in $(seq 1 60); do
+  docker ps -q --filter "name=^${CONTAINER}$" | grep -q . || {
+    echo "test-migrations: the container exited during startup:" >&2
+    docker logs "$CONTAINER" 2>&1 | tail -10 >&2; exit 1; }
   pg_isready -h localhost -p "$PORT" -q && break
   sleep 1
 done
 pg_isready -h localhost -p "$PORT" -q || { echo "test-migrations: postgres never became ready" >&2; exit 1; }
+
+# Prove we are talking to OUR container and not something else already on this
+# port: afloat_test is created by this script's own POSTGRES_DB and nothing else.
+if [ "$(command psql -h localhost -p "$PORT" -U postgres -d afloat_test -qtA -c 'SELECT current_database();' 2>&1)" != "afloat_test" ]; then
+  echo "test-migrations: port $PORT is not this script's container — refusing to run" >&2
+  exit 1
+fi
 
 psql() { command psql -h localhost -p "$PORT" -U postgres -d afloat_test -qtA "$@"; }
 

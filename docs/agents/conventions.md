@@ -17,11 +17,20 @@ whole scaffold sheet. If the two ever disagree, `BOOTSTRAP.md` wins and this fil
 - **Dates:** `occurred_on` is a `date` (the Period Day); `captured_at` is `timestamptz`; everything
   else that's an instant is `timestamptz`. Period Day (`day_starts_at` + per-User `time_zone`) is
   computed server-side only — if the frontend also derives it, the two disagree at 03:59.
-- **Soft delete everywhere:** nullable `deleted_at`. No hard-delete endpoint.
+- **Soft delete everywhere:** nullable `deleted_at`. No hard-delete endpoint. Scoped to
+  Household-scoped domain data — instance-local auth state (`sessions`, `credentials`,
+  `invitations`) is exempt and hard-deletes, because session revocation *is* the row delete.
 - **Constraints:** `CHECK (amount <> 0)` on expenses. Negative amounts are valid (refunds with no
   recorded original); zero is not.
-- **Error envelope:** one shape across both backends (Balances ADR-0027 precedent). Codes, not
-  messages — the frontend localises.
+- **Error envelope:** one shape across both backends, identical to Balances ADR-0027:
+  `{"code": "SCREAMING_SNAKE", "args": {...}}`, no `message` field, `args` values JSON primitives
+  only. Codes, not messages — the frontend localises. `VALIDATION` carries `{field, rule}` and
+  reports the first failing field only.
+- **Auth:** Argon2id (`m=19456`, `t=2`, `p=1`, salt 16, key 32) as a PHC string; a hash written by
+  either backend must verify in the other. Session tokens hashed at rest (the cookie keeps the
+  plaintext). Sliding TTL with an absolute cap, refreshed on a threshold rather than every request.
+  Login backoff lives in Postgres, not process memory — two backends, so an in-memory limiter
+  diverges where contract conformance can't see it. `BOOTSTRAP.md` §5.1 has the reasoning.
 - **Contract:** `contract/openapi.yaml` is hand-written and authoritative. Regenerate Go server
   interfaces, Kotlin interfaces, and TypeScript types from it; never hand-edit generated output. CI
   runs the generators and `git diff --exit-code`.

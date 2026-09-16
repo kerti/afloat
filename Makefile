@@ -89,6 +89,7 @@ doctor:
 	else echo "MISSING (Node $$(cat .nvmrc))"; fi
 	@printf '%-16s' 'java';         /usr/libexec/java_home -v 21 >/dev/null 2>&1 || java -version 2>&1 | grep -q '"21' && echo 'ok (21)' || echo 'MISSING (Temurin 21 via SDKMAN)'
 	@printf '%-16s' 'docker';       command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1 && echo 'ok' || echo 'MISSING (docker compose)'
+	@printf '%-16s' 'golangci-lint'; command -v golangci-lint >/dev/null 2>&1 && echo 'ok' || echo 'MISSING (brew install golangci-lint)'
 	@printf '%-16s' 'jq';           command -v jq     >/dev/null 2>&1 && echo 'ok'                   || echo 'MISSING (Claude Code hooks need it)'
 	@printf '%-16s' 'claude';       command -v claude >/dev/null 2>&1 && echo 'ok'                   || echo 'not on PATH (install separately; the Makefile cannot)'
 	@printf '%-16s' 'git hooks';    [ "$$(git config core.hooksPath)" = ".githooks" ] && echo 'armed' || echo 'NOT armed - run make hooks-install'
@@ -165,11 +166,17 @@ db-reset:
 # Replace a surface's FAIL branch with its real lint/test steps as it lands.
 # Lint and test for the Go backend. Kept as its own target so it can be run
 # directly while working; check calls it.
+# golangci-lint covers gofmt, goimports, go vet and more (docs/adr/go/0004), so
+# it replaces the hand-rolled format check rather than sitting beside it. Tests
+# run with -race: this is a server with a pool and shared middleware.
 check-go:
 	@cd backend && \
-	  unformatted=$$(gofmt -l . | grep -v '\.gen\.go$$' || true); \
-	  if [ -n "$$unformatted" ]; then echo 'FAIL gofmt:'; echo "$$unformatted"; exit 1; fi
-	@cd backend && go vet ./... && go build ./... && go test ./...
+	  if command -v golangci-lint >/dev/null 2>&1; then golangci-lint run; \
+	  else echo 'golangci-lint not installed - see make doctor'; \
+	       unformatted=$$(gofmt -l . | grep -v '\.gen\.go$$' || true); \
+	       if [ -n "$$unformatted" ]; then echo 'FAIL gofmt:'; echo "$$unformatted"; exit 1; fi; \
+	       go vet ./...; fi
+	@cd backend && go build ./... && go test -race ./...
 
 check:
 	@fail=0; \

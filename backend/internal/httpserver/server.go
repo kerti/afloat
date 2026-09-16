@@ -3,6 +3,7 @@
 package httpserver
 
 import (
+	"context"
 	"net/http"
 	"time"
 
@@ -10,19 +11,44 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 
 	"github.com/kerti/afloat/backend/internal/api"
+	"github.com/kerti/afloat/backend/internal/auth"
 	"github.com/kerti/afloat/backend/internal/system"
 )
 
-// Server implements api.StrictServerInterface by composing the domain
-// handlers. The generator emits one interface for the whole contract, so one
-// type has to satisfy it; the methods delegate rather than doing work here.
+// Server implements api.StrictServerInterface. The generator emits one
+// interface for the whole contract, so one type has to satisfy it.
+//
+// Delegation is explicit rather than by embedding: two packages would otherwise
+// both contribute a type named Handlers, and promotion would silently decide
+// which one won.
 type Server struct {
-	*system.Handlers
-	pendingAuth
+	system *system.Handlers
+	auth   *auth.Handlers
 }
 
 type Deps struct {
 	System *system.Handlers
+	Auth   *auth.Handlers
+}
+
+func (s *Server) GetHealth(ctx context.Context, r api.GetHealthRequestObject) (api.GetHealthResponseObject, error) {
+	return s.system.GetHealth(ctx, r)
+}
+
+func (s *Server) GetAuthMethods(ctx context.Context, r api.GetAuthMethodsRequestObject) (api.GetAuthMethodsResponseObject, error) {
+	return s.system.GetAuthMethods(ctx, r)
+}
+
+func (s *Server) LocalLogin(ctx context.Context, r api.LocalLoginRequestObject) (api.LocalLoginResponseObject, error) {
+	return s.auth.LocalLogin(ctx, r)
+}
+
+func (s *Server) Logout(ctx context.Context, r api.LogoutRequestObject) (api.LogoutResponseObject, error) {
+	return s.auth.Logout(ctx, r)
+}
+
+func (s *Server) GetMe(ctx context.Context, r api.GetMeRequestObject) (api.GetMeResponseObject, error) {
+	return s.auth.GetMe(ctx, r)
 }
 
 // New builds the router: the API under /api, with the middleware every request
@@ -31,19 +57,33 @@ type Deps struct {
 // Middleware is written as func(http.Handler) http.Handler and stays free of
 // chi types, so the stdlib exit ADR-0001 describes remains cheap.
 func New(d Deps) http.Handler {
-	srv := &Server{Handlers: d.System}
+	srv := &Server{system: d.System, auth: d.Auth}
 
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
-	r.Use(middleware.RealIP)
+	// middleware.RealIP is deliberately NOT mounted. It rewrites RemoteAddr from
+	// X-Forwarded-For, which nothing strips in a self-hosted deployment with no
+	// proxy in front — so an attacker would choose their own rate-limit key and
+	// the per-IP login backoff would stop existing.
+	//
 	// Recoverer turns a handler panic into a 500 instead of killing the process
 	// and dropping every in-flight request with it.
 	r.Use(middleware.Recoverer)
 	r.Use(requestLogger)
 	// A body limit on every JSON route. Balances caps only its file uploads,
-	// which leaves an unbounded decode on every other endpoint.
+	// which leaves an unbounded decode everywhere else.
 	r.Use(maxBodyBytes(1 << 20))
 	r.Use(middleware.Timeout(30 * time.Second))
+	// Second CSRF layer, behind SameSite=Lax.
+	r.Use(crossSiteGuard)
+	// Carries the client IP, User-Agent and presented token into the handler
+	// context: strict handlers receive only a context, not the request.
+	r.Use(auth.RequestContextMiddleware)
+	// Resolves a session into a User but never rejects. The generated wrapper
+	// mounts every route the same way, so authentication is enforced by each
+	// handler asking for its User rather than by route-level grouping — which
+	// means a new authenticated endpoint cannot be added without deciding.
+	r.Use(d.Auth.SessionMiddleware)
 
 	// The contract's servers entry is /api, so the generated routes mount under
 	// it rather than carrying the prefix in every path.

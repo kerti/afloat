@@ -1,0 +1,168 @@
+package auth
+
+import (
+	"context"
+	"errors"
+	"log/slog"
+	"strings"
+	"time"
+
+	"github.com/jackc/pgx/v5"
+
+	"github.com/kerti/afloat/backend/internal/api"
+	"github.com/kerti/afloat/backend/internal/db"
+)
+
+// dummyHash is verified against when no credential exists, so a request for an
+// unknown address costs the same Argon2id work as a real one. Without it,
+// response time answers "does this account exist?" regardless of what the
+// status code says. Generated once at startup from a value nobody knows.
+var dummyHash = func() string {
+	h, err := HashPassword("this password matches nothing, by construction")
+	if err != nil {
+		// Only reachable if crypto/rand fails, in which case nothing about this
+		// process is trustworthy.
+		panic("auth: cannot build dummy hash: " + err.Error())
+	}
+	return h
+}()
+
+// LocalLogin exchanges email and password for a session.
+//
+// Every failure mode — unknown email, a User holding no credential, a wrong
+// password — returns one INVALID_CREDENTIALS, the comparison is constant time,
+// and a request for an address with no account still pays the full hashing
+// cost. All three, not two of three: any one missing re-opens enumeration.
+func (h *Handlers) LocalLogin(ctx context.Context, request api.LocalLoginRequestObject) (api.LocalLoginResponseObject, error) {
+	email := normalizeEmail(string(request.Body.Email))
+	password := request.Body.Password
+
+	keys := backoffKeys(ctx, email)
+
+	wait, err := h.backoffRemaining(ctx, keys)
+	if err != nil {
+		slog.Error("login: read backoff", "err", err)
+		return internalError[api.LocalLoginResponseObject]()
+	}
+	if wait > 0 {
+		// Rounded up: a Retry-After of 0 invites an immediate retry that is
+		// still inside the window.
+		retryAfter := int(wait.Seconds()) + 1
+		return api.LocalLogin429JSONResponse{
+			TooManyRequestsJSONResponse: api.TooManyRequestsJSONResponse{
+				Body:    api.Error{Code: api.TOOMANYATTEMPTS},
+				Headers: api.TooManyRequestsResponseHeaders{RetryAfter: &retryAfter},
+			},
+		}, nil
+	}
+
+	user, ok := h.verify(ctx, email, password)
+	if !ok {
+		if err := h.recordFailure(ctx, keys); err != nil {
+			slog.Error("login: record failure", "err", err)
+		}
+		return invalidCredentials()
+	}
+
+	if err := h.q.ClearLoginAttempts(ctx, keys); err != nil {
+		// The login succeeded; a stale backoff row is a nuisance, not a reason
+		// to refuse the session.
+		slog.Warn("login: clear attempts", "err", err)
+	}
+
+	cookie, err := h.IssueSession(ctx, user.ID, userAgentFrom(ctx))
+	if err != nil {
+		slog.Error("login: issue session", "err", err)
+		return internalError[api.LocalLoginResponseObject]()
+	}
+
+	// The contract declares Set-Cookie on this 204, so the generated response
+	// carries it and the handler never touches a ResponseWriter.
+	setCookie := cookie.String()
+	return api.LocalLogin204Response{
+		Headers: api.LocalLogin204ResponseHeaders{SetCookie: &setCookie},
+	}, nil
+}
+
+// verify resolves the credential and checks the password, in constant work
+// regardless of which step fails.
+func (h *Handlers) verify(ctx context.Context, email, password string) (db.User, bool) {
+	user, err := h.q.GetUserByEmail(ctx, email)
+	if err != nil {
+		if !errors.Is(err, pgx.ErrNoRows) {
+			slog.Error("login: look up user", "err", err)
+		}
+		// Pay the cost anyway: an unknown address must not return faster than a
+		// known one.
+		VerifyPassword(password, dummyHash)
+		return db.User{}, false
+	}
+
+	cred, err := h.q.GetCredentialByUserID(ctx, user.ID)
+	if err != nil {
+		if !errors.Is(err, pgx.ErrNoRows) {
+			slog.Error("login: look up credential", "err", err)
+		}
+		// A dormant User — invited, never set a password. Same cost, same answer.
+		VerifyPassword(password, dummyHash)
+		return db.User{}, false
+	}
+
+	if !VerifyPassword(password, cred.PasswordHash) {
+		return db.User{}, false
+	}
+	return user, true
+}
+
+func (h *Handlers) backoffRemaining(ctx context.Context, keys []string) (time.Duration, error) {
+	until, err := h.q.GetLoginBackoff(ctx, keys)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	if !until.Valid {
+		return 0, nil
+	}
+	if remaining := until.Time.Sub(h.now()); remaining > 0 {
+		return remaining, nil
+	}
+	return 0, nil
+}
+
+func (h *Handlers) recordFailure(ctx context.Context, keys []string) error {
+	for _, key := range keys {
+		if err := h.q.RecordLoginFailure(ctx, db.RecordLoginFailureParams{
+			Key:          key,
+			FirstBackoff: intervalFrom(firstBackoff),
+			MaxBackoff:   intervalFrom(maxBackoff),
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// backoffKeys rate-limits per IP and per email together: per-IP alone lets one
+// attacker spread across addresses, per-email alone lets anyone lock out a
+// known address. The pair is checked in a single read.
+func backoffKeys(ctx context.Context, email string) []string {
+	keys := []string{"email:" + email}
+	if ip := clientIPFrom(ctx); ip != "" {
+		keys = append(keys, "ip:"+ip)
+	}
+	return keys
+}
+
+// normalizeEmail lower-cases and trims so the lookup matches the same
+// expression the unique index uses.
+func normalizeEmail(email string) string {
+	return strings.ToLower(strings.TrimSpace(email))
+}
+
+func invalidCredentials() (api.LocalLoginResponseObject, error) {
+	return api.LocalLogin401JSONResponse{
+		UnauthorizedJSONResponse: api.UnauthorizedJSONResponse{Code: api.INVALIDCREDENTIALS},
+	}, nil
+}

@@ -1,6 +1,5 @@
 # Config, logging and validation
 
-`draft`
 
 Three small picks, recorded together because none justifies its own file and all three are load-
 bearing from the first commit: **`caarlos0/env/v11`** for configuration, **`log/slog`** for logging,

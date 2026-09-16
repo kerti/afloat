@@ -6,14 +6,49 @@ package db
 
 import (
 	"context"
+
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 type Querier interface {
+	ClearLoginAttempts(ctx context.Context, keys []string) error
+	CreateSession(ctx context.Context, arg CreateSessionParams) (Session, error)
+	DeleteExpiredSessions(ctx context.Context) error
+	DeleteSession(ctx context.Context, id string) error
+	// Revoke every session a User holds. Run on a password change, inside the same
+	// transaction, so the change boots any other session before the new one is
+	// minted — the "reset because compromised" guarantee.
+	DeleteSessionsForUser(ctx context.Context, userID pgtype.UUID) error
+	// A User with no row here is DORMANT: present, owns data, cannot yet
+	// authenticate. A legitimate state, so this returning no rows is not an error.
+	GetCredentialByUserID(ctx context.Context, userID pgtype.UUID) (Credential, error)
+	GetHouseholdByID(ctx context.Context, id pgtype.UUID) (Household, error)
+	// sessions.id is the SHA-256 of the bearer token, never the token. Callers hash
+	// before every read and write.
+	//
+	// Both lifetimes are enforced here rather than in Go, so a caller cannot forget
+	// one: expires_at is the sliding window, created_at the absolute cap that stops
+	// a stolen cookie living forever on repeated use (BOOTSTRAP.md §5.1).
+	GetLiveSession(ctx context.Context, arg GetLiveSessionParams) (Session, error)
+	// Login backoff lives in the database, not process memory, because there are
+	// two backends and an in-memory limiter would diverge where contract
+	// conformance cannot see it (BOOTSTRAP.md §5.1).
+	GetLoginBackoff(ctx context.Context, keys []string) (pgtype.Timestamptz, error)
+	// Authentication queries. Instance-local auth state hard-deletes: revocation IS
+	// the row delete (BOOTSTRAP.md §4).
+	// Email is the handle, never the identity. Matched case-insensitively against
+	// the same expression the unique index uses, so a lookup cannot disagree with
+	// what the index considers a duplicate. Soft-deleted Users are invisible here.
+	GetUserByEmail(ctx context.Context, email string) (User, error)
+	GetUserByID(ctx context.Context, id pgtype.UUID) (User, error)
 	// Readiness probe for GET /health. A round-trip through the pool proves more
 	// than pgx's own Ping: it takes a connection from the pool, executes, and scans,
 	// which is the path every real query takes. A pool that is exhausted or pointed
 	// at a database the role cannot read fails here and passes a bare Ping.
 	Ping(ctx context.Context) (int32, error)
+	RecordLoginFailure(ctx context.Context, arg RecordLoginFailureParams) error
+	TouchSession(ctx context.Context, arg TouchSessionParams) error
+	UpsertCredential(ctx context.Context, arg UpsertCredentialParams) error
 }
 
 var _ Querier = (*Queries)(nil)

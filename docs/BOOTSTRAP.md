@@ -235,6 +235,12 @@ all return one `INVALID_CREDENTIALS`; the comparison is constant-time; and a req
 address with no account still pays the full hashing cost, so timing cannot distinguish present from
 absent either. All three, not two of three.
 
+**The rate-limit key is the connection's own address, never `X-Forwarded-For`.** Self-hosting means
+there may be no proxy in front, so nothing strips that header and it is attacker-controlled — using
+it means an attacker picks a fresh key per request and the per-IP backoff stops existing. Whatever
+each backend's equivalent of chi's `RealIP` middleware is, it stays unmounted. A deployment that does
+put a trusted proxy in front changes this behind a config flag, never by default.
+
 **Login backoff lives in Postgres — a departure, and the load-bearing one.** Per-IP and per-email
 exponential backoff, capped, returning `429` with `Retry-After`. Backoff, never a hard lockout: a
 lockout on a self-hosted household app is a footgun. Balances keeps the limiter in process memory,

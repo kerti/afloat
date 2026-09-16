@@ -45,6 +45,13 @@ type Config struct {
 	AuthLocalEnabled  bool `env:"AUTH_LOCAL_ENABLED" envDefault:"true"`
 	AuthGoogleEnabled bool `env:"AUTH_GOOGLE_ENABLED" envDefault:"false"`
 
+	// SessionTTL is the sliding window, refreshed once a session is past half
+	// its life rather than on every request. SessionMaxLifetime is the absolute
+	// cap measured from creation: without it a stolen cookie stays valid
+	// indefinitely on continued use (BOOTSTRAP.md §5.1).
+	SessionTTL         time.Duration `env:"SESSION_TTL" envDefault:"720h"`
+	SessionMaxLifetime time.Duration `env:"SESSION_MAX_LIFETIME" envDefault:"2160h"`
+
 	// Off only for local development over plain HTTP. Every deployment leaves it
 	// on — a session cookie without Secure travels in clear (BOOTSTRAP.md §5.1).
 	CookieSecure bool `env:"COOKIE_SECURE" envDefault:"true"`
@@ -84,6 +91,12 @@ func (c Config) validate() error {
 	case "text", "json":
 	default:
 		return fmt.Errorf("LOG_FORMAT %q: want text or json", c.LogFormat)
+	}
+	// A cap shorter than the window would expire every session early and make
+	// the sliding refresh pointless.
+	if c.SessionMaxLifetime < c.SessionTTL {
+		return fmt.Errorf("SESSION_MAX_LIFETIME (%s) is shorter than SESSION_TTL (%s)",
+			c.SessionMaxLifetime, c.SessionTTL)
 	}
 	switch c.LogLevel {
 	case "debug", "info", "warn", "error":

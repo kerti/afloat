@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/kerti/afloat/backend/internal/auth"
 	"github.com/kerti/afloat/backend/internal/config"
 	"github.com/kerti/afloat/backend/internal/db"
 	"github.com/kerti/afloat/backend/internal/httpserver"
@@ -60,9 +61,18 @@ func run() error {
 	}
 	defer pool.Close()
 
+	queries := db.New(pool)
+
 	handler := httpserver.New(httpserver.Deps{
+		Auth: auth.New(auth.Deps{
+			Querier:            queries,
+			Beginner:           pool,
+			SessionTTL:         cfg.SessionTTL,
+			SessionMaxLifetime: cfg.SessionMaxLifetime,
+			CookieSecure:       cfg.CookieSecure,
+		}),
 		System: system.New(system.Deps{
-			Querier:       db.New(pool),
+			Querier:       queries,
 			Version:       cfg.Version,
 			LocalEnabled:  cfg.AuthLocalEnabled,
 			GoogleEnabled: cfg.AuthGoogleEnabled,

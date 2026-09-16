@@ -1,6 +1,5 @@
 # chi as the HTTP router, with oapi-codegen strict handlers
 
-`draft`
 
 The Go backend routes with **`github.com/go-chi/chi/v5`**, and consumes
 `contract/openapi.yaml` through **`oapi-codegen`'s chi server + strict-handler mode**. The two are one

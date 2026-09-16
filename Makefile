@@ -1,5 +1,6 @@
 .PHONY: help setup hooks-install claude-install doctor check gen-goose-migrations test-migrations \
-        db-up db-down db-reset test-migration-runners gen-oapi gen-sqlc gen check-go lint-install
+        db-up db-down db-reset test-migration-runners gen-oapi gen-sqlc gen check-go check-kotlin \
+        lint-install sync-kotlin-migrations
 
 # `make` with no target prints help.
 .DEFAULT_GOAL := help
@@ -7,6 +8,11 @@
 # The three surfaces `check` gates on, by the file whose existence means the
 # surface has been scaffolded (BOOTSTRAP.md §11 steps 5-7).
 SURFACES := backend/go.mod backend-kotlin/build.gradle.kts frontend/package.json
+
+# Where sync-kotlin-migrations writes. The Kotlin backend carries its
+# migrations inside the jar, so the canonical db/migrations are COPIED here and
+# committed. Generated output - never hand-edited (BOOTSTRAP.md §7, §12).
+KOTLIN_MIGRATIONS := backend-kotlin/src/main/resources/db/migration
 
 # Where gen-goose-migrations writes. Generated, committed, //go:embed-ed by the
 # Go backend once it exists (BOOTSTRAP.md §7) - never hand-edited.
@@ -41,9 +47,11 @@ help:
 	@echo "  gen-oapi                regenerate Go server interfaces from contract/openapi.yaml"
 	@echo "  gen-sqlc                regenerate typed queries from db/migrations + backend/queries"
 	@echo "  gen-goose-migrations    regenerate the Go backend's embedded goose migrations"
+	@echo "  sync-kotlin-migrations  copy db/migrations into the Kotlin backend's resources"
 	@echo "  test-migrations         apply db/migrations to a throwaway Postgres and assert"
 	@echo "  test-migration-runners  run Flyway and goose for real and compare the two schemas"
 	@echo "  check                   pre-push gate: pass/fail per surface"
+	@echo "  check-kotlin            build, lint and test the Kotlin backend"
 	@echo "  lint-install            install the pinned golangci-lint (the version CI uses)"
 
 # ---- first run -------------------------------------------------------------
@@ -109,6 +117,15 @@ doctor:
 # (BOOTSTRAP.md §7). GOOSE_OUT lets check generate somewhere else and compare.
 gen-goose-migrations:
 	@./scripts/gen-goose-migrations.sh $(GOOSE_OUT)
+
+# db/migrations is canonical and already Flyway-native, so unlike the goose
+# files this is a copy rather than a generator. The Kotlin backend needs its
+# migrations INSIDE the jar: a filesystem: location pointing at ../db/migrations
+# works in tests and breaks the moment it runs from a jar or a container.
+# check regenerates into a scratch directory and diffs, so drift is reported
+# rather than silently repaired.
+sync-kotlin-migrations:
+	@./scripts/sync-kotlin-migrations.sh $(KOTLIN_MIGRATIONS)
 
 # The contract leads (BOOTSTRAP.md §6): these read contract/openapi.yaml and
 # db/migrations, never the other way round. Output is committed and never
@@ -190,6 +207,20 @@ check-go:
 	       go vet ./...; fi
 	@cd backend && go build ./... && go test -race ./...
 
+# Build, lint and test the Kotlin backend. Gradle's own `check` lifecycle task
+# is deliberately the entry point rather than `test`: it already depends on
+# compilation and on every verification task registered in the build, so adding
+# ktlint or detekt later wires itself into this gate with no Makefile change.
+#
+# The wrapper is required, not optional. A build that runs on whatever Gradle
+# happens to be on PATH is not the build CI runs.
+check-kotlin:
+	@if [ ! -x backend-kotlin/gradlew ]; then \
+	  echo 'FAIL backend-kotlin/gradlew is missing or not executable - commit the Gradle wrapper'; \
+	  exit 1; \
+	fi
+	@cd backend-kotlin && ./gradlew --quiet --console=plain check
+
 check:
 	@fail=0; \
 	printf '%-32s' 'goose migrations'; \
@@ -209,9 +240,23 @@ check:
 	if [ ! -e backend/go.mod ]; then echo '- skipped (not scaffolded yet)'; \
 	elif $(MAKE) --no-print-directory check-go >/dev/null 2>&1; then echo 'ok'; \
 	else echo 'FAIL - see: make check-go'; fail=1; fi; \
-	for s in backend-kotlin/build.gradle.kts frontend/package.json; do \
-	  printf '%-32s' "$$s"; \
-	  if [ -e "$$s" ]; then echo 'FAIL - exists, but check has no steps for it'; fail=1; \
-	  else echo '- skipped (not scaffolded yet)'; fi; \
-	done; \
+	printf '%-32s' 'kotlin migration copy'; \
+	if [ ! -e backend-kotlin/build.gradle.kts ]; then echo '- skipped (not scaffolded yet)'; \
+	else \
+	  tmp=$$(mktemp -d); \
+	  if ./scripts/sync-kotlin-migrations.sh "$$tmp" >/dev/null 2>&1 \
+	     && diff -rq "$$tmp" $(KOTLIN_MIGRATIONS) >/dev/null 2>&1; then echo 'in sync'; \
+	  else echo 'FAIL - stale or hand-edited; run make sync-kotlin-migrations'; fail=1; fi; \
+	  rm -rf "$$tmp"; \
+	fi; \
+	printf '%-32s' 'env var parity'; \
+	if ./scripts/check-env-parity.sh >/dev/null 2>&1; then echo 'in sync'; \
+	else echo 'FAIL - see: ./scripts/check-env-parity.sh'; fail=1; fi; \
+	printf '%-32s' 'backend-kotlin/build.gradle.kts'; \
+	if [ ! -e backend-kotlin/build.gradle.kts ]; then echo '- skipped (not scaffolded yet)'; \
+	elif $(MAKE) --no-print-directory check-kotlin >/dev/null 2>&1; then echo 'ok'; \
+	else echo 'FAIL - see: make check-kotlin'; fail=1; fi; \
+	printf '%-32s' 'frontend/package.json'; \
+	if [ -e frontend/package.json ]; then echo 'FAIL - exists, but check has no steps for it'; fail=1; \
+	else echo '- skipped (not scaffolded yet)'; fi; \
 	if [ $$fail -eq 0 ]; then echo 'all green'; else echo 'FAILED - wire the surface(s) above into check'; exit 1; fi

@@ -442,3 +442,61 @@ conversation from a self-hosted app.
    dashboard endpoints exist**. Red tests first — this is the parity gate.
 9. Domain: households, pockets, categories, budgets, expenses. Then trajectory. Then the dashboard.
 10. `make parity-matrix` wiring, Caddyfile, deploy.
+
+## 12. Environment variables
+
+**Both backends read the same variable names, with the same defaults and the same meanings.** An
+operator who has configured one has configured the other; switching a deployment from Go to Kotlin
+is a change of image, not a rewrite of the environment.
+
+This is the operator-facing half of the two-backend premise, and it is a *naming* contract, not a
+shared runtime artefact. There is deliberately no config file both backends read: that would be a
+format, two parsers, a deployment artefact and a new failure mode in which one backend refuses to
+boot on a file the other accepts. Numeric agreement is proven by the shared fixtures in §6, not by
+shared state.
+
+`scripts/check-env-parity.sh` — wired into `make check` — treats the table below as the source of
+truth and fails if either backend's configuration drifts from it.
+
+### Backend configuration
+
+| Variable | Default | Notes |
+|---|---|---|
+| `DATABASE_URL` | *(required)* | libpq form. Blank or absent fails at boot, never at first request. |
+| `PORT` | `5182` Go / `5183` Kotlin | The one deliberate difference — §1 requires the two to differ. |
+| `LOG_FORMAT` | `text` | `text` for a terminal, `json` where logs are collected. |
+| `LOG_LEVEL` | `info` | |
+| `AUTO_MIGRATE` | `true` | Apply migrations on boot. Off only to run against a database migrated by something else. |
+| `HTTP_READ_TIMEOUT` | `30s` | |
+| `HTTP_WRITE_TIMEOUT` | `60s` | |
+| `HTTP_IDLE_TIMEOUT` | `120s` | |
+| `SHUTDOWN_TIMEOUT` | `10s` | |
+| `AUTH_LOCAL_ENABLED` | `true` | |
+| `AUTH_GOOGLE_ENABLED` | `false` | Planned, not built (PRD §4.1). |
+| `SESSION_TTL` | `720h` | The sliding window (§5.1). |
+| `SESSION_MAX_LIFETIME` | `2160h` | The absolute cap from `created_at` (§5.1). |
+| `COOKIE_SECURE` | `true` | Off only for local development over plain HTTP. |
+| `VERSION` | `dev` | Stamped at build time; reported by `GET /api/health`. |
+
+`AFLOAT_REQUIRE_TEST_DB` is test-only and so not in the table: set to `1`, it turns the integration
+suites' docker-missing *skip* into a *failure*, in both backends. CI sets it once.
+
+### The two that do not share cleanly
+
+**`DATABASE_URL` is given in libpq form and the Kotlin backend translates it.** Go's `pgx` takes
+`postgres://user:pass@host:5184/afloat_kotlin`; JDBC needs `jdbc:postgresql://…` and Spring will not
+accept the libpq form. Translating at boot is required rather than optional: `DATABASE_URL` is the
+most operator-visible setting there is, and a deployment where it alone differs by backend makes the
+rest of this section a half-truth.
+
+**Durations use the suffixes both runtimes accept, and never `d`.** Go's `time.ParseDuration`
+understands `ns us ms s m h` and rejects `d`; Spring's simple duration style accepts `d` as well. So
+`720h` works everywhere and `30d` boots Kotlin and crashes Go. The values above are spelled in hours
+for this reason, and tidying `2160h` into `90d` would be undoing a decision rather than finding one.
+`check-env-parity.sh` rejects a `d` suffix on any duration variable.
+
+### Compose-level variables
+
+`docker-compose.yml` reads `AFLOAT_DB_PORT`, `AFLOAT_DB_USER` and `AFLOAT_DB_PASSWORD` to build the
+local Postgres. They configure the *container*, not either backend, and are out of scope for the
+parity contract above — a backend never reads them. `.env.example` carries both groups, separated.

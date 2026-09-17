@@ -1,3 +1,30 @@
 spring:
   application:
     name: afloat
+  jpa:
+    hibernate:
+      ddl-auto: validate
+  flyway:
+    enabled: ${AUTO_MIGRATE:true}
+    baseline-on-migrate: false
+
+server:
+  port: ${PORT:5183}
+  servlet:
+    context-path: /api
+
+afloat:
+  database-url: ${DATABASE_URL:}
+  log-format: ${LOG_FORMAT:text}
+  log-level: ${LOG_LEVEL:info}
+  auto-migrate: ${AUTO_MIGRATE:true}
+  http-read-timeout: ${HTTP_READ_TIMEOUT:30s}
+  http-write-timeout: ${HTTP_WRITE_TIMEOUT:60s}
+  http-idle-timeout: ${HTTP_IDLE_TIMEOUT:120s}
+  shutdown-timeout: ${SHUTDOWN_TIMEOUT:10s}
+  auth-local-enabled: ${AUTH_LOCAL_ENABLED:true}
+  auth-google-enabled: ${AUTH_GOOGLE_ENABLED:false}
+  session-ttl: ${SESSION_TTL:720h}
+  session-max-lifetime: ${SESSION_MAX_LIFETIME:2160h}
+  cookie-secure: ${COOKIE_SECURE:true}
+  version: ${VERSION:dev}

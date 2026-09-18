@@ -39,12 +39,11 @@ dependencies {
 	testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 
 	val kotestVersion = "6.2.5"
-	val testcontainersVersion = "1.21.4"
 
 	testImplementation("io.kotest:kotest-runner-junit5:$kotestVersion")
 	testImplementation("io.kotest:kotest-assertions-core:$kotestVersion")
 	testImplementation("io.kotest:kotest-extensions-spring:$kotestVersion")
-	testImplementation("org.testcontainers:postgresql:$testcontainersVersion")
+	testImplementation("org.testcontainers:testcontainers-postgresql")
 }
 
 kotlin {

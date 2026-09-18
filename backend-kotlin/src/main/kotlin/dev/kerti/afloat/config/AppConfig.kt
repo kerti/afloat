@@ -22,6 +22,27 @@ data class AppConfig(
     val version: String,
 ) {
     companion object {
+        // The names the adapter reads from the Environment. It is kept here, next to
+        // load(), so the set and the reader cannot drift. AppConfigEnvNamesSpec pins
+        // it against application.yaml's placeholders.
+        val ENV_NAMES = listOf(
+            "DATABASE_URL",
+            "PORT",
+            "LOG_FORMAT",
+            "LOG_LEVEL",
+            "AUTO_MIGRATE",
+            "HTTP_READ_TIMEOUT",
+            "HTTP_WRITE_TIMEOUT",
+            "HTTP_IDLE_TIMEOUT",
+            "SHUTDOWN_TIMEOUT",
+            "AUTH_LOCAL_ENABLED",
+            "AUTH_GOOGLE_ENABLED",
+            "SESSION_TTL",
+            "SESSION_MAX_LIFETIME",
+            "COOKIE_SECURE",
+            "VERSION",
+        )
+
         // We do not parse the URL here, only guard against absence or set-but-empty.
         // The data connection layer will validate it later in the app lifecycle.
         fun load(env: Map<String, String>): AppConfig {

@@ -10,8 +10,6 @@ spring:
 
 server:
   port: ${PORT:5183}
-  servlet:
-    context-path: /api
 
 afloat:
   database-url: ${DATABASE_URL:}

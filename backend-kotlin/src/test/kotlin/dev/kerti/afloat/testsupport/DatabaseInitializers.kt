@@ -31,7 +31,9 @@ class VirginDatabaseInitializer : ApplicationContextInitializer<ConfigurableAppl
 }
 
 // A fresh database with migrations switched off, so a spec can assert Flyway
-// did not run. spring.jpa.hibernate.ddl-auto=none is the time bomb: with the
+// did not run. AUTO_MIGRATE=false is enough on its own: FlywayEnablementContextInitializer
+// feeds the parsed value into spring.flyway.enabled, which is exactly the path
+// this exercises. spring.jpa.hibernate.ddl-auto=none is the time bomb: with the
 // YAML default of validate, JPA would abort the context on the empty schema
 // before the assertion ever executed.
 class NoMigrateDatabaseInitializer : ApplicationContextInitializer<ConfigurableApplicationContext> {
@@ -39,8 +41,18 @@ class NoMigrateDatabaseInitializer : ApplicationContextInitializer<ConfigurableA
         context.useDatabase(
             TestDatabase.noMigrate(),
             "AUTO_MIGRATE" to "false",
-            "spring.flyway.enabled" to "false",
             "spring.jpa.hibernate.ddl-auto" to "none",
+        )
+    }
+}
+
+// The reported regression end-to-end: an AUTO_MIGRATE spelling that passes the
+// Go-parity parse (1/t/T) must still turn Flyway ON against a virgin database.
+class NumericEnableDatabaseInitializer : ApplicationContextInitializer<ConfigurableApplicationContext> {
+    override fun initialize(context: ConfigurableApplicationContext) {
+        context.useDatabase(
+            TestDatabase.virginNumeric(),
+            "AUTO_MIGRATE" to "1",
         )
     }
 }

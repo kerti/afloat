@@ -100,7 +100,9 @@ data class AppConfig(
             }
         }
 
-        private fun parseBool(name: String, raw: String): Boolean = when (raw.lowercase()) {
+        // Shared with AutoMigrateFlywayPropertySource: the §12 contract parses
+        // AUTO_MIGRATE once, and Flyway must see the same answer.
+        internal fun parseBool(name: String, raw: String): Boolean = when (raw.lowercase()) {
             "0", "f", "false" -> false
             "1", "t", "true" -> true
             else -> throw ConfigException("$name: '$raw' is not a boolean")

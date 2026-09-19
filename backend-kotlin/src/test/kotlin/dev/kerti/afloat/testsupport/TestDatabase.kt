@@ -84,6 +84,11 @@ object TestDatabase {
 
     fun noMigrate(): String = freshDatabase("afloat_no_migrate")
 
+    // A built-in AutoMigrate numeric spec (AUTO_MIGRATE=1) needs its own virgin
+    // database: contexts are keyed on their initializer class, but the databases
+    // must not collide, or a second boot lands on an already-migrated schema.
+    fun virginNumeric(): String = freshDatabase("afloat_virgin_numeric")
+
     private fun freshDatabase(name: String): String {
         startedOrFail()
         createDatabaseIfAbsent(name)

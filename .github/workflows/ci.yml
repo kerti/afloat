@@ -37,6 +37,23 @@ jobs:
           go-version-file: backend/go.mod
           cache-dependency-path: backend/go.sum
 
+      # Temurin 21 per BOOTSTRAP.md §3. Present from this commit even though
+      # `make check` still skips the Kotlin surface: the alternative is that the
+      # step which scaffolds backend-kotlin/ also has to remember to set up a
+      # JDK here, and the gate would go red on a runner with no Java for a
+      # reason that has nothing to do with the code that turned it on.
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      # Caches ~/.gradle and reports the build in the job summary. A no-op while
+      # backend-kotlin/ does not exist; `cache-read-only` keeps pull requests
+      # from writing entries that main's cache would then have to live with.
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-read-only: ${{ github.ref != 'refs/heads/main' }}
+
       # The pinned version from the Makefile, so the lint gate is the same one
       # twice. check-go falls back to gofmt+vet when the binary is absent rather
       # than failing, so prove it is really on PATH before trusting the gate.
@@ -55,7 +72,9 @@ jobs:
         if: failure()
         run: |
           ./scripts/check-generated.sh || true
+          ./scripts/check-env-parity.sh || true
           make check-go || true
+          make check-kotlin || true
 
   migrations:
     name: migrations (both runners, real schema)

@@ -46,13 +46,48 @@ class NoMigrateDatabaseInitializer : ApplicationContextInitializer<ConfigurableA
     }
 }
 
-// The reported regression end-to-end: an AUTO_MIGRATE spelling that passes the
-// Go-parity parse (1/t/T) must still turn Flyway ON against a virgin database.
+// Each tolerant spelling gets its own initializer (and database): Spring keys
+// the context cache on the initializer class, so sharing one would let a second
+// row inherit the first row's boot and both rows would pass for the wrong reason.
+
+// The reported regression end-to-end: a spelling that passes the Go-parity
+// parse (1/t/T) must still turn Flyway ON against a virgin database.
 class NumericEnableDatabaseInitializer : ApplicationContextInitializer<ConfigurableApplicationContext> {
     override fun initialize(context: ConfigurableApplicationContext) {
         context.useDatabase(
             TestDatabase.virginNumeric(),
             "AUTO_MIGRATE" to "1",
+        )
+    }
+}
+
+class TEnableDatabaseInitializer : ApplicationContextInitializer<ConfigurableApplicationContext> {
+    override fun initialize(context: ConfigurableApplicationContext) {
+        context.useDatabase(
+            TestDatabase.virginT(),
+            "AUTO_MIGRATE" to "t",
+        )
+    }
+}
+
+// 0 and f must keep Flyway off; ddl-auto=none is the same JPA time bomb guard
+// as NoMigrateDatabaseInitializer.
+class ZeroDisableDatabaseInitializer : ApplicationContextInitializer<ConfigurableApplicationContext> {
+    override fun initialize(context: ConfigurableApplicationContext) {
+        context.useDatabase(
+            TestDatabase.noMigrateZero(),
+            "AUTO_MIGRATE" to "0",
+            "spring.jpa.hibernate.ddl-auto" to "none",
+        )
+    }
+}
+
+class FDisableDatabaseInitializer : ApplicationContextInitializer<ConfigurableApplicationContext> {
+    override fun initialize(context: ConfigurableApplicationContext) {
+        context.useDatabase(
+            TestDatabase.noMigrateF(),
+            "AUTO_MIGRATE" to "f",
+            "spring.jpa.hibernate.ddl-auto" to "none",
         )
     }
 }

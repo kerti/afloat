@@ -84,10 +84,18 @@ object TestDatabase {
 
     fun noMigrate(): String = freshDatabase("afloat_no_migrate")
 
-    // A built-in AutoMigrate numeric spec (AUTO_MIGRATE=1) needs its own virgin
-    // database: contexts are keyed on their initializer class, but the databases
-    // must not collide, or a second boot lands on an already-migrated schema.
+    // Each Flyway spelling row boots its own Spring context (keyed on its
+    // initializer class), so the databases must not collide either: a second
+    // boot on an already-migrated schema would read "Flyway ran" for a spelling
+    // that never enabled it, and a second boot on an unmigrated one would pass
+    // for a spelling that wrongly ran.
     fun virginNumeric(): String = freshDatabase("afloat_virgin_numeric")
+
+    fun virginT(): String = freshDatabase("afloat_virgin_t")
+
+    fun noMigrateZero(): String = freshDatabase("afloat_no_migrate_zero")
+
+    fun noMigrateF(): String = freshDatabase("afloat_no_migrate_f")
 
     private fun freshDatabase(name: String): String {
         startedOrFail()

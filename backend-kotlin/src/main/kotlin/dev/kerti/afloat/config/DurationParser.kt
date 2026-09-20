@@ -5,7 +5,7 @@ import java.time.Duration
 object DurationParser {
 
     private const val OVERFLOW_LIMIT = Long.MAX_VALUE.toDouble()
-    private val durationPattern = "([0-9]+(?:\\.[0-9]+)?)(ns|us|ms|s|m|h)".toRegex()
+    private val durationPattern = "([+-]?[0-9]+(?:\\.[0-9]+)?)(ns|us|ms|s|m|h)".toRegex()
 
     /*
     Pure function to parse duration so the app can reach configuration parity

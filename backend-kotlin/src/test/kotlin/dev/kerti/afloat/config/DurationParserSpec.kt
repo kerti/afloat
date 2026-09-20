@@ -16,9 +16,11 @@ open class DurationParserSpec : StringSpec({
     withData(
         nameFn = { "Parses '${it.input}'" },
         listOf(
+            DurationParsingCase("-1s", Duration.ofSeconds(-1)),
             DurationParsingCase("1500ns", Duration.ofNanos(1500)),
             DurationParsingCase("1500us", Duration.ofNanos(1500 * 1000)),
             DurationParsingCase("1500ms", Duration.ofMillis(1500)),
+            DurationParsingCase("+1s", Duration.ofSeconds(1)),
             DurationParsingCase("30s", Duration.ofSeconds(30)),
             DurationParsingCase("1h30m", Duration.ofMinutes(90)),
             DurationParsingCase("1h29m60s", Duration.ofMinutes(90)),

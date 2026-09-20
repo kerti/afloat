@@ -1,6 +1,7 @@
 package dev.kerti.afloat.config
 
 import java.time.Duration
+import kotlin.math.abs
 
 object DurationParser {
 
@@ -56,11 +57,11 @@ object DurationParser {
 
             val componentNanos = value * multiplier * signMultiplier
 
-            if (componentNanos >= OVERFLOW_LIMIT) {
+            if (abs(componentNanos) >= OVERFLOW_LIMIT) {
                 throw IllegalArgumentException("Duration component will overflow: '$valueStr$unit' in '$input'")
             }
 
-            if (totalNanosDouble + componentNanos >= OVERFLOW_LIMIT) {
+            if (abs(totalNanosDouble) + abs(componentNanos) >= OVERFLOW_LIMIT) {
                 throw IllegalArgumentException("Duration string total will overflow: '$input'")
             }
 

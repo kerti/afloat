@@ -24,19 +24,28 @@ class NormalizedServerTimeoutPropertySource(private val environment: Environment
 
     data class Relay(val leaf: String, val envName: String)
 
-    private val relays: Map<String, Relay> = mapOf(
-        "server.tomcat.connection-timeout" to Relay("afloat.http-read-timeout", "HTTP_READ_TIMEOUT"),
-        "server.tomcat.keep-alive-timeout" to Relay("afloat.http-idle-timeout", "HTTP_IDLE_TIMEOUT"),
-        "spring.lifecycle.timeout-per-shutdown-phase" to Relay("afloat.shutdown-timeout", "SHUTDOWN_TIMEOUT"),
-    )
-
     override fun getProperty(name: String): Any? {
-        val relay = relays[name] ?: return null
+        val relay = RELAYS[name] ?: return null
         val raw = environment.getProperty(relay.leaf) ?: return null
         return try {
             DurationParser.parse(raw).toString()
         } catch (e: IllegalArgumentException) {
             throw ConfigException("${relay.envName}: '${raw}' is not a valid duration")
         }
+    }
+
+    companion object {
+        val RELAYS: Map<String, Relay> = mapOf(
+            "server.tomcat.connection-timeout" to Relay("afloat.http-read-timeout", "HTTP_READ_TIMEOUT"),
+            "server.tomcat.keep-alive-timeout" to Relay("afloat.http-idle-timeout", "HTTP_IDLE_TIMEOUT"),
+            "spring.lifecycle.timeout-per-shutdown-phase" to Relay("afloat.shutdown-timeout", "SHUTDOWN_TIMEOUT"),
+        )
+
+        // The property keys this source answers, and therefore the ones whose
+        // application.yaml placeholder is a fallback rather than the live value.
+        // RuntimeKnobsSpec holds its own list of relayed knobs against this set,
+        // so a relay added or dropped here cannot leave a stale row there
+        // asserting a path nothing reads.
+        val RELAYED_KEYS: Set<String> = RELAYS.keys
     }
 }

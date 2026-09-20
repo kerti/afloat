@@ -91,3 +91,19 @@ class FDisableDatabaseInitializer : ApplicationContextInitializer<ConfigurableAp
         )
     }
 }
+
+// Compound and fractional spellings that Go's time.ParseDuration accepts and
+// Spring's simple duration style does not. Its own initializer class, so this
+// context is never handed to another spec (and never inherits one): the whole
+// point is a boot that binds these three values. The shared, migrated database
+// is enough - nothing here reads the schema.
+class CompoundDurationDatabaseInitializer : ApplicationContextInitializer<ConfigurableApplicationContext> {
+    override fun initialize(context: ConfigurableApplicationContext) {
+        context.useDatabase(
+            TestDatabase.shared(),
+            "HTTP_READ_TIMEOUT" to "1m30s",
+            "HTTP_IDLE_TIMEOUT" to "90m0s",
+            "SHUTDOWN_TIMEOUT" to "1.5m",
+        )
+    }
+}

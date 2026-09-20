@@ -99,11 +99,7 @@ data class AppConfig(
                 throw ConfigException("no identity provider enabled: set AUTH_LOCAL_ENABLED or AUTH_GOOGLE_ENABLED")
             }
 
-            // Port 0 is Boot's "let the OS pick" marker - RANDOM_PORT web tests
-            // write server.port=0 and it reaches parse() through PROPERTY_KEYS.
-            // It must not be blamed on the app; any port an operator actually
-            // chooses must still be a usable 1..65535.
-            if (cfg.port !in 0..65535) {
+            if (cfg.port !in 1..65535) {
                 throw ConfigException("PORT '${cfg.port}' is not a valid port")
             }
 

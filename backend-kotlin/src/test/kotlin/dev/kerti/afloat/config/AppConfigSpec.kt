@@ -123,27 +123,6 @@ open class AppConfigSpec : StringSpec({
                     cookieSecure = true, version = "dev",
                 )
             ),
-            AppConfigCase(
-                name = "PORT: '0' means OS-assigned (Boot's RANDOM_PORT web tests write it)",
-                input = TestConfigDefaults.testConfigBase("PORT" to "0"),
-                expectedConfig = AppConfig(
-                    databaseUrl = "postgres://host/afloat_kotlin",
-                    port = 0,
-                    logFormat = "text",
-                    logLevel = "info",
-                    autoMigrate = true,
-                    readTimeout = Duration.ofSeconds(30),
-                    writeTimeout = Duration.ofSeconds(60),
-                    idleTimeout = Duration.ofSeconds(120),
-                    shutdownTimeout = Duration.ofSeconds(10),
-                    authLocalEnabled = true,
-                    authGoogleEnabled = false,
-                    sessionTtl = Duration.ofHours(720),
-                    sessionMaxLifetime = Duration.ofHours(2160),
-                    cookieSecure = true,
-                    version = "dev",
-                )
-            ),
         ),
     ) { (_, input, expectedConfig) ->
         val cfg = AppConfig.parse(input)
@@ -161,6 +140,11 @@ open class AppConfigSpec : StringSpec({
                 name = "DATABASE_URL: '    '",
                 input = TestConfigDefaults.testConfigBase("DATABASE_URL" to "    "),
                 expectedMessage = "DATABASE_URL is empty",
+            ),
+            AppConfigCase(
+                name = "PORT: '0'",
+                input = TestConfigDefaults.testConfigBase("PORT" to "0"),
+                expectedMessage = "PORT '0' is not a valid port",
             ),
             AppConfigCase(
                 name = "PORT: '-1'",

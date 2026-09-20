@@ -5,7 +5,7 @@ import java.time.Duration
 object DurationParser {
 
     private const val OVERFLOW_LIMIT = Long.MAX_VALUE.toDouble()
-    private val durationPattern = "([+-]?[0-9]+(?:\\.[0-9]+)?)(ns|us|ms|s|m|h)".toRegex()
+    private val durationPattern = "([0-9]+(?:\\.[0-9]+)?)(ns|us|ms|s|m|h)".toRegex()
 
     /*
     Pure function to parse duration so the app can reach configuration parity
@@ -18,8 +18,22 @@ object DurationParser {
         }
 
         val matches = durationPattern.findAll(input).toList()
+        if (matches.isEmpty()) {
+            throw IllegalArgumentException("Duration string cannot be empty")
+        }
 
-        val reconstructed = matches.joinToString("") { it.value }
+        val sign = if (input.substring(0, 1).matches("[+-]".toRegex())) {
+            input.substring(0, 1)
+        } else {
+            ""
+        }
+        val signMultiplier = if (sign == "-") {
+            -1
+        } else {
+            1
+        }
+
+        val reconstructed = sign.plus(matches.joinToString("") { it.value })
         if (input != reconstructed) {
             throw IllegalArgumentException("Invalid duration format or unsupported unit in: '$input'")
         }
@@ -40,7 +54,7 @@ object DurationParser {
                 else -> throw IllegalArgumentException("Unsupported unit '${unit}'")
             }
 
-            val componentNanos = value * multiplier
+            val componentNanos = value * multiplier * signMultiplier
 
             if (componentNanos >= OVERFLOW_LIMIT) {
                 throw IllegalArgumentException("Duration component will overflow: '$valueStr$unit' in '$input'")

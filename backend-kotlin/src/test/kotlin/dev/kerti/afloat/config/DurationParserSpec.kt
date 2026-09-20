@@ -46,6 +46,7 @@ open class DurationParserSpec : StringSpec({
             "abc",
             "10000000000000000000us",
             "2562047h48m",
+            "1h-30m"
         )
     ) { input ->
         shouldThrow<IllegalArgumentException> { DurationParser.parse(input) }

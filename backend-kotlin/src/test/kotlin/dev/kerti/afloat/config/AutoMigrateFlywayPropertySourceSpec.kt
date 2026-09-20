@@ -31,23 +31,23 @@ open class AutoMigrateFlywayPropertySourceSpec : StringSpec({
             AutoMigrateCase("spelling false", "false", "false"),
         )
     ) { (_, autoMigrate, expected) ->
-        val source = AutoMigrateFlywayPropertySource(MockEnvironment().withProperty("AUTO_MIGRATE", autoMigrate))
+        val source = AutoMigrateFlywayPropertySource(MockEnvironment().withProperty("afloat.auto-migrate", autoMigrate))
         source.getProperty("spring.flyway.enabled") shouldBe expected
     }
 
-    "absent AUTO_MIGRATE leaves spring.flyway.enabled unresolved (Boot's default true applies)" {
+    "absent afloat.auto-migrate leaves spring.flyway.enabled unresolved (Boot's default true applies)" {
         val source = AutoMigrateFlywayPropertySource(MockEnvironment())
         source.getProperty("spring.flyway.enabled").shouldBeNull()
     }
 
     "resolves nothing but spring.flyway.enabled" {
-        val source = AutoMigrateFlywayPropertySource(MockEnvironment().withProperty("AUTO_MIGRATE", "1"))
+        val source = AutoMigrateFlywayPropertySource(MockEnvironment().withProperty("afloat.auto-migrate", "1"))
         source.getProperty("AUTO_MIGRATE").shouldBeNull()
         source.getProperty("DATABASE_URL").shouldBeNull()
     }
 
     "invalid AUTO_MIGRATE fails with the AppConfig message" {
-        val source = AutoMigrateFlywayPropertySource(MockEnvironment().withProperty("AUTO_MIGRATE", "banana"))
+        val source = AutoMigrateFlywayPropertySource(MockEnvironment().withProperty("afloat.auto-migrate", "banana"))
         val ex = shouldThrow<ConfigException> { source.getProperty("spring.flyway.enabled") }
         ex.message shouldBe "AUTO_MIGRATE: 'banana' is not a boolean"
     }

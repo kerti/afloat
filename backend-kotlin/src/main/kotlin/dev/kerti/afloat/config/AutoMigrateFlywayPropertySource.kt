@@ -6,8 +6,12 @@ import org.springframework.core.env.PropertySource
 // Resolves spring.flyway.enabled from the parsed AUTO_MIGRATE instead of the raw
 // string. Flyway's auto-configuration gates on @ConditionalOnBooleanProperty,
 // which accepts only a value equal to "true" (OnPropertyCondition.isMatch), so
-// the Go-parity spellings 1/t/T pass AppConfig.load and then silently switch
+// the Go-parity spellings 1/t/T pass AppConfig.parseBool and then silently switch
 // Flyway off if the placeholder relays them unparsed.
+//
+// The value is read from the afloat.auto-migrate leaf - the same resolved value
+// AppConfig.from() binds - not the raw AUTO_MIGRATE env name, so a default or an
+// override is seen identically by the bean and by Flyway.
 //
 // Deliberately lazy: a property source is probed in order at condition-evaluation
 // time, so the AUTO_MIGRATE this reads is whatever the environment holds *then* -
@@ -22,7 +26,7 @@ class AutoMigrateFlywayPropertySource(private val environment: Environment) :
 
     override fun getProperty(name: String): Any? {
         if (name != "spring.flyway.enabled") return null
-        val raw = environment.getProperty("AUTO_MIGRATE") ?: return null
-        return AppConfig.parseBool("AUTO_MIGRATE", raw).toString().lowercase()
+        val raw = environment.getProperty("afloat.auto-migrate") ?: return null
+        return AppConfig.parseBool("AUTO_MIGRATE", raw).toString()
     }
 }

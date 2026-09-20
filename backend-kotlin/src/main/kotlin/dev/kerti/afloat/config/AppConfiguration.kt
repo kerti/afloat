@@ -10,12 +10,9 @@ import javax.sql.DataSource
 class AppConfiguration {
 
     @Bean
-    fun appConfig(env: Environment): AppConfig =
-        AppConfig.load(AppConfig.ENV_NAMES.mapNotNull { n ->
-            env.getProperty(n)?.let { n to it }
-        }.toMap())
+    fun appConfig(env: Environment): AppConfig = AppConfig.from(env)
 
-    // The connection layer AppConfig.load() deliberately leaves to later.
+    // The connection layer AppConfig.parse()/validate() deliberately leave to later.
     // The libpq DATABASE_URL becomes the JDBC DataSource that Flyway and JPA share.
     @Bean
     fun dataSource(appConfig: AppConfig): DataSource {

@@ -3,6 +3,7 @@ package dev.kerti.afloat.system
 import dev.kerti.afloat.api.model.AuthMethods
 import dev.kerti.afloat.api.model.Health
 import dev.kerti.afloat.config.AppConfig
+import dev.kerti.afloat.testsupport.TestConfigDefaults
 import io.kotest.core.spec.style.StringSpec
 import io.kotest.matchers.shouldBe
 import org.springframework.http.HttpStatus
@@ -11,8 +12,11 @@ open class SystemControllerSpec : StringSpec({
 
     // A version pinned beyond the default so the flow from config into the
     // response is asserted, not assumed.
-    val config = AppConfig.load(
-        mapOf("DATABASE_URL" to "postgres://localhost/afloat_test", "VERSION" to "1.2.3")
+    val config = AppConfig.parse(
+        TestConfigDefaults.testConfigBase(
+            "DATABASE_URL" to "postgres://localhost/afloat_test",
+            "VERSION" to "1.2.3",
+        )
     )
 
     "reports ok when the database is reachable" {
@@ -45,8 +49,8 @@ open class SystemControllerSpec : StringSpec({
     }
 
     "reports google once it is enabled" {
-        val config = AppConfig.load(
-            mapOf(
+        val config = AppConfig.parse(
+            TestConfigDefaults.testConfigBase(
                 "DATABASE_URL" to "postgres://localhost/afloat_test",
                 "AUTH_GOOGLE_ENABLED" to "true",
             )
@@ -61,8 +65,8 @@ open class SystemControllerSpec : StringSpec({
     "reports local disabled while google stays live" {
         // Afloat cannot disable both providers: validate() refuses a
         // configuration nothing could log in with.
-        val config = AppConfig.load(
-            mapOf(
+        val config = AppConfig.parse(
+            TestConfigDefaults.testConfigBase(
                 "DATABASE_URL" to "postgres://localhost/afloat_test",
                 "AUTH_LOCAL_ENABLED" to "false",
                 "AUTH_GOOGLE_ENABLED" to "true",

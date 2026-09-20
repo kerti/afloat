@@ -16,6 +16,7 @@ open class DurationParserSpec : StringSpec({
     withData(
         nameFn = { "Parses '${it.input}'" },
         listOf(
+            DurationParsingCase("-1h30m", Duration.ofMinutes(-90)),
             DurationParsingCase("-1s", Duration.ofSeconds(-1)),
             DurationParsingCase("1500ns", Duration.ofNanos(1500)),
             DurationParsingCase("1500us", Duration.ofNanos(1500 * 1000)),
@@ -46,7 +47,8 @@ open class DurationParserSpec : StringSpec({
             "abc",
             "10000000000000000000us",
             "2562047h48m",
-            "1h-30m"
+            "1h-30m",
+            "1h+30m"
         )
     ) { input ->
         shouldThrow<IllegalArgumentException> { DurationParser.parse(input) }

@@ -42,11 +42,11 @@ object DurationParser {
 
             val componentNanos = value * multiplier
 
-            if (componentNanos > OVERFLOW_LIMIT) {
+            if (componentNanos >= OVERFLOW_LIMIT) {
                 throw IllegalArgumentException("Duration component will overflow: '$valueStr$unit' in '$input'")
             }
 
-            if (totalNanosDouble + componentNanos > OVERFLOW_LIMIT) {
+            if (totalNanosDouble + componentNanos >= OVERFLOW_LIMIT) {
                 throw IllegalArgumentException("Duration string total will overflow: '$input'")
             }
 

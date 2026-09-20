@@ -68,14 +68,14 @@ open class PostgresUrlTranslatorSpec : StringSpec({
                 "pass"
             ),
             PostgresUrlTranslatorCase(
-                "username without password",
+                "username with empty password",
                 "postgres://user:@host:5184/afloat_kotlin?sslmode=require",
                 "jdbc:postgresql://host:5184/afloat_kotlin?sslmode=require",
                 "user",
                 ""
             ),
             PostgresUrlTranslatorCase(
-                "username with empty password",
+                "username without password",
                 "postgres://user@host:5184/afloat_kotlin?sslmode=require",
                 "jdbc:postgresql://host:5184/afloat_kotlin?sslmode=require",
                 "user",

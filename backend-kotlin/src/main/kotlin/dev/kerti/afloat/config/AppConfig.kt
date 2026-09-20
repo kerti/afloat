@@ -135,21 +135,17 @@ data class AppConfig(
         // gate pins the two documents against each other.
         private const val DEFAULT_VERSION = "dev"
 
-        // One contract for every duration. §12 documents single components, and
-        // three of them (read/idle/shutdown) relay raw into Spring's own boot
-        // binder, whose simple style takes exactly one integer and one unit.
-        // DurationParser still accepts compound/fractional for Go parity; the
-        // preflight is where an operator hears that this value cannot be that.
-        private val SINGLE_COMPONENT_DURATION = Regex("""^[+-]?\d+(ns|us|ms|s|m|h)$""")
-
+        // DurationParser owns the whole §12 duration surface: whatever Go's
+        // time.ParseDuration accepts (compound 1m30s, fractional 1.5h) parses
+        // here. Of the six durations, the three that relay raw into Spring's
+        // own binder are normalized to ISO-8601 by
+        // NormalizedServerTimeoutPropertySource, so neither this validation nor
+        // the relay ever rejects a spelling Go accepted.
         private fun parseDuration(name: String, raw: String): Duration {
             val duration = try {
                 DurationParser.parse(raw)
             } catch (e: IllegalArgumentException) {
                 throw ConfigException("$name: '${raw}' is not a valid duration")
-            }
-            if (!SINGLE_COMPONENT_DURATION.matches(raw)) {
-                throw ConfigException("$name: '$raw' must be a single-component duration (e.g. 30s or 1h)")
             }
             return duration
         }

@@ -73,6 +73,57 @@ open class AppConfigSpec : StringSpec({
                 )
             ),
             AppConfigCase(
+                name = "HTTP_READ_TIMEOUT: '1m30s' — compound, Go-valid",
+                input = TestConfigDefaults.testConfigBase("HTTP_READ_TIMEOUT" to "1m30s"),
+                expectedConfig = AppConfig(
+                    databaseUrl = "postgres://host/afloat_kotlin",
+                    port = 5183, logFormat = "text", logLevel = "info", autoMigrate = true,
+                    readTimeout = Duration.ofMinutes(1).plusSeconds(30),
+                    writeTimeout = Duration.ofSeconds(60),
+                    idleTimeout = Duration.ofSeconds(120),
+                    shutdownTimeout = Duration.ofSeconds(10),
+                    authLocalEnabled = true, authGoogleEnabled = false,
+                    sessionTtl = Duration.ofHours(720),
+                    sessionMaxLifetime = Duration.ofHours(2160),
+                    cookieSecure = true, version = "dev",
+                )
+            ),
+            AppConfigCase(
+                name = "HTTP_READ_TIMEOUT: '1.5h' — fractional, Go-valid",
+                input = TestConfigDefaults.testConfigBase("HTTP_READ_TIMEOUT" to "1.5h"),
+                expectedConfig = AppConfig(
+                    databaseUrl = "postgres://host/afloat_kotlin",
+                    port = 5183, logFormat = "text", logLevel = "info", autoMigrate = true,
+                    readTimeout = Duration.ofMinutes(90),
+                    writeTimeout = Duration.ofSeconds(60),
+                    idleTimeout = Duration.ofSeconds(120),
+                    shutdownTimeout = Duration.ofSeconds(10),
+                    authLocalEnabled = true, authGoogleEnabled = false,
+                    sessionTtl = Duration.ofHours(720),
+                    sessionMaxLifetime = Duration.ofHours(2160),
+                    cookieSecure = true, version = "dev",
+                )
+            ),
+            AppConfigCase(
+                name = "SESSION_TTL: '36h30m' — compound, Go-valid",
+                input = TestConfigDefaults.testConfigBase(
+                    "SESSION_TTL" to "36h30m",
+                    "SESSION_MAX_LIFETIME" to "96h",
+                ),
+                expectedConfig = AppConfig(
+                    databaseUrl = "postgres://host/afloat_kotlin",
+                    port = 5183, logFormat = "text", logLevel = "info", autoMigrate = true,
+                    readTimeout = Duration.ofSeconds(30),
+                    writeTimeout = Duration.ofSeconds(60),
+                    idleTimeout = Duration.ofSeconds(120),
+                    shutdownTimeout = Duration.ofSeconds(10),
+                    authLocalEnabled = true, authGoogleEnabled = false,
+                    sessionTtl = Duration.ofMinutes(36 * 60 + 30),
+                    sessionMaxLifetime = Duration.ofHours(96),
+                    cookieSecure = true, version = "dev",
+                )
+            ),
+            AppConfigCase(
                 name = "PORT: '0' means OS-assigned (Boot's RANDOM_PORT web tests write it)",
                 input = TestConfigDefaults.testConfigBase("PORT" to "0"),
                 expectedConfig = AppConfig(
@@ -166,21 +217,6 @@ open class AppConfigSpec : StringSpec({
                 name = "HTTP_READ_TIMEOUT: 'abc'",
                 input = TestConfigDefaults.testConfigBase("HTTP_READ_TIMEOUT" to "abc"),
                 expectedMessage = "HTTP_READ_TIMEOUT: 'abc' is not a valid duration",
-            ),
-            AppConfigCase(
-                name = "HTTP_READ_TIMEOUT: '1m30s'",
-                input = TestConfigDefaults.testConfigBase("HTTP_READ_TIMEOUT" to "1m30s"),
-                expectedMessage = "HTTP_READ_TIMEOUT: '1m30s' must be a single-component duration (e.g. 30s or 1h)",
-            ),
-            AppConfigCase(
-                name = "HTTP_READ_TIMEOUT: '1.5h'",
-                input = TestConfigDefaults.testConfigBase("HTTP_READ_TIMEOUT" to "1.5h"),
-                expectedMessage = "HTTP_READ_TIMEOUT: '1.5h' must be a single-component duration (e.g. 30s or 1h)",
-            ),
-            AppConfigCase(
-                name = "SESSION_TTL: '36h30m'",
-                input = TestConfigDefaults.testConfigBase("SESSION_TTL" to "36h30m"),
-                expectedMessage = "SESSION_TTL: '36h30m' must be a single-component duration (e.g. 30s or 1h)",
             ),
             AppConfigCase(
                 name = "AUTO_MIGRATE: 'banana'",

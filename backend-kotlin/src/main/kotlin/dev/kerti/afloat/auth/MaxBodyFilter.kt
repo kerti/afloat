@@ -39,15 +39,31 @@ private class LimitedBodyRequest(
     request: HttpServletRequest,
     private val limit: Long,
 ) : HttpServletRequestWrapper(request) {
-    override fun getInputStream(): ServletInputStream {
-        val delegate = super.getInputStream()
-        return object : ServletInputStream() {
-            private var count = 0L
 
+    // The counter lives on the wrapper, not on the stream object: getReader()
+    // goes through getInputStream(), and a per-stream counter would hand the
+    // second caller a fresh allowance for the same body.
+    private var count = 0L
+    private var stream: ServletInputStream? = null
+
+    override fun getInputStream(): ServletInputStream {
+        stream?.let { return it }
+        val delegate = super.getInputStream()
+        val limited = object : ServletInputStream() {
             override fun read(): Int {
                 val b = delegate.read()
-                if (b != -1 && ++count > limit) throw IOException("request body exceeds $limit bytes")
+                if (b != -1) consume(1)
                 return b
+            }
+
+            // Overridden, not inherited. InputStream's default bulk read loops
+            // on read() one byte at a time, so leaving it out does not just
+            // lose the fast path — it puts a virtual call per byte under every
+            // JSON parse in the application, oversized or not.
+            override fun read(b: ByteArray, off: Int, len: Int): Int {
+                val read = delegate.read(b, off, len)
+                if (read > 0) consume(read.toLong())
+                return read
             }
 
             override fun isFinished(): Boolean = delegate.isFinished
@@ -56,6 +72,13 @@ private class LimitedBodyRequest(
 
             override fun setReadListener(listener: ReadListener?) = delegate.setReadListener(listener)
         }
+        stream = limited
+        return limited
+    }
+
+    private fun consume(bytes: Long) {
+        count += bytes
+        if (count > limit) throw IOException("request body exceeds $limit bytes")
     }
 
     // Routed through the capped stream as well, or reading the body as text

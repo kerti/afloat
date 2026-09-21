@@ -10,6 +10,10 @@ spring:
     # Go's http.Server.ShutdownTimeout: the graceful drain window each shutdown
     # phase is allowed (server.shutdown=graceful below).
     timeout-per-shutdown-phase: ${SHUTDOWN_TIMEOUT:10s}
+  jackson:
+    # Money and nullable fields are omitted, not nulled (G2): Go omits a null
+    # expected_monthly_income and a 429 envelope without args the same way.
+    default-property-inclusion: non_null
 
 server:
   port: ${PORT:5183}

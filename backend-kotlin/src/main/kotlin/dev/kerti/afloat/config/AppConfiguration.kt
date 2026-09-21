@@ -4,6 +4,7 @@ import org.springframework.boot.jdbc.DataSourceBuilder
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
 import org.springframework.core.env.Environment
+import java.time.Clock
 import javax.sql.DataSource
 
 @Configuration
@@ -26,4 +27,10 @@ class AppConfiguration {
 
         return builder.build()
     }
+
+    // UTC, not the host's zone: every stored instant is timestamptz and all
+    // Period Day arithmetic is server-side, so the process must never inherit
+    // a local offset (BOOTSTRAP.md §4).
+    @Bean
+    fun clock(): Clock = Clock.systemUTC()
 }

@@ -107,3 +107,15 @@ class CompoundDurationDatabaseInitializer : ApplicationContextInitializer<Config
         )
     }
 }
+
+// COOKIE_SECURE=false, the self-hoster on plain HTTP over a LAN. Its own
+// initializer class because it needs its own context: the flag is read once,
+// when SessionCookieFactory is constructed.
+class InsecureCookieDatabaseInitializer : ApplicationContextInitializer<ConfigurableApplicationContext> {
+    override fun initialize(context: ConfigurableApplicationContext) {
+        context.useDatabase(
+            TestDatabase.shared(),
+            "COOKIE_SECURE" to "false",
+        )
+    }
+}

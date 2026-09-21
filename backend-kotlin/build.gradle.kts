@@ -28,6 +28,10 @@ dependencies {
     implementation("org.springframework.boot:spring-boot-starter-validation")
     implementation("org.springframework.boot:spring-boot-starter-webmvc")
     implementation("org.flywaydb:flyway-database-postgresql")
+    // Spring Security's Argon2PasswordEncoder delegates to Bouncy Castle and is
+    // not usable without it: the starter does not pull it in, so every hash and
+    // verify throws NoClassDefFoundError at runtime without this line.
+    implementation("org.bouncycastle:bcprov-jdk18on:1.83")
     implementation("org.jetbrains.kotlin:kotlin-reflect")
     implementation("tools.jackson.module:jackson-module-kotlin")
     runtimeOnly("org.postgresql:postgresql")

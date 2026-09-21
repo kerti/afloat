@@ -42,6 +42,16 @@ object TestDatabase {
                 .withDatabaseName(SHARED_DB)
                 .withUsername(USER)
                 .withPassword(PASSWORD)
+                // Spring keys its context cache on the initializer classes, so
+                // this suite keeps a dozen contexts alive at once and each one
+                // holds its own Hikari pool for the whole run. The image
+                // default of 100 connections runs out partway through and the
+                // next context to boot fails with "sorry, too many clients
+                // already" - a failure that reads like a broken spec and is
+                // really just arithmetic. The custom DataSource bean in
+                // AppConfiguration is built by hand, so spring.datasource.*
+                // pool properties would not reach it either.
+                .withCommand("postgres", "-c", "max_connections=400")
             // PostgreSQLContainer's built-in wait is the two "ready to accept
             // connections" log lines, i.e. Go's wait.ForLog(...).WithOccurrence(2).
             // Reuse stays false: it belongs in ~/.testcontainers.properties, never here.

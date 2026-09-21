@@ -11,6 +11,11 @@ object ApiErrorWriter {
     fun write(response: HttpServletResponse, status: Int, code: ErrorCode, args: Map<String, Any>? = null) {
         if (response.isCommitted) return
         response.status = status
+        // Charset set explicitly. Without it the servlet default is ISO-8859-1,
+        // so the first arg carrying a non-ASCII character — an Indonesian
+        // display name, say — reaches the client mangled, and nothing here or
+        // in the frontend would say why.
+        response.characterEncoding = Charsets.UTF_8.name()
         response.contentType = "application/json"
         val body = StringBuilder("{\"code\":\"${code.value}\"")
         if (!args.isNullOrEmpty()) {
@@ -33,7 +38,25 @@ object ApiErrorWriter {
             "\"${escape(k)}\":" + valueToJson(v)
         }
 
-    private fun escape(s: String): String = s
-        .replace("\\", "\\\\")
-        .replace("\"", "\\\"")
+    // RFC 8259 §7. The two-replace version this had covered `\` and `"` and
+    // emitted a raw newline or tab straight into the body, which is invalid
+    // JSON: the client's parse fails and the error it was carrying is lost
+    // along with it. Only reachable through args today, and args are only ever
+    // written by the filters — which is exactly the sort of "unreachable" that
+    // stops being true quietly.
+    private fun escape(s: String): String = buildString(s.length) {
+        s.forEach { c ->
+            when {
+                c == '\\' -> append("\\\\")
+                c == '"' -> append("\\\"")
+                c == '\n' -> append("\\n")
+                c == '\r' -> append("\\r")
+                c == '\t' -> append("\\t")
+                c == '\b' -> append("\\b")
+                c == '\u000C' -> append("\\f")
+                c < ' ' -> append("\\u%04x".format(c.code))
+                else -> append(c)
+            }
+        }
+    }
 }

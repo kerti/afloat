@@ -6,16 +6,33 @@ import kotlin.math.abs
 object DurationParser {
 
     private const val OVERFLOW_LIMIT = Long.MAX_VALUE.toDouble()
-    private val durationPattern = "([0-9]+(?:\\.[0-9]+)?)(ns|us|ms|s|m|h)".toRegex()
+
+    // The mantissa is Go's, not a tidier version of it: leadingInt followed by
+    // an optional leadingFraction, where EITHER may be empty as long as one of
+    // them is not. So `1.5h`, `.5s` and `1.h` all parse in Go, and a
+    // `[0-9]+(\.[0-9]+)?` shape silently refuses the last two.
+    //
+    // `ms` precedes `s`, and `m` follows both, or `1ms` would match `m` and
+    // leave a stray `s` for the reconstruction check to reject.
+    private val durationPattern =
+        "((?:[0-9]+(?:\\.[0-9]*)?)|(?:\\.[0-9]+))(ns|us|µs|μs|ms|s|m|h)".toRegex()
 
     /*
     Pure function to parse duration so the app can reach configuration parity
-    with its Go counterpart. Accepts ns, us, ms, s, m, h. Does not accept
-    d (days). Allows fractional inputs (1.5h). Expects no whitespace.
+    with its Go counterpart. Accepts ns, us (and both micro signs), ms, s, m, h.
+    Does not accept d (days). Allows fractional inputs (1.5h). Expects no
+    whitespace.
      */
     fun parse(input: String): Duration {
         if (input.isEmpty()) {
             throw IllegalArgumentException("Duration string cannot be empty")
+        }
+
+        // Go's one special case: a bare zero needs no unit, with or without a
+        // sign. Nothing else in the grammar allows a unitless component, so it
+        // is handled here rather than bent into the pattern.
+        if (input == "0" || input == "+0" || input == "-0") {
+            return Duration.ZERO
         }
 
         val matches = durationPattern.findAll(input).toList()
@@ -50,7 +67,10 @@ object DurationParser {
                 "m" -> 60_000_000_000.0
                 "s" -> 1_000_000_000.0
                 "ms" -> 1_000_000.0
-                "us" -> 1_000.0
+                // Go spells microseconds three ways, and an operator who copies
+                // a value out of Go's own docs gets one of the two it does not
+                // occur to anyone to test.
+                "us", "µs", "μs" -> 1_000.0
                 "ns" -> 1.0
                 else -> throw IllegalArgumentException("Unsupported unit '${unit}'")
             }

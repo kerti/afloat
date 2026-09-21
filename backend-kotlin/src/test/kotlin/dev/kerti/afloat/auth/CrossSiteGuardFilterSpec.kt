@@ -93,6 +93,16 @@ class CrossSiteGuardFilterSpec : StringSpec({
             outcome.reached shouldBe false
             outcome.response.status shouldBe 403
         }
+        withClue("the literal Origin: null a sandboxed iframe sends") {
+            // Parses as a relative URI with no authority, so it matches no
+            // host. Worth pinning rather than inferring: `null` is the one
+            // Origin value that is neither a real origin nor a parse failure,
+            // and a guard that let it through would be trusting the one context
+            // the browser is telling it not to.
+            val outcome = run(origin = "null")
+            outcome.reached shouldBe false
+            outcome.response.status shouldBe 403
+        }
     }
 
     "compares Origin against the Host header including its port" {

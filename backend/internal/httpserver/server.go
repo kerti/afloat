@@ -87,7 +87,19 @@ func New(d Deps) http.Handler {
 
 	// The contract's servers entry is /api, so the generated routes mount under
 	// it rather than carrying the prefix in every path.
-	r.Mount("/api", api.HandlerFromMux(api.NewStrictHandler(srv, nil), chi.NewRouter()))
+	//
+	// Both option structs are supplied rather than taking HandlerFromMux and
+	// NewStrictHandler: their defaults answer with http.Error, i.e. text/plain
+	// carrying an English message, on every path that fails before a handler
+	// runs. See errors.go.
+	strict := api.NewStrictHandlerWithOptions(srv, nil, api.StrictHTTPServerOptions{
+		RequestErrorHandlerFunc:  requestErrorHandler,
+		ResponseErrorHandlerFunc: responseErrorHandler,
+	})
+	r.Mount("/api", api.HandlerWithOptions(strict, api.ChiServerOptions{
+		BaseRouter:       chi.NewRouter(),
+		ErrorHandlerFunc: paramErrorHandler,
+	}))
 
 	return r
 }

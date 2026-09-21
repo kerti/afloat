@@ -87,6 +87,11 @@ func TestErrorsUseTheSharedEnvelope(t *testing.T) {
 
 // Balances caps request bodies on its file-upload handlers only, leaving an
 // unbounded decode everywhere else. This is that gap closed.
+//
+// The assertion is the envelope, not merely "not 200": the oversized body is
+// refused by MaxBytesReader mid-decode, which is one of the generated server's
+// escape hatches and answered http.Error — text/plain carrying an English
+// message — until errors.go wired it.
 func TestBodyIsCapped(t *testing.T) {
 	srv := newTestServer()
 
@@ -97,8 +102,56 @@ func TestBodyIsCapped(t *testing.T) {
 	rec := httptest.NewRecorder()
 	srv.ServeHTTP(rec, req)
 
-	if rec.Code == http.StatusOK {
-		t.Errorf("an oversized body was accepted (status %d)", rec.Code)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400 for an oversized body", rec.Code)
+	}
+	assertEnvelope(t, rec, string(api.INVALIDJSONBODY))
+}
+
+// A body that did not decode is INVALID_JSON_BODY, in the envelope. The
+// generated strict handler decodes before any handler runs, so nothing in
+// internal/auth can answer this path — it is the server's to wire, and its
+// default was a plain-text message (PRD N7, non-negotiable 7).
+func TestMalformedBodyIsTheEnvelope(t *testing.T) {
+	srv := newTestServer()
+
+	for _, tc := range []struct{ name, body string }{
+		{"truncated", `{"email": `},
+		{"not an object", `["email"]`},
+		{"empty", ``},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/api/auth/local/login", strings.NewReader(tc.body))
+			req.Header.Set("Content-Type", "application/json")
+
+			rec := httptest.NewRecorder()
+			srv.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusBadRequest {
+				t.Errorf("status = %d, want 400", rec.Code)
+			}
+			assertEnvelope(t, rec, string(api.INVALIDJSONBODY))
+		})
+	}
+}
+
+// assertEnvelope checks the one shape both backends emit: application/json,
+// a `code`, and no `message` anywhere.
+func assertEnvelope(t *testing.T, rec *httptest.ResponseRecorder, wantCode string) {
+	t.Helper()
+
+	if ct := rec.Header().Get("Content-Type"); !strings.HasPrefix(ct, "application/json") {
+		t.Errorf("Content-Type = %q, want application/json (body %q)", ct, rec.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("body is not JSON: %v (%s)", err, rec.Body.String())
+	}
+	if body["code"] != wantCode {
+		t.Errorf("code = %v, want %s", body["code"], wantCode)
+	}
+	if _, present := body["message"]; present {
+		t.Error("envelope carries a message field; the frontend owns copy")
 	}
 }
 

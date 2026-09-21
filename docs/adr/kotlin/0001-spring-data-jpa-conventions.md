@@ -93,6 +93,15 @@ configuration rather than per-field annotations (issue #13): per-field means eve
 field is another chance to forget. The mapping half is the column definition and the entity's scale
 agreeing — which `ddl-auto: validate` checks, as long as rule 1 holds.
 
+Two things are true at once here and it is worth being explicit, because they look like a
+contradiction. Every money field in `contract/openapi.yaml` is declared `type: string`, so the
+generated models carry `String` and a handler converts with `toPlainString()` — that is the path
+`GET /api/me` actually takes, and it is the same thing Go does with `Decimal.String()`. The global
+`BigDecimal` serialiser (`config/MoneySerializationConfiguration`) therefore sits under all of that
+rather than on the live path: it is the floor for the first hand-written DTO, the first projection,
+or a generator change that yields a `BigDecimal` property. It is configured and asserted now because
+the alternative is discovering in review that one of those three happened.
+
 ## Consequences
 
 - A tenant-scoped repository is more verbose than idiomatic Spring Data. That is the trade: the

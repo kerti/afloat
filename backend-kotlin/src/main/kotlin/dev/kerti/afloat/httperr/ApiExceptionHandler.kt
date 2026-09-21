@@ -32,12 +32,27 @@ class ApiExceptionHandler {
         return ResponseEntity(Error(e.code, e.args), headers, HttpStatus.valueOf(e.status))
     }
 
+    // The envelope is flat and reports ONE field, so which one must not depend
+    // on the run. Bean Validation collects violations in an unspecified order —
+    // a HashSet, in practice — so `fieldErrors.first()` is whatever the JVM
+    // felt like this time, and a body failing two fields would report either.
+    //
+    // The rule is: sort by the wire field name and take the first (#13 §3.5).
+    // Alphabetical rather than declaration order because the generated model's
+    // property order is the generator's to change, and it agrees with Go on the
+    // one body that exists today — LocalLoginRequest is (email, password) in
+    // both spellings.
     @ExceptionHandler(MethodArgumentNotValidException::class)
     fun handleValidation(e: MethodArgumentNotValidException): ResponseEntity<Error> {
-        val first = e.bindingResult.fieldErrors.firstOrNull()
+        // Sorted by rule as well as field: two constraints can fail on the SAME
+        // field (a @Size and a @Pattern), and then the field name alone still
+        // leaves the reported rule to chance.
+        val first = e.bindingResult.fieldErrors
+            .map { snakeCase(it.field) to ruleOf(it) }
+            .minWithOrNull(compareBy({ it.first }, { it.second }))
             ?: return badRequest(Error(ErrorCode.VALIDATION, null))
         return badRequest(
-            Error(ErrorCode.VALIDATION, mapOf("field" to snakeCase(first.field), "rule" to ruleOf(first)))
+            Error(ErrorCode.VALIDATION, mapOf("field" to first.first, "rule" to first.second))
         )
     }
 

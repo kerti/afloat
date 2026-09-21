@@ -3,6 +3,7 @@ package dev.kerti.afloat.security
 import dev.kerti.afloat.api.AuthApi
 import dev.kerti.afloat.api.SystemApi
 import dev.kerti.afloat.auth.CrossSiteGuardFilter
+import dev.kerti.afloat.auth.EnvelopeAccessDeniedHandler
 import dev.kerti.afloat.auth.EnvelopeAuthenticationEntryPoint
 import dev.kerti.afloat.auth.MaxBodyFilter
 import dev.kerti.afloat.auth.RequestFactsFilter
@@ -65,8 +66,14 @@ class SecurityConfiguration {
                 it.anyRequest().authenticated()
             }
             // The envelope-writer entry point, so an unauthenticated /me is a
-            // shaped 401, not the container's bare status.
-            .exceptionHandling { it.authenticationEntryPoint(EnvelopeAuthenticationEntryPoint()) }
+            // shaped 401, not the container's bare status. The access-denied
+            // handler is wired with it rather than left at its default: both
+            // write from a filter, outside controller exception handling, and
+            // #14 §3.5 asks for both.
+            .exceptionHandling {
+                it.authenticationEntryPoint(EnvelopeAuthenticationEntryPoint())
+                it.accessDeniedHandler(EnvelopeAccessDeniedHandler())
+            }
             // Go's order, anchored explicitly rather than inherited from the
             // order these lines happen to run in (server.go:75-86):
             // maxBody -> crossSiteGuard -> requestFacts -> session.

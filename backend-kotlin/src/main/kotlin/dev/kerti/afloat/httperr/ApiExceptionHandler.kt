@@ -75,8 +75,12 @@ class ApiExceptionHandler {
     // Likewise 405: the catch-all below would otherwise turn Spring's own
     // method-not-allowed into a 500.
     @ExceptionHandler(HttpRequestMethodNotSupportedException::class)
-    fun handleMethodNotAllowed(e: HttpRequestMethodNotSupportedException): ResponseEntity<Error> =
-        ResponseEntity.status(HttpStatus.METHOD_NOT_ALLOWED).build()
+    // RFC 9110 §15.5.6 makes Allow mandatory on a 405, and chi sends it.
+    fun handleMethodNotAllowed(e: HttpRequestMethodNotSupportedException): ResponseEntity<Error> {
+        val headers = HttpHeaders()
+        e.supportedHttpMethods?.let { headers.allow = it }
+        return ResponseEntity(null, headers, HttpStatus.METHOD_NOT_ALLOWED)
+    }
 
     // Rethrown, deliberately, so the catch-all below does NOT swallow it.
     //

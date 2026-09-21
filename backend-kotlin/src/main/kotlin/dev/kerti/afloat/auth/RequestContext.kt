@@ -41,7 +41,7 @@ class RequestFactsFilter : OncePerRequestFilter() {
             // attacker pick a fresh key per request (Go's clientIP is identical).
             RequestContext.set(
                 RequestFacts(
-                    clientIp = request.remoteAddr ?: "",
+                    clientIp = normalizeIp(request.remoteAddr),
                     userAgent = request.getHeader(HttpHeaders.USER_AGENT),
                     sessionToken = token,
                 )
@@ -51,4 +51,44 @@ class RequestFactsFilter : OncePerRequestFilter() {
             RequestContext.clear()
         }
     }
+}
+
+// Go keys the backoff on net.SplitHostPort(RemoteAddr), whose IPv6 spelling is
+// the compressed RFC 5952 one (`::1`); Tomcat reports the expanded
+// `0:0:0:0:0:0:0:1`. The same address must land on the same `ip:` row in both
+// backends, since they share the table. IPv4 and anything that is not an IP
+// literal pass through untouched.
+internal fun normalizeIp(remoteAddr: String?): String {
+    val raw = remoteAddr?.trim().orEmpty()
+    if (':' !in raw) return raw
+    val zoneAt = raw.indexOf('%')
+    val literal = if (zoneAt >= 0) raw.substring(0, zoneAt) else raw
+    val zone = if (zoneAt >= 0) raw.substring(zoneAt) else ""
+    // Literal-only parse: a string that is not an address never reaches DNS.
+    if (!literal.all { it.isDigit() || it in 'a'..'f' || it in 'A'..'F' || it == ':' || it == '.' }) return raw
+    val address = try {
+        java.net.InetAddress.getByName(literal)
+    } catch (e: java.net.UnknownHostException) {
+        return raw
+    }
+    // An IPv4-mapped address comes back as Inet4Address, spelled dotted, as Go does.
+    if (address !is java.net.Inet6Address) return address.hostAddress
+    val bytes = address.address
+    val groups = IntArray(8) { ((bytes[2 * it].toInt() and 0xff) shl 8) or (bytes[2 * it + 1].toInt() and 0xff) }
+    // The longest run of zero groups collapses to `::`, the first on a tie, and
+    // a run of one group is left alone (RFC 5952 §4.2).
+    var bestStart = -1
+    var bestLen = 0
+    var i = 0
+    while (i < 8) {
+        if (groups[i] != 0) { i++; continue }
+        var j = i
+        while (j < 8 && groups[j] == 0) j++
+        if (j - i > bestLen) { bestStart = i; bestLen = j - i }
+        i = j
+    }
+    if (bestLen < 2) return groups.joinToString(":") { it.toString(16) } + zone
+    val head = groups.take(bestStart).joinToString(":") { it.toString(16) }
+    val tail = groups.drop(bestStart + bestLen).joinToString(":") { it.toString(16) }
+    return "$head::$tail$zone"
 }

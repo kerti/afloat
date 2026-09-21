@@ -58,8 +58,12 @@ class CrossSiteGuardFilter : OncePerRequestFilter() {
             hostAndPort(uri) == host
         } else {
             // HTTP/2 sends :authority and no Host header; the container
-            // surfaces it as the server name and port instead.
-            uri.host == request.serverName && (uri.port == -1 || uri.port == request.serverPort)
+            // surfaces it as the server name and port instead. Compared the way
+            // the Host branch does: an Origin with no port names the scheme's
+            // default port, so it matches only a server on that port — never
+            // whichever one the request happened to arrive on.
+            val port = if (uri.port != -1) uri.port else defaultPort(uri.scheme)
+            uri.host == request.serverName && port == request.serverPort
         }
     } catch (e: IllegalArgumentException) {
         false
@@ -72,6 +76,12 @@ class CrossSiteGuardFilter : OncePerRequestFilter() {
     // is dangerous — but a guard whose entire purpose is that both backends
     // refuse the same request should not be the place the two disagree.
     private fun hostAndPort(uri: URI): String? = uri.authority?.substringAfterLast('@')
+
+    private fun defaultPort(scheme: String?): Int = when (scheme?.lowercase()) {
+        "http" -> 80
+        "https" -> 443
+        else -> -1
+    }
 
     private fun isSafeMethod(method: String): Boolean =
         method == "GET" || method == "HEAD" || method == "OPTIONS" || method == "TRACE"

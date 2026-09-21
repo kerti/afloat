@@ -1,5 +1,6 @@
 package dev.kerti.afloat.auth
 
+import io.kotest.assertions.withClue
 import io.kotest.core.spec.style.StringSpec
 import io.kotest.matchers.nulls.shouldBeNull
 import io.kotest.matchers.shouldBe
@@ -59,5 +60,39 @@ class RequestFactsFilterSpec : StringSpec({
         RequestFactsFilter().doFilter(request, MockHttpServletResponse(), chain)
 
         seen?.sessionToken.shouldBeNull()
+    }
+
+    // Go writes `ip:::1`; Tomcat reports the expanded form. Both backends share
+    // login_attempts, so the spelling has to agree or one address gets two rows.
+    "spells an IPv6 remote address the way Go does" {
+        mapOf(
+            "0:0:0:0:0:0:0:1" to "::1",
+            "0:0:0:0:0:0:0:0" to "::",
+            "2001:db8:0:0:0:0:2:1" to "2001:db8::2:1",
+            "2001:0db8:0000:0000:0001:0000:0000:0001" to "2001:db8::1:0:0:1",
+            "2001:db8:0:1:1:1:1:1" to "2001:db8:0:1:1:1:1:1",
+            "FE80:0:0:0:0:0:0:1" to "fe80::1",
+            "fe80:0:0:0:0:0:0:1%eth0" to "fe80::1%eth0",
+            "0:0:0:0:0:ffff:c000:280" to "192.0.2.128",
+            "203.0.113.7" to "203.0.113.7",
+            "not an address" to "not an address",
+            "" to "",
+        ).forEach { (raw, expected) ->
+            withClue(raw) { normalizeIp(raw) shouldBe expected }
+        }
+    }
+
+    "carries the normalised address into the context" {
+        val request = MockHttpServletRequest().apply { remoteAddr = "0:0:0:0:0:0:0:1" }
+        var seen: RequestFacts? = null
+        val chain = MockFilterChain(object : HttpServlet() {
+            override fun service(req: HttpServletRequest, res: HttpServletResponse) {
+                seen = RequestContext.current()
+            }
+        })
+
+        RequestFactsFilter().doFilter(request, MockHttpServletResponse(), chain)
+
+        seen?.clientIp shouldBe "::1"
     }
 })

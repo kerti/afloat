@@ -48,7 +48,7 @@ class SessionTouchFailureSpec : WebDatabaseSpec() {
                 expiresAt = Instant.now().plus(appConfig.sessionTtl.dividedBy(2)).minusSeconds(60),
             )
             doThrow(QueryTimeoutException("touch failed"))
-                .`when`(sessionRepository).touch(anyString(), anyInstant(), anyInstant())
+                .`when`(sessionRepository).touch(anyString(), anyInstant())
 
             val result = mockMvc.perform(
                 get(AuthApi.BASE_PATH + AuthApi.PATH_GET_ME)

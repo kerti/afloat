@@ -11,18 +11,19 @@ object ApiErrorWriter {
     fun write(response: HttpServletResponse, status: Int, code: ErrorCode, args: Map<String, Any>? = null) {
         if (response.isCommitted) return
         response.status = status
-        // Charset set explicitly. Without it the servlet default is ISO-8859-1,
-        // so the first arg carrying a non-ASCII character — an Indonesian
-        // display name, say — reaches the client mangled, and nothing here or
-        // in the frontend would say why.
-        response.characterEncoding = Charsets.UTF_8.name()
+        // Plain application/json, as the controllers and Go both send: JSON has
+        // no charset parameter, UTF-8 being the format. So the bytes are written
+        // encoded here rather than through response.writer — setting a character
+        // encoding to make the writer do it would append ";charset=UTF-8" to the
+        // header, and the servlet default of ISO-8859-1 would mangle the first
+        // non-ASCII arg (an Indonesian display name, say).
         response.contentType = "application/json"
         val body = StringBuilder("{\"code\":\"${code.value}\"")
         if (!args.isNullOrEmpty()) {
             body.append(",\"args\":").append(valueToJson(args))
         }
         body.append('}')
-        response.writer.write(body.toString())
+        response.outputStream.write(body.toString().toByteArray(Charsets.UTF_8))
     }
 
     private fun valueToJson(value: Any?): String = when (value) {

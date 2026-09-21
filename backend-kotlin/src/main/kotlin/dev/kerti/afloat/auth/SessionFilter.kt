@@ -43,8 +43,7 @@ class SessionFilter(
             val session = try {
                 sessionRepository.findLive(
                     TokenService.hash(token),
-                    now,
-                    now.minus(appConfig.sessionMaxLifetime),
+                    appConfig.sessionMaxLifetime.seconds,
                 )
             } catch (e: DataAccessException) {
                 // A lookup that failed says nothing about the session, so the
@@ -102,7 +101,7 @@ class SessionFilter(
         if (remaining > appConfig.sessionTtl.dividedBy(2)) return
         val newExpiry = now.plus(appConfig.sessionTtl)
         try {
-            sessionRepository.touch(session.id, now, newExpiry)
+            sessionRepository.touch(session.id, newExpiry)
         } catch (e: DataAccessException) {
             // A failed refresh is not worth failing the request: the session is
             // still valid until its current expiry.

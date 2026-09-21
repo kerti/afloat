@@ -32,36 +32,51 @@ class ErrorEnvelopeSpec : WebDatabaseSpec() {
     init {
         // unknownRouteReturnsContractErrorEnvelope
         //
-        // 401, not 404, and that is a DIVERGENCE from Go, pinned here rather
-        // than left to be found. Authorization runs in the filter chain, before
-        // routing, so an unknown path is refused as unauthenticated before
-        // anything discovers there is no handler — a consequence of "public by
-        // exception, authenticated by default" (SecurityConfiguration).
+        // 404 for an anonymous caller too, as in Go, where RequireAuth wraps the
+        // handlers and not the router (httpserver/server_test.go asserts it for
+        // /api/nope). The chain is authenticated-by-default, but a path nothing
+        // maps is let through to be a 404 rather than refused as a 401 that
+        // claims the route exists. `/api/health/` is the case that showed it:
+        // trailing slashes do not match, so it is unmapped.
         //
-        // Go mounts its routes on chi and answers 404
-        // (httpserver/server_test.go asserts exactly that for /api/nope).
-        // Neither is wrong: Kotlin's declines to confirm which routes exist,
-        // Go's is the ordinary thing a router does. They disagree, and choosing
-        // for them here would bake the answer into a test, so it is recorded
-        // as-is and raised on #14.
-        //
-        // What is NOT in doubt, and is the point of #13 test 22: the body is
-        // the contract envelope, never Boot's default error page.
-        "answers an unknown route with the envelope, never Boot's error body" {
-            listOf("/api/nope", "/api/auth/nope", "/nope").forEach { path ->
+        // Bare, because the contract's ErrorCode enum has no NOT_FOUND. What is
+        // in doubt for neither is the point of #13 test 22: never Boot's page.
+        "answers an unknown route with a bare 404, never Boot's error body" {
+            listOf("/api/nope", "/api/auth/nope", "/nope", "/api/health/").forEach { path ->
                 val result = mockMvc.perform(get(path)).andReturn()
                 withClue(path) {
-                    result.response.status shouldBe 401
-                    result.response.contentAsString shouldBe """{"code":"UNAUTHORIZED"}"""
+                    result.response.status shouldBe 404
+                    result.response.contentAsString shouldBe ""
                     result.carriesNoSpringDefault()
                 }
             }
+        }
+
+        "keeps a mapped route behind authentication" {
+            val result = mockMvc.perform(get(AuthApi.BASE_PATH + AuthApi.PATH_GET_ME)).andReturn()
+
+            result.response.status shouldBe 401
+        }
+
+        // A JSON API has nothing to negotiate. Honoured, this was a 406 that
+        // Boot answered with an HTML page and a Content-Language header.
+        "ignores an Accept header that names no JSON" {
+            val result = mockMvc.perform(
+                get(AuthApi.BASE_PATH + AuthApi.PATH_GET_ME).header("Accept", "text/html"),
+            ).andReturn()
+
+            result.response.status shouldBe 401
+            result.response.contentAsString shouldBe """{"code":"UNAUTHORIZED"}"""
+            result.response.getHeader("Content-Language") shouldBe null
+            result.carriesNoSpringDefault()
         }
 
         "answers a wrong method with a bare 405 and none of Boot's error body" {
             val result = mockMvc.perform(delete(SystemApi.BASE_PATH + SystemApi.PATH_GET_HEALTH)).andReturn()
 
             result.response.status shouldBe 405
+            // RFC 9110 §15.5.6: a 405 must say what would have worked.
+            result.response.getHeader("Allow") shouldBe "GET"
             result.carriesNoSpringDefault()
         }
 

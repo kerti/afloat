@@ -17,7 +17,6 @@ import org.springframework.dao.DataAccessException
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
 import java.time.Clock
-import java.time.Duration
 import java.time.LocalTime
 import java.time.format.DateTimeFormatter
 import java.util.UUID
@@ -39,21 +38,28 @@ class AuthService(
     // Every failure mode: unknown email (no credential, wrong password) is one
     // INVALID_CREDENTIALS, the compare is constant work, and an unknown address
     // still pays the hash.
-    @Transactional
+    //
+    // Deliberately NOT @Transactional. The Argon2 verify takes tens of
+    // milliseconds of CPU, and a transaction spanning it pins a pooled
+    // connection for all of that — then recordFailure asks for a second one, so
+    // a burst of bad logins as wide as the pool deadlocks it. Each repository
+    // call is its own short transaction instead, which is also what makes the
+    // "logged, never raised" writes below survivable: one failed statement
+    // cannot abort the ones after it.
     fun login(email: String, password: String): Issue {
         val normalized = normalizeEmail(email)
         val keys = backoffKeys(normalized)
         val now = clock.instant()
 
-        val until = try {
-            loginAttemptRepository.activeBackoff(keys, now)
+        val remaining = try {
+            loginAttemptRepository.activeBackoffSeconds(keys)
         } catch (e: DataAccessException) {
             log.error("login: read backoff", e)
             throw ApiException(500, ErrorCode.INTERNAL)
         }
-        if (until != null) {
+        if (remaining != null) {
             // Rounded up: Retry-After of 0 invites an immediate retry inside the window.
-            val retryAfter = Duration.between(now, until).toSeconds().toInt() + 1
+            val retryAfter = remaining.toInt() + 1
             throw ApiException(429, ErrorCode.TOO_MANY_ATTEMPTS, retryAfterSeconds = retryAfter)
         }
 

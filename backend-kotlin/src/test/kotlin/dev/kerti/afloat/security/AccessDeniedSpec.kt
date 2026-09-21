@@ -35,7 +35,7 @@ class AccessDeniedSpec : StringSpec({
         // there is RequireAuth's 401. See EnvelopeAccessDeniedHandler.
         response.status shouldBe 401
         response.contentAsString shouldBe """{"code":"UNAUTHORIZED"}"""
-        response.contentType shouldBe "application/json;charset=UTF-8"
+        response.contentType shouldBe "application/json"
         response.contentAsString shouldNotContain "message"
         response.contentAsString shouldNotContain "Access is denied"
     }

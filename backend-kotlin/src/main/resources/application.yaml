@@ -1,7 +1,17 @@
 spring:
   application:
     name: afloat
+  autoconfigure:
+    exclude:
+      # Would register an in-memory user with a random password and log it at
+      # boot ("Using generated security password"). Sessions are resolved by
+      # SessionFilter; nothing authenticates through a UserDetailsService.
+      - org.springframework.boot.security.autoconfigure.UserDetailsServiceAutoConfiguration
   jpa:
+    # Open-in-view holds a pooled connection for the whole request, hash and
+    # response write included; every repository call here is its own short
+    # transaction, so nothing wants the session kept open.
+    open-in-view: false
     hibernate:
       ddl-auto: validate
   flyway:

@@ -155,4 +155,26 @@ class CrossSiteGuardFilterSpec : StringSpec({
             }
         }
     }
+
+    // No Host header: an HTTP/2 request, whose :authority the container surfaces
+    // as serverName and serverPort. The fallback must compare the way the Host
+    // branch does, so an Origin without a port names the scheme's default one.
+    "without a Host header, allows an Origin on the request's own authority" {
+        run(origin = "https://afloat.example", host = null).reached shouldBe true
+        run(origin = "https://afloat.example:8443", host = null, serverPort = 8443).reached shouldBe true
+    }
+
+    "without a Host header, rejects an Origin with no port when the server is not on the default one" {
+        // The bug: `uri.port == -1` matched any serverPort, so this passed.
+        val outcome = run(origin = "https://afloat.example", host = null, serverPort = 8443)
+
+        outcome.response.status shouldBe 403
+        outcome.reached shouldBe false
+    }
+
+    "without a Host header, rejects another host or another port" {
+        run(origin = "https://evil.example", host = null).reached shouldBe false
+        run(origin = "https://afloat.example:8443", host = null).reached shouldBe false
+        run(origin = "http://afloat.example", host = null).reached shouldBe false
+    }
 })

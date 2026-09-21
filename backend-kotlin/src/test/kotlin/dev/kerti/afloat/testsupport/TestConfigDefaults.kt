@@ -16,9 +16,10 @@ object TestConfigDefaults {
     // name -> default string, exactly as the placeholders in application.yaml
     // declare them. DATABASE_URL's default is empty by design: it is required.
     // A name may legitimately appear in several leaves (LOG_LEVEL under logging:
-    // and afloat:), but every occurrence must agree: check-env-parity.sh reads
-    // only the first, so a silent disagreement would let one reader change under
-    // the gate. Conflicting occurrences fail here instead.
+    // and afloat:), but every occurrence must agree, or one reader has quietly
+    // been given a different default from another. check-env-parity.sh now
+    // compares every occurrence too; this stays because it fails at the point
+    // the stale value would be read, with the name in the message.
     fun scrapedDefaults(): Map<String, String> {
         val yaml = checkNotNull(javaClass.getResource("/application.yaml")).readText()
         return placeholder.findAll(yaml).groupBy { it.groupValues[1] }

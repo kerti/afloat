@@ -25,9 +25,10 @@ jobs:
     name: check (mirrors make check)
     runs-on: ubuntu-latest
     env:
-      # The Go integration tests skip themselves when docker is missing, which
-      # on a runner that has docker would mean a green suite that never ran.
-      # See backend/internal/testutil/db.go.
+      # Both suites skip themselves when docker is missing, which on a runner
+      # that has docker would mean a green build that never ran. One variable,
+      # one meaning, in both backends: backend/internal/testutil/db.go and
+      # backend-kotlin/.../testsupport/TestDatabase.kt.
       AFLOAT_REQUIRE_TEST_DB: "1"
     steps:
       - uses: actions/checkout@v5

@@ -97,10 +97,16 @@ else
   for name in $go_names; do
     case "$default_exempt" in *" $name "*) continue ;; esac
     want=$(documented_default_for "$name")
+    # An empty cell in §12 means the row documents no default, so there is
+    # nothing to hold the backend against. A NON-empty cell must be matched.
     [ -z "$want" ] && continue
     got=$(grep -o "env:\"$name[^\"]*\"[^\`]*envDefault:\"[^\"]*\"" "$go_config" \
           | grep -o 'envDefault:"[^"]*"' | cut -d'"' -f2 || true)
-    if [ -n "$got" ] && [ "$got" != "$want" ]; then
+    if [ -z "$got" ]; then
+      # Previously skipped, which made a dropped envDefault invisible: §12 would
+      # promise a default the backend does not have, and the gate stayed green.
+      report "go default $name" "§12 documents $want, Go declares no envDefault"
+    elif [ "$got" != "$want" ]; then
       report "go default $name" "§12 documents $want, Go defaults to $got"
     fi
   done
@@ -127,8 +133,29 @@ else
     case "$default_exempt" in *" $name "*) continue ;; esac
     want=$(documented_default_for "$name")
     [ -z "$want" ] && continue
-    got=$(grep -o "\${$name:[^}]*}" "$kotlin_config" | head -1 | sed "s/^\${$name://; s/}$//")
-    if [ -n "$got" ] && [ "$got" != "$want" ]; then
+
+    # EVERY occurrence, not the first. Several names are relayed into more than
+    # one key — LOG_LEVEL, SHUTDOWN_TIMEOUT and the two HTTP timeouts each
+    # appear twice — and the placeholder Boot actually binds for the server
+    # knobs is the second one. Comparing only `head -1` let a second, divergent
+    # default sit there unread.
+    # `|| true` on the pipeline, not decoration: a placeholder with no default
+    # matches nothing, and under `set -eo pipefail` grep's exit 1 would kill the
+    # script mid-report — an exit code with no FAIL line, which is worse than
+    # the hole it replaced.
+    got=$(grep -o "\${$name:[^}]*}" "$kotlin_config" \
+          | sed "s/^\${$name://; s/}$//" | sort -u || true)
+    count=$(printf '%s\n' "$got" | grep -c . || true)
+
+    if [ "$count" -eq 0 ]; then
+      # The name is bound (it is in kotlin_names) but with no `:default`, so an
+      # operator who sets nothing gets an unresolved placeholder, not the
+      # documented value.
+      report "kotlin default $name" "§12 documents $want, the placeholder carries no default"
+    elif [ "$count" -gt 1 ]; then
+      report "kotlin default $name" \
+        "placeholders disagree: $(echo "$got" | tr '\n' ' ')- §12 documents $want"
+    elif [ "$got" != "$want" ]; then
       report "kotlin default $name" "§12 documents $want, application.yml defaults to $got"
     fi
   done

@@ -129,6 +129,22 @@ class LoginSpec : WebDatabaseSpec() {
             login("User@Example.COM", AuthFixtures.PASSWORD).response.status shouldBe 204
         }
 
+        // The case above only ever proved the INPUT is normalised, because the
+        // fixture stored a lower-case address. The column is plain `text` and
+        // only the INDEX is lower(email), so the stored side can carry case
+        // too — and a repository comparing `email = :email` misses it while
+        // Go's `lower(email) = lower($1)` finds it.
+        "matches an address stored with capitals" {
+            AuthFixtures.account(dataSource, email = "Mixed.Case@Example.COM")
+
+            withClue("normalised input against a stored capital") {
+                login("mixed.case@example.com", AuthFixtures.PASSWORD).response.status shouldBe 204
+            }
+            withClue("capitals on both sides") {
+                login("Mixed.Case@Example.COM", AuthFixtures.PASSWORD).response.status shouldBe 204
+            }
+        }
+
         // The trimming half of #14 test 17 is NOT asserted here, deliberately.
         // Go accepts "  A@ExAmPlE.CoM  " and answers 204
         // (login_integration_test.go:TestLoginIsCaseInsensitiveOnEmail) because
@@ -233,6 +249,48 @@ class LoginSpec : WebDatabaseSpec() {
             // reports whichever failed (httperr_test.go). Reporting "max" for
             // an empty password would send the frontend to the "too long" key.
             result.response.contentAsString shouldContain """"rule":"min""""
+        }
+
+        // Every request schema in the contract declares additionalProperties:
+        // false, and spring.jackson.deserialization.fail-on-unknown-properties
+        // makes Jackson honour it (#13 §3.6).
+        //
+        // A KNOWN divergence, pinned rather than discovered: Go decodes with
+        // encoding/json, which ignores unknown fields, so the same body is a
+        // 401 there. Closing it needs DisallowUnknownFields in the generated
+        // decode path, which is the generator's, and is filed.
+        "rejects a body carrying a field the contract does not declare" {
+            AuthFixtures.account(dataSource)
+
+            val result = mockMvc.perform(
+                post(loginPath).contentType(MediaType.APPLICATION_JSON)
+                    .content(
+                        """{"email":"user@example.com","password":"${AuthFixtures.PASSWORD}","admin":true}"""
+                    )
+            ).andReturn()
+
+            result.response.status shouldBe 400
+            result.response.contentAsString shouldBe """{"code":"INVALID_JSON_BODY"}"""
+            // The point of refusing it: the field was not quietly dropped and
+            // the login did not succeed anyway.
+            JdbcClient.create(dataSource).sql("SELECT count(*) FROM sessions")
+                .query(Long::class.java).single() shouldBe 0L
+        }
+
+        // Two fields fail at once, and the envelope reports one. WHICH one must
+        // not depend on the run: Bean Validation collects violations in an
+        // unspecified order, so this is the assertion that the handler sorts
+        // rather than taking whatever the JVM handed it (#13 §3.5).
+        "reports the same field every time when two of them fail" {
+            val bodies = (1..8).map {
+                mockMvc.perform(
+                    post(loginPath).contentType(MediaType.APPLICATION_JSON)
+                        .content("""{"email":"not-an-email","password":""}""")
+                ).andReturn().response.contentAsString
+            }
+
+            bodies.distinct().size shouldBe 1
+            bodies.first() shouldContain """"field":"email""""
         }
 
         // emailLongerThan320OrPasswordLongerThan4096IsRejected

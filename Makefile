@@ -1,6 +1,6 @@
 .PHONY: help setup hooks-install claude-install doctor check gen-goose-migrations test-migrations \
         db-up db-down db-reset test-migration-runners gen-oapi gen-sqlc gen check-go check-kotlin \
-        lint-install sync-kotlin-migrations
+        lint-install sync-kotlin-migrations sync-denylist
 
 # `make` with no target prints help.
 .DEFAULT_GOAL := help
@@ -53,6 +53,7 @@ help:
 	@echo "  check                   pre-push gate: pass/fail per surface"
 	@echo "  check-kotlin            build, lint and test the Kotlin backend"
 	@echo "  lint-install            install the pinned golangci-lint (the version CI uses)"
+	@echo "  sync-denylist           copy shared/common_passwords.txt into both backends"
 
 # ---- first run -------------------------------------------------------------
 # Idempotent - safe to re-run, and worth re-running after a pull that touches
@@ -126,6 +127,13 @@ gen-goose-migrations:
 # rather than silently repaired.
 sync-kotlin-migrations:
 	@./scripts/sync-kotlin-migrations.sh $(KOTLIN_MIGRATIONS)
+
+# shared/common_passwords.txt is owned by neither backend, and neither can read
+# it where it lives: Go's //go:embed cannot reach a parent directory, and the
+# Kotlin backend needs the file inside the jar for the same reason as the
+# migrations above. Both copies are generated and diffed by check.
+sync-denylist:
+	@./scripts/sync-denylist.sh
 
 # The contract leads (BOOTSTRAP.md §6): these read contract/openapi.yaml and
 # db/migrations, never the other way round. Output is committed and never
@@ -247,6 +255,18 @@ check:
 	  if ./scripts/sync-kotlin-migrations.sh "$$tmp" >/dev/null 2>&1 \
 	     && diff -rq "$$tmp" $(KOTLIN_MIGRATIONS) >/dev/null 2>&1; then echo 'in sync'; \
 	  else echo 'FAIL - stale or hand-edited; run make sync-kotlin-migrations'; fail=1; fi; \
+	  rm -rf "$$tmp"; \
+	fi; \
+	printf '%-32s' 'denylist copies'; \
+	if [ ! -e shared/common_passwords.txt ]; then echo '- skipped (no denylist)'; \
+	else \
+	  tmp=$$(mktemp -d); \
+	  if ./scripts/sync-denylist.sh "$$tmp" >/dev/null 2>&1 \
+	     && diff -q "$$tmp/backend/internal/auth/common_passwords.txt" backend/internal/auth/common_passwords.txt >/dev/null 2>&1 \
+	     && { [ ! -e backend-kotlin/build.gradle.kts ] \
+	          || diff -q "$$tmp/backend-kotlin/src/main/resources/common_passwords.txt" backend-kotlin/src/main/resources/common_passwords.txt >/dev/null 2>&1; }; \
+	  then echo 'in sync'; \
+	  else echo 'FAIL - stale or hand-edited; run make sync-denylist'; fail=1; fi; \
 	  rm -rf "$$tmp"; \
 	fi; \
 	printf '%-32s' 'env var parity'; \

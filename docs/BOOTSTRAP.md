@@ -113,6 +113,8 @@ afloat/
 │   ├── migrations/V0001__*.sql     # CANONICAL, Flyway-native
 │   ├── undo/U0001__*.sql           # goose Down source only — NOT a Flyway location
 │   └── init/                       # container first-boot only — creates the second database
+├── shared/                         # cross-backend runtime data, owned by neither
+│   └── common_passwords.txt        # CANONICAL denylist — copied into both, see §5.1
 ├── docs/{adr/{go,kotlin},brand,qa}/
 ├── scripts/                        # repo tooling the Makefile shells out to
 ├── docker-compose.yml              # profiles: go | kotlin, one Postgres, two databases
@@ -213,7 +215,17 @@ disagree, and the contract cannot see it.
 
 **Password policy is a floor only:** minimum length plus a common-password denylist. No composition
 rules. Cap the maximum length too, and put a body-size limit on JSON routes in both backends —
-Balances caps only its file-upload handlers.
+Balances caps only its file-upload handlers. Both lengths are counted in **Unicode code points**, not
+bytes and not UTF-16 units: an Indonesian or any non-ASCII passphrase must not be penalised for
+encoding wider. Go counts runes; Kotlin must use `codePointCount`, because `String.length` measures
+an astral character twice and would let a nine-character passphrase through.
+
+**The denylist is one file, `shared/common_passwords.txt`.** Both backends reject the same passwords
+or they are not the same app, and a denylist that drifts is a divergence no contract test can see. It
+is owned by neither backend and copied into both by `scripts/sync-denylist.sh`, gated by `make check`
+— neither backend can read it where it lives, because Go's `//go:embed` cannot reference a parent
+directory and the Kotlin backend has to carry it inside the jar. The copies are generated output;
+edit the canonical file.
 
 **Session tokens are hashed at rest.** The cookie carries a 256-bit random, URL-safe value; the
 `sessions` primary key is its SHA-256. A database leak yields nothing usable. Hash before every read

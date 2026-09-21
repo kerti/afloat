@@ -73,6 +73,7 @@ afloat/
 ├── backend-kotlin/          # Kotlin — learning track, opened separately in IntelliJ
 ├── frontend/                # shared, backend-agnostic React app
 ├── contract/                # openapi.yaml (source of truth) + shared test fixtures
+├── shared/                  # cross-backend runtime data; copies generated, never hand-edited
 ├── db/                      # canonical Flyway migrations + goose-source undo files
 ├── docs/{adr/{go,kotlin},brand,qa}/
 ├── docker-compose.yml

@@ -21,6 +21,12 @@ file grows as real targets land.
   the jar, so it needs its own copy; the copy is **generated output and never hand-edited**, and
   `make check` diffs it against a scratch regeneration rather than repairing it silently. Edit
   `db/migrations` and re-run this.
+- `make sync-denylist` — copies `shared/common_passwords.txt` into `backend/internal/auth/` and
+  `backend-kotlin/src/main/resources/`. The denylist is owned by neither backend and **neither can
+  read it where it lives**: Go's `//go:embed` cannot reference a parent directory, and the Kotlin
+  backend needs the file inside the jar for the same reason as the migrations above. Both copies are
+  **generated output and never hand-edited**; `make check` diffs them against a scratch regeneration.
+  Edit `shared/common_passwords.txt` and re-run this.
 - **Environment variables are a cross-backend contract** (`BOOTSTRAP.md` §12): both backends read the
   same names with the same defaults, so an operator configures once and can switch backends.
   `scripts/check-env-parity.sh` (in `make check`) treats the §12 table as the source of truth and

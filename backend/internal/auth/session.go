@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"net/http"
 	"time"
 
@@ -72,6 +73,13 @@ func (h *Handlers) setSessionCookie(w http.ResponseWriter, token string, expires
 }
 
 func (h *Handlers) sessionCookie(token string, expires time.Time) *http.Cookie {
+	// Max-Age alongside Expires, not instead of it. Spring's ResponseCookie
+	// always emits both, so a cookie carrying only Expires is a header the two
+	// backends do not spell the same way — and Max-Age is the one a browser
+	// prefers, which makes it the one that matters on a client with a skewed
+	// clock. Rounded up, so a sub-second remainder never truncates to 0 and
+	// turns a fresh session into a session cookie.
+	maxAge := max(int(math.Ceil(time.Until(expires).Seconds())), 1)
 	return &http.Cookie{
 		Name:  SessionCookieName,
 		Value: token,
@@ -79,6 +87,7 @@ func (h *Handlers) sessionCookie(token string, expires time.Time) *http.Cookie {
 		// No Domain attribute, deliberately: a host-only cookie cannot leak a
 		// demo session into preview under a shared parent (BOOTSTRAP.md §5).
 		Expires:  expires,
+		MaxAge:   maxAge,
 		HttpOnly: true,
 		Secure:   h.cookieSecure,
 		SameSite: http.SameSiteLaxMode,

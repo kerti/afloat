@@ -228,6 +228,11 @@ class LoginSpec : WebDatabaseSpec() {
             result.response.status shouldBe 400
             result.response.contentAsString shouldContain """"code":"VALIDATION""""
             result.response.contentAsString shouldContain """"field":"password""""
+            // @Size(min=1,max=4096) is one constraint covering both bounds,
+            // where Go spells them as separate `min=` and `max=` tags and
+            // reports whichever failed (httperr_test.go). Reporting "max" for
+            // an empty password would send the frontend to the "too long" key.
+            result.response.contentAsString shouldContain """"rule":"min""""
         }
 
         // emailLongerThan320OrPasswordLongerThan4096IsRejected
@@ -243,6 +248,9 @@ class LoginSpec : WebDatabaseSpec() {
             withClue("password of 4097 characters") {
                 overLongPassword.response.status shouldBe 400
                 overLongPassword.response.contentAsString shouldContain "\"field\":\"password\""
+                // The other bound of the same @Size: the ceiling still reports
+                // "max", so recovering the failing bound did not invert it.
+                overLongPassword.response.contentAsString shouldContain "\"rule\":\"max\""
             }
         }
     }

@@ -2,11 +2,13 @@ package dev.kerti.afloat.httperr
 
 import dev.kerti.afloat.api.model.Error
 import dev.kerti.afloat.api.model.ErrorCode
+import jakarta.validation.ConstraintViolation
 import org.slf4j.LoggerFactory
 import org.springframework.http.HttpHeaders
 import org.springframework.http.HttpStatus
 import org.springframework.http.ResponseEntity
 import org.springframework.http.converter.HttpMessageNotReadableException
+import org.springframework.validation.FieldError
 import org.springframework.web.HttpMediaTypeNotSupportedException
 import org.springframework.web.HttpRequestMethodNotSupportedException
 import org.springframework.web.bind.MethodArgumentNotValidException
@@ -35,7 +37,7 @@ class ApiExceptionHandler {
         val first = e.bindingResult.fieldErrors.firstOrNull()
             ?: return badRequest(Error(ErrorCode.VALIDATION, null))
         return badRequest(
-            Error(ErrorCode.VALIDATION, mapOf("field" to snakeCase(first.field), "rule" to ruleOf(first.code)))
+            Error(ErrorCode.VALIDATION, mapOf("field" to snakeCase(first.field), "rule" to ruleOf(first)))
         )
     }
 
@@ -81,13 +83,37 @@ class ApiExceptionHandler {
 
         // Go reports the validator tag, Bean Validation the constraint class.
         // One vocabulary, or the i18n catalogue needs two sets of keys.
-        private fun ruleOf(code: String?): String = when (code) {
+        private fun ruleOf(error: FieldError): String = when (val code = error.code) {
             "NotNull", "NotBlank", "NotEmpty" -> "required"
             "Email" -> "email"
             "Min", "DecimalMin" -> "min"
-            "Max", "DecimalMax", "Size" -> "max"
+            "Max", "DecimalMax" -> "max"
+            "Size" -> sizeBound(error)
             "Pattern" -> "pattern"
             else -> code?.lowercase() ?: "invalid"
         }
+
+        // One @Size carries both bounds, where Go writes them as separate
+        // `min=` and `max=` tags and reports whichever failed. Collapsing both
+        // to "max" hands the frontend the key for "too long" when the value was
+        // too short, so the bound is recovered from the constraint itself.
+        private fun sizeBound(error: FieldError): String {
+            val min = error.constraintAttribute("min") ?: return "max"
+            val length = when (val rejected = error.rejectedValue) {
+                is CharSequence -> rejected.length
+                is Collection<*> -> rejected.size
+                is Map<*, *> -> rejected.size
+                is Array<*> -> rejected.size
+                else -> return "max"
+            }
+            return if (length < min) "min" else "max"
+        }
+
+        private fun FieldError.constraintAttribute(name: String): Int? =
+            if (contains(ConstraintViolation::class.java)) {
+                unwrap(ConstraintViolation::class.java).constraintDescriptor.attributes[name] as? Int
+            } else {
+                null
+            }
     }
 }

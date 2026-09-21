@@ -55,7 +55,7 @@ class CrossSiteGuardFilter : OncePerRequestFilter() {
         val uri = URI.create(origin)
         val host = request.getHeader(HttpHeaders.HOST)
         if (host != null) {
-            uri.authority == host
+            hostAndPort(uri) == host
         } else {
             // HTTP/2 sends :authority and no Host header; the container
             // surfaces it as the server name and port instead.
@@ -64,6 +64,14 @@ class CrossSiteGuardFilter : OncePerRequestFilter() {
     } catch (e: IllegalArgumentException) {
         false
     }
+
+    // Go compares url.URL.Host, which is host[:port] with the userinfo split
+    // off into url.URL.User. URI.authority keeps it, so comparing that would
+    // reject `https://x@afloat.example` against Host `afloat.example` where Go
+    // accepts it. A browser never puts userinfo in an Origin, so neither answer
+    // is dangerous — but a guard whose entire purpose is that both backends
+    // refuse the same request should not be the place the two disagree.
+    private fun hostAndPort(uri: URI): String? = uri.authority?.substringAfterLast('@')
 
     private fun isSafeMethod(method: String): Boolean =
         method == "GET" || method == "HEAD" || method == "OPTIONS" || method == "TRACE"

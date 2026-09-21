@@ -11,6 +11,11 @@ data class DurationParsingCase(
     val expectedDuration: Duration
 )
 
+// durationsParseInBothStyles (#13 test 7)
+//
+// Every suffix Go's time.ParseDuration takes, and `d` REJECTED: Spring's simple
+// style accepts 30d and Go does not, so a value that works in one backend and
+// not the other defeats the point of a shared name (BOOTSTRAP §12).
 open class DurationParserSpec : StringSpec({
 
     withData(

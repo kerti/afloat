@@ -50,6 +50,13 @@ only in middleware. In Kotlin that means:
   interceptor that appends a predicate. An ambient tenant filter is precisely the "middleware only"
   failure §4 forbids, wearing a Hibernate hat: every query looks correct in isolation, and the one
   code path that runs outside the filter's scope is invisible.
+- **Reading the tenant root by its own primary key is the one exception.** `findById(householdId)`
+  on `HouseholdRepository` needs no `@Query`, because there the tenant key *is* the identifier: a
+  rename cannot drop the predicate the way it can from a `findByHouseholdIdAnd…` method name, and
+  `@SQLRestriction` supplies the `deleted_at IS NULL` half. `GET /api/me` is the first and currently
+  only case (`AuthService.me`), and Go spells the same read out longhand as
+  `WHERE id = $1 AND deleted_at IS NULL` (`GetHouseholdByID`). Any read of a table that merely
+  *carries* a `household_id` column stays under the rule above.
 
 The distinction is that a reviewer must be able to confirm tenancy by reading the repository, the
 same property `go/0002` values in written SQL.

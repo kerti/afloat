@@ -3,6 +3,7 @@ package dev.kerti.afloat.auth
 import dev.kerti.afloat.api.AuthApi
 import dev.kerti.afloat.testsupport.AuthFixtures
 import dev.kerti.afloat.testsupport.WebDatabaseSpec
+import dev.kerti.afloat.testsupport.jsonFields
 import dev.kerti.afloat.testsupport.sha256Hex
 import io.kotest.matchers.collections.shouldNotContain
 import io.kotest.matchers.ints.shouldBeGreaterThanOrEqual
@@ -38,31 +39,10 @@ class MeSpec : WebDatabaseSpec() {
         ).andReturn()
 
     // Flat JSON, read without a mapper so the assertions are about the bytes on
-    // the wire rather than about how a mapper chooses to read them back.
-    private fun body(result: MvcResult): Map<String, String> {
-        val raw = result.response.contentAsString.trim().removePrefix("{").removeSuffix("}")
-        if (raw.isBlank()) return emptyMap()
-        return splitTopLevel(raw).associate { pair ->
-            val name = pair.substringBefore(':').trim().trim('"')
-            name to pair.substringAfter(':').trim()
-        }
-    }
-
-    // Splits on commas that are not inside a quoted string.
-    private fun splitTopLevel(raw: String): List<String> {
-        val parts = mutableListOf<String>()
-        val current = StringBuilder()
-        var inQuotes = false
-        raw.forEach { c ->
-            when {
-                c == '"' -> { inQuotes = !inQuotes; current.append(c) }
-                c == ',' && !inQuotes -> { parts += current.toString(); current.clear() }
-                else -> current.append(c)
-            }
-        }
-        if (current.isNotBlank()) parts += current.toString()
-        return parts
-    }
+    // the wire rather than about how a mapper chooses to read them back. The
+    // reader lives in testsupport because SystemBodySpec asserts the same way.
+    private fun body(result: MvcResult): Map<String, String> =
+        result.response.contentAsString.jsonFields()
 
     init {
         // meReturnsUserAndHouseholdFieldsForAValidSession

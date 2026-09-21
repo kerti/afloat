@@ -8,6 +8,7 @@ import org.springframework.http.HttpHeaders
 import org.springframework.http.HttpStatus
 import org.springframework.http.ResponseEntity
 import org.springframework.http.converter.HttpMessageNotReadableException
+import org.springframework.security.access.AccessDeniedException
 import org.springframework.validation.FieldError
 import org.springframework.web.HttpMediaTypeNotSupportedException
 import org.springframework.web.HttpRequestMethodNotSupportedException
@@ -76,6 +77,22 @@ class ApiExceptionHandler {
     @ExceptionHandler(HttpRequestMethodNotSupportedException::class)
     fun handleMethodNotAllowed(e: HttpRequestMethodNotSupportedException): ResponseEntity<Error> =
         ResponseEntity.status(HttpStatus.METHOD_NOT_ALLOWED).build()
+
+    // Rethrown, deliberately, so the catch-all below does NOT swallow it.
+    //
+    // Spring Security raises AccessDeniedException inside the handler (method
+    // security, or a controller calling it directly) and expects
+    // ExceptionTranslationFilter — further out in the chain — to turn it into a
+    // response through the access-denied handler. A @RestControllerAdvice with
+    // an `Exception` catch-all intercepts it first and answers 500 INTERNAL,
+    // which is how a wired EnvelopeAccessDeniedHandler stays unreachable for a
+    // second reason after the first one (no authorities) goes away at step 9.
+    //
+    // ExceptionHandlerExceptionResolver treats a handler that throws the SAME
+    // exception it was given as "not handled" and lets the original continue up
+    // the chain, without logging it as an accident.
+    @ExceptionHandler(AccessDeniedException::class)
+    fun rethrowAccessDenied(e: AccessDeniedException): Nothing = throw e
 
     @ExceptionHandler(Exception::class)
     fun handleUnexpected(e: Exception): ResponseEntity<Error> {

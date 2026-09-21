@@ -105,6 +105,20 @@ class CrossSiteGuardFilterSpec : StringSpec({
         }
     }
 
+    // Go compares url.URL.Host, which splits userinfo off into url.URL.User;
+    // URI.authority keeps it. Comparing authority rejected an Origin that Go
+    // accepts — harmless in itself, since no browser puts userinfo in an
+    // Origin, but a guard whose whole purpose is that both backends refuse the
+    // same request is the wrong place for the two to disagree.
+    "ignores userinfo in the Origin, as Go's url.Host does" {
+        withClue("userinfo in front of a matching host") {
+            run(origin = "https://someone@afloat.example").reached shouldBe true
+        }
+        withClue("userinfo in front of a mismatched host is still blocked") {
+            run(origin = "https://afloat.example@evil.example").reached shouldBe false
+        }
+    }
+
     "compares Origin against the Host header including its port" {
         // Behind a proxy the request's own serverPort is the local one and
         // would never match a public 443, so the Host header is the comparison

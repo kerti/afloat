@@ -27,6 +27,14 @@ class SecurityChainSpec : WebDatabaseSpec() {
     private fun countOf(table: String): Long =
         JdbcClient.create(dataSource).sql("SELECT count(*) FROM $table").query(Long::class.java).single()
 
+    // Spring Security's own default for an unauthenticated request is a 302 to
+    // a generated /login page. A test that only asserted "not 401" would read
+    // that redirect as success, so the absence is checked explicitly.
+    private fun MvcResult.servedWithoutALoginPage(expectedStatus: Int) {
+        response.status shouldBe expectedStatus
+        response.getHeader("Location") shouldBe null
+    }
+
     private fun MvcResult.issuedNoJsessionid() {
         response.getHeaders("Set-Cookie").forEach { it shouldNotContain "JSESSIONID" }
         // The stateless policy means the container session is never created in
@@ -69,23 +77,28 @@ class SecurityChainSpec : WebDatabaseSpec() {
         }
 
         // publicRoutesRemainPublic
+        // permitAllChainDoesNotServeAGeneratedLoginPage
+        //
+        // 200 AND no redirect: Spring Security's default for an unauthenticated
+        // request is a 302 to a generated /login page, which would read as
+        // "reachable" to a test that only checked for a non-401.
         "leaves the public routes public" {
             AuthFixtures.account(dataSource)
 
             withClue("GET /api/health") {
                 mockMvc.perform(get(SystemApi.BASE_PATH + SystemApi.PATH_GET_HEALTH))
-                    .andReturn().response.status shouldBe 200
+                    .andReturn().servedWithoutALoginPage(200)
             }
             withClue("GET /api/auth/methods") {
                 mockMvc.perform(get(SystemApi.BASE_PATH + SystemApi.PATH_GET_AUTH_METHODS))
-                    .andReturn().response.status shouldBe 200
+                    .andReturn().servedWithoutALoginPage(200)
             }
             withClue("POST /api/auth/local/login") {
                 mockMvc.perform(
                     post(AuthApi.BASE_PATH + AuthApi.PATH_LOCAL_LOGIN)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(loginBody("user@example.com", AuthFixtures.PASSWORD))
-                ).andReturn().response.status shouldBe 204
+                ).andReturn().servedWithoutALoginPage(204)
             }
         }
 
@@ -109,6 +122,11 @@ class SecurityChainSpec : WebDatabaseSpec() {
         }
 
         // stillNoJsessionidIsIssued
+        // sessionCreationPolicyIsStateless
+        //
+        // Afloat's sessions are its own rows in `sessions`, not a servlet
+        // container's. A JSESSIONID alongside afloat_session would be a second,
+        // unmanaged session mechanism that nothing in either backend expires.
         "still issues no JSESSIONID" {
             AuthFixtures.account(dataSource)
 

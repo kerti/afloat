@@ -79,7 +79,11 @@ func (h *Handlers) sessionCookie(token string, expires time.Time) *http.Cookie {
 	// prefers, which makes it the one that matters on a client with a skewed
 	// clock. Rounded up, so a sub-second remainder never truncates to 0 and
 	// turns a fresh session into a session cookie.
-	maxAge := max(int(math.Ceil(time.Until(expires).Seconds())), 1)
+	//
+	// Measured against h.now(), not time.Now(): expires was computed from the
+	// same seam, so time.Until here would subtract a fake clock from a real one
+	// and hand a test a Max-Age with no relationship to the TTL it set.
+	maxAge := max(int(math.Ceil(expires.Sub(h.now()).Seconds())), 1)
 	return &http.Cookie{
 		Name:  SessionCookieName,
 		Value: token,

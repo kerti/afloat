@@ -29,7 +29,27 @@ class SessionCookieFactory(appConfig: AppConfig, private val clock: Clock) {
     // The same Clock the callers computed `expires` from: a fixed clock in a
     // test would otherwise measure Max-Age against wall time.
     fun set(token: String, expires: Instant): String =
-        base(token, Duration.between(clock.instant(), expires).toSeconds().coerceAtLeast(0)).build().toString()
+        base(token, maxAgeSeconds(expires)).build().toString()
+
+    // Rounded UP, with a floor of 1, matching Go's
+    // `max(int(math.Ceil(expires.Sub(h.now()).Seconds())), 1)`
+    // (backend/internal/auth/session.go). Both halves matter and neither is
+    // cosmetic:
+    //
+    //   - Ceil, because the caller reads the clock to compute `expires` and this
+    //     reads it again a few microseconds later. Truncating turns the whole
+    //     SESSION_TTL into TTL-1 on every single login, so the two backends
+    //     would disagree by a second on a header the operator can read.
+    //   - Floor of 1, because Max-Age=0 is not "expires immediately", it is
+    //     DELETE THIS COOKIE. A refresh racing its own expiry would hand the
+    //     browser a logout instead of a session.
+    private fun maxAgeSeconds(expires: Instant): Long {
+        val remaining = Duration.between(clock.instant(), expires)
+        // Duration normalises `nano` into 0..999_999_999 with a possibly
+        // negative `seconds`, so this is a true ceiling on either side of zero.
+        val ceiled = remaining.seconds + if (remaining.nano > 0) 1 else 0
+        return ceiled.coerceAtLeast(1)
+    }
 
     fun clear(): String = base("", 0).build().toString()
 }

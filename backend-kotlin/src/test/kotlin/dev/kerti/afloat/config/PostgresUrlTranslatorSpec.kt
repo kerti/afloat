@@ -13,6 +13,10 @@ data class PostgresUrlTranslatorCase(
     val expectedPass: String?,
 )
 
+// databaseUrlIsTranslatedToJdbc (#13 test 5)
+//
+// DATABASE_URL is the one §12 name that cannot be shared verbatim — libpq for
+// pgx, JDBC for Spring — so it is translated at boot rather than spelled twice.
 open class PostgresUrlTranslatorSpec : StringSpec({
 
     withData(

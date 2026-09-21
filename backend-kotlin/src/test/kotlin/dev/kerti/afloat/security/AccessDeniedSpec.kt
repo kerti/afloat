@@ -1,8 +1,11 @@
 package dev.kerti.afloat.security
 
 import dev.kerti.afloat.auth.EnvelopeAccessDeniedHandler
+import dev.kerti.afloat.httperr.ApiExceptionHandler
+import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.StringSpec
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.types.shouldBeSameInstanceAs
 import io.kotest.matchers.string.shouldNotContain
 import org.springframework.mock.web.MockHttpServletRequest
 import org.springframework.mock.web.MockHttpServletResponse
@@ -35,5 +38,27 @@ class AccessDeniedSpec : StringSpec({
         response.contentType shouldBe "application/json;charset=UTF-8"
         response.contentAsString shouldNotContain "message"
         response.contentAsString shouldNotContain "Access is denied"
+    }
+
+    // The handler above can only ever run if the exception REACHES
+    // ExceptionTranslationFilter. ApiExceptionHandler's @ExceptionHandler(
+    // Exception::class) catch-all sits inside the handler, further in, and
+    // would answer 500 INTERNAL first — leaving the handler this spec just
+    // asserted unreachable for a second reason once step 9's authorization
+    // rules make the first one (no authorities on the chain) go away.
+    //
+    // Rethrowing the SAME exception is how a @ControllerAdvice declines:
+    // ExceptionHandlerExceptionResolver reads it as "not handled" and lets the
+    // original continue up the chain.
+    "declines AccessDeniedException so the filter chain still sees it" {
+        val denial = AccessDeniedException("Access is denied")
+
+        val rethrown = shouldThrow<AccessDeniedException> {
+            ApiExceptionHandler().rethrowAccessDenied(denial)
+        }
+
+        // The same instance, not a copy: a different one would be logged as an
+        // accident and the resolver's contract would not apply.
+        rethrown shouldBeSameInstanceAs denial
     }
 })

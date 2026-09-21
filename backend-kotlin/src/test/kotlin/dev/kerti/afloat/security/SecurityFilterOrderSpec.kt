@@ -7,9 +7,13 @@ import dev.kerti.afloat.auth.SessionFilter
 import dev.kerti.afloat.testsupport.DatabaseSpec
 import io.kotest.matchers.ints.shouldBeGreaterThanOrEqual
 import io.kotest.matchers.ints.shouldBeLessThan
+import io.kotest.matchers.shouldBe
 import jakarta.servlet.Filter
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.security.web.FilterChainProxy
+import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter
+import org.springframework.security.web.authentication.www.BasicAuthenticationFilter
+import org.springframework.security.web.csrf.CsrfFilter
 
 class SecurityFilterOrderSpec : DatabaseSpec() {
 
@@ -38,6 +42,35 @@ class SecurityFilterOrderSpec : DatabaseSpec() {
             maxBody shouldBeLessThan crossSite
             crossSite shouldBeLessThan facts
             facts shouldBeLessThan session
+        }
+
+        // csrfIsDisabledInSpringSecurity (#13 test 21)
+        //
+        // Asserted by absence from the real chain, not by reading `.csrf {
+        // it.disable() }` back out of the configuration. Spring's token CSRF is
+        // not the design: the defence is SameSite=Lax plus CrossSiteGuardFilter
+        // (BOOTSTRAP §5.1), and CsrfFilter alongside it would reject every POST
+        // that carries no token — every login, from every client that is not
+        // the browser app.
+        "mounts no CsrfFilter" {
+            val filters = filterChainProxy.filterChains.first().filters
+
+            filters.indexOfFilter<CsrfFilter>() shouldBe -1
+            // The guard that replaces it is present, so this cannot pass by
+            // there being no chain at all.
+            filters.indexOfFilter<CrossSiteGuardFilter>() shouldBeGreaterThanOrEqual 0
+        }
+
+        // httpBasicAndFormLoginAreDisabled (#13 test 19)
+        //
+        // The header half is asserted through /me in SecurityChainSpec; this is
+        // the other half — neither filter is mounted, so there is no /login
+        // route and no generated form for anything to be redirected to.
+        "mounts neither form login nor HTTP Basic" {
+            val filters = filterChainProxy.filterChains.first().filters
+
+            filters.indexOfFilter<UsernamePasswordAuthenticationFilter>() shouldBe -1
+            filters.indexOfFilter<BasicAuthenticationFilter>() shouldBe -1
         }
     }
 }

@@ -62,6 +62,7 @@ open class SystemControllerSpec : StringSpec({
         response.body shouldBe AuthMethods(local = true, google = true)
     }
 
+    // authMethodsHonoursDisabledLocal
     "reports local disabled while google stays live" {
         // Afloat cannot disable both providers: validate() refuses a
         // configuration nothing could log in with.

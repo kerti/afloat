@@ -36,6 +36,7 @@ class SessionTouchFailureSpec : WebDatabaseSpec() {
     private fun anyInstant(): Instant = any(Instant::class.java) ?: Instant.EPOCH
 
     init {
+        // aFailedTouchDoesNotFailTheRequest
         "serves the request when the session refresh fails" {
             val account = AuthFixtures.account(dataSource)
             val token = UUID.randomUUID().toString()

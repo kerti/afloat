@@ -36,3 +36,33 @@ fun loginBody(email: String, password: String): String =
 
 private fun String.jsonString(): String =
     "\"" + replace("\\", "\\\\").replace("\"", "\\\"") + "\""
+
+// A flat JSON object read WITHOUT a mapper, as name -> raw value text: a string
+// keeps its quotes, a number and a boolean do not. Deliberately not
+// ObjectMapper.readValue, because these assertions are about the bytes on the
+// wire — `additionalProperties: false`, money as a quoted string, a null field
+// omitted rather than emitted — and a mapper answers about how IT chose to read
+// them back. Extracted from MeSpec so the system routes assert the same way.
+fun String.jsonFields(): Map<String, String> {
+    val raw = trim().removePrefix("{").removeSuffix("}")
+    if (raw.isBlank()) return emptyMap()
+    return raw.splitTopLevel().associate { pair ->
+        pair.substringBefore(':').trim().trim('"') to pair.substringAfter(':').trim()
+    }
+}
+
+// Splits on commas that are not inside a quoted string.
+private fun String.splitTopLevel(): List<String> {
+    val parts = mutableListOf<String>()
+    val current = StringBuilder()
+    var inQuotes = false
+    forEach { c ->
+        when {
+            c == '"' -> { inQuotes = !inQuotes; current.append(c) }
+            c == ',' && !inQuotes -> { parts += current.toString(); current.clear() }
+            else -> current.append(c)
+        }
+    }
+    if (current.isNotBlank()) parts += current.toString()
+    return parts
+}

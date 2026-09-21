@@ -74,6 +74,11 @@ class LoginSpec : WebDatabaseSpec() {
             // Host-only, deliberately: a cookie scoped to a shared parent domain
             // leaks a demo session into a preview deployment (BOOTSTRAP §5).
             attributes.keys shouldNotContain "domain"
+            // The whole SESSION_TTL, not one second short of it. Max-Age is the
+            // attribute a browser prefers over Expires, and Go emits the same
+            // number (TestSessionCookieMaxAgeIsTheFullTTL); the rounding rules
+            // that make the two agree are pinned in SessionCookieFactorySpec.
+            attributes["max-age"] shouldBe appConfig.sessionTtl.toSeconds().toString()
         }
 
         // sessionRowStoresTheSha256OfTheTokenNeverTheToken

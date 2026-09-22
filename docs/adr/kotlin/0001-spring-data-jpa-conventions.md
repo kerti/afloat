@@ -1,7 +1,7 @@
 # Spring Data JPA conventions
 
-`draft` — no code has shipped behind this yet. It lands with `BOOTSTRAP.md` §11 step 6
-(issues #13, #14) and the tag comes off when step 9's domain tables are reading through it.
+`draft` — rules 1, 2, 3, 4 and 6 ship behind #15. The tag stays until rule 5 (idempotent create) and
+domain-table tenancy scoping have shipped too, which lands with step 9.
 
 The Kotlin backend uses **Spring Data JPA**, per `BOOTSTRAP.md` §3, with the conventions below. The
 Go backend uses `sqlc` over hand-written SQL (`go/0002`). That asymmetry is deliberate and this ADR
@@ -50,13 +50,13 @@ only in middleware. In Kotlin that means:
   interceptor that appends a predicate. An ambient tenant filter is precisely the "middleware only"
   failure §4 forbids, wearing a Hibernate hat: every query looks correct in isolation, and the one
   code path that runs outside the filter's scope is invisible.
-- **Reading the tenant root by its own primary key is the one exception.** `findById(householdId)`
-  on `HouseholdRepository` needs no `@Query`, because there the tenant key *is* the identifier: a
-  rename cannot drop the predicate the way it can from a `findByHouseholdIdAnd…` method name, and
-  `@SQLRestriction` supplies the `deleted_at IS NULL` half. `GET /api/me` is the first and currently
-  only case (`AuthService.me`), and Go spells the same read out longhand as
-  `WHERE id = $1 AND deleted_at IS NULL` (`GetHouseholdByID`). Any read of a table that merely
-  *carries* a `household_id` column stays under the rule above.
+- **A read by primary key, where that key came from the authenticated session, needs no `@Query`.**
+  `HouseholdRepository.findById(user.householdId)` and `UserRepository.findById(principal.userId)`
+  both qualify: the identifier is itself the authorisation, a rename cannot drop a predicate that was
+  never written, and `@SQLRestriction` supplies the `deleted_at IS NULL` half. Go spells the same two
+  reads longhand (`GetHouseholdByID`, `GetUserByID`) and likewise filters no `household_id`.
+  Everything reached *through* a household — a read filtered by `household_id` rather than by its own
+  id — stays under the rule above, without exception.
 
 The distinction is that a reviewer must be able to confirm tenancy by reading the repository, the
 same property `go/0002` values in written SQL.

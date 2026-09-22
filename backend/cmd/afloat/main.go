@@ -77,6 +77,7 @@ func run() error {
 			LocalEnabled:  cfg.AuthLocalEnabled,
 			GoogleEnabled: cfg.AuthGoogleEnabled,
 		}),
+		AuthLocalEnabled: cfg.AuthLocalEnabled,
 	})
 
 	srv := &http.Server{

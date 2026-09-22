@@ -66,9 +66,11 @@ func New(d Deps) http.Handler {
 	// proxy in front — so an attacker would choose their own rate-limit key and
 	// the per-IP login backoff would stop existing.
 	//
-	// Recoverer turns a handler panic into a 500 instead of killing the process
-	// and dropping every in-flight request with it.
-	r.Use(middleware.Recoverer)
+	// recoverer (middleware.go) turns a handler panic into the shared envelope
+	// instead of killing the process and dropping every in-flight request with
+	// it. Not chi's middleware.Recoverer: that writes a bare 500 with no body
+	// and no Content-Type (#29).
+	r.Use(recoverer)
 	r.Use(requestLogger)
 	// A body limit on every JSON route. Balances caps only its file uploads,
 	// which leaves an unbounded decode everywhere else.

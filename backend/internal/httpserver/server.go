@@ -29,12 +29,6 @@ type Server struct {
 type Deps struct {
 	System *system.Handlers
 	Auth   *auth.Handlers
-
-	// AuthLocalEnabled gates POST /api/auth/local/login (issue #24): when
-	// false, the route must not exist — a bare 404, not a 401/403 from
-	// within the handler. /auth/methods stays the single source of truth
-	// for which providers are configured; this only has to agree with it.
-	AuthLocalEnabled bool
 }
 
 func (s *Server) GetHealth(ctx context.Context, r api.GetHealthRequestObject) (api.GetHealthResponseObject, error) {
@@ -84,11 +78,13 @@ func New(d Deps) http.Handler {
 	// mounting and no per-route middleware hook (ChiServerOptions.Middlewares
 	// applies to every operation alike). Hand-editing that file is out
 	// (BOOTSTRAP.md §6; CI regenerates and diffs it away). So this one route
-	// is gated ahead of the generated mux instead: matched by exact method
-	// and path, before CSRF or session middleware ever run, so a disabled
-	// login answers chi's ordinary 404 with no session row written and no
-	// side effect beyond that.
-	r.Use(disabledLocalLogin404(d.AuthLocalEnabled))
+	// is gated ahead of the generated mux instead: any request whose path
+	// matches is answered before CSRF or session middleware ever run, so a
+	// disabled login gives chi's ordinary 404 with no session row written.
+	// Enabled comes from d.System.LocalEnabled() — the same value
+	// GetAuthMethods reports — so the gate cannot drift from what
+	// /auth/methods tells the client.
+	r.Use(disabledLocalLogin404(d.System.LocalEnabled()))
 	// A body limit on every JSON route. Balances caps only its file uploads,
 	// which leaves an unbounded decode everywhere else.
 	r.Use(maxBodyBytes(1 << 20))

@@ -55,12 +55,12 @@ func requestLogger(next http.Handler) http.Handler {
 	})
 }
 
-// localLoginPath is POST /api/auth/local/login's full mounted path — the one
-// route disabledLocalLogin404 gates. It is spelled out here rather than
-// derived from the generated api package, which has no constant for it.
+// localLoginPath is /api/auth/local/login's full mounted path — the one route
+// disabledLocalLogin404 gates. It is spelled out here rather than derived from
+// the generated api package, which has no constant for it.
 const localLoginPath = "/api/auth/local/login"
 
-// disabledLocalLogin404 makes POST /api/auth/local/login answer a bare 404
+// disabledLocalLogin404 makes /api/auth/local/login answer a bare 404
 // when the local provider is off, matching how GET /api/auth/methods already
 // reports it (issue #24). When enabled is true this is a no-op: the returned
 // middleware is next itself, so the default configuration's request path is
@@ -71,7 +71,7 @@ func disabledLocalLogin404(enabled bool) func(http.Handler) http.Handler {
 			return next
 		}
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.Method == http.MethodPost && r.URL.Path == localLoginPath {
+			if r.URL.Path == localLoginPath {
 				http.NotFound(w, r)
 				return
 			}

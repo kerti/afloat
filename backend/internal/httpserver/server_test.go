@@ -29,7 +29,6 @@ func newTestServer() http.Handler {
 			SessionMaxLifetime: 90 * 24 * time.Hour,
 			CookieSecure:       true,
 		}),
-		AuthLocalEnabled: true,
 	})
 }
 
@@ -160,9 +159,8 @@ func assertEnvelope(t *testing.T, rec *httptest.ResponseRecorder, wantCode strin
 // in-flight request with it.
 func TestPanicIsRecovered(t *testing.T) {
 	srv := New(Deps{
-		System:           system.New(system.Deps{Querier: panicQuerier{}, LocalEnabled: true}),
-		Auth:             auth.New(auth.Deps{Querier: panicQuerier{}}),
-		AuthLocalEnabled: true,
+		System: system.New(system.Deps{Querier: panicQuerier{}, LocalEnabled: true}),
+		Auth:   auth.New(auth.Deps{Querier: panicQuerier{}}),
 	})
 
 	rec := httptest.NewRecorder()
@@ -207,7 +205,6 @@ func TestLocalLoginDisabledIsABareNotFound(t *testing.T) {
 			SessionMaxLifetime: 90 * 24 * time.Hour,
 			CookieSecure:       true,
 		}),
-		AuthLocalEnabled: false,
 	})
 
 	body := `{"email":"a@example.com","password":"whatever-it-does-not-matter"}`
@@ -221,6 +218,16 @@ func TestLocalLoginDisabledIsABareNotFound(t *testing.T) {
 		t.Errorf("status = %d, want 404", rec.Code)
 	}
 
+	// GET too: with a method-scoped gate chi answers 405 here, which tells a
+	// prober the route exists.
+	reqGet := httptest.NewRequest(http.MethodGet, "/api/auth/local/login", nil)
+	recGet := httptest.NewRecorder()
+	srv.ServeHTTP(recGet, reqGet)
+
+	if recGet.Code != http.StatusNotFound {
+		t.Errorf("GET status = %d, want 404", recGet.Code)
+	}
+
 	// Not just any 404: the same one chi hands back for a path that was never
 	// registered — proof this isn't an error envelope wearing a 404, and that
 	// the route genuinely does not exist rather than existing-but-refusing.
@@ -231,6 +238,9 @@ func TestLocalLoginDisabledIsABareNotFound(t *testing.T) {
 	}
 	if rec.Body.String() != unmatched.Body.String() {
 		t.Errorf("body = %q, want %q (same as an unmatched route)", rec.Body.String(), unmatched.Body.String())
+	}
+	if recGet.Body.String() != unmatched.Body.String() {
+		t.Errorf("body = %q, want %q (same as an unmatched route)", recGet.Body.String(), unmatched.Body.String())
 	}
 
 	if q.sessionCreated {

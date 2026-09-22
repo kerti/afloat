@@ -155,9 +155,12 @@ Both backends must satisfy all of these identically.
   - *Spring Data JPA footgun:* a non-null assigned `@Id` makes `isNew()` false, so `save()` calls
     `merge()` — a SELECT before every INSERT. Implement `Persistable<UUID>` with a transient `isNew`
     flag. Both backends stay correct, so contract conformance will never catch this.
-- **Money:** `DECIMAL(20,4)`, serialised as **strings** on the wire. Jackson must be configured
-  explicitly or Spring emits JSON numbers (or scientific notation) while Go emits strings. Worth an
-  early conformance test.
+- **Money:** `DECIMAL(20,4)`, serialised as **strings** on the wire, at exactly the storage scale —
+  4 decimal places, always, never trimmed and never exponent notation. `"25000000"` and `"2.5e7"` are
+  both wrong for a `25000000.0000` row; `"25000000.0000"` is the only correct rendering. In Go, use
+  `decimal.Decimal.StringFixed(4)`, not `.String()`, which strips trailing zeros. Jackson must be
+  configured explicitly or Spring emits JSON numbers (or scientific notation) while Go emits strings.
+  Worth an early conformance test.
 - **Currency:** every monetary value carries its `currency` column even though the MVP UI is pinned to
   the Household's reporting currency.
 - **Dates:** `occurred_on` is a `date` (the Period Day). `captured_at` is `timestamptz`. Everything

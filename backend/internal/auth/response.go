@@ -47,9 +47,11 @@ func formatDayStartsAt(t pgtype.Time) string {
 
 // meResponse projects the User and Household onto the wire shape.
 //
-// Money is a STRING (BOOTSTRAP.md §4). decimal.NullDecimal.String() would
-// render "0" for a null, which is a different statement from "not supplied", so
-// the null case returns no field at all.
+// Money is a STRING at the storage scale, 4 decimal places, never trimmed
+// (BOOTSTRAP.md §4) — StringFixed(4), not String(), which strips trailing
+// zeros. decimal.NullDecimal.String() would also render "0" for a null,
+// which is a different statement from "not supplied", so the null case
+// returns no field at all.
 func meResponse(user db.User, household db.Household) api.Me {
 	me := api.Me{
 		Id:                   openapi_types.UUID(user.ID.Bytes),
@@ -65,7 +67,7 @@ func meResponse(user db.User, household db.Household) api.Me {
 		AllowanceMode:        api.MeAllowanceMode(household.AllowanceMode),
 	}
 	if household.ExpectedMonthlyIncome.Valid {
-		income := household.ExpectedMonthlyIncome.Decimal.String()
+		income := household.ExpectedMonthlyIncome.Decimal.StringFixed(4)
 		me.ExpectedMonthlyIncome = &income
 	}
 	return me

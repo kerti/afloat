@@ -131,8 +131,41 @@ func TestGetMeSerialisesMoneyAsAString(t *testing.T) {
 	if me.ExpectedMonthlyIncome == nil {
 		t.Fatal("expected_monthly_income is absent, want a string")
 	}
-	if got := *me.ExpectedMonthlyIncome; got != "25000000" {
-		t.Errorf("expected_monthly_income = %q, want 25000000", got)
+	if got := *me.ExpectedMonthlyIncome; got != "25000000.0000" {
+		t.Errorf("expected_monthly_income = %q, want 25000000.0000", got)
+	}
+}
+
+// A whole-number amount must not be mistaken for the only shape money takes:
+// a fractional value has to round-trip at the storage scale too, so trailing-
+// zero trimming (fixed above) can't silently start passing again for one case
+// while breaking the other.
+func TestGetMeSerialisesFractionalMoneyAtStorageScale(t *testing.T) {
+	h := newHarness(t, time.Now)
+	ctx := context.Background()
+
+	householdID := h.tdb.CreateHousehold(t, "Test Household")
+	if _, err := h.tdb.Pool.Exec(ctx,
+		`UPDATE households SET expected_monthly_income = 1234.5600 WHERE id = $1`, householdID); err != nil {
+		t.Fatalf("set income: %v", err)
+	}
+	userID := h.tdb.CreateUser(t, householdID, "a@example.com", "A")
+
+	user, err := h.tdb.Queries.GetUserByID(ctx, userID)
+	if err != nil {
+		t.Fatalf("GetUserByID: %v", err)
+	}
+	resp, err := h.auth.GetMe(auth.WithUser(ctx, user), api.GetMeRequestObject{})
+	if err != nil {
+		t.Fatalf("GetMe: %v", err)
+	}
+	me := resp.(api.GetMe200JSONResponse)
+
+	if me.ExpectedMonthlyIncome == nil {
+		t.Fatal("expected_monthly_income is absent, want a string")
+	}
+	if got := *me.ExpectedMonthlyIncome; got != "1234.5600" {
+		t.Errorf("expected_monthly_income = %q, want 1234.5600", got)
 	}
 }
 

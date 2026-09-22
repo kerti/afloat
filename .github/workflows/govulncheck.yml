@@ -20,7 +20,9 @@ permissions:
   contents: read
 
 jobs:
-  scan:
+  # Distinct display name - see gitleaks.yml.
+  govulncheck:
+    name: govulncheck (Go, reachability)
     runs-on: ubuntu-latest
     steps:
       # The action checks the repo out and sets Go up itself. The govulncheck

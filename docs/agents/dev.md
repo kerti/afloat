@@ -51,9 +51,12 @@ file grows as real targets land.
   `backend-kotlin/build/reports/jacoco/test/jacocoTestReport.xml`; the `check` job uploads both to
   Codecov under the flags `backend-go` and `backend-kotlin`. A separate coverage job would be a
   second run of both suites and the CI-mirrors-`make check` promise would stop being true. Policy
-  lives in `codecov.yml`: a fixed 80% project floor (not a delta gate, which would punish deleting
-  dead code), per-flag floors **informational** until both flags clear the line, and an ignore list
-  for generated code. Re-validate that file after editing it — a malformed one is accepted silently
+  lives in `codecov.yml`: a fixed 80% floor (not a delta gate, which would punish deleting dead
+  code), **every status informational** until the numbers clear it, and an ignore list for generated
+  code. The trap worth knowing: `go tool cover` counts statements and JaCoCo counts instructions,
+  but Codecov normalises both to **lines**, and only Codecov's number is what the gate reads — at
+  `f56fbfc` that is Go 75.75%, Kotlin 80.43%, project 78.55%, against 78.76 / 86.42 / ~83 from the
+  local tools. Compare like for like before concluding coverage moved. Re-validate that file after editing it — a malformed one is accepted silently
   and then ignored:
   `curl -X POST --data-binary @codecov.yml https://codecov.io/validate`.
 - **The other workflows** run beside CI rather than inside it, because `check` mirrors `make check`

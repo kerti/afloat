@@ -40,12 +40,23 @@ ignore:
 # as covered as its base - which fails a well-tested feature added at 85% to a
 # repo sitting at 91%, and punishes deleting dead code. Patch coverage stays on
 # `auto`, where comparing the diff against the base is the right question.
+#
+# INFORMATIONAL, and the reason is a measurement, not a preference. 80% was set
+# against `go tool cover` and JaCoCo, which count STATEMENTS and INSTRUCTIONS
+# respectively. Codecov normalises everything to LINES, and by that measure the
+# first uploaded report (f56fbfc, both flags) is Go 75.75%, Kotlin 80.43%,
+# project 78.55% - so the floor was chosen against numbers no gate ever
+# computes. Enforcing it would put the project status red on every PR from the
+# first merge, which is the same day-one-red failure the per-flag floors below
+# are informational to avoid. The target stays at 80% because 80% is the
+# standard; flip `informational` off once main's report actually clears it.
 coverage:
   status:
     project:
       default:
         target: 80%
         threshold: 0%
+        informational: true
     patch:
       default:
         target: auto
@@ -59,11 +70,10 @@ flags:
     paths:
       - "backend-kotlin/"
 
-# Per-flag floors start INFORMATIONAL and stay that way until both flags clear
-# the line. Measured at 6707e58: Go 78.76%, Kotlin 86.42%, project ~83%. So the
-# project floor passes today and enforces; an enforcing backend-go floor would
-# block every PR from day one over a number no PR in flight caused. Flip
-# `informational` off per flag once it is above 80% on main, not before.
+# Per-flag floors are INFORMATIONAL for the same reason as the project status
+# above, and stay that way until each flag clears the line on main. As measured
+# by Codecov at f56fbfc: backend-go 75.75%, backend-kotlin 80.43%. Flip
+# `informational` off per flag once that flag is above 80% on main, not before.
 flag_management:
   default_rules:
     statuses:

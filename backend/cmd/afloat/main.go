@@ -77,6 +77,10 @@ func run() error {
 			LocalEnabled:  cfg.AuthLocalEnabled,
 			GoogleEnabled: cfg.AuthGoogleEnabled,
 		}),
+		// Same variable as http.Server.WriteTimeout below: one bound on how long
+		// a handler may run, read once rather than a second literal that could
+		// drift from it (#30).
+		HandlerTimeout: cfg.WriteTimeout,
 	})
 
 	srv := &http.Server{

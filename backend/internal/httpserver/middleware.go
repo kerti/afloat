@@ -65,3 +65,30 @@ func maxBodyBytes(n int64) func(http.Handler) http.Handler {
 		})
 	}
 }
+
+// securityHeaders writes the fixed set BOOTSTRAP.md §5.2 pins, matching what
+// Kotlin already sends via Spring Security's defaults (issue #26). The values
+// never depend on the request, so every response carries the same six —
+// Strict-Transport-Security stays off: that one is Tomcat's HTTPS-only
+// behaviour, a documented deliberate difference, not something Go replicates
+// on a deployment that may not terminate TLS itself.
+//
+// It must be mounted after middleware.RequestID: that puts an id in the
+// request context but — deliberately, per its own docs — never writes it to
+// the response, so this is what turns the id chi already generated (or
+// echoed from an incoming X-Request-Id) into a response header.
+func securityHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := w.Header()
+		h.Set("X-Content-Type-Options", "nosniff")
+		h.Set("X-Frame-Options", "DENY")
+		h.Set("Cache-Control", "no-cache, no-store, max-age=0, must-revalidate")
+		h.Set("Pragma", "no-cache")
+		h.Set("Expires", "0")
+		h.Set("X-XSS-Protection", "0")
+		if reqID := middleware.GetReqID(r.Context()); reqID != "" {
+			h.Set("X-Request-Id", reqID)
+		}
+		next.ServeHTTP(w, r)
+	})
+}

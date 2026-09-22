@@ -305,6 +305,25 @@ The error envelope is Balances ADR-0027 exactly: `{"code": "SCREAMING_SNAKE", "a
 `message` field, `args` values JSON primitives only. `VALIDATION` carries `{field, rule}` and reports
 the first failing field only.
 
+### Response headers
+
+Both backends send this fixed set on every response, as explicit middleware on Go and Spring
+Security's defaults on Kotlin (issue #26):
+
+| Header | Value |
+|---|---|
+| `X-Content-Type-Options` | `nosniff` |
+| `X-Frame-Options` | `DENY` |
+| `Cache-Control` | `no-cache, no-store, max-age=0, must-revalidate` |
+| `Pragma` | `no-cache` |
+| `Expires` | `0` |
+| `X-XSS-Protection` | `0` |
+| `X-Request-Id` | The incoming request's id if it sent one, otherwise one minted server-side. |
+
+**`Strict-Transport-Security` is the one deliberate difference.** Kotlin's Tomcat sends it; Go does
+not. It is HTTPS-only, Tomcat-decided rather than an application choice, and not applicable to Go's
+current deployment, which may not terminate TLS itself.
+
 ## 6. The API contract
 
 `contract/openapi.yaml` is **hand-written and authoritative**; every artefact is generated from it.
@@ -498,7 +517,7 @@ truth and fails if either backend's configuration drifts from it.
 | `LOG_LEVEL` | `info` | |
 | `AUTO_MIGRATE` | `true` | Apply migrations on boot. Off only to run against a database migrated by something else. |
 | `HTTP_READ_TIMEOUT` | `30s` | |
-| `HTTP_WRITE_TIMEOUT` | `60s` | |
+| `HTTP_WRITE_TIMEOUT` | `60s` | Go: enforced twice with one value — `http.Server.WriteTimeout` and the handler-timeout middleware (`middleware.Timeout`, issue #30). Kotlin has no enforcement yet; the ruling on #30 is a statement-level timeout (`@Transactional(timeout=...)`/JDBC `queryTimeout`) rather than a true request-level cutoff — a Spring MVC limitation, and a documented deliberate difference once built, not a gap to close the same way Go's was. |
 | `HTTP_IDLE_TIMEOUT` | `120s` | |
 | `SHUTDOWN_TIMEOUT` | `10s` | |
 | `AUTH_LOCAL_ENABLED` | `true` | |

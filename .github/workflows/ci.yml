@@ -87,11 +87,18 @@ jobs:
       # fail_ci_if_error on, not skipping would fail every dependency PR on an
       # upload rather than on the bump - and a dependency bump's coverage
       # measures nothing new.
+      #
+      # disable_search is not optional here. `files` adds to the CLI's file
+      # list, it does not replace it: left searching, EACH step finds BOTH
+      # profiles and ships them under its own flag, so `backend-go` carries the
+      # Kotlin report and vice versa. codecov.yml's flag paths happen to mask
+      # the damage; the numbers would still be assembled from the wrong inputs.
       - name: Upload Go coverage
         if: github.actor != 'dependabot[bot]'
         uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
         with:
           files: backend/coverage.out
+          disable_search: true
           flags: backend-go
           fail_ci_if_error: true
           token: ${{ secrets.CODECOV_TOKEN }}
@@ -101,6 +108,7 @@ jobs:
         uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
         with:
           files: backend-kotlin/build/reports/jacoco/test/jacocoTestReport.xml
+          disable_search: true
           flags: backend-kotlin
           fail_ci_if_error: true
           token: ${{ secrets.CODECOV_TOKEN }}

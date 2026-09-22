@@ -11,6 +11,6 @@ generate:
   chi-server: true
   strict-server: true
   models: true
-  embedded-spec: false
+  embedded-spec: true
 output-options:
   skip-prune: true

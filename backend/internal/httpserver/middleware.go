@@ -3,10 +3,35 @@ package httpserver
 import (
 	"log/slog"
 	"net/http"
+	"runtime/debug"
 	"time"
 
 	"github.com/go-chi/chi/v5/middleware"
+
+	"github.com/kerti/afloat/backend/internal/httperr"
 )
+
+// recoverer replaces chi's middleware.Recoverer, which answers a handler
+// panic with a bare 500 — no body, no Content-Type — leaving the frontend
+// nothing to dispatch on (issue #29; #19 closed the other two escape
+// hatches the generated server has). It logs the panic and stack at error
+// level, then writes the shared envelope. It never re-panics: that would
+// drop the in-flight request, exactly what recovering exists to prevent.
+func recoverer(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() {
+			if rvr := recover(); rvr != nil {
+				slog.Error("panic recovered",
+					"path", r.URL.Path,
+					"panic", rvr,
+					"stack", string(debug.Stack()),
+				)
+				httperr.Write(w, http.StatusInternalServerError, httperr.CodeInternal, nil)
+			}
+		}()
+		next.ServeHTTP(w, r)
+	})
+}
 
 // requestLogger records method, path, status and duration — and nothing else.
 //

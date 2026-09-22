@@ -169,6 +169,7 @@ func TestPanicIsRecovered(t *testing.T) {
 	if rec.Code != http.StatusInternalServerError {
 		t.Errorf("status = %d, want 500 from the recoverer", rec.Code)
 	}
+	assertEnvelope(t, rec, string(api.INTERNAL))
 }
 
 type panicQuerier struct{ db.Querier }

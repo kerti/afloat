@@ -1,0 +1,19 @@
+# GET /api/health - the first case, and the one that proves the harness works
+# rather than proving anything about the product. Unauthenticated, no request
+# body, no persisted state, identical answer from both backends: if this cannot
+# be made to pass, nothing harder is worth writing yet.
+#
+# `version` is asserted as `dev` because that is the documented default of the
+# VERSION variable (BOOTSTRAP.md §12) and scripts/conformance.sh does not
+# override it. A run that stamps a real version must override the case too -
+# which is the correct coupling, since the value is part of the answer.
+
+- name: health reports ok when the database is reachable
+  request:
+    method: GET
+    path: /health
+  expect:
+    status: 200
+    body_json:
+      status: ok
+      version: dev

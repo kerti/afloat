@@ -23,6 +23,11 @@ ignore:
   - "backend/internal/migrations/**"
   - "backend/internal/testutil/**"
   - "backend/cmd/afloat/**"
+  # The conformance harness (#28) is test infrastructure, like internal/testutil
+  # above: it is the instrument, not the code under measurement, and neither
+  # backend's suite executes it. Measuring it would drag the number down with a
+  # file nobody's tests are supposed to cover.
+  - "contract/conformance/**"
   # The Kotlin side of the same rule: openApiGenerate's output, which JaCoCo
   # measures because it is in the main source set.
   # Both spellings on purpose: Codecov compiles "**/x/**" to ".*/x/.*", which

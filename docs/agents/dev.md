@@ -23,6 +23,15 @@ file grows as real targets land.
   compiles the tests against a main output `clean` has already removed (issue #34). This target is
   two invocations, always. It is deliberately not part of `make check` — recompiling from scratch and
   re-running the Testcontainers suite on every push buys freshness nobody asked for.
+- `make conformance` — boots **both** backends from source, each against its own database, and runs
+  the cross-backend conformance suite against the pair (`contract/conformance/`, issue #28). Needs
+  docker, a Go toolchain and a JDK, and takes minutes, so it is **not** in `make check`. It reports
+  two failure kinds separately and the distinction is the point: a backend disagreeing with the
+  expected answer means *that backend is wrong*; the two agreeing with every assertion and still
+  differing means *the case file is incomplete*, which is its own finding. `make check` compiles the
+  module and runs `go test -short` there, which validates the committed case files without needing a
+  live backend. Read `contract/conformance/README.md` before adding a case — in particular, a case
+  for a decision that has not landed pins today's accident.
 - `make sync-kotlin-migrations` — copies `db/migrations/V*.sql` into
   `backend-kotlin/src/main/resources/db/migration`. The Kotlin backend carries its migrations inside
   the jar, so it needs its own copy; the copy is **generated output and never hand-edited**, and

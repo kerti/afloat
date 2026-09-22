@@ -1,5 +1,5 @@
 .PHONY: help setup hooks-install claude-install doctor check gen-goose-migrations test-migrations \
-        db-up db-down db-reset test-migration-runners gen-oapi gen-sqlc gen check-go check-kotlin clean-kotlin \
+        db-up db-down db-reset test-migration-runners gen-oapi gen-sqlc gen check-go check-kotlin clean-kotlin conformance \
         lint-install sync-kotlin-migrations sync-denylist
 
 # `make` with no target prints help.
@@ -59,6 +59,7 @@ help:
 	@echo "  check                   pre-push gate: pass/fail per surface"
 	@echo "  check-kotlin            build, lint and test the Kotlin backend"
 	@echo "  clean-kotlin            the same, from a clean build (two Gradle invocations)"
+	@echo "  conformance             boot both backends and run the cross-backend suite"
 	@echo "  lint-install            install the pinned golangci-lint (the version CI uses)"
 	@echo "  sync-denylist           copy shared/common_passwords.txt into both backends"
 
@@ -248,6 +249,14 @@ clean-kotlin:
 	@cd backend-kotlin && ./gradlew --quiet --console=plain clean
 	@cd backend-kotlin && ./gradlew --quiet --console=plain check
 
+# Boot both backends from source, against their own databases, and assert they
+# answer identically (issue #28). Needs docker, two builds and two processes,
+# and is deliberately NOT part of check: that gate is the pre-push one and stays
+# fast. check compiles this module and validates the case files; only this
+# target runs the suite against live servers.
+conformance:
+	@./scripts/conformance.sh
+
 check:
 	@fail=0; \
 	printf '%-32s' 'goose migrations'; \
@@ -295,6 +304,10 @@ check:
 	if [ ! -e backend-kotlin/build.gradle.kts ]; then echo '- skipped (not scaffolded yet)'; \
 	elif $(MAKE) --no-print-directory check-kotlin >/dev/null 2>&1; then echo 'ok'; \
 	else echo 'FAIL - see: make check-kotlin'; fail=1; fi; \
+	printf '%-32s' 'conformance harness'; \
+	if [ ! -e contract/conformance/go.mod ]; then echo '- skipped (not scaffolded yet)'; \
+	elif (cd contract/conformance && go build ./... && go vet ./... && go test -short ./...) >/dev/null 2>&1; then echo 'ok'; \
+	else echo 'FAIL - see: cd contract/conformance && go vet ./... && go test -short ./...'; fail=1; fi; \
 	printf '%-32s' 'frontend/package.json'; \
 	if [ -e frontend/package.json ]; then echo 'FAIL - exists, but check has no steps for it'; fail=1; \
 	else echo '- skipped (not scaffolded yet)'; fi; \

@@ -1,0 +1,81 @@
+# The permitted-difference list: response headers the two backends may differ
+# on. Milestone "Base parity" axis 1 is "identical observable responses ... plus
+# a documented and tested list of permitted differences" - this is that list, in
+# the form the runner enforces. README.md is the prose; this is the enforcement,
+# so the two cannot drift apart.
+#
+# Every entry needs `why`. An entry that encodes a DECISION also needs `issue`,
+# and `provisional: true` marks one that exists only because its decision has
+# not landed - the runner prints those on every run, so the list cannot quietly
+# calcify into "the backends differ and nobody minds".
+#
+# Adding a header here to make a failing run go green, without an issue behind
+# it, is hiding a divergence rather than ruling on one.
+
+- header: Date
+  why: >
+    A property of HTTP, not of either backend: the value is the instant the
+    response was generated, and the two responses are generated milliseconds
+    apart. No decision to make.
+
+- header: Content-Length
+  why: >
+    Framing, not content. A backend that chunks where the other sets a length
+    is answering the same thing; the body itself is compared byte for byte
+    regardless, so nothing is lost by exempting the header.
+
+# ---------------------------------------------------------------------------
+# Provisional - pending #26, which decides the response header allowlist.
+# Every entry below should either disappear or gain a permanent `why` when that
+# lands. They are listed individually rather than as a wildcard so the decision
+# has to be made per header.
+# ---------------------------------------------------------------------------
+
+- header: X-Request-Id
+  issue: "26"
+  provisional: true
+  why: >
+    Kotlin emits a per-request correlation id and Go emits nothing. Whether both
+    should, neither should, or it is legitimately Kotlin-only is exactly what
+    #26 decides.
+
+- header: X-Content-Type-Options
+  issue: "26"
+  provisional: true
+  why: Spring Security default; Go sends no security headers at all. #26 rules on the set.
+
+- header: X-Frame-Options
+  issue: "26"
+  provisional: true
+  why: Spring Security default; Go sends no security headers at all. #26 rules on the set.
+
+- header: X-XSS-Protection
+  issue: "26"
+  provisional: true
+  why: Spring Security default; Go sends no security headers at all. #26 rules on the set.
+
+- header: Cache-Control
+  issue: "26"
+  provisional: true
+  why: >
+    Spring Security sets no-store on every response by default; Go sets nothing.
+    A real answer probably differs per endpoint, which is why it is #26's to
+    make and not this file's to assume.
+
+- header: Pragma
+  issue: "26"
+  provisional: true
+  why: Emitted by Spring Security alongside Cache-Control. Same decision.
+
+- header: Expires
+  issue: "26"
+  provisional: true
+  why: Emitted by Spring Security alongside Cache-Control. Same decision.
+
+- header: Strict-Transport-Security
+  issue: "26"
+  provisional: true
+  why: >
+    Spring Security emits it on HTTPS requests. It should almost certainly be
+    set by the reverse proxy rather than by either backend, but that is #26's
+    call.

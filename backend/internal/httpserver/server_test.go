@@ -237,10 +237,10 @@ func TestLocalLoginDisabledIsABareNotFound(t *testing.T) {
 		t.Errorf("Content-Type = %q, want %q (same as an unmatched route)", ct, wantCt)
 	}
 	if rec.Body.String() != unmatched.Body.String() {
-		t.Errorf("body = %q, want %q (same as an unmatched route)", rec.Body.String(), unmatched.Body.String())
+		t.Errorf("POST body = %q, want %q (same as an unmatched route)", rec.Body.String(), unmatched.Body.String())
 	}
 	if recGet.Body.String() != unmatched.Body.String() {
-		t.Errorf("body = %q, want %q (same as an unmatched route)", recGet.Body.String(), unmatched.Body.String())
+		t.Errorf("GET body = %q, want %q (same as an unmatched route)", recGet.Body.String(), unmatched.Body.String())
 	}
 
 	if q.sessionCreated {

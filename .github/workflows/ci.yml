@@ -35,7 +35,7 @@ jobs:
       # backend-kotlin/.../testsupport/TestDatabase.kt.
       AFLOAT_REQUIRE_TEST_DB: "1"
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
@@ -128,7 +128,7 @@ jobs:
     name: migrations (both runners, real schema)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # test-migration-runners runs goose via `go run`; test-migrations does not
       # need Go, but shares the job.

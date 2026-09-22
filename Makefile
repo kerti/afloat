@@ -1,5 +1,5 @@
 .PHONY: help setup hooks-install claude-install doctor check gen-goose-migrations test-migrations \
-        db-up db-down db-reset test-migration-runners gen-oapi gen-sqlc gen check-go check-kotlin \
+        db-up db-down db-reset test-migration-runners gen-oapi gen-sqlc gen check-go check-kotlin clean-kotlin \
         lint-install sync-kotlin-migrations sync-denylist
 
 # `make` with no target prints help.
@@ -28,6 +28,12 @@ GOOSE_OUT ?= $(GOOSE_DIR)
 # bump it here and CI follows.
 GOLANGCI_VERSION := v2.13.2
 
+# Where check-go writes its coverage profile, relative to backend/. Produced on
+# every run rather than behind a flag: CI uploads the profile from the same job
+# that runs `make check`, so a separate coverage invocation would be a second
+# run of the suite and the mirror would stop being one. Gitignored.
+GO_COVERAGE := coverage.out
+
 help:
 	@echo "afloat - make targets (run 'make <target>')"
 	@echo ""
@@ -52,6 +58,7 @@ help:
 	@echo "  test-migration-runners  run Flyway and goose for real and compare the two schemas"
 	@echo "  check                   pre-push gate: pass/fail per surface"
 	@echo "  check-kotlin            build, lint and test the Kotlin backend"
+	@echo "  clean-kotlin            the same, from a clean build (two Gradle invocations)"
 	@echo "  lint-install            install the pinned golangci-lint (the version CI uses)"
 	@echo "  sync-denylist           copy shared/common_passwords.txt into both backends"
 
@@ -213,7 +220,8 @@ check-go:
 	       unformatted=$$(gofmt -l . | grep -v '\.gen\.go$$' || true); \
 	       if [ -n "$$unformatted" ]; then echo 'FAIL gofmt:'; echo "$$unformatted"; exit 1; fi; \
 	       go vet ./...; fi
-	@cd backend && go build ./... && go test -race ./...
+	@cd backend && go build ./... && \
+	  go test -race -covermode=atomic -coverprofile=$(GO_COVERAGE) ./...
 
 # Build, lint and test the Kotlin backend. Gradle's own `check` lifecycle task
 # is deliberately the entry point rather than `test`: it already depends on
@@ -227,6 +235,17 @@ check-kotlin:
 	  echo 'FAIL backend-kotlin/gradlew is missing or not executable - commit the Gradle wrapper'; \
 	  exit 1; \
 	fi
+	@cd backend-kotlin && ./gradlew --quiet --console=plain check
+
+# A clean Kotlin build, as two Gradle invocations. `clean` declares no ordering
+# against anything, and build/generated/openapi is both its target and an input
+# to the main source set - so `./gradlew clean check` is a race that
+# occasionally compiles the tests against a main output clean has already
+# removed. Deliberately not folded into check-kotlin: `make check` calls that on
+# every push, and recompiling from scratch plus re-running the Testcontainers
+# suite would cost minutes per commit to buy freshness nobody asked for.
+clean-kotlin:
+	@cd backend-kotlin && ./gradlew --quiet --console=plain clean
 	@cd backend-kotlin && ./gradlew --quiet --console=plain check
 
 check:

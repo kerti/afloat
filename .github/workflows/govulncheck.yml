@@ -1,0 +1,35 @@
+# Reachability-based vulnerability scanning for the Go backend: govulncheck
+# reports a CVE only when the binary can actually reach the affected symbol,
+# which is why it earns a slot where a generic dependency scanner does not.
+#
+# Go only. The Kotlin backend's equivalent is Dependabot's security updates -
+# there is no reachability analysis for the JVM worth the noise here.
+name: govulncheck
+
+on:
+  push:
+    branches: [main]
+  # No branches filter - see codeql.yml.
+  pull_request:
+  # Weekly, because the interesting change is usually in the vulnerability
+  # database rather than in this repo.
+  schedule:
+    - cron: "0 4 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  # Distinct display name - see gitleaks.yml.
+  govulncheck:
+    name: govulncheck (Go, reachability)
+    runs-on: ubuntu-latest
+    steps:
+      # The action checks the repo out and sets Go up itself. The govulncheck
+      # binary it installs is deliberately unpinned: a scanner pinned to an old
+      # release is a scanner reading an old database.
+      - uses: golang/govulncheck-action@032d45514ae346b1db93c04b0c90b841c370344f # v1.1.0
+        with:
+          work-dir: backend
+          go-version-file: backend/go.mod
+          go-package: ./...

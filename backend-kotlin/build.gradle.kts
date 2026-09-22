@@ -5,6 +5,7 @@ plugins {
     id("io.spring.dependency-management") version "1.1.7"
     kotlin("plugin.jpa") version "2.3.21"
     id("org.openapi.generator") version "7.25.0"
+    jacoco
 }
 
 group = "dev.kerti.afloat"
@@ -99,4 +100,30 @@ allOpen {
 
 tasks.withType<Test> {
     useJUnitPlatform()
+
+    // Argon2id is configured at m=19456 KiB and that memory is allocated per
+    // hash in flight, so LoginConcurrencySpec's 30 parallel logins want ~570
+    // MiB of live heap at once - more than Gradle's 512 MiB default. Without
+    // this the suite fails with OutOfMemoryError on a machine with enough cores
+    // to genuinely overlap the hashes, and passes on CI's 4-core runner, which
+    // is the worst shape a flake can have. This makes the test runnable; it
+    // does not fix the product exposure it demonstrates - see issue #33.
+    maxHeapSize = "3g"
+}
+
+// XML only: the HTML report is for a human at a terminal, and nothing here
+// reads it. The report covers the generated API sources too; what is and is not
+// counted is decided once, in codecov.yml's ignore list, rather than twice.
+tasks.jacocoTestReport {
+    dependsOn(tasks.test)
+    reports {
+        xml.required = true
+        html.required = false
+    }
+}
+
+// Coverage is part of `check`, which is what `make check-kotlin` and CI run, so
+// the profile exists without a second invocation of the suite.
+tasks.check {
+    dependsOn(tasks.jacocoTestReport)
 }

@@ -1,0 +1,60 @@
+name: Bug report
+description: Something Afloat does is wrong.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please don't paste real amounts, real budgets or real household names -
+        this is a public repo. Toy numbers reproduce bugs just as well.
+  - type: dropdown
+    id: backend
+    attributes:
+      label: Which backend
+      description: >
+        Afloat runs one contract against two implementations. If you don't know,
+        say so - "both" and "don't know" are different answers and both are useful.
+      options:
+        - Go
+        - Kotlin
+        - Both
+        - Don't know
+        - Not a backend bug (frontend, docs, tooling)
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, what you got instead.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. ...
+        2. ...
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Capturing an Expense
+        - Left to Spend Today, or the State
+        - Monthly Budget, Categories or Pockets
+        - Login or sessions
+        - Self-hosting / deploy
+        - Something else
+  - type: checkboxes
+    id: trust
+    attributes:
+      label: Trust core
+      options:
+        - label: This bug involves an amount, the Monthly Budget, or a trajectory figure being wrong.
+          required: false
+        - label: The two backends disagree about it.
+          required: false

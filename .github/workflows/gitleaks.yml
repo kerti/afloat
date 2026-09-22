@@ -1,0 +1,32 @@
+# Secret scanning on every push and PR. gitleaks-action is free for public
+# repos and personal use; org use needs GITLEAKS_LICENSE.
+#
+# This is not the same gate as the pre-commit pii-guard (.githooks/pre-commit):
+# that one is local, opt-in per clone, and matches a personal denylist. This one
+# runs on history nobody can skip.
+name: gitleaks
+
+on:
+  push:
+    branches: [main]
+  # No branches filter - see codeql.yml.
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  # Named distinctly from govulncheck.yml's job: branch-protection required
+  # checks are selected by display name, and two identically-named check runs
+  # from different workflows are ambiguous to pick between.
+  gitleaks:
+    name: gitleaks (full history)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          # Full history: the point is a secret committed and then removed.
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -265,6 +265,21 @@ disagree on the backoff curve, on key normalisation, or on eviction, and every c
 still pass. A table keyed by ip/email with a `backoff_until` is identical by construction, testable,
 and survives a restart, which the in-memory version does not.
 
+**Any instant the database also evaluates comes from the database.** `aa1f68f` moved
+`activeBackoffSeconds`, `findLive` and `touch` onto the database's `now()` rather than the app's,
+because a window the database evaluates (a session's absolute lifetime, an active backoff) must be
+measured by the database's clock — subtracting against the app's own clock in a second step lets
+app/DB skew silently lengthen, shorten, or defeat the check, and the two disagree exactly at the
+boundary a caller cares about. This bit both sides once each after that commit: Go's login backoff
+computed the remaining wait by subtracting `h.now()` from a timestamp the database had already
+filtered on its own `now()` (fixed in #25 by having the query return the remaining interval, computed
+in SQL, instead of a raw timestamp); Kotlin's session `INSERT` supplied `created_at`/`last_seen_at`
+from the app clock while the absolute-lifetime check compares them against the database's `now()`
+(#25). Neither error was visible on the wire — the second was a persisted-state divergence only, with
+nothing in a response to show which clock wrote the row. When a boundary is checked in SQL, compute
+anything derived from that boundary in the same SQL, and never re-derive it in application code
+against a different clock.
+
 **Revoke every session on a password reset.** The reset is the "assume it was compromised" lever;
 delete the user's sessions inside the same transaction before minting the new one.
 
@@ -503,6 +518,12 @@ suites' docker-missing *skip* into a *failure*, in both backends. CI sets it onc
 accept the libpq form. Translating at boot is required rather than optional: `DATABASE_URL` is the
 most operator-visible setting there is, and a deployment where it alone differs by backend makes the
 rest of this section a half-truth.
+
+**Open: the libpq Unix-socket form is unresolved.** `pgx` accepts the hostless socket spelling,
+`postgres:///afloat?host=/var/run/postgresql`; Kotlin's `PostgresUrlTranslator` requires a host and
+rejects it. That may be the right answer — a deployment without a proxying host in front is already
+an unusual shape — but it is currently an accident of `urlPattern`, not a decision anyone made. Needs
+a ruling either way before this parity contract can claim it (#32 item 7).
 
 **Durations use the suffixes both runtimes accept, and never `d`.** Go's `time.ParseDuration`
 understands `ns us ms s m h` and rejects `d`; Spring's simple duration style accepts `d` as well. So

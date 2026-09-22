@@ -33,7 +33,13 @@ type Querier interface {
 	// Login backoff lives in the database, not process memory, because there are
 	// two backends and an in-memory limiter would diverge where contract
 	// conformance cannot see it (BOOTSTRAP.md §5.1).
-	GetLoginBackoff(ctx context.Context, keys []string) (pgtype.Timestamptz, error)
+	//
+	// Returns the remaining seconds, computed by the database's own clock, not a
+	// raw timestamp for Go to subtract against its own clock: any instant the
+	// database also evaluates (here, backoff_until > now()) comes from the
+	// database (BOOTSTRAP.md §5.1, #25). Coalesced to 0 so "no active backoff"
+	// (the aggregate over zero matching rows) is a plain zero, not a NULL scan.
+	GetLoginBackoff(ctx context.Context, keys []string) (float64, error)
 	// Authentication queries. Instance-local auth state hard-deletes: revocation IS
 	// the row delete (BOOTSTRAP.md §4).
 	// Email is the handle, never the identity. Matched case-insensitively against

@@ -1,0 +1,41 @@
+# Weekly dependency updates for the three ecosystems this repo has. The
+# frontend joins as a fourth (npm, /frontend) at BOOTSTRAP.md §11 step 7.
+#
+# GROUPED, and this is the point of the file rather than a tidiness preference:
+# ungrouped, Spring Boot's BOM alone opens a dozen pull requests and every one
+# of them burns a full 269-spec Testcontainers run in ci.yml. Majors stay
+# ungrouped - a major deserves its own PR and its own read.
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: "/backend"
+    schedule:
+      interval: weekly
+    labels: [dependencies]
+    groups:
+      go-minor-and-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: gradle
+    directory: "/backend-kotlin"
+    schedule:
+      interval: weekly
+    labels: [dependencies]
+    groups:
+      kotlin-minor-and-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  # Pins in .github/workflows/*.yml are SHAs with a `# vX.Y.Z` comment;
+  # Dependabot reads that comment and rewrites both. Grouped for the same
+  # reason: an actions bump week is five one-line PRs otherwise.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    labels: [dependencies]
+    groups:
+      actions-minor-and-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]

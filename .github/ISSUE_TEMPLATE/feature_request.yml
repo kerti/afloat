@@ -1,0 +1,46 @@
+name: Feature request
+description: Suggest something - please read the scope bar first.
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Afloat informs; it never enforces.** A feature that scores, gates,
+        streaks or moralises spending is out however useful it looks, so a
+        friendly "no, that's a different product" is a normal answer here and
+        isn't a judgement on the idea.
+
+        Already ruled out, each because it was raised and rejected on purpose:
+        blocking, gating or warning before a spend; streaks, scores, badges or
+        any adherence metric; reconciling Pockets against real balances;
+        detecting missing or unrecorded money; a "close the period" ritual or
+        any approval workflow; double-entry, immutable events or compensating
+        entries; any Afloat-side knowledge of
+        [Balances](https://github.com/kerti/balances-v2); and telemetry of any
+        kind. See
+        [`docs/PRD.md` section 10](https://github.com/kerti/afloat/blob/main/docs/PRD.md)
+        and [`docs/VISION.md`](https://github.com/kerti/afloat/blob/main/docs/VISION.md)
+        - absolute URLs because relative links don't resolve on the new-issue page.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does the household have?
+      description: Describe the situation, not the solution. What goes wrong today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What do you suggest?
+    validations:
+      required: true
+  - type: textarea
+    id: bar
+    attributes:
+      label: Does it clear the bar?
+      description: >
+        Does it help someone see their spending trajectory in seconds, without
+        learning anything new? If it adds a screen, a setting or a concept, say
+        how it earns that - and say whether it informs or enforces.
+    validations:
+      required: true

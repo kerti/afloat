@@ -1,0 +1,77 @@
+# Coverage policy for both backends. Uploaded from ci.yml's single `check` job,
+# from the profiles `make check-go` and `make check-kotlin` already produce - a
+# second job re-running the suites would break the invariant that `check`
+# mirrors `make check` step for step.
+#
+# Re-validate after any edit here; a malformed file is accepted silently and
+# then ignored:
+#   curl -X POST --data-binary @codecov.yml https://codecov.io/validate
+
+# Generated code is not reviewed line by line, so measuring it measures the
+# generator. Everything listed is output of oapi-codegen, sqlc, the goose
+# generator or the OpenAPI Kotlin generator, or is test scaffolding that only
+# exists to exercise the code that IS measured.
+#
+# backend/internal/postgres is deliberately NOT here. It is 78 lines of pool and
+# migration logic with real error paths - including the promise that a bad
+# DATABASE_URL fails at boot rather than at first request, which nothing
+# currently verifies. Excluding it would buy ~4 points by shrinking the
+# denominator; testing it is the honest route to the same number.
+ignore:
+  - "backend/internal/api/**"
+  - "backend/internal/db/**"
+  - "backend/internal/migrations/**"
+  - "backend/internal/testutil/**"
+  - "backend/cmd/afloat/**"
+  # The Kotlin side of the same rule: openApiGenerate's output, which JaCoCo
+  # measures because it is in the main source set.
+  # Both spellings on purpose: Codecov compiles "**/x/**" to ".*/x/.*", which
+  # requires a leading path segment. JaCoCo reports a package-rooted path, so
+  # if the generated sources ever resolve to the repo root the starred form
+  # alone would silently match none of them.
+  - "**/dev/kerti/afloat/api/**"
+  - "**/org/openapitools/**"
+  - "dev/kerti/afloat/api/**"
+  - "org/openapitools/**"
+  - "backend-kotlin/build/**"
+
+# The project status asks one question: is the codebase still well covered? A
+# fixed floor answers it. `auto` answers a different one - is this PR at least
+# as covered as its base - which fails a well-tested feature added at 85% to a
+# repo sitting at 91%, and punishes deleting dead code. Patch coverage stays on
+# `auto`, where comparing the diff against the base is the right question.
+coverage:
+  status:
+    project:
+      default:
+        target: 80%
+        threshold: 0%
+    patch:
+      default:
+        target: auto
+        threshold: 1%
+
+flags:
+  backend-go:
+    paths:
+      - "backend/"
+  backend-kotlin:
+    paths:
+      - "backend-kotlin/"
+
+# Per-flag floors start INFORMATIONAL and stay that way until both flags clear
+# the line. Measured at 6707e58: Go 78.76%, Kotlin 86.42%, project ~83%. So the
+# project floor passes today and enforces; an enforcing backend-go floor would
+# block every PR from day one over a number no PR in flight caused. Flip
+# `informational` off per flag once it is above 80% on main, not before.
+flag_management:
+  default_rules:
+    statuses:
+      - type: project
+        target: 80%
+        threshold: 0%
+        informational: true
+
+comment:
+  layout: "reach, diff, flags, files"
+  require_changes: false

@@ -9,13 +9,20 @@ file grows as real targets land.
   `.pii-patterns`) + `claude-install` (hook executable bits, seeds `.claude/settings.local.json`).
 - `make doctor` — toolchain readout against `BOOTSTRAP.md` §3. Never fails.
 - `make check` — the pre-push gate `pre-push-gate.sh` runs. `backend/` is wired (lint, build,
-  `go test -race`); `backend-kotlin/` is wired but skips until it is scaffolded; `frontend/` still
-  skips. A surface that exists but has no steps in `check` **fails** — so the scaffold step that
+  `go test -race`, coverage); `backend-kotlin/` is wired (`check-kotlin`); `frontend/` still skips.
+  A surface that exists but has no steps in `check` **fails** — so the scaffold step that
   creates a backend or the frontend must also wire its lint/test steps into `check`, and into
   `.github/workflows/ci.yml` in the same commit (the two mirror step for step).
 - `make check-kotlin` — `./gradlew check` in `backend-kotlin/`. Gradle's `check` lifecycle task, not
   `test`: it already depends on compilation and on every verification task in the build, so a linter
   added later joins this gate without a `Makefile` change. Requires the committed Gradle wrapper.
+  JaCoCo's `jacocoTestReport` hangs off `check`, so a coverage report exists after every run.
+- `make clean-kotlin` — the same verification, from a clean build. **Not** `./gradlew clean check`:
+  `clean` declares no ordering against anything, and `build/generated/openapi` is both `clean`'s
+  target and an input to the main source set, so a single invocation is a race that occasionally
+  compiles the tests against a main output `clean` has already removed (issue #34). This target is
+  two invocations, always. It is deliberately not part of `make check` — recompiling from scratch and
+  re-running the Testcontainers suite on every push buys freshness nobody asked for.
 - `make sync-kotlin-migrations` — copies `db/migrations/V*.sql` into
   `backend-kotlin/src/main/resources/db/migration`. The Kotlin backend carries its migrations inside
   the jar, so it needs its own copy; the copy is **generated output and never hand-edited**, and
@@ -39,6 +46,25 @@ file grows as real targets land.
   which need docker and minutes and so stay out of the local gate. It sets
   `AFLOAT_REQUIRE_TEST_DB=1`, which turns the integration tests' docker-missing skip into a failure —
   a runner that has docker must never report green on a suite that never ran.
+- **Coverage** is produced by the gate, not beside it. `make check-go` always writes
+  `backend/coverage.out` and Gradle's `check` always writes
+  `backend-kotlin/build/reports/jacoco/test/jacocoTestReport.xml`; the `check` job uploads both to
+  Codecov under the flags `backend-go` and `backend-kotlin`. A separate coverage job would be a
+  second run of both suites and the CI-mirrors-`make check` promise would stop being true. Policy
+  lives in `codecov.yml`: a fixed 80% project floor (not a delta gate, which would punish deleting
+  dead code), per-flag floors **informational** until both flags clear the line, and an ignore list
+  for generated code. Re-validate that file after editing it — a malformed one is accepted silently
+  and then ignored:
+  `curl -X POST --data-binary @codecov.yml https://codecov.io/validate`.
+- **The other workflows** run beside CI rather than inside it, because `check` mirrors `make check`
+  and nothing else belongs in that job: `codeql.yml` (matrix `go` + `java-kotlin`, manual build mode
+  — autobuild looks at the repository root and finds neither backend), `gitleaks.yml` (full history,
+  and not the same thing as the local pre-commit pii-guard), and `govulncheck.yml` (Go only;
+  reachability-based, so it reports a CVE only in a path the binary can reach).
+- **Every action is pinned to a commit SHA** with a trailing `# vX.Y.Z` comment. The comment is not
+  decoration — Dependabot reads it and rewrites both. `.github/dependabot.yml` groups minor and patch
+  bumps per ecosystem; ungrouped, Spring Boot's BOM alone opens a dozen PRs a week and each one burns
+  a full Testcontainers run.
 
 **Expected later, per `BOOTSTRAP.md`:**
 

@@ -63,8 +63,14 @@ DELETE FROM sessions WHERE expires_at <= now();
 -- Login backoff lives in the database, not process memory, because there are
 -- two backends and an in-memory limiter would diverge where contract
 -- conformance cannot see it (BOOTSTRAP.md §5.1).
+--
+-- Returns the remaining seconds, computed by the database's own clock, not a
+-- raw timestamp for Go to subtract against its own clock: any instant the
+-- database also evaluates (here, backoff_until > now()) comes from the
+-- database (BOOTSTRAP.md §5.1, #25). Coalesced to 0 so "no active backoff"
+-- (the aggregate over zero matching rows) is a plain zero, not a NULL scan.
 -- name: GetLoginBackoff :one
-SELECT coalesce(max(backoff_until), '-infinity'::timestamptz)::timestamptz AS backoff_until
+SELECT coalesce(extract(epoch FROM (max(backoff_until) - now())), 0)::float8 AS remaining_seconds
 FROM login_attempts
 WHERE key = ANY(sqlc.arg(keys)::text[]) AND backoff_until > now();
 

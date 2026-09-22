@@ -211,6 +211,43 @@ func TestSuccessfulLoginClearsBackoff(t *testing.T) {
 	}
 }
 
+// The backoff window is measured against the database's clock end to end: the
+// remaining time the query returns, not a subtraction against the app's own
+// clock. A fixed app clock running two hours ahead of the container must
+// neither shorten Retry-After to something untruthful nor, worse, let the
+// skew push the computed remainder negative and silently let the request
+// through while the database still considers the window active (#25).
+func TestBackoffRemainderIsTrueUnderAppClockSkew(t *testing.T) {
+	skewed := func() time.Time { return time.Now().Add(2 * time.Hour) }
+	h := newHarness(t, skewed)
+	h.seedCredentialedUser(t, "a@example.com")
+	ctx := ipContext("198.51.100.40")
+
+	// Arm the backoff, then widen the window well past this test's own
+	// runtime so the assertion below cannot race the real 1s default.
+	h.login(ctx, t, "a@example.com", "wrong")
+	if _, err := h.tdb.Pool.Exec(context.Background(),
+		`UPDATE login_attempts SET backoff_until = now() + interval '2 minutes'`); err != nil {
+		t.Fatalf("widen backoff: %v", err)
+	}
+
+	resp := h.login(ctx, t, "a@example.com", goodPassword)
+	got, is := resp.(api.LocalLogin429JSONResponse)
+	if !is {
+		t.Fatalf("response under a +2h app clock = %T, want 429 (the DB still considers the window active)", resp)
+	}
+	if got.Headers.RetryAfter == nil {
+		t.Fatal("Retry-After is nil")
+	}
+	// ~120s, computed by the database's own clock. A wide but bounded band:
+	// tight enough to catch the app-clock-subtraction bug (which would report
+	// a Retry-After hours off, or let the request through instead of 429ing),
+	// loose enough not to flake on the DB round trip.
+	if ra := *got.Headers.RetryAfter; ra < 90 || ra > 130 {
+		t.Errorf("Retry-After = %d, want close to 120 (the DB-measured remainder, unaffected by the app clock's 2h skew)", ra)
+	}
+}
+
 // Per-email as well as per-IP: per-IP alone lets an attacker spread across
 // addresses, and this proves the email key is armed independently.
 func TestBackoffAppliesPerEmailAcrossAddresses(t *testing.T) {

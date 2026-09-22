@@ -58,9 +58,7 @@ func (h *Handlers) LocalLogin(ctx context.Context, request api.LocalLoginRequest
 
 	user, ok := h.verify(ctx, email, password)
 	if !ok {
-		if err := h.recordFailure(ctx, keys); err != nil {
-			slog.Error("login: record failure", "err", err)
-		}
+		h.recordFailure(ctx, keys)
 		return invalidCredentials()
 	}
 
@@ -114,34 +112,41 @@ func (h *Handlers) verify(ctx context.Context, email, password string) (db.User,
 	return user, true
 }
 
+// backoffRemaining reads the remaining backoff as seconds the database itself
+// computed (query: GetLoginBackoff), never subtracting against h.now(). The
+// window's start (backoff_until) and its end (the database's now()) must come
+// from the same clock, or app/DB skew makes Retry-After lie and, if the app
+// clock leads, can let the throttle silently stop applying near the end of a
+// window (#25).
 func (h *Handlers) backoffRemaining(ctx context.Context, keys []string) (time.Duration, error) {
-	until, err := h.q.GetLoginBackoff(ctx, keys)
+	remainingSeconds, err := h.q.GetLoginBackoff(ctx, keys)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return 0, nil
 		}
 		return 0, err
 	}
-	if !until.Valid {
+	if remainingSeconds <= 0 {
 		return 0, nil
 	}
-	if remaining := until.Time.Sub(h.now()); remaining > 0 {
-		return remaining, nil
-	}
-	return 0, nil
+	return time.Duration(remainingSeconds * float64(time.Second)), nil
 }
 
-func (h *Handlers) recordFailure(ctx context.Context, keys []string) error {
+// recordFailure writes every key's row independently: email: and ip: are two
+// separate rate limiters, so one failing to write (a transient DB error) must
+// not stop the other from being recorded — that is exactly when the per-IP
+// limiter matters most. Logs and continues rather than returning on the first
+// error (#32 item 3).
+func (h *Handlers) recordFailure(ctx context.Context, keys []string) {
 	for _, key := range keys {
 		if err := h.q.RecordLoginFailure(ctx, db.RecordLoginFailureParams{
 			Key:          key,
 			FirstBackoff: intervalFrom(firstBackoff),
 			MaxBackoff:   intervalFrom(maxBackoff),
 		}); err != nil {
-			return err
+			slog.Error("login: record failure", "key", key, "err", err)
 		}
 	}
-	return nil
 }
 
 // backoffKeys rate-limits per IP and per email together: per-IP alone lets one

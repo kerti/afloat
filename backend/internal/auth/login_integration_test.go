@@ -2,6 +2,8 @@ package auth_test
 
 import (
 	"context"
+	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -20,7 +22,7 @@ func (h harness) seedCredentialedUser(t *testing.T, email string) (pgtype.UUID, 
 	householdID := h.tdb.CreateHousehold(t, "Test Household")
 	userID := h.tdb.CreateUser(t, householdID, email, "Test User")
 
-	hash, err := auth.HashPassword(goodPassword)
+	hash, err := auth.HashPassword(context.Background(), goodPassword)
 	if err != nil {
 		t.Fatalf("HashPassword: %v", err)
 	}
@@ -259,5 +261,83 @@ func TestBackoffAppliesPerEmailAcrossAddresses(t *testing.T) {
 	resp := h.login(ipContext("198.51.100.31"), t, "target@example.com", "wrong")
 	if _, is := resp.(api.LocalLogin429JSONResponse); !is {
 		t.Errorf("a second address attacking one account = %T, want 429", resp)
+	}
+}
+
+// The product bug from #33: Argon2id's memory is allocated per hash in
+// flight, not once, so with no bound an unauthenticated caller chooses the
+// process's peak memory — 30 concurrent logins wanted ~570 MiB, and a Go
+// process that exceeds available memory is killed outright rather than
+// answering a 500 a handler could catch.
+//
+// N >> the cap concurrent requests, a mix of a wrong password against a real
+// account and an address that does not exist, so both the real hash and the
+// dummy-cost-equalizer path are exercised — both must share the one
+// semaphore, or bounding only one of them leaves the other free to blow the
+// same memory ceiling. Every request must still answer (never fail on
+// resource exhaustion), and the peak concurrent Argon2 call count — tracked
+// exactly in password.go as each call actually holds a permit, not sampled or
+// inferred from memory or wall-clock timing — must never exceed the cap.
+func TestLoginConcurrencyBoundsArgon2AndAnswersEveryRequest(t *testing.T) {
+	h := newHarness(t, time.Now)
+	h.seedCredentialedUser(t, "known@example.com")
+	auth.ResetArgonPeakInFlightForTest()
+
+	const n = 20 // n >> the cap, so the cap is what limits it, not n itself.
+
+	type result struct {
+		resp api.LocalLoginResponseObject
+		err  error
+	}
+	results := make([]result, n)
+
+	var wg sync.WaitGroup
+	for i := range n {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			// A fresh IP per goroutine, or the per-IP backoff would 429 the
+			// second arrival on any address it shares and mask what this test
+			// checks. Half hit a real account with the wrong password (the
+			// real-hash path), half an address that does not exist (the
+			// dummy-cost-equalizer path).
+			ip := fmt.Sprintf("198.51.100.%d", 150+i)
+			email, password := "known@example.com", "wrong password entirely"
+			if i%2 == 1 {
+				email = fmt.Sprintf("nobody-%d@example.com", i)
+			}
+			resp, err := h.auth.LocalLogin(ipContext(ip), api.LocalLoginRequestObject{
+				Body: &api.LocalLoginJSONRequestBody{
+					Email:    openapi_types.Email(email),
+					Password: password,
+				},
+			})
+			results[i] = result{resp, err}
+		}(i)
+	}
+	wg.Wait()
+
+	for i, r := range results {
+		if r.err != nil {
+			t.Errorf("request %d: LocalLogin returned an error: %v", i, r.err)
+			continue
+		}
+		if _, is := r.resp.(api.LocalLogin500JSONResponse); is {
+			t.Errorf("request %d answered 500 (resource exhaustion under load), want 401", i)
+			continue
+		}
+		if _, is := r.resp.(api.LocalLogin401JSONResponse); !is {
+			t.Errorf("request %d = %T, want 401", i, r.resp)
+		}
+	}
+
+	if got, wantCap := auth.ArgonPeakInFlightForTest(), auth.ArgonConcurrencyCapForTest(); got > wantCap {
+		t.Errorf("peak concurrent Argon2 calls = %d, want <= %d", got, wantCap)
+	}
+	if got, wantCap := auth.ArgonPeakInFlightForTest(), auth.ArgonConcurrencyCapForTest(); got != wantCap {
+		// Not a requirement of the cap itself, but if 20 concurrent requests
+		// never even reached it, nothing here proved the bound holds under
+		// real contention.
+		t.Errorf("peak concurrent Argon2 calls = %d, want exactly %d (%d concurrent logins should saturate the cap)", got, wantCap, n)
 	}
 }

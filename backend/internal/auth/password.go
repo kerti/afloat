@@ -1,12 +1,14 @@
 package auth
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/base64"
 	"errors"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"unicode/utf8"
 
 	"golang.org/x/crypto/argon2"
@@ -27,6 +29,83 @@ const (
 	argonSaltLen   = 16
 	argonAlgo      = "argon2id"
 )
+
+// argonConcurrencyCap bounds how many Argon2id hashes may run at once,
+// process-wide (#33, BOOTSTRAP.md §5.1). Each hash holds argonMemoryKiB
+// live for its duration, and that memory is allocated per call, not once —
+// so with no bound, an unauthenticated caller sending concurrent logins
+// chooses the process's peak memory. At this cap: 4 × 19 MiB ≈ 76 MiB.
+//
+// Fixed by ruling, not an operator knob (BOOTSTRAP.md §12 stays untouched):
+// retuning it means changing this constant, which keeps the memory ceiling
+// arithmetic in one place next to the parameters it depends on rather than
+// letting a deployment drift it silently.
+const argonConcurrencyCap = 4
+
+// argonSem is the semaphore every Argon2id call — real or dummy-cost-equalizer
+// — must hold for its duration. A request beyond the cap queues for a permit
+// rather than failing fast: an immediate 429 here would leak that the server
+// is busy, which the login path's constant-work design treats as worth
+// hiding, and queueing is the shape that preserves it (#33 ruling).
+var argonSem = make(chan struct{}, argonConcurrencyCap)
+
+// argonInFlight counts hashes currently holding a permit, and
+// argonPeakInFlight is the highest value it has ever reached. Both exist so a
+// test can assert the concurrency bound directly — the actual peak, tracked
+// exactly as it happens — rather than infer it from memory or wall-clock
+// timing, either of which is what makes that kind of test flaky by machine.
+var (
+	argonInFlight     atomic.Int32
+	argonPeakInFlight atomic.Int32
+)
+
+// acquireArgonSlot blocks until a permit is free or ctx is done, whichever
+// comes first. Callers pass the incoming request's own context so a queued
+// wait is bounded by the same deadline the rest of that request already
+// answers to (chi's Timeout middleware, 30s) — deliberately not a new,
+// separate timeout invented for this one step.
+func acquireArgonSlot(ctx context.Context) error {
+	select {
+	case argonSem <- struct{}{}:
+		n := argonInFlight.Add(1)
+		for {
+			peak := argonPeakInFlight.Load()
+			if n <= peak || argonPeakInFlight.CompareAndSwap(peak, n) {
+				break
+			}
+		}
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func releaseArgonSlot() {
+	argonInFlight.Add(-1)
+	<-argonSem
+}
+
+// ArgonConcurrencyCapForTest reports the fixed cap. Exported for tests in
+// other packages; nothing in production calls it, and there is deliberately
+// no setter — the cap is a fixed constant (#33 ruling), not something even a
+// test may change.
+func ArgonConcurrencyCapForTest() int32 {
+	return argonConcurrencyCap
+}
+
+// ArgonPeakInFlightForTest reports the highest number of Argon2 calls ever
+// concurrently holding a permit since the last reset. Exported for tests in
+// other packages; nothing in production calls it.
+func ArgonPeakInFlightForTest() int32 {
+	return argonPeakInFlight.Load()
+}
+
+// ResetArgonPeakInFlightForTest zeroes the value ArgonPeakInFlightForTest
+// reports, so a test measures only the load it generates itself. Exported for
+// tests in other packages; nothing in production calls it.
+func ResetArgonPeakInFlightForTest() {
+	argonPeakInFlight.Store(0)
+}
 
 // A floor and a denylist, no composition rules: forced symbols push people
 // towards predictable substitutions, and length is what actually helps.
@@ -60,11 +139,19 @@ func ValidatePasswordPolicy(password string) error {
 }
 
 // HashPassword returns a PHC string: $argon2id$v=19$m=...,t=...,p=...$salt$hash.
-func HashPassword(password string) (string, error) {
+//
+// Waits for an Argon2 permit under ctx first (#33) — the same bound
+// VerifyPassword observes, so a future caller on the hot path (e.g.
+// registration) cannot add to peak concurrent Argon2 work outside the cap.
+func HashPassword(ctx context.Context, password string) (string, error) {
 	salt := make([]byte, argonSaltLen)
 	if _, err := rand.Read(salt); err != nil {
 		return "", fmt.Errorf("generate salt: %w", err)
 	}
+	if err := acquireArgonSlot(ctx); err != nil {
+		return "", fmt.Errorf("wait for argon2 slot: %w", err)
+	}
+	defer releaseArgonSlot()
 	sum := argon2.IDKey([]byte(password), salt, argonTime, argonMemoryKiB, argonThreads, argonKeyLen)
 	return buildPHC(argonMemoryKiB, argonTime, argonThreads, salt, sum), nil
 }
@@ -73,17 +160,23 @@ func HashPassword(password string) (string, error) {
 // string's own recorded cost parameters rather than the constants above — so a
 // retune does not invalidate existing hashes.
 //
-// Returns false rather than an error for a hash it cannot parse: a corrupt row
-// must fail the login, not crash the handler, and the caller has no different
-// action to take either way.
-func VerifyPassword(password, phc string) bool {
+// Returns (false, nil) rather than an error for a hash it cannot parse: a
+// corrupt row must fail the login, not crash the handler, and the caller has
+// no different action to take either way. A non-nil error means the call
+// never ran the hash at all — ctx ended while queued for an Argon2 permit —
+// which the caller must not treat the same as a wrong password (#33).
+func VerifyPassword(ctx context.Context, password, phc string) (bool, error) {
 	params, salt, want, err := parsePHC(phc)
 	if err != nil {
-		return false
+		return false, nil
 	}
+	if err := acquireArgonSlot(ctx); err != nil {
+		return false, err
+	}
+	defer releaseArgonSlot()
 	got := argon2.IDKey([]byte(password), salt, params.time, params.memory, params.threads, uint32(len(want)))
 	// Constant time: a byte-wise comparison leaks how much of the hash matched.
-	return subtle.ConstantTimeCompare(got, want) == 1
+	return subtle.ConstantTimeCompare(got, want) == 1, nil
 }
 
 type argonParams struct {

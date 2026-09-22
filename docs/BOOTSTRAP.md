@@ -250,6 +250,30 @@ all return one `INVALID_CREDENTIALS`; the comparison is constant-time; and a req
 address with no account still pays the full hashing cost, so timing cannot distinguish present from
 absent either. All three, not two of three.
 
+**Concurrent Argon2id hashing is capped at 4, process-wide, in both backends — a departure surfaced
+by #33.** `m=19456` KiB is allocated *per hash in flight*, not once, so with no bound an
+unauthenticated caller chooses the process's peak memory: 30 concurrent logins want `30 × 19 MiB ≈
+570 MiB`, and a Go process that exceeds available memory is killed outright rather than degrading —
+worse than a JVM `OutOfMemoryError` a handler can at least catch. Afloat's deployment target is a
+self-hosted box (`VISION.md`), where that is the whole machine. At the cap, `4 × 19 MiB ≈ 76 MiB`, and
+retuning Argon2id's cost parameter later must be checked against this arithmetic before it ships, or
+the memory ceiling moves silently. The cap is a **fixed constant in both backends, not a §12
+environment variable** — small enough to fit the smallest supported deployment, large enough
+(~80 hashes/sec at this cost) that a household's simultaneous logins are never serialised behind each
+other in practice.
+
+The dummy-cost-equalizer hash (the unknown-address path above) shares the **same** semaphore as a
+real hash, not a separate one — the bound is on total concurrent Argon2 work regardless of account
+validity, or bounding only the real path leaves the dummy path free to blow the same ceiling. A
+request beyond the cap **queues for a permit rather than answering 429 immediately**: an immediate
+429 would leak that the server is busy, which is not an account-level fact, and the login path's
+whole constant-work design (previous paragraph) is built to hide exactly that kind of signal. Queueing
+adds latency that is a function of load, not of the account being checked, so the enumeration-
+resistance property survives it. The wait is bounded by the incoming request's own context deadline —
+chi's `Timeout` middleware in Go, its Kotlin-side equivalent — not a second, separate timeout invented
+for this one step; a request that times out queued answers however that path already answers a timeout,
+same as it would if any other step were slow.
+
 **The rate-limit key is the connection's own address, never `X-Forwarded-For`.** Self-hosting means
 there may be no proxy in front, so nothing strips that header and it is attacker-controlled — using
 it means an attacker picks a fresh key per request and the per-IP backoff stops existing. Whatever

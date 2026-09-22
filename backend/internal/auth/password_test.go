@@ -1,14 +1,16 @@
 package auth
 
 import (
+	"context"
 	"strings"
+	"sync"
 	"testing"
 
 	"golang.org/x/crypto/argon2"
 )
 
 func TestHashPasswordProducesPHCWithPinnedParameters(t *testing.T) {
-	phc, err := HashPassword("correct horse battery staple")
+	phc, err := HashPassword(context.Background(), "correct horse battery staple")
 	if err != nil {
 		t.Fatalf("HashPassword: %v", err)
 	}
@@ -26,11 +28,11 @@ func TestHashPasswordProducesPHCWithPinnedParameters(t *testing.T) {
 }
 
 func TestHashPasswordSaltsEveryHash(t *testing.T) {
-	a, err := HashPassword("same password")
+	a, err := HashPassword(context.Background(), "same password")
 	if err != nil {
 		t.Fatalf("HashPassword: %v", err)
 	}
-	b, err := HashPassword("same password")
+	b, err := HashPassword(context.Background(), "same password")
 	if err != nil {
 		t.Fatalf("HashPassword: %v", err)
 	}
@@ -40,19 +42,19 @@ func TestHashPasswordSaltsEveryHash(t *testing.T) {
 }
 
 func TestVerifyPassword(t *testing.T) {
-	phc, err := HashPassword("correct horse battery staple")
+	phc, err := HashPassword(context.Background(), "correct horse battery staple")
 	if err != nil {
 		t.Fatalf("HashPassword: %v", err)
 	}
 
-	if !VerifyPassword("correct horse battery staple", phc) {
-		t.Error("the correct password did not verify")
+	if ok, err := VerifyPassword(context.Background(), "correct horse battery staple", phc); err != nil || !ok {
+		t.Errorf("the correct password did not verify: ok=%v err=%v", ok, err)
 	}
-	if VerifyPassword("Correct horse battery staple", phc) {
-		t.Error("a differently-cased password verified")
+	if ok, err := VerifyPassword(context.Background(), "Correct horse battery staple", phc); err != nil || ok {
+		t.Errorf("a differently-cased password verified: ok=%v err=%v", ok, err)
 	}
-	if VerifyPassword("", phc) {
-		t.Error("an empty password verified")
+	if ok, err := VerifyPassword(context.Background(), "", phc); err != nil || ok {
+		t.Errorf("an empty password verified: ok=%v err=%v", ok, err)
 	}
 }
 
@@ -67,8 +69,8 @@ func TestVerifyPasswordRejectsMalformedHashes(t *testing.T) {
 		"$argon2id$v=19$m=bad,t=2,p=1$c2FsdA$aGFzaA",
 		"$argon2id$v=19$m=19456,t=2,p=1$!!!notbase64$aGFzaA",
 	} {
-		if VerifyPassword("anything", phc) {
-			t.Errorf("malformed hash verified: %q", phc)
+		if ok, err := VerifyPassword(context.Background(), "anything", phc); err != nil || ok {
+			t.Errorf("malformed hash verified: %q (ok=%v err=%v)", phc, ok, err)
 		}
 	}
 }
@@ -85,11 +87,11 @@ func TestVerifyPasswordHonoursTheHashesOwnParameters(t *testing.T) {
 	sum := argon2.IDKey([]byte("hunter2hunter2"), salt, otherTime, otherMemory, otherThreads, argonKeyLen)
 	phc := buildPHC(otherMemory, otherTime, otherThreads, salt, sum)
 
-	if !VerifyPassword("hunter2hunter2", phc) {
-		t.Error("a hash with non-default parameters failed to verify")
+	if ok, err := VerifyPassword(context.Background(), "hunter2hunter2", phc); err != nil || !ok {
+		t.Errorf("a hash with non-default parameters failed to verify: ok=%v err=%v", ok, err)
 	}
-	if VerifyPassword("wrong password here", phc) {
-		t.Error("a wrong password verified against non-default parameters")
+	if ok, err := VerifyPassword(context.Background(), "wrong password here", phc); err != nil || ok {
+		t.Errorf("a wrong password verified against non-default parameters: ok=%v err=%v", ok, err)
 	}
 }
 
@@ -124,5 +126,72 @@ func TestPasswordLengthIsCountedInRunes(t *testing.T) {
 	}
 	if err := ValidatePasswordPolicy(tenRunes + "あい"); err != nil {
 		t.Errorf("a 10-rune password was rejected: %v", err)
+	}
+}
+
+// The product bug from #33: unbounded concurrent Argon2 calls let an
+// unauthenticated caller choose the process's peak memory. This proves the
+// bound directly — argonPeakInFlight is updated exactly at the moment each
+// call actually holds a permit (password.go), so the assertion below is the
+// real peak, not an inference from memory or wall-clock timing, which is what
+// made the equivalent Kotlin test flaky by machine (issue #33).
+func TestVerifyPasswordBoundsConcurrentArgon2Calls(t *testing.T) {
+	phc, err := HashPassword(context.Background(), "correct horse battery staple")
+	if err != nil {
+		t.Fatalf("HashPassword: %v", err)
+	}
+
+	// Isolate this test's peak from whatever earlier tests in this file left
+	// behind — those run sequentially, so the true concurrent peak they could
+	// have left is 1, but resetting keeps the assertion honest regardless.
+	argonPeakInFlight.Store(0)
+
+	const n = 20 // n >> argonConcurrencyCap, so the cap is what limits it, not n itself.
+
+	var wg sync.WaitGroup
+	results := make([]struct {
+		ok  bool
+		err error
+	}, n)
+	for i := range n {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			// A mix: even indices check the real hash, odd ones the dummy-cost
+			// path an unknown account takes — both must share the one cap.
+			password, target := "correct horse battery staple", phc
+			if i%2 == 1 {
+				password, target = "wrong password entirely", dummyHash
+			}
+			ok, err := VerifyPassword(context.Background(), password, target)
+			results[i].ok, results[i].err = ok, err
+		}(i)
+	}
+	wg.Wait()
+
+	for i, r := range results {
+		if r.err != nil {
+			t.Errorf("call %d: unexpected error (resource exhaustion, not a timeout): %v", i, r.err)
+		}
+	}
+	for i := 0; i < n; i += 2 {
+		if !results[i].ok {
+			t.Errorf("call %d: correct password did not verify", i)
+		}
+	}
+	for i := 1; i < n; i += 2 {
+		if results[i].ok {
+			t.Errorf("call %d: wrong password verified", i)
+		}
+	}
+
+	if got := argonPeakInFlight.Load(); got > argonConcurrencyCap {
+		t.Errorf("peak concurrent Argon2 calls = %d, want <= %d", got, argonConcurrencyCap)
+	}
+	if got := argonPeakInFlight.Load(); got != argonConcurrencyCap {
+		// Not a hard requirement of the cap itself, but if 20 calls fired at
+		// once never even reached the cap, the concurrency in this test setup
+		// is not real and the assertion above proves nothing.
+		t.Errorf("peak concurrent Argon2 calls = %d, want exactly %d (20 calls should have saturated the cap)", got, argonConcurrencyCap)
 	}
 }

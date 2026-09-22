@@ -5,7 +5,7 @@ both backends must agree on is **not** an ADR here — it belongs in [`../BOOTST
 which is the cross-cutting scaffold sheet. Only put an ADR in `go/` or `kotlin/` when it's a choice
 specific to that backend's implementation (a library, a framework idiom, an internal package shape).
 
-The `go/` track opens at step 5; `kotlin/` is still empty and opens at step 6.
+The `go/` track opens at step 5; the `kotlin/` track opens at step 6.
 
 ## How an ADR changes
 
@@ -53,3 +53,4 @@ change log.
 
 | # | Decision | Stage |
 |---|---|---|
+| [0001](kotlin/0001-spring-data-jpa-conventions.md) | Spring Data JPA conventions | draft |

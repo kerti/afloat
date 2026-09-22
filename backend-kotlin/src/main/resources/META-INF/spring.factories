@@ -1,0 +1,3 @@
+org.springframework.context.ApplicationContextInitializer=\
+dev.kerti.afloat.config.FlywayEnablementContextInitializer,\
+dev.kerti.afloat.config.ServerTimeoutNormalizingContextInitializer

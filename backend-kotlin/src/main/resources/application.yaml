@@ -1,0 +1,79 @@
+spring:
+  application:
+    name: afloat
+  autoconfigure:
+    exclude:
+      # Would register an in-memory user with a random password and log it at
+      # boot ("Using generated security password"). Sessions are resolved by
+      # SessionFilter; nothing authenticates through a UserDetailsService.
+      - org.springframework.boot.security.autoconfigure.UserDetailsServiceAutoConfiguration
+  jpa:
+    # Open-in-view holds a pooled connection for the whole request, hash and
+    # response write included; every repository call here is its own short
+    # transaction, so nothing wants the session kept open.
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+  flyway:
+    baseline-on-migrate: false
+  lifecycle:
+    # Go's http.Server.ShutdownTimeout: the graceful drain window each shutdown
+    # phase is allowed (server.shutdown=graceful below).
+    timeout-per-shutdown-phase: ${SHUTDOWN_TIMEOUT:10s}
+  jackson:
+    # Money and nullable fields are omitted, not nulled (G2): Go omits a null
+    # expected_monthly_income and a 429 envelope without args the same way.
+    default-property-inclusion: non_null
+    deserialization:
+      # Every request schema in the contract declares additionalProperties:
+      # false, so an unexpected field is a client bug worth surfacing rather
+      # than silently dropping (#13 §3.6). Jackson's default is to ignore it.
+      #
+      # This is a KNOWN divergence from Go, which decodes with encoding/json and
+      # ignores unknown fields — pinned by a test in LoginSpec rather than left
+      # for someone to discover. Closing it on the Go side means
+      # DisallowUnknownFields in the generated decode path, which the generator
+      # owns; filed rather than hand-patched.
+      fail-on-unknown-properties: true
+
+server:
+  port: ${PORT:5183}
+  shutdown: graceful
+  tomcat:
+    # The endorsed analogues of Go's http.Server timeouts. connection-timeout
+    # bounds the request-line/header read (servlet IO cannot time a whole-body
+    # read); keep-alive-timeout is the idle keep-alive window. HTTP_WRITE_TIMEOUT
+    # has no Tomcat equivalent and is bound-but-deferred (issue #13 §6).
+    connection-timeout: ${HTTP_READ_TIMEOUT:30s}
+    keep-alive-timeout: ${HTTP_IDLE_TIMEOUT:120s}
+
+logging:
+  level:
+    # Go's LOG_LEVEL steers the app's own logger (slog), not the container. Pin
+    # root so Spring/Hibernate/Tomcat's noise stays at info and LOG_LEVEL drives
+    # exactly the afloat packages, matching the Go side.
+    root: info
+    dev.kerti.afloat: ${LOG_LEVEL:info}
+
+afloat:
+  # Bound by AppConfig.from() (AppConfiguration.appConfig): each leaf is the
+  # resolved value of its env-var placeholder, so THIS subtree - not code - owns
+  # the defaults an operator gets with no env set. check-env-parity.sh holds them
+  # against the BOOTSTRAP.md §12 table; PORT is bound by Boot at server.port and
+  # reaches AppConfig the same way.
+  database-url: ${DATABASE_URL:}
+  # LOG_FORMAT is bound-but-deferred (issue #13 §6), like HTTP_WRITE_TIMEOUT
+  # above: no logging sink reads it yet, until the JSON encoder lands.
+  log-format: ${LOG_FORMAT:text}
+  log-level: ${LOG_LEVEL:info}
+  auto-migrate: ${AUTO_MIGRATE:true}
+  http-read-timeout: ${HTTP_READ_TIMEOUT:30s}
+  http-write-timeout: ${HTTP_WRITE_TIMEOUT:60s}
+  http-idle-timeout: ${HTTP_IDLE_TIMEOUT:120s}
+  shutdown-timeout: ${SHUTDOWN_TIMEOUT:10s}
+  auth-local-enabled: ${AUTH_LOCAL_ENABLED:true}
+  auth-google-enabled: ${AUTH_GOOGLE_ENABLED:false}
+  session-ttl: ${SESSION_TTL:720h}
+  session-max-lifetime: ${SESSION_MAX_LIFETIME:2160h}
+  cookie-secure: ${COOKIE_SECURE:true}
+  version: ${VERSION:dev}

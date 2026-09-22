@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -123,6 +124,53 @@ func TestSessionCookieAttributes(t *testing.T) {
 	}
 	if cookie.Path != "/" {
 		t.Errorf("Path = %q, want /", cookie.Path)
+	}
+}
+
+// Max-Age is the attribute a browser prefers over Expires, so it is the one
+// that decides how long a session survives on a client with a skewed clock —
+// and it is the one the Kotlin backend must spell identically
+// (SessionCookieFactory). Nothing asserted its VALUE until this test, so the
+// two backends were free to round it differently.
+//
+// The clock is fixed and in the past: computed against time.Now() rather than
+// h.now(), the whole TTL would already have elapsed and this would read 1.
+func TestSessionCookieMaxAgeIsTheFullTTL(t *testing.T) {
+	fixed := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+	h := newHarness(t, func() time.Time { return fixed })
+	householdID := h.tdb.CreateHousehold(t, "Test Household")
+	userID := h.tdb.CreateUser(t, householdID, "a@example.com", "A")
+
+	cookie, err := h.auth.IssueSession(context.Background(), userID, "")
+	if err != nil {
+		t.Fatalf("IssueSession: %v", err)
+	}
+
+	if want := int(testTTL.Seconds()); cookie.MaxAge != want {
+		t.Errorf("Max-Age = %d, want %d (the full SESSION_TTL)", cookie.MaxAge, want)
+	}
+	if !cookie.Expires.Equal(fixed.Add(testTTL)) {
+		t.Errorf("Expires = %v, want %v", cookie.Expires, fixed.Add(testTTL))
+	}
+}
+
+// The cleared cookie is the one both backends must agree on most literally: a
+// browser that does not delete its copy keeps presenting a token the server
+// can never honour. Go renders MaxAge < 0 as `Max-Age=0`, which is what
+// Spring's ResponseCookie.maxAge(0) emits (LogoutSpec asserts the same value).
+func TestClearedSessionCookieDeletesTheClientsCopy(t *testing.T) {
+	h := newHarness(t, time.Now)
+
+	cookie := h.auth.ClearedSessionCookie()
+
+	if cookie.Value != "" {
+		t.Errorf("Value = %q, want empty", cookie.Value)
+	}
+	if cookie.MaxAge >= 0 {
+		t.Errorf("MaxAge = %d, want negative so the header reads Max-Age=0", cookie.MaxAge)
+	}
+	if got := cookie.String(); !strings.Contains(got, "Max-Age=0") {
+		t.Errorf("Set-Cookie = %q, want it to carry Max-Age=0", got)
 	}
 }
 

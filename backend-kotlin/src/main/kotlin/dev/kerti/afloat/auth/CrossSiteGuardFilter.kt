@@ -1,0 +1,88 @@
+package dev.kerti.afloat.auth
+
+import dev.kerti.afloat.api.model.ErrorCode
+import dev.kerti.afloat.httperr.ApiErrorWriter
+import jakarta.servlet.FilterChain
+import jakarta.servlet.http.HttpServletRequest
+import jakarta.servlet.http.HttpServletResponse
+import org.springframework.http.HttpHeaders
+import org.springframework.web.filter.OncePerRequestFilter
+import java.net.URI
+
+class CrossSiteGuardFilter : OncePerRequestFilter() {
+    override fun doFilterInternal(
+        request: HttpServletRequest,
+        response: HttpServletResponse,
+        filterChain: FilterChain,
+    ) {
+        if (isSafeMethod(request.method)) {
+            filterChain.doFilter(request, response)
+            return
+        }
+
+        // Sec-Fetch-Site is the browser's own statement and cannot be set by
+        // page script. Preferred when present; `none` is a direct navigation or
+        // a tool with no originating site.
+        val site = request.getHeader("Sec-Fetch-Site")
+        if (!site.isNullOrEmpty()) {
+            if (site != "same-origin" && site != "none") {
+                ApiErrorWriter.write(response, 403, ErrorCode.CROSS_SITE_REQUEST_BLOCKED)
+                return
+            }
+            filterChain.doFilter(request, response)
+            return
+        }
+
+        // Fall back to Origin for clients that send no Sec-Fetch-Site.
+        val origin = request.getHeader("Origin")
+        if (!origin.isNullOrEmpty()) {
+            if (!isSameOrigin(origin, request)) {
+                ApiErrorWriter.write(response, 403, ErrorCode.CROSS_SITE_REQUEST_BLOCKED)
+                return
+            }
+        }
+
+        // Neither header present: not a browser form post, so there is no
+        // ambient cookie to abuse. curl and the test suite land here.
+        filterChain.doFilter(request, response)
+    }
+
+    // Go compares url.Host to r.Host, both of which carry the port when the
+    // client sent one, so the Host header is the comparison whenever it is
+    // there — including behind a proxy, where the request's own serverPort is
+    // the local one and would never match a public 443.
+    private fun isSameOrigin(origin: String, request: HttpServletRequest): Boolean = try {
+        val uri = URI.create(origin)
+        val host = request.getHeader(HttpHeaders.HOST)
+        if (host != null) {
+            hostAndPort(uri) == host
+        } else {
+            // HTTP/2 sends :authority and no Host header; the container
+            // surfaces it as the server name and port instead. Compared the way
+            // the Host branch does: an Origin with no port names the scheme's
+            // default port, so it matches only a server on that port — never
+            // whichever one the request happened to arrive on.
+            val port = if (uri.port != -1) uri.port else defaultPort(uri.scheme)
+            uri.host == request.serverName && port == request.serverPort
+        }
+    } catch (e: IllegalArgumentException) {
+        false
+    }
+
+    // Go compares url.URL.Host, which is host[:port] with the userinfo split
+    // off into url.URL.User. URI.authority keeps it, so comparing that would
+    // reject `https://x@afloat.example` against Host `afloat.example` where Go
+    // accepts it. A browser never puts userinfo in an Origin, so neither answer
+    // is dangerous — but a guard whose entire purpose is that both backends
+    // refuse the same request should not be the place the two disagree.
+    private fun hostAndPort(uri: URI): String? = uri.authority?.substringAfterLast('@')
+
+    private fun defaultPort(scheme: String?): Int = when (scheme?.lowercase()) {
+        "http" -> 80
+        "https" -> 443
+        else -> -1
+    }
+
+    private fun isSafeMethod(method: String): Boolean =
+        method == "GET" || method == "HEAD" || method == "OPTIONS" || method == "TRACE"
+}

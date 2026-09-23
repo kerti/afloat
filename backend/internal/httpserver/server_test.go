@@ -96,7 +96,7 @@ func TestBodyIsCapped(t *testing.T) {
 	srv := newTestServer()
 
 	huge := strings.NewReader(`{"email":"` + strings.Repeat("a", 2<<20) + `"}`)
-	req := httptest.NewRequest(http.MethodPost, "/api/auth/local/login", huge)
+	req := httptest.NewRequest(http.MethodPost, localLoginPath, huge)
 	req.Header.Set("Content-Type", "application/json")
 
 	rec := httptest.NewRecorder()
@@ -121,7 +121,7 @@ func TestMalformedBodyIsTheEnvelope(t *testing.T) {
 		{"empty", ``},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			req := httptest.NewRequest(http.MethodPost, "/api/auth/local/login", strings.NewReader(tc.body))
+			req := httptest.NewRequest(http.MethodPost, localLoginPath, strings.NewReader(tc.body))
 			req.Header.Set("Content-Type", "application/json")
 
 			rec := httptest.NewRecorder()
@@ -208,19 +208,19 @@ func TestLocalLoginDisabledIsABareNotFound(t *testing.T) {
 	})
 
 	body := `{"email":"a@example.com","password":"whatever-it-does-not-matter"}`
-	req := httptest.NewRequest(http.MethodPost, "/api/auth/local/login", strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, localLoginPath, strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 
 	rec := httptest.NewRecorder()
 	srv.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusNotFound {
-		t.Errorf("status = %d, want 404", rec.Code)
+		t.Errorf("POST status = %d, want 404", rec.Code)
 	}
 
 	// GET too: with a method-scoped gate chi answers 405 here, which tells a
 	// prober the route exists.
-	reqGet := httptest.NewRequest(http.MethodGet, "/api/auth/local/login", nil)
+	reqGet := httptest.NewRequest(http.MethodGet, localLoginPath, nil)
 	recGet := httptest.NewRecorder()
 	srv.ServeHTTP(recGet, reqGet)
 
@@ -232,12 +232,17 @@ func TestLocalLoginDisabledIsABareNotFound(t *testing.T) {
 	// registered — proof this isn't an error envelope wearing a 404, and that
 	// the route genuinely does not exist rather than existing-but-refusing.
 	unmatched := httptest.NewRecorder()
+
 	srv.ServeHTTP(unmatched, httptest.NewRequest(http.MethodGet, "/api/genuinely-unregistered", nil))
 	if ct, wantCt := rec.Header().Get("Content-Type"), unmatched.Header().Get("Content-Type"); ct != wantCt {
-		t.Errorf("Content-Type = %q, want %q (same as an unmatched route)", ct, wantCt)
+		t.Errorf("POST Content-Type = %q, want %q (same as an unmatched route)", ct, wantCt)
 	}
 	if rec.Body.String() != unmatched.Body.String() {
 		t.Errorf("POST body = %q, want %q (same as an unmatched route)", rec.Body.String(), unmatched.Body.String())
+	}
+
+	if ct, wantCt := recGet.Header().Get("Content-Type"), unmatched.Header().Get("Content-Type"); ct != wantCt {
+		t.Errorf("GET Content-Type = %q, want %q (same as an unmatched route)", ct, wantCt)
 	}
 	if recGet.Body.String() != unmatched.Body.String() {
 		t.Errorf("GET body = %q, want %q (same as an unmatched route)", recGet.Body.String(), unmatched.Body.String())
@@ -273,7 +278,7 @@ func TestLocalLoginEnabledIsUnaffected(t *testing.T) {
 	// exact case (400, not 404), reasserted here as the explicit "default
 	// config is unaffected" contrast to the disabled case above.
 	rec := httptest.NewRecorder()
-	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/auth/local/login", nil))
+	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, localLoginPath, nil))
 
 	if rec.Code == http.StatusNotFound {
 		t.Error("status = 404 with the local provider enabled; the route must still exist")

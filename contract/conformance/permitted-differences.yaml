@@ -25,6 +25,26 @@
     regardless, so nothing is lost by exempting the header.
 
 # ---------------------------------------------------------------------------
+# Case-scoped - apply only to the cases that cite them under `permit:`, for a
+# difference that is right on those answers and would be a bug on any other.
+# Always a ruling, so always an issue.
+# ---------------------------------------------------------------------------
+
+- name: unmatched-path-404
+  issue: "24"
+  headers: [Content-Type]
+  body: true
+  why: >
+    Each backend answers an unregistered path with its framework's own 404 and
+    keeps it: Go's net/http sends `404 page not found\n` as text/plain; Spring
+    sends an empty body and no Content-Type. #24 requires a disabled route to be
+    indistinguishable from an unregistered one ON THE SAME BACKEND, which the
+    citing cases pin with `same_as`; it does not require the two backends'
+    404s to match. Neither is the error envelope, so the frontend must treat a
+    404 by its status alone and never read a non-envelope body - both then
+    land on the same path. Revisit if a 404 ever needs to carry a code.
+
+# ---------------------------------------------------------------------------
 # Provisional - pending #26, which decides the response header allowlist.
 # Every entry below should either disappear or gain a permanent `why` when that
 # lands. They are listed individually rather than as a wildcard so the decision

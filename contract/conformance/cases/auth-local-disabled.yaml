@@ -1,0 +1,60 @@
+# AUTH_LOCAL_ENABLED=false (#24): the local login route answers exactly like a
+# path that was never registered, on every method, so a prober cannot tell it
+# exists. Run against the local-disabled pair scripts/conformance.sh boots.
+#
+# What "exactly like" means is a relation, not bytes: each backend keeps its
+# own unregistered-path 404 (the `unmatched-path-404` entry in
+# permitted-differences.yaml), so the body and Content-Type are pinned by
+# `same_as` against that backend's own answer for /no-such-route rather than by
+# a byte assertion one of them would fail.
+
+- name: local login disabled - POST is an unregistered-path 404
+  issue: "24"
+  profile: local-disabled
+  permit: [unmatched-path-404]
+  request:
+    method: POST
+    path: /auth/local/login
+    headers:
+      Content-Type: application/json
+    body: '{"email":"nobody@example.com","password":"correct horse battery staple"}'
+  expect:
+    status: 404
+    same_as:
+      method: POST
+      path: /no-such-route
+      headers:
+        Content-Type: application/json
+      body: '{"email":"nobody@example.com","password":"correct horse battery staple"}'
+
+# The 405 case. A gate keyed on POST leaves the router to answer GET with 405
+# Method Not Allowed, which says the route exists - the disclosure the 404 is
+# there to prevent (Go #47).
+- name: local login disabled - GET is an unregistered-path 404, not a 405
+  issue: "24"
+  profile: local-disabled
+  permit: [unmatched-path-404]
+  request:
+    method: GET
+    path: /auth/local/login
+  expect:
+    status: 404
+    same_as:
+      method: GET
+      path: /no-such-route
+
+# One flag, two readers: the gate and /auth/methods read the same value, so the
+# client is never told a provider exists that then 404s. Also proves the pair
+# really booted with local off - the two cases above would pass against a
+# backend that 404s everything.
+- name: local login disabled - auth methods reports local off
+  issue: "24"
+  profile: local-disabled
+  request:
+    method: GET
+    path: /auth/methods
+  expect:
+    status: 200
+    body_json:
+      local: false
+      google: true

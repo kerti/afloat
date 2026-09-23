@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -30,6 +31,16 @@ type Case struct {
 	// Issue optionally records the decision this case pins, so a case that
 	// encodes a milestone ruling says which one.
 	Issue string `yaml:"issue"`
+
+	// Profile names the server configuration the case runs against; empty
+	// means ProfileDefault. A case runs against its own profile only, so a
+	// login case is never also run against a pair where login is off.
+	Profile string `yaml:"profile"`
+
+	// Permit cites case-scoped entries in permitted-differences.yaml by name.
+	// A difference that is legitimate on one answer - Go's and Spring's own
+	// unregistered-path 404 - must not become invisible on every other.
+	Permit []string `yaml:"permit"`
 
 	Request Request `yaml:"request"`
 	Expect  Expect  `yaml:"expect"`
@@ -65,6 +76,30 @@ type Expect struct {
 	// BodyEmpty asserts a zero-length body, which is distinct from "no
 	// assertion" and is what every 204 in this contract requires.
 	BodyEmpty bool `yaml:"body_empty"`
+
+	// SameAs is a second request, sent to the same backend, whose whole answer
+	// this one must equal. It asserts a relation rather than bytes: "answers
+	// exactly like an unregistered path" (#24) holds on each backend even where
+	// the two backends' unregistered-path answers are permitted to differ.
+	SameAs *Request `yaml:"same_as"`
+}
+
+const (
+	ProfileDefault = "default"
+	// ProfileLocalDisabled is AUTH_LOCAL_ENABLED=false with Google on, since a
+	// backend refuses to boot with no provider at all.
+	ProfileLocalDisabled = "local-disabled"
+)
+
+// Profiles is every configuration scripts/conformance.sh boots a pair for.
+var Profiles = []string{ProfileDefault, ProfileLocalDisabled}
+
+// ProfileOf is the profile a case runs against.
+func (c *Case) ProfileOf() string {
+	if c.Profile == "" {
+		return ProfileDefault
+	}
+	return c.Profile
 }
 
 // Load reads every *.yaml in dir, sorted by filename then by case name, so a
@@ -127,6 +162,17 @@ func (c *Case) validate() error {
 	}
 	if c.Expect.BodyEmpty && (c.Expect.BodyJSON != nil || c.Expect.BodyRaw != "") {
 		return fmt.Errorf("%s: expect.body_empty cannot be combined with a body assertion", c.Name)
+	}
+	if !slices.Contains(Profiles, c.ProfileOf()) {
+		return fmt.Errorf("%s: unknown profile %q, want one of %v", c.Name, c.Profile, Profiles)
+	}
+	if s := c.Expect.SameAs; s != nil {
+		if s.Method == "" {
+			return fmt.Errorf("%s: expect.same_as.method is required", c.Name)
+		}
+		if !strings.HasPrefix(s.Path, "/") {
+			return fmt.Errorf("%s: expect.same_as.path must start with / and exclude the /api base", c.Name)
+		}
 	}
 	return nil
 }

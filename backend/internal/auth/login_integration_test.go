@@ -447,6 +447,45 @@ func TestLoginLogsAClientLeavingWhileQueuedAsAWarning(t *testing.T) {
 	}
 }
 
+// Behind a flood, the login that gets a permit is the one about to run out of
+// time. Its hash crosses the deadline, and on the request's ctx the failure
+// write then failed: a checked guess answered 401 with nothing recorded, so
+// the backoff never grew. A login holding its permit must finish.
+func TestLoginHoldingItsPermitRecordsItsFailurePastTheDeadline(t *testing.T) {
+	h := newHarness(t, time.Now)
+	h.seedCredentialedUser(t, "a@example.com")
+
+	release := auth.HoldArgonPermitsForTest()
+	defer release()
+	auth.ResetArgonPeakInFlightForTest()
+
+	ctx, cancel := context.WithCancel(ipContext("198.51.100.204"))
+	defer cancel()
+	answer := h.loginInBackground(passedDeadline{ctx}, "a@example.com", "wrong password entirely")
+	waitForArgonQueue(t, 1)
+	release()
+	// HoldArgonPermitsForTest counts nothing in flight, so the peak reaching 1
+	// is the login taking its permit. The deadline passes there, ahead of the
+	// second backoff read, the hash and the failure write.
+	deadline := time.Now().Add(10 * time.Second)
+	for auth.ArgonPeakInFlightForTest() != 1 {
+		if time.Now().After(deadline) {
+			t.Fatal("the login never took its Argon2 permit")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	cancel()
+	resp := <-answer
+
+	if _, is := resp.(api.LocalLogin401JSONResponse); !is {
+		t.Fatalf("response = %T, want 401", resp)
+	}
+	// One row per key: email: and ip:.
+	if rows := h.loginAttemptRows(t); rows != 2 {
+		t.Errorf("%d login_attempts rows after a checked wrong password, want 2", rows)
+	}
+}
+
 // A burst on one account passes the first backoff read before any of it has
 // failed, and queues. Read only there, the backoff never applied: every
 // queued guess was checked. Read again under the permit, the first failures

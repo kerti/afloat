@@ -278,9 +278,25 @@ resistance property survives it. The wait is bounded by the timeout the request 
 second one invented for this step: in Go the request context's deadline, set by chi's `Timeout`
 middleware from `HTTP_WRITE_TIMEOUT`; in Kotlin, where a servlet request carries no deadline,
 `HTTP_WRITE_TIMEOUT` itself, counted from when the wait starts. Go's wait gets only what is left of
-the one request deadline, so a Kotlin login can run longer end to end. A login still queued when the
-wait runs out answers `500 INTERNAL` and records **no** backoff failure, because its password was never
-checked. The one Argon2 call outside the cap is generating Kotlin's dummy hash, once per process when
+the one request deadline, so a Kotlin login can wait longer. A login still queued when the wait runs
+out answers `500 INTERNAL` and records **no** backoff failure, because its password was never checked.
+
+**The deadline bounds the wait, not the login.** A login that took its permit in time finishes: the
+second backoff read, the hash, the failure write and, on success, the session. In Go that work runs on
+a context detached from the request, bounded by the handler timeout again, counted from the permit; in
+Kotlin each statement after the wait already has its own `HTTP_WRITE_TIMEOUT` as a transaction
+timeout. So in both backends a login can run longer than `HTTP_WRITE_TIMEOUT` end to end. In Go its
+answer can then miss the connection's write deadline (`HTTP_WRITE_TIMEOUT` plus the 5s grace, §12),
+but its failure is still recorded, and that is the part that matters.
+Bounding it by the request deadline instead lets a flood switch the backoff off: behind a queue
+filled faster than the cap clears, the login that gets a permit is the one about to run out of time,
+its hash carries it past the deadline, and the failure write then fails. Its guess was checked and
+answered `401`, but nothing was recorded, so the backoff never grows. Measured on Go before the fix,
+with the deadline scaled down to 300 ms: under a flood of unknown addresses, 4 to 9 guesses at one
+account were answered `401` against a recorded `failure_count` of 1. A client that leaves after its
+permit is taken no longer stops the login either; the answer is lost, but the failure is recorded.
+
+The one Argon2 call outside the cap is generating Kotlin's dummy hash, once per process when
 the class loads at startup, before any request can queue. Verifying against it takes a permit like any
 other hash.
 

@@ -39,6 +39,7 @@ func (h *Handlers) LocalLogin(ctx context.Context, request api.LocalLoginRequest
 	password := request.Body.Password
 
 	keys := backoffKeys(ctx, email)
+	budget, hasBudget := handlerBudget(ctx)
 
 	// Read once before queueing, so a throttled caller is answered without
 	// waiting for a permit. checkPassword reads it again under the permit.
@@ -48,8 +49,7 @@ func (h *Handlers) LocalLogin(ctx context.Context, request api.LocalLoginRequest
 
 	user, phc := h.resolve(ctx, email)
 
-	refused, ok, err := h.checkPassword(ctx, keys, password, phc)
-	if err != nil {
+	if err := acquireArgonPermit(ctx); err != nil {
 		// ctx ended while queued for an Argon2 permit (#33): the handler
 		// timeout passed, or the client went away. The password was never
 		// checked, so this is neither INVALID_CREDENTIALS nor a failure for the
@@ -62,6 +62,17 @@ func (h *Handlers) LocalLogin(ctx context.Context, request api.LocalLoginRequest
 		}
 		return internalError[api.LocalLoginResponseObject]()
 	}
+
+	// A login that got its permit finishes, whatever the wait cost it. Queued
+	// behind a flood, a login reaches the head just before its deadline, and
+	// on the request's own ctx the hash would run past it and the failure
+	// write then fail: a checked guess answered 401 with nothing recorded, the
+	// backoff never growing (#33). From here on it has the handler timeout
+	// again, as each Kotlin statement after the wait has HTTP_WRITE_TIMEOUT.
+	ctx, cancel := afterPermit(ctx, budget, hasBudget)
+	defer cancel()
+
+	refused, ok := h.checkPassword(ctx, keys, password, phc)
 	if refused != nil {
 		return refused, nil
 	}
@@ -135,28 +146,46 @@ func (h *Handlers) resolve(ctx context.Context, email string) (db.User, string) 
 	return user, cred.PasswordHash
 }
 
-// checkPassword holds one Argon2 permit from a second backoff read until any
-// failure is recorded. The first read, before the queue, sees none of the
-// failures of the logins queued alongside it: a burst on one account all
-// passed it, all queued, and all had their passwords checked, the backoff
-// never applying (#33). Read under the permit instead, and written before the
-// permit passes on, one caller's failure throttles the next. At most the cap's
-// worth of callers are checked at once, so a burst gets that many guesses, not
-// the whole queue. An error means no permit came free before ctx ended.
-func (h *Handlers) checkPassword(ctx context.Context, keys []string, password, phc string) (refused api.LocalLoginResponseObject, ok bool, err error) {
-	if err := acquireArgonPermit(ctx); err != nil {
-		return nil, false, err
-	}
+// checkPassword takes over the caller's Argon2 permit and holds it from a
+// second backoff read until any failure is recorded, then gives it back. The
+// first read, before the queue, sees none of the failures of the logins queued
+// alongside it: a burst on one account all passed it, all queued, and all had
+// their passwords checked, the backoff never applying (#33). Read under the
+// permit instead, and written before the permit passes on, one caller's
+// failure throttles the next. At most the cap's worth of callers are checked
+// at once, so a burst gets that many guesses, not the whole queue.
+func (h *Handlers) checkPassword(ctx context.Context, keys []string, password, phc string) (refused api.LocalLoginResponseObject, ok bool) {
 	defer releaseArgonPermit()
 
 	if refused := h.throttled(ctx, keys); refused != nil {
-		return refused, false, nil
+		return refused, false
 	}
 	if !verifyHoldingPermit(password, phc) {
 		h.recordFailure(ctx, keys)
-		return nil, false, nil
+		return nil, false
 	}
-	return nil, true, nil
+	return nil, true
+}
+
+// handlerBudget is how long the handler was given: the time left on ctx's
+// deadline, read before anything has spent it.
+func handlerBudget(ctx context.Context) (time.Duration, bool) {
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return 0, false
+	}
+	return time.Until(deadline), true
+}
+
+// afterPermit detaches ctx from the request's cancellation and deadline, and
+// bounds it by budget again, counted from now. Without a budget, the request
+// had no deadline either, and neither does this.
+func afterPermit(ctx context.Context, budget time.Duration, hasBudget bool) (context.Context, context.CancelFunc) {
+	ctx = context.WithoutCancel(ctx)
+	if !hasBudget {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(ctx, budget)
 }
 
 // backoffRemaining reads the remaining backoff as seconds the database itself

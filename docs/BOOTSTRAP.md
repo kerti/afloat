@@ -307,6 +307,34 @@ The error envelope is Balances ADR-0027 exactly: `{"code": "SCREAMING_SNAKE", "a
 `message` field, `args` values JSON primitives only. `VALIDATION` carries `{field, rule}` and reports
 the first failing field only.
 
+### Response headers
+
+Both backends send this fixed set on every response, as explicit middleware on Go and Spring
+Security's defaults on Kotlin (issue #26):
+
+| Header | Value |
+|---|---|
+| `X-Content-Type-Options` | `nosniff` |
+| `X-Frame-Options` | `DENY` |
+| `Cache-Control` | `no-cache, no-store, max-age=0, must-revalidate` |
+| `Pragma` | `no-cache` |
+| `Expires` | `0` |
+| `X-XSS-Protection` | `0` |
+| `X-Request-Id` | The inbound id, sanitised; otherwise one minted server-side (below). |
+
+**`X-Request-Id`** is honoured inbound so a reverse proxy's id survives into both backends' logs,
+but the header is attacker-controlled when nothing sits in front, so it is sanitised first: keep only
+ASCII `A–Z`, `a–z`, `0–9`, `-` and `_` (every other byte dropped, not replaced), then cut to 64. If
+nothing survives, or none was sent, mint one: 8 random bytes as 16 lowercase hex characters. Go
+implements this itself rather than using chi's `middleware.RequestID`, which echoes unfiltered and
+mints ids that carry the hostname and a request counter.
+
+**Neither backend sends `Strict-Transport-Security`.** HSTS is policy about the operator's domain
+(`max-age`, `includeSubDomains`), not about Afloat, and whatever terminates TLS owns it — the reverse
+proxy in any deployment this document supports. Kotlin disables Spring Security's HSTS writer
+explicitly: it only fires on a secure request, so it is silent today, but it would start sending
+Spring's default the day someone enabled TLS on Tomcat or trusted forwarded headers.
+
 ## 6. The API contract
 
 `contract/openapi.yaml` is **hand-written and authoritative**; every artefact is generated from it.
@@ -500,7 +528,7 @@ truth and fails if either backend's configuration drifts from it.
 | `LOG_LEVEL` | `info` | |
 | `AUTO_MIGRATE` | `true` | Apply migrations on boot. Off only to run against a database migrated by something else. |
 | `HTTP_READ_TIMEOUT` | `30s` | |
-| `HTTP_WRITE_TIMEOUT` | `60s` | |
+| `HTTP_WRITE_TIMEOUT` | `60s` | Go: the handler-timeout middleware (`middleware.Timeout`, issue #30) uses the value itself; `http.Server.WriteTimeout` is the value plus a fixed 5s grace, because with the two equal the connection's write deadline passes first and the cut-off handler's 503 never reaches the client. Kotlin: the transaction manager's default timeout (`JpaTransactionManager.defaultTimeout`, issue #30) — a deadline on the whole transaction, not a per-statement cap: each statement gets the time left as its JDBC `queryTimeout`, and Postgres cancels one that overruns it. It covers every repository call, because each repository interface carries `@Transactional(readOnly = true)` (declared query methods get no transaction otherwise, and so no deadline), and every `@Transactional` service method. It deliberately does not cover the health probe's raw `SELECT 1`. Rounded up to whole seconds, minimum 1s, since JPA timeouts count in seconds; Go's is exact. A documented deliberate difference, not a gap to close the same way Go's was. Must be positive: both backends refuse to boot on `0` or a negative value, since `0` does not mean "no timeout" to the handler timeout but a deadline already passed. |
 | `HTTP_IDLE_TIMEOUT` | `120s` | |
 | `SHUTDOWN_TIMEOUT` | `10s` | |
 | `AUTH_LOCAL_ENABLED` | `true` | |

@@ -29,6 +29,12 @@ type Server struct {
 type Deps struct {
 	System *system.Handlers
 	Auth   *auth.Handlers
+
+	// HandlerTimeout bounds how long a handler may run before middleware.Timeout
+	// cuts it off. It is config.Config.WriteTimeout (HTTP_WRITE_TIMEOUT) — issue
+	// #30 folded the two rather than inventing a second variable that would
+	// need to agree with the first.
+	HandlerTimeout time.Duration
 }
 
 func (s *Server) GetHealth(ctx context.Context, r api.GetHealthRequestObject) (api.GetHealthResponseObject, error) {
@@ -60,7 +66,11 @@ func New(d Deps) http.Handler {
 	srv := &Server{system: d.System, auth: d.Auth}
 
 	r := chi.NewRouter()
-	r.Use(middleware.RequestID)
+	// First, so every response this router produces carries the id and the
+	// fixed header set (issue #26), including ones later middleware rejects,
+	// and so requestLogger can read the id from context.
+	r.Use(requestID)
+	r.Use(securityHeaders)
 	// middleware.RealIP is deliberately NOT mounted. It rewrites RemoteAddr from
 	// X-Forwarded-For, which nothing strips in a self-hosted deployment with no
 	// proxy in front — so an attacker would choose their own rate-limit key and
@@ -88,7 +98,11 @@ func New(d Deps) http.Handler {
 	// A body limit on every JSON route. Balances caps only its file uploads,
 	// which leaves an unbounded decode everywhere else.
 	r.Use(maxBodyBytes(1 << 20))
-	r.Use(middleware.Timeout(30 * time.Second))
+	// The bare literal this used to read is gone (#30): HandlerTimeout is
+	// config.Config.WriteTimeout, and main.go derives http.Server.WriteTimeout
+	// from the same value plus a grace, so operators set both with one
+	// variable and the cut-off handler's answer still reaches the client.
+	r.Use(middleware.Timeout(d.HandlerTimeout))
 	// Second CSRF layer, behind SameSite=Lax.
 	r.Use(crossSiteGuard)
 	// Carries the client IP, User-Agent and presented token into the handler

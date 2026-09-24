@@ -6,6 +6,7 @@ import org.springframework.data.jpa.repository.Query
 import org.springframework.data.repository.query.Param
 import org.springframework.transaction.annotation.Transactional
 
+@Transactional(readOnly = true)
 interface LoginAttemptRepository : JpaRepository<LoginAttempt, String> {
     // The pair of keys (email + ip) is checked in a single read, against the
     // database's own now() like recordFailure writes with: an app-side instant

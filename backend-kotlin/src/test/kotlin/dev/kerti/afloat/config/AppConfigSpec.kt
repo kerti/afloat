@@ -227,6 +227,16 @@ open class AppConfigSpec : StringSpec({
                 input = TestConfigDefaults.testConfigBase("LOG_FORMAT" to " json"),
                 expectedMessage = "LOG_FORMAT ' json': want text or json",
             ),
+            AppConfigCase(
+                name = "HTTP_WRITE_TIMEOUT: '0s'",
+                input = TestConfigDefaults.testConfigBase("HTTP_WRITE_TIMEOUT" to "0s"),
+                expectedMessage = "HTTP_WRITE_TIMEOUT 'PT0S': must be positive",
+            ),
+            AppConfigCase(
+                name = "HTTP_WRITE_TIMEOUT: '-1s'",
+                input = TestConfigDefaults.testConfigBase("HTTP_WRITE_TIMEOUT" to "-1s"),
+                expectedMessage = "HTTP_WRITE_TIMEOUT 'PT-1S': must be positive",
+            ),
         )
     ) { (_, input, _, expectedMessage) ->
         val ex = shouldThrow<ConfigException> { AppConfig.parse(input) }

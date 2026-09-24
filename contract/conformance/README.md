@@ -154,16 +154,15 @@ quietly calcify into "the backends differ and nobody minds".
 Adding a header here to make a red run green, with no issue behind it, is hiding
 a divergence rather than ruling on one.
 
-Today the list holds two permanent global entries — `Date` and
-`Content-Length`, both properties of HTTP rather than decisions — one
+Today the list holds three permanent global entries — `Date` and
+`Content-Length`, both properties of HTTP rather than decisions, and
+`X-Request-Id` (#26: both backends send it, but a minted id is random; the
+sanitising rule is pinned by `cases/request-id.yaml` instead) — and one
 case-scoped entry, `unmatched-path-404` (#24: each backend keeps its own
 unregistered-path 404, so the frontend must act on a non-envelope 404's status
-alone), and **eight provisional ones, all
-pending [#26](https://github.com/kerti/afloat/issues/26)**: `X-Request-Id`,
-which Kotlin sends and Go does not, and the seven Spring Security defaults
-(`X-Content-Type-Options`, `X-Frame-Options`, `X-XSS-Protection`,
-`Cache-Control`, `Pragma`, `Expires`, `Strict-Transport-Security`). They are
-listed one per header rather than as a wildcard so #26 has to answer for each.
+alone). #26 retired the provisional entries: the six security headers are
+identical on both backends and compared like any other, and neither backend
+sends `Strict-Transport-Security`.
 
 ## Design decisions, and what they rejected
 

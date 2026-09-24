@@ -43,7 +43,8 @@ server:
     # The endorsed analogues of Go's http.Server timeouts. connection-timeout
     # bounds the request-line/header read (servlet IO cannot time a whole-body
     # read); keep-alive-timeout is the idle keep-alive window. HTTP_WRITE_TIMEOUT
-    # has no Tomcat equivalent and is bound-but-deferred (issue #13 §6).
+    # has no Tomcat equivalent: it bounds transactions instead, as the transaction
+    # manager's default timeout (issue #30, BOOTSTRAP §12).
     connection-timeout: ${HTTP_READ_TIMEOUT:30s}
     keep-alive-timeout: ${HTTP_IDLE_TIMEOUT:120s}
 
@@ -62,8 +63,8 @@ afloat:
   # against the BOOTSTRAP.md §12 table; PORT is bound by Boot at server.port and
   # reaches AppConfig the same way.
   database-url: ${DATABASE_URL:}
-  # LOG_FORMAT is bound-but-deferred (issue #13 §6), like HTTP_WRITE_TIMEOUT
-  # above: no logging sink reads it yet, until the JSON encoder lands.
+  # LOG_FORMAT is bound-but-deferred (issue #13 §6): no logging sink reads it
+  # yet, until the JSON encoder lands.
   log-format: ${LOG_FORMAT:text}
   log-level: ${LOG_LEVEL:info}
   auto-migrate: ${AUTO_MIGRATE:true}

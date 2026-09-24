@@ -13,6 +13,7 @@ import io.kotest.assertions.withClue
 import io.kotest.matchers.collections.shouldHaveSize
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
+import io.kotest.matchers.string.shouldMatch
 import io.kotest.matchers.string.shouldNotContain
 import jakarta.servlet.http.Cookie
 import org.slf4j.LoggerFactory
@@ -21,7 +22,7 @@ import org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post
 
 // #13 test 29 and PRD N6. A log line carrying an Expense description is
 // telemetry that happens to be written to disk, and the fact that nobody meant
-// it that way is not a defence.
+// it that way is not a defense.
 class RequestLogSpec : WebDatabaseSpec() {
 
     private val appender = ListAppender<ILoggingEvent>()
@@ -100,10 +101,10 @@ class RequestLogSpec : WebDatabaseSpec() {
             lines().single() shouldContain "status=403"
         }
 
-        // An inbound id is honoured so a proxy's correlation survives, and
-        // sanitised because in a self-hosted deployment nothing strips it: a
+        // An inbound id is honored so a proxy's correlation survives, and
+        // sanitized because in a self-hosted deployment nothing strips it: a
         // newline in that header would otherwise write a second, forged line.
-        "honours a supplied request id but strips anything that could forge a line" {
+        "honors a supplied request id but strips anything that could forge a line" {
             mockMvc.perform(
                 post(AuthApi.BASE_PATH + AuthApi.PATH_LOGOUT)
                     .header(RequestLogFilter.REQUEST_ID_HEADER, "abc-123\nrequest method=GET path=/forged"),
@@ -114,6 +115,25 @@ class RequestLogSpec : WebDatabaseSpec() {
                 line shouldContain "request_id=abc-123requestmethodGETpathforged"
                 line shouldNotContain "\n"
             }
+        }
+
+        "keeps only ASCII id alphabet from a supplied request id" {
+            mockMvc.perform(
+                post(AuthApi.BASE_PATH + AuthApi.PATH_LOGOUT)
+                    .header(RequestLogFilter.REQUEST_ID_HEADER, "ab<c>d;f/g:iéÃ1"),
+            ).andReturn()
+
+            lines().single() shouldContain "request_id=abcdfgi1"
+        }
+
+        "supplies a request id in the response if it isn't provided in a request" {
+            val response = mockMvc.perform(
+                post(AuthApi.BASE_PATH + AuthApi.PATH_LOGOUT),
+            ).andReturn().response
+            val requestId = response.getHeader(RequestLogFilter.REQUEST_ID_HEADER)
+
+            requestId shouldMatch Regex("^[0-9a-f]{16}\$")
+            lines().single() shouldContain "request_id=$requestId"
         }
     }
 }

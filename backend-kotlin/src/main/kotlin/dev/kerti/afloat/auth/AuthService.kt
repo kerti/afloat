@@ -162,7 +162,9 @@ class AuthService(
         }
     }
 
-    @Transactional
+    // Not @Transactional, like login: the transaction would begin at the proxy,
+    // before this body, so an outage would fail there and never reach the catch
+    // below. deleteRow is its own transaction instead.
     fun logout(): String {
         // Revocation is the row delete. Deleting an absent row is a no-op, so a
         // session-less logout stays idempotent.

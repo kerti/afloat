@@ -1,5 +1,8 @@
 package dev.kerti.afloat.auth
 
+import ch.qos.logback.classic.Logger
+import ch.qos.logback.classic.spi.ILoggingEvent
+import ch.qos.logback.core.read.ListAppender
 import com.zaxxer.hikari.HikariDataSource
 import dev.kerti.afloat.api.AuthApi
 import dev.kerti.afloat.auth.data.CredentialRepository
@@ -9,11 +12,13 @@ import dev.kerti.afloat.testsupport.WebDatabaseSpec
 import dev.kerti.afloat.testsupport.loginBody
 import dev.kerti.afloat.testsupport.sha256Hex
 import io.kotest.matchers.collections.shouldBeEmpty
+import io.kotest.matchers.collections.shouldContain
 import io.kotest.matchers.shouldBe
 import jakarta.servlet.http.Cookie
 import org.mockito.ArgumentMatchers.any
 import org.mockito.ArgumentMatchers.anyString
 import org.mockito.Mockito.doThrow
+import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.config.BeanPostProcessor
 import org.springframework.boot.test.context.TestConfiguration
 import org.springframework.context.annotation.Bean
@@ -96,6 +101,19 @@ class DatabaseOutageSpec : WebDatabaseSpec() {
         return token
     }
 
+    // An explicit catch and ApiExceptionHandler's catch-all answer an outage
+    // with the same 500, so what AuthService logged is what says which one did.
+    private fun <T> loggedByAuthService(block: () -> T): Pair<T, List<String>> {
+        val logger = LoggerFactory.getLogger(AuthService::class.java) as Logger
+        val appender = ListAppender<ILoggingEvent>().apply { start() }
+        logger.addAppender(appender)
+        try {
+            return block() to appender.list.map { it.formattedMessage }
+        } finally {
+            logger.detachAppender(appender)
+        }
+    }
+
     // Holds every connection the pool will lend for the length of block, so
     // anything else that asks waits out the connection timeout and fails.
     private fun <T> withPoolExhausted(block: () -> T): T {
@@ -117,22 +135,24 @@ class DatabaseOutageSpec : WebDatabaseSpec() {
                 val account = AuthFixtures.account(dataSource)
                 doThrow(outage).`when`(userRepository).findByEmail(anyString())
 
-                val result = login(account.email)
+                val (result, logged) = loggedByAuthService { login(account.email) }
 
                 result.response.status shouldBe 500
                 result.response.contentAsString shouldBe """{"code":"INTERNAL"}"""
                 loginAttemptKeys().shouldBeEmpty()
+                logged shouldContain "login: look up credential"
             }
 
             "answers 500 and records no failure when the credential lookup fails ($kind)" {
                 val account = AuthFixtures.account(dataSource)
                 doThrow(outage).`when`(credentialRepository).findByUserId(account.userId)
 
-                val result = login(account.email)
+                val (result, logged) = loggedByAuthService { login(account.email) }
 
                 result.response.status shouldBe 500
                 result.response.contentAsString shouldBe """{"code":"INTERNAL"}"""
                 loginAttemptKeys().shouldBeEmpty()
+                logged shouldContain "login: look up credential"
             }
 
             "leaves the cookie alone when the session's user lookup fails ($kind)" {
@@ -146,6 +166,8 @@ class DatabaseOutageSpec : WebDatabaseSpec() {
             }
         }
 
+        // The first read to find the pool empty is the backoff read, before
+        // resolve: the stubbed lookups above are what reach resolve's catch.
         "answers 500 and records no failure when the pool is exhausted during login" {
             val account = AuthFixtures.account(dataSource)
 
@@ -164,6 +186,27 @@ class DatabaseOutageSpec : WebDatabaseSpec() {
             result.response.status shouldBe 401
             result.response.contentAsString shouldBe """{"code":"UNAUTHORIZED"}"""
             result.response.getHeaders("Set-Cookie").shouldBeEmpty()
+        }
+
+        // Go's Logout answers 500 when the delete fails; the session row is
+        // left, so the cookie is not cleared on a revocation that never happened.
+        "answers 500 and keeps the session when the pool is exhausted during logout" {
+            val token = liveSession()
+
+            val (result, logged) = loggedByAuthService {
+                withPoolExhausted {
+                    mockMvc.perform(
+                        post(AuthApi.BASE_PATH + AuthApi.PATH_LOGOUT)
+                            .cookie(Cookie(SessionCookieFactory.COOKIE_NAME, token))
+                    ).andReturn()
+                }
+            }
+
+            result.response.status shouldBe 500
+            result.response.contentAsString shouldBe """{"code":"INTERNAL"}"""
+            result.response.getHeaders("Set-Cookie").shouldBeEmpty()
+            logged shouldContain "logout: delete session"
+            me(token).response.status shouldBe 200
         }
 
         // The pool recovers and so does the session: the cookie that was left

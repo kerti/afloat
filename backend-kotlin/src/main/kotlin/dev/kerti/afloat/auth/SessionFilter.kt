@@ -48,7 +48,7 @@ class SessionFilter(
                 if (!e.isDatabaseFailure()) throw e
                 // A lookup that failed says nothing about the session, so the
                 // cookie is left alone and the request continues
-                // unauthenticated (Go's session.go:131-138).
+                // unauthenticated (Go's SessionMiddleware, the GetLiveSession branch).
                 log.error("session lookup", e)
                 filterChain.doFilter(request, response)
                 return

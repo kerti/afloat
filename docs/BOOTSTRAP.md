@@ -358,7 +358,9 @@ about any one of them. **In Kotlin, "every other failure" includes `TransactionE
 repository is `@Transactional`, so it takes its connection when the transaction begins, and a
 database that cannot lend one arrives as `CannotCreateTransactionException` — not a
 `DataAccessException`. A catch written for `DataAccessException` alone misses exactly the outage it
-was meant for, so the auth code tests both through `isDatabaseFailure()`.
+was meant for, so the auth code tests both through `isDatabaseFailure()`. That test leaves out
+`TransactionUsageException`, the one family that is a bug in this code rather than the database's
+doing, so misuse still fails loudly instead of being served as an outage.
 
 **Any instant the database also evaluates comes from the database.** `aa1f68f` moved
 `activeBackoffSeconds`, `findLive` and `touch` onto the database's `now()` rather than the app's,

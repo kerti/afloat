@@ -8,12 +8,18 @@
 #
 # Strict-Transport-Security is absent from both, and parity would catch it if
 # one started sending it: it is not in the permitted list.
+#
+# X-Request-Id IS on that list, globally, and a permit exempts the header's
+# presence as well as its value. So each request sends a clean id and expects
+# it echoed: that pins the header on every path here, not just on /health.
 
 - name: security headers on a handler's 200
   issue: "26"
   request:
     method: GET
     path: /health
+    headers:
+      X-Request-Id: conformance-probe
   expect:
     status: 200
     headers: &security-headers
@@ -23,6 +29,7 @@
       Pragma: no-cache
       Expires: "0"
       X-XSS-Protection: "0"
+      X-Request-Id: conformance-probe
     body_json:
       status: ok
       version: dev
@@ -34,6 +41,8 @@
   request:
     method: GET
     path: /me
+    headers:
+      X-Request-Id: conformance-probe
   expect:
     status: 401
     headers: *security-headers
@@ -48,6 +57,7 @@
     path: /auth/logout
     headers:
       Sec-Fetch-Site: cross-site
+      X-Request-Id: conformance-probe
   expect:
     status: 403
     headers: *security-headers
@@ -63,6 +73,8 @@
   request:
     method: GET
     path: /no-such-route
+    headers:
+      X-Request-Id: conformance-probe
   expect:
     status: 404
     headers: *security-headers

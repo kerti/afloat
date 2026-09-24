@@ -16,18 +16,18 @@ class RepositoryTransactionSpec : DatabaseSpec() {
     private lateinit var applicationContext: ApplicationContext
 
     init {
-        "every auth.data repository carries Spring's @Transactional" {
+        "every repository under dev.kerti.afloat carries Spring's @Transactional" {
             val repositories = Repositories(applicationContext)
 
-            val authRepositories = repositories.map {
+            val repositoryInterfaces = repositories.map {
                 repositories.getRequiredRepositoryInformation(it).repositoryInterface
             }.filter {
                 it.packageName.startsWith("dev.kerti.afloat")
             }
 
-            authRepositories.shouldNotBeEmpty()
+            repositoryInterfaces.shouldNotBeEmpty()
 
-            for (repositoryInterface in authRepositories) {
+            for (repositoryInterface in repositoryInterfaces) {
                 withClue(repositoryInterface.name) {
                     AnnotatedElementUtils
                         .hasAnnotation(repositoryInterface, Transactional::class.java)

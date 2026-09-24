@@ -24,6 +24,15 @@
     is answering the same thing; the body itself is compared byte for byte
     regardless, so nothing is lost by exempting the header.
 
+- header: X-Request-Id
+  issue: "26"
+  why: >
+    Both backends send it on every response (#26), but a minted id is random,
+    so two answers never agree on its value. What IS deterministic - an inbound
+    id sanitised to [A-Za-z0-9_-] and cut to 64 - is pinned per backend by
+    cases/request-id.yaml, which asserts the value under expected/<backend>,
+    where this entry does not reach.
+
 # ---------------------------------------------------------------------------
 # Case-scoped - apply only to the cases that cite them under `permit:`, for a
 # difference that is right on those answers and would be a bug on any other.
@@ -43,59 +52,3 @@
     404s to match. Neither is the error envelope, so the frontend must treat a
     404 by its status alone and never read a non-envelope body - both then
     land on the same path. Revisit if a 404 ever needs to carry a code.
-
-# ---------------------------------------------------------------------------
-# Provisional - pending #26, which decides the response header allowlist.
-# Every entry below should either disappear or gain a permanent `why` when that
-# lands. They are listed individually rather than as a wildcard so the decision
-# has to be made per header.
-# ---------------------------------------------------------------------------
-
-- header: X-Request-Id
-  issue: "26"
-  provisional: true
-  why: >
-    Kotlin emits a per-request correlation id and Go emits nothing. Whether both
-    should, neither should, or it is legitimately Kotlin-only is exactly what
-    #26 decides.
-
-- header: X-Content-Type-Options
-  issue: "26"
-  provisional: true
-  why: Spring Security default; Go sends no security headers at all. #26 rules on the set.
-
-- header: X-Frame-Options
-  issue: "26"
-  provisional: true
-  why: Spring Security default; Go sends no security headers at all. #26 rules on the set.
-
-- header: X-XSS-Protection
-  issue: "26"
-  provisional: true
-  why: Spring Security default; Go sends no security headers at all. #26 rules on the set.
-
-- header: Cache-Control
-  issue: "26"
-  provisional: true
-  why: >
-    Spring Security sets no-store on every response by default; Go sets nothing.
-    A real answer probably differs per endpoint, which is why it is #26's to
-    make and not this file's to assume.
-
-- header: Pragma
-  issue: "26"
-  provisional: true
-  why: Emitted by Spring Security alongside Cache-Control. Same decision.
-
-- header: Expires
-  issue: "26"
-  provisional: true
-  why: Emitted by Spring Security alongside Cache-Control. Same decision.
-
-- header: Strict-Transport-Security
-  issue: "26"
-  provisional: true
-  why: >
-    Spring Security emits it on HTTPS requests. It should almost certainly be
-    set by the reverse proxy rather than by either backend, but that is #26's
-    call.

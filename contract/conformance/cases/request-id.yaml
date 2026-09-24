@@ -1,0 +1,53 @@
+# X-Request-Id (#26, BOOTSTRAP.md §5.2). An inbound id is honoured so a
+# reverse proxy's id survives into both backends' logs, but only after
+# sanitising: ASCII letters, digits, '-' and '_' kept, then cut to 64. A
+# minted id is random, so only the inbound path can be asserted by value -
+# which is also why the permitted list exempts the header from parity, and
+# why these cases assert it under expected/<backend> instead.
+
+- name: request id is echoed when already clean
+  issue: "26"
+  request:
+    method: GET
+    path: /health
+    headers:
+      X-Request-Id: proxy-assigned_ID-42
+  expect:
+    status: 200
+    headers:
+      X-Request-Id: proxy-assigned_ID-42
+    body_json:
+      status: ok
+      version: dev
+
+- name: request id keeps only the ASCII id alphabet
+  issue: "26"
+  request:
+    method: GET
+    path: /health
+    headers:
+      # Non-ASCII too: Tomcat decodes header bytes as Latin-1, so a UTF-8 'é'
+      # arrives as 'Ã©', and 'Ã' is a letter to Character.isLetterOrDigit.
+      X-Request-Id: "ab<c>d e;f/g.h:iéÃ1"
+  expect:
+    status: 200
+    headers:
+      X-Request-Id: abcdefghi1
+    body_json:
+      status: ok
+      version: dev
+
+- name: request id is cut to 64 after sanitising
+  issue: "26"
+  request:
+    method: GET
+    path: /health
+    headers:
+      X-Request-Id: "<<<<aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  expect:
+    status: 200
+    headers:
+      X-Request-Id: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    body_json:
+      status: ok
+      version: dev

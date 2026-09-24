@@ -66,10 +66,10 @@ func New(d Deps) http.Handler {
 	srv := &Server{system: d.System, auth: d.Auth}
 
 	r := chi.NewRouter()
-	r.Use(middleware.RequestID)
-	// securityHeaders is mounted right after RequestID so it can read the id
-	// RequestID put in context (issue #26) and so the fixed set lands on every
-	// response this router produces, including ones later middleware rejects.
+	// First, so every response this router produces carries the id and the
+	// fixed header set (issue #26), including ones later middleware rejects,
+	// and so requestLogger can read the id from context.
+	r.Use(requestID)
 	r.Use(securityHeaders)
 	// middleware.RealIP is deliberately NOT mounted. It rewrites RemoteAddr from
 	// X-Forwarded-For, which nothing strips in a self-hosted deployment with no

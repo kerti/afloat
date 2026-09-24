@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -185,8 +186,8 @@ type panicQuerier struct{ db.Querier }
 func (panicQuerier) Ping(context.Context) (int32, error) { panic("boom") }
 
 // The full pinned set (#26), asserted on a representative response. Not
-// Strict-Transport-Security: that one is Tomcat's HTTPS-only behaviour, a
-// documented deliberate difference from Kotlin, not something Go sends.
+// Strict-Transport-Security, in either backend: whatever terminates TLS owns
+// it (BOOTSTRAP.md §5.2).
 func TestSecurityHeadersOnHealth(t *testing.T) {
 	srv := newTestServer()
 
@@ -206,28 +207,69 @@ func TestSecurityHeadersOnHealth(t *testing.T) {
 			t.Errorf("%s = %q, want %q", header, got, value)
 		}
 	}
-	if got := rec.Header().Get("X-Request-Id"); got == "" {
-		t.Error("X-Request-Id is empty; chi's middleware.RequestID mints one and this must echo it")
-	}
 	if got := rec.Header().Get("Strict-Transport-Security"); got != "" {
-		t.Errorf("Strict-Transport-Security = %q, want unset — that is Tomcat's HTTPS-only behaviour, not Go's", got)
+		t.Errorf("Strict-Transport-Security = %q, want unset — the TLS terminator owns HSTS, not either backend", got)
 	}
 }
 
-// An incoming X-Request-Id is echoed, not overwritten: chi's middleware.
-// RequestID already prefers it (request_id.go), and this only has to not
-// lose what RequestID put in context.
-func TestSecurityHeadersEchoesIncomingRequestID(t *testing.T) {
+var mintedRequestID = regexp.MustCompile(`^[0-9a-f]{16}$`)
+
+// The inbound rule Kotlin's RequestLogFilter applies, byte for byte: keep
+// ASCII letters, digits, '-' and '_', cut to 64, mint if nothing survives.
+func TestRequestIDFromInbound(t *testing.T) {
+	cases := []struct {
+		name, inbound, want string // want "" means a freshly minted id
+	}{
+		{"clean id is echoed", "caller-supplied_ID-42", "caller-supplied_ID-42"},
+		{"disallowed ASCII is dropped", "ab<c>d e;f/g.h:i", "abcdefghi"},
+		{"non-ASCII is dropped, not just decoded", "abcé字1", "abc1"},
+		{"cut to 64 after filtering", "<" + strings.Repeat("a", 70), strings.Repeat("a", 64)},
+		{"nothing survives, so one is minted", "<>;/.:", ""},
+		{"absent, so one is minted", "", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var inContext string
+			h := requestID(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+				inContext = requestIDFrom(r.Context())
+			}))
+			req := httptest.NewRequest(http.MethodGet, "/", nil)
+			if tc.inbound != "" {
+				req.Header.Set("X-Request-Id", tc.inbound)
+			}
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, req)
+
+			got := rec.Header().Get("X-Request-Id")
+			switch {
+			case tc.want == "" && !mintedRequestID.MatchString(got):
+				t.Errorf("X-Request-Id = %q, want a minted id (16 lowercase hex)", got)
+			case tc.want != "" && got != tc.want:
+				t.Errorf("X-Request-Id = %q, want %q", got, tc.want)
+			}
+			// requestLogger reads the context; the response must not name a
+			// different request than the log line does.
+			if inContext != got {
+				t.Errorf("context id = %q, response header = %q; they must be the same id", inContext, got)
+			}
+		})
+	}
+}
+
+// Through the whole router, so a later middleware that rewrote or dropped the
+// header would be caught — including on a response the router answers itself.
+func TestRequestIDOnEveryResponse(t *testing.T) {
 	srv := newTestServer()
 
-	req := httptest.NewRequest(http.MethodGet, "/api/health", nil)
-	req.Header.Set("X-Request-Id", "caller-supplied-id")
+	for _, path := range []string{"/api/health", "/api/genuinely-unregistered"} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		req.Header.Set("X-Request-Id", "from-the-proxy")
+		rec := httptest.NewRecorder()
+		srv.ServeHTTP(rec, req)
 
-	rec := httptest.NewRecorder()
-	srv.ServeHTTP(rec, req)
-
-	if got := rec.Header().Get("X-Request-Id"); got != "caller-supplied-id" {
-		t.Errorf("X-Request-Id = %q, want the incoming id echoed back", got)
+		if got := rec.Header().Get("X-Request-Id"); got != "from-the-proxy" {
+			t.Errorf("%s: X-Request-Id = %q, want the inbound id echoed", path, got)
+		}
 	}
 }
 

@@ -320,11 +320,20 @@ Security's defaults on Kotlin (issue #26):
 | `Pragma` | `no-cache` |
 | `Expires` | `0` |
 | `X-XSS-Protection` | `0` |
-| `X-Request-Id` | The incoming request's id if it sent one, otherwise one minted server-side. |
+| `X-Request-Id` | The inbound id, sanitised; otherwise one minted server-side (below). |
 
-**`Strict-Transport-Security` is the one deliberate difference.** Kotlin's Tomcat sends it; Go does
-not. It is HTTPS-only, Tomcat-decided rather than an application choice, and not applicable to Go's
-current deployment, which may not terminate TLS itself.
+**`X-Request-Id`** is honoured inbound so a reverse proxy's id survives into both backends' logs,
+but the header is attacker-controlled when nothing sits in front, so it is sanitised first: keep only
+ASCII `A–Z`, `a–z`, `0–9`, `-` and `_` (every other byte dropped, not replaced), then cut to 64. If
+nothing survives, or none was sent, mint one: 8 random bytes as 16 lowercase hex characters. Go
+implements this itself rather than using chi's `middleware.RequestID`, which echoes unfiltered and
+mints ids that carry the hostname and a request counter.
+
+**Neither backend sends `Strict-Transport-Security`.** HSTS is policy about the operator's domain
+(`max-age`, `includeSubDomains`), not about Afloat, and whatever terminates TLS owns it — the reverse
+proxy in any deployment this document supports. Kotlin disables Spring Security's HSTS writer
+explicitly: it only fires on a secure request, so it is silent today, but it would start sending
+Spring's default the day someone enabled TLS on Tomcat or trusted forwarded headers.
 
 ## 6. The API contract
 

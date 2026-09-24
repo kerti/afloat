@@ -356,15 +356,16 @@ session logged out. A 500 is not an answer about any one address: an outage that
 down fails the lookups for every address alike. It is not quite uniform, though. A known address makes
 one more query before the Argon2 permit than an unknown one (the credential lookup), so under a starved
 pool its 500s come a little more often, and a caller flooding logins could compare the rates. That
-residual, and the extra round trip it rides on, is #55. **In Kotlin, "every other failure" includes `TransactionException`.** Every
-repository is `@Transactional`, so it takes its connection when the transaction begins, and a
-database that cannot lend one arrives as `CannotCreateTransactionException` — not a
-`DataAccessException`. A catch written for `DataAccessException` alone misses exactly the outage it
-was meant for, so the auth code tests both through `isDatabaseFailure()`. That test leaves out
-`TransactionUsageException`, an illegal propagation or isolation setting, so that misuse fails loudly
-instead of being served as an outage. It is not the only bug-class family: `DataAccessException`'s
-own (`InvalidDataAccessApiUsageException`, `BadSqlGrammarException`) still count as outages, as every
-error but `pgx.ErrNoRows` does in Go.
+residual, and the extra round trip it rides on, is #55.
+
+**In Kotlin, "every other failure" includes `TransactionException`.** Every repository is
+`@Transactional`, so it takes its connection when the transaction begins, and a database that cannot
+lend one arrives as `CannotCreateTransactionException` — not a `DataAccessException`. A catch written
+for `DataAccessException` alone misses exactly the outage it was meant for, so the auth code tests both
+through `isDatabaseFailure()`. That test leaves out `TransactionUsageException`, an illegal propagation
+or isolation setting, so that misuse fails loudly instead of being served as an outage. It is not the
+only bug-class family: `DataAccessException`'s own (`InvalidDataAccessApiUsageException`,
+`BadSqlGrammarException`) still count as outages, as every error but `pgx.ErrNoRows` does in Go.
 
 **Any instant the database also evaluates comes from the database.** `aa1f68f` moved
 `activeBackoffSeconds`, `findLive` and `touch` onto the database's `now()` rather than the app's,

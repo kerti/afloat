@@ -359,3 +359,43 @@ func TestLoginAnswers500AndRecordsNoFailureWhenNoArgonPermitComesFree(t *testing
 		t.Errorf("%d login_attempts rows after a login that never checked its password, want 0", rows)
 	}
 }
+
+// A client that leaves while queued is no fault of the server's: still a 500
+// and no failure recorded, but logged at Warn, so a stream of dropped
+// connections does not read as a stream of errors.
+func TestLoginLogsAClientLeavingWhileQueuedAsAWarning(t *testing.T) {
+	h := newHarness(t, time.Now)
+	h.seedCredentialedUser(t, "a@example.com")
+
+	release := auth.HoldArgonPermitsForTest()
+	defer release()
+
+	var logged bytes.Buffer
+	defaultLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logged, nil)))
+	defer slog.SetDefault(defaultLogger)
+
+	// Cancelled, not timed out: what net/http does when the client goes away.
+	// Late enough that the backoff read and the lookups are done, so it lands
+	// in the permit wait.
+	ctx, cancel := context.WithCancel(ipContext("198.51.100.202"))
+	defer cancel()
+	time.AfterFunc(200*time.Millisecond, cancel)
+	resp := h.login(ctx, t, "a@example.com", "wrong password entirely")
+
+	if _, is := resp.(api.LocalLogin500JSONResponse); !is {
+		t.Fatalf("response = %T, want 500", resp)
+	}
+	if out := logged.String(); !strings.Contains(out, `level=WARN msg="login: client left while waiting for an argon2 permit"`) ||
+		strings.Contains(out, "level=ERROR") {
+		t.Errorf("want one Warn for the client leaving and no Error; logged:\n%s", out)
+	}
+	var rows int
+	if err := h.tdb.Pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM login_attempts`).Scan(&rows); err != nil {
+		t.Fatalf("query: %v", err)
+	}
+	if rows != 0 {
+		t.Errorf("%d login_attempts rows after a login that never checked its password, want 0", rows)
+	}
+}

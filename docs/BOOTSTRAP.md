@@ -61,6 +61,8 @@ Stated because the values alone read as an oversight, and the next person to tid
 | Kotlin backend | `5183` |
 | Postgres | `5184` |
 | Postgres, throwaway test container | `5185` |
+| Go backend, conformance `local-disabled` pair | `5186` |
+| Kotlin backend, conformance `local-disabled` pair | `5187` |
 
 **The two backends must differ.** Not a tidiness preference — Afloat's premise is two implementations
 of one contract, so parity work means running both at once. A shared port makes the project's central
@@ -76,7 +78,7 @@ Chosen against three constraints, which matter more than the specific numbers:
    — where an outbound connection can transiently hold the port, so a bind fails at random and does
    not reproduce. Afloat's Postgres was briefly on `55432`: exactly this bug, waiting.
 
-Contiguous because one fact is easier to hold than five, and `5181` sits above Vite's `5173` so it
+Contiguous because one fact is easier to hold than seven, and `5181` sits above Vite's `5173` so it
 still reads as the frontend. Go takes the lower backend number, matching *canonical* everywhere else.
 
 **This is Afloat's own allocation and claims nothing about any other project.** No registry, no

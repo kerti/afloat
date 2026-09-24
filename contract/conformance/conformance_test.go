@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -22,10 +23,25 @@ type backend struct {
 	baseURL string
 }
 
-const (
-	defaultGoBaseURL     = "http://localhost:5182/api"
-	defaultKotlinBaseURL = "http://localhost:5183/api"
+// pairs is where each profile's two backends answer by default, and the
+// variables that move them. scripts/conformance.sh boots one pair per profile.
+var pairs = map[string][2]struct{ name, envKey, fallback string }{
+	conformance.ProfileDefault: {
+		{"go", "AFLOAT_GO_BASE_URL", "http://localhost:5182/api"},
+		{"kotlin", "AFLOAT_KOTLIN_BASE_URL", "http://localhost:5183/api"},
+	},
+	conformance.ProfileLocalDisabled: {
+		{"go", "AFLOAT_GO_LOCAL_DISABLED_BASE_URL", "http://localhost:5186/api"},
+		{"kotlin", "AFLOAT_KOTLIN_LOCAL_DISABLED_BASE_URL", "http://localhost:5187/api"},
+	},
+}
 
+// perResponseHeaders carry a value minted per response, so two answers from
+// the SAME backend differ on them by construction. Only same_as skips them;
+// parity between backends is the permitted list's business.
+var perResponseHeaders = []string{"Date", "X-Request-Id"}
+
+const (
 	casesDir      = "cases"
 	permittedFile = "permitted-differences.yaml"
 	readinessPath = "/health"
@@ -56,11 +72,6 @@ func env(key, fallback string) string {
 // TestConformance is the whole harness. One test function, subtests per case
 // per mode, so a failure names the case and which kind of failure it is.
 func TestConformance(t *testing.T) {
-	backends := []backend{
-		{name: "go", baseURL: env("AFLOAT_GO_BASE_URL", defaultGoBaseURL)},
-		{name: "kotlin", baseURL: env("AFLOAT_KOTLIN_BASE_URL", defaultKotlinBaseURL)},
-	}
-
 	// Same shape as AFLOAT_REQUIRE_TEST_DB in both backends' suites: a machine
 	// that has the backends running must never report green on a run that never
 	// happened, and a machine that does not must not fail for it.
@@ -75,43 +86,60 @@ func TestConformance(t *testing.T) {
 		t.Skip("skipping: -short runs no case that needs a running backend")
 	}
 
-	limit := readinessLimitOptional
-	if required {
-		limit = readinessLimitRequired
-	}
-	for _, b := range backends {
-		if err := waitReady(b, limit); err != nil {
-			if required {
-				t.Fatalf("AFLOAT_REQUIRE_CONFORMANCE=1 but the %s backend is not answering at %s: %v",
-					b.name, b.baseURL, err)
-			}
-			t.Skipf("skipping: the %s backend is not answering at %s (%v). "+
-				"Run `make conformance`, or set AFLOAT_REQUIRE_CONFORMANCE=1 to make this a failure.",
-				b.name, b.baseURL, err)
-		}
-	}
-
 	permitted, err := conformance.LoadPermitted(permittedFile)
 	if err != nil {
 		t.Fatalf("loading %s: %v", permittedFile, err)
 	}
+	cases, err := conformance.Load(casesDir)
+	if err != nil {
+		t.Fatalf("loading cases: %v", err)
+	}
+	if err := conformance.CheckPermits(cases, permitted); err != nil {
+		t.Fatal(err)
+	}
 	if prov := permitted.Provisional(); len(prov) > 0 {
 		names := make([]string, 0, len(prov))
 		for _, p := range prov {
-			names = append(names, fmt.Sprintf("%s (%s)", p.Header, p.Issue))
+			names = append(names, fmt.Sprintf("%s%s (%s)", p.Header, p.Name, p.Issue))
 		}
 		sort.Strings(names)
 		t.Logf("%d permitted difference(s) are PROVISIONAL, pending a decision: %s",
 			len(prov), strings.Join(names, ", "))
 	}
 
-	cases, err := conformance.Load(casesDir)
-	if err != nil {
-		t.Fatalf("loading cases: %v", err)
+	// Only the profiles some case uses have to be up: a pair nothing runs
+	// against is not a reason to skip, or to fail.
+	limit := readinessLimitOptional
+	if required {
+		limit = readinessLimitRequired
 	}
-	t.Logf("%d case(s) from %s, against %d backends", len(cases), casesDir, len(backends))
+	backendsFor := map[string][]backend{}
+	for _, c := range cases {
+		profile := c.ProfileOf()
+		if _, done := backendsFor[profile]; done {
+			continue
+		}
+		var bs []backend
+		for _, p := range pairs[profile] {
+			bs = append(bs, backend{name: p.name, baseURL: env(p.envKey, p.fallback)})
+		}
+		for _, b := range bs {
+			if err := waitReady(b, limit); err != nil {
+				if required {
+					t.Fatalf("AFLOAT_REQUIRE_CONFORMANCE=1 but the %s backend (%s profile) is not answering at %s: %v",
+						b.name, profile, b.baseURL, err)
+				}
+				t.Skipf("skipping: the %s backend (%s profile) is not answering at %s (%v). "+
+					"Run `make conformance`, or set AFLOAT_REQUIRE_CONFORMANCE=1 to make this a failure.",
+					b.name, profile, b.baseURL, err)
+			}
+		}
+		backendsFor[profile] = bs
+	}
+	t.Logf("%d case(s) from %s, across %d profile(s)", len(cases), casesDir, len(backendsFor))
 
 	for _, c := range cases {
+		backends := backendsFor[c.ProfileOf()]
 		t.Run(c.Name, func(t *testing.T) {
 			answers := make(map[string]response, len(backends))
 
@@ -119,13 +147,24 @@ func TestConformance(t *testing.T) {
 			// That backend is wrong, and the case names which one.
 			for _, b := range backends {
 				b := b
-				resp, err := do(b, c)
+				resp, err := do(b, c.Request)
 				if err != nil {
 					t.Fatalf("%s: %v", b.name, err)
 				}
 				answers[b.name] = resp
+				var ref *response
+				if c.Expect.SameAs != nil {
+					r, err := do(b, *c.Expect.SameAs)
+					if err != nil {
+						t.Fatalf("%s same_as: %v", b.name, err)
+					}
+					ref = &r
+				}
 				t.Run("expected/"+b.name, func(t *testing.T) {
 					assertExpected(t, c, resp)
+					if ref != nil {
+						assertSameAs(t, c, resp, *ref)
+					}
 				})
 			}
 
@@ -158,16 +197,16 @@ func waitReady(b backend, limit time.Duration) error {
 	return last
 }
 
-func do(b backend, c conformance.Case) (response, error) {
+func do(b backend, r conformance.Request) (response, error) {
 	var body io.Reader
-	if c.Request.Body != "" {
-		body = strings.NewReader(c.Request.Body)
+	if r.Body != "" {
+		body = strings.NewReader(r.Body)
 	}
-	req, err := http.NewRequest(c.Request.Method, b.baseURL+c.Request.Path, body)
+	req, err := http.NewRequest(r.Method, b.baseURL+r.Path, body)
 	if err != nil {
 		return response{}, err
 	}
-	for k, v := range c.Request.Headers {
+	for k, v := range r.Headers {
 		req.Header.Set(k, v)
 	}
 
@@ -228,6 +267,39 @@ func assertExpected(t *testing.T, c conformance.Case, got response) {
 	}
 }
 
+// assertSameAs holds one backend's answer to its own answer for the same_as
+// request: status, every header but the per-response ones, and the body bytes.
+// It runs under expected/<backend>, because a mismatch means that backend is
+// wrong, whatever the other one does.
+func assertSameAs(t *testing.T, c conformance.Case, got, ref response) {
+	t.Helper()
+	s := c.Expect.SameAs
+
+	if got.status != ref.status {
+		t.Errorf("same_as %s %s: status %d, but that request answers %d", s.Method, s.Path, got.status, ref.status)
+	}
+	names := map[string]struct{}{}
+	for n := range got.headers {
+		names[n] = struct{}{}
+	}
+	for n := range ref.headers {
+		names[n] = struct{}{}
+	}
+	for n := range names {
+		if slices.ContainsFunc(perResponseHeaders, func(h string) bool { return strings.EqualFold(h, n) }) {
+			continue
+		}
+		if g, r := got.headers.Values(n), ref.headers.Values(n); !reflect.DeepEqual(g, r) {
+			t.Errorf("same_as %s %s: header %s is %q, but that request answers %q",
+				s.Method, s.Path, n, strings.Join(g, ", "), strings.Join(r, ", "))
+		}
+	}
+	if string(got.body) != string(ref.body) {
+		t.Errorf("same_as %s %s: body %s, but that request answers %s",
+			s.Method, s.Path, truncate(got.body), truncate(ref.body))
+	}
+}
+
 // assertParity is failure mode 2. It compares the FULL answers and reports
 // anything that differs and is neither asserted by the case nor on the
 // permitted-difference list.
@@ -251,8 +323,9 @@ func assertParity(t *testing.T, c conformance.Case, permitted *conformance.Permi
 	}
 	sort.Strings(sorted)
 
+	allowsHeader, allowsBody := permitted.ForCase(c)
 	for _, n := range sorted {
-		if permitted.Allows(n) {
+		if allowsHeader(n) {
 			continue
 		}
 		g, k := goResp.headers.Values(n), ktResp.headers.Values(n)
@@ -273,7 +346,7 @@ func assertParity(t *testing.T, c conformance.Case, permitted *conformance.Permi
 		}
 	}
 
-	if !equalBodies(goResp.body, ktResp.body) {
+	if !allowsBody && !equalBodies(goResp.body, ktResp.body) {
 		t.Errorf("body differs between backends\n  go:     %s\n  kotlin: %s",
 			truncate(goResp.body), truncate(ktResp.body))
 	}

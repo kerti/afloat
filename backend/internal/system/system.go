@@ -35,6 +35,11 @@ func New(d Deps) *Handlers {
 	}
 }
 
+// LocalEnabled reports whether the local provider is configured. GetAuthMethods
+// serves it to the client and the httpserver's login-route gate reads it, so
+// the two can never disagree (issue #24).
+func (h *Handlers) LocalEnabled() bool { return h.localEnabled }
+
 // GetHealth reports whether this instance can serve. It runs a real query
 // rather than a bare ping: a pool that is exhausted, or pointed at a database
 // this role cannot read, passes a ping and fails here — which is the difference

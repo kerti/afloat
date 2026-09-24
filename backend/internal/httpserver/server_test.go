@@ -103,7 +103,7 @@ func TestBodyIsCapped(t *testing.T) {
 	srv := newTestServer()
 
 	huge := strings.NewReader(`{"email":"` + strings.Repeat("a", 2<<20) + `"}`)
-	req := httptest.NewRequest(http.MethodPost, "/api/auth/local/login", huge)
+	req := httptest.NewRequest(http.MethodPost, localLoginPath, huge)
 	req.Header.Set("Content-Type", "application/json")
 
 	rec := httptest.NewRecorder()
@@ -128,7 +128,7 @@ func TestMalformedBodyIsTheEnvelope(t *testing.T) {
 		{"empty", ``},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			req := httptest.NewRequest(http.MethodPost, "/api/auth/local/login", strings.NewReader(tc.body))
+			req := httptest.NewRequest(http.MethodPost, localLoginPath, strings.NewReader(tc.body))
 			req.Header.Set("Content-Type", "application/json")
 
 			rec := httptest.NewRecorder()
@@ -274,5 +274,118 @@ func TestHandlerTimeoutReadsConfig(t *testing.T) {
 	// middleware.Timeout's own deferred write raced it.
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Errorf("status = %d, want %d", rec.Code, http.StatusServiceUnavailable)
+	}
+}
+
+// spyQuerier's every unstubbed method panics (db.Querier is embedded nil),
+// which is deliberate: if disabledLocalLogin404 ever let a request through
+// to the handler, the test fails loudly on that panic rather than passing by
+// accident. CreateSession is the one method it does stub, so a session issued
+// in spite of the gate is a recorded fact, not a guess.
+type spyQuerier struct {
+	db.Querier
+	sessionCreated bool
+}
+
+func (q *spyQuerier) CreateSession(_ context.Context, _ db.CreateSessionParams) (db.Session, error) {
+	q.sessionCreated = true
+	return db.Session{}, nil
+}
+
+// issue #24 (Go side): with the local provider off, the login route must not
+// exist — a bare 404 indistinguishable from any other unmatched path, not a
+// 401/403 answered from inside the handler — and /auth/methods must still
+// report it accurately.
+func TestLocalLoginDisabledIsABareNotFound(t *testing.T) {
+	q := &spyQuerier{}
+	srv := New(Deps{
+		System: system.New(system.Deps{Querier: q, Version: "test", LocalEnabled: false}),
+		Auth: auth.New(auth.Deps{
+			Querier:            q,
+			SessionTTL:         30 * 24 * time.Hour,
+			SessionMaxLifetime: 90 * 24 * time.Hour,
+			CookieSecure:       true,
+		}),
+		HandlerTimeout: testHandlerTimeout,
+	})
+
+	body := `{"email":"a@example.com","password":"whatever-it-does-not-matter"}`
+	req := httptest.NewRequest(http.MethodPost, localLoginPath, strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("POST status = %d, want 404", rec.Code)
+	}
+
+	// GET too: with a method-scoped gate chi answers 405 here, which tells a
+	// prober the route exists.
+	reqGet := httptest.NewRequest(http.MethodGet, localLoginPath, nil)
+	recGet := httptest.NewRecorder()
+	srv.ServeHTTP(recGet, reqGet)
+
+	if recGet.Code != http.StatusNotFound {
+		t.Errorf("GET status = %d, want 404", recGet.Code)
+	}
+
+	// Not just any 404: the same one chi hands back for a path that was never
+	// registered — proof this isn't an error envelope wearing a 404, and that
+	// the route genuinely does not exist rather than existing-but-refusing.
+	unmatched := httptest.NewRecorder()
+
+	srv.ServeHTTP(unmatched, httptest.NewRequest(http.MethodGet, "/api/genuinely-unregistered", nil))
+	if ct, wantCt := rec.Header().Get("Content-Type"), unmatched.Header().Get("Content-Type"); ct != wantCt {
+		t.Errorf("POST Content-Type = %q, want %q (same as an unmatched route)", ct, wantCt)
+	}
+	if rec.Body.String() != unmatched.Body.String() {
+		t.Errorf("POST body = %q, want %q (same as an unmatched route)", rec.Body.String(), unmatched.Body.String())
+	}
+
+	if ct, wantCt := recGet.Header().Get("Content-Type"), unmatched.Header().Get("Content-Type"); ct != wantCt {
+		t.Errorf("GET Content-Type = %q, want %q (same as an unmatched route)", ct, wantCt)
+	}
+	if recGet.Body.String() != unmatched.Body.String() {
+		t.Errorf("GET body = %q, want %q (same as an unmatched route)", recGet.Body.String(), unmatched.Body.String())
+	}
+
+	if q.sessionCreated {
+		t.Error("a session was created even though the route should not exist")
+	}
+
+	// /auth/methods is the single source of truth for which providers exist,
+	// and gating the route must not drift from what it reports.
+	methodsRec := httptest.NewRecorder()
+	srv.ServeHTTP(methodsRec, httptest.NewRequest(http.MethodGet, "/api/auth/methods", nil))
+	var methods struct {
+		Local  bool `json:"local"`
+		Google bool `json:"google"`
+	}
+	if err := json.Unmarshal(methodsRec.Body.Bytes(), &methods); err != nil {
+		t.Fatalf("auth/methods body is not JSON: %v (%s)", err, methodsRec.Body.String())
+	}
+	if methods.Local {
+		t.Error("auth/methods reports local: true while the route is gated off")
+	}
+}
+
+// The mirror of the case above: with the default configuration (local
+// enabled), gating this route must be a no-op — LocalLogin behaves exactly as
+// it did before #24.
+func TestLocalLoginEnabledIsUnaffected(t *testing.T) {
+	srv := newTestServer()
+
+	// No body: the existing TestRoutesAreMountedUnderAPI already covers this
+	// exact case (400, not 404), reasserted here as the explicit "default
+	// config is unaffected" contrast to the disabled case above.
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, localLoginPath, nil))
+
+	if rec.Code == http.StatusNotFound {
+		t.Error("status = 404 with the local provider enabled; the route must still exist")
+	}
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400 (no body), not a gate-related change", rec.Code)
 	}
 }

@@ -53,7 +53,7 @@ func (h *Handlers) LocalLogin(ctx context.Context, request api.LocalLoginRequest
 	if err != nil {
 		// An outage is not a statement about this account's credentials (#23):
 		// not a 401, and no backoff failure the account did nothing to earn.
-		logLoginError("login: resolve credential", err)
+		logLookupError("login: resolve credential", err)
 		return internalError[api.LocalLoginResponseObject]()
 	}
 
@@ -119,7 +119,7 @@ func (h *Handlers) LocalLogin(ctx context.Context, request api.LocalLoginRequest
 func (h *Handlers) throttled(ctx context.Context, keys []string) api.LocalLoginResponseObject {
 	wait, err := h.backoffRemaining(ctx, keys)
 	if err != nil {
-		logLoginError("login: read backoff", err)
+		logLookupError("login: read backoff", err)
 		resp, _ := internalError[api.LocalLoginResponseObject]()
 		return resp
 	}
@@ -137,11 +137,11 @@ func (h *Handlers) throttled(ctx context.Context, keys []string) api.LocalLoginR
 	}
 }
 
-// logLoginError logs a lookup that failed before the permit, while ctx is
-// still the request's: at Warn when the client went away, as the permit wait
-// does, since a stream of dropped connections must not read as a stream of
-// errors (#33).
-func logLoginError(msg string, err error) {
+// logLookupError logs a query that failed on the request's own ctx: login's
+// lookups before the permit, and SessionMiddleware's. At Warn when the client
+// went away, as the permit wait does, since a stream of dropped connections
+// must not read as a stream of errors (#33).
+func logLookupError(msg string, err error) {
 	if errors.Is(err, context.Canceled) {
 		slog.Warn(msg, "err", err)
 		return

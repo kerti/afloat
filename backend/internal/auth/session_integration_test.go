@@ -51,6 +51,13 @@ func (h harness) withQuerier(q db.Querier) harness {
 // came out the other side — which is the only thing callers care about.
 func (h harness) resolve(t *testing.T, token string) (db.User, bool, *httptest.ResponseRecorder) {
 	t.Helper()
+	return h.resolveWithContext(context.Background(), t, token)
+}
+
+// resolveWithContext is resolve for a request carrying ctx, such as one whose
+// client has already gone.
+func (h harness) resolveWithContext(ctx context.Context, t *testing.T, token string) (db.User, bool, *httptest.ResponseRecorder) {
+	t.Helper()
 
 	var got db.User
 	var found bool
@@ -58,7 +65,7 @@ func (h harness) resolve(t *testing.T, token string) (db.User, bool, *httptest.R
 		got, found = auth.UserFromContext(r.Context())
 	})
 
-	req := httptest.NewRequest(http.MethodGet, "/api/me", nil)
+	req := httptest.NewRequestWithContext(ctx, http.MethodGet, "/api/me", nil)
 	if token != "" {
 		req.AddCookie(&http.Cookie{Name: auth.SessionCookieName, Value: token})
 	}

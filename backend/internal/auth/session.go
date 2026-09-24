@@ -147,7 +147,7 @@ func (h *Handlers) SessionMiddleware(next http.Handler) http.Handler {
 				// stops presenting a cookie that cannot work.
 				h.ClearSessionCookie(w)
 			} else {
-				slog.Error("session lookup", "err", err)
+				logLookupError("session lookup", err)
 			}
 			next.ServeHTTP(w, r)
 			return
@@ -163,7 +163,7 @@ func (h *Handlers) SessionMiddleware(next http.Handler) http.Handler {
 				// user's session: leave the cookie alone. The request
 				// proceeds unauthenticated, same as the session-lookup branch
 				// above (#27).
-				slog.Error("session user lookup", "err", err)
+				logLookupError("session user lookup", err)
 			}
 			next.ServeHTTP(w, r)
 			return

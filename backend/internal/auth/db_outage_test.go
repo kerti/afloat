@@ -112,7 +112,7 @@ func TestLoginLogsAClientLeavingDuringALookupAsAWarning(t *testing.T) {
 			msg: "login: read backoff",
 		},
 		// The backoff read answered and the client left during the next one.
-		"credential lookup": {
+		"user lookup": {
 			ctx:  func(ctx context.Context) context.Context { return ctx },
 			fail: failingQuerier{failGetUserByEmail: true, err: fmt.Errorf("get user: %w", context.Canceled)},
 			msg:  "login: resolve credential",
@@ -168,5 +168,59 @@ func TestSessionMiddlewareLeavesCookieAloneOnDatabaseOutageDuringUserLookup(t *t
 	}
 	if len(rec.Result().Cookies()) != 0 {
 		t.Errorf("Set-Cookie header present = %v, want none", rec.Result().Cookies())
+	}
+}
+
+// The same for SessionMiddleware, which runs on every authenticated request:
+// a client that left mid-lookup logs Warn, not Error, on either lookup, and
+// the cookie is left alone as for any lookup that did not answer (#27).
+func TestSessionMiddlewareLogsAClientLeavingDuringALookupAsAWarning(t *testing.T) {
+	for name, tc := range map[string]struct {
+		ctx  func(context.Context) context.Context
+		fail failingQuerier
+		msg  string
+	}{
+		// A real cancelled request: pgx gives back context.Canceled from the
+		// first query, which is the session lookup.
+		"session lookup": {
+			ctx: func(ctx context.Context) context.Context {
+				ctx, cancel := context.WithCancel(ctx)
+				cancel()
+				return ctx
+			},
+			msg: "session lookup",
+		},
+		// The session lookup answered and the client left during the next one.
+		"user lookup": {
+			ctx:  func(ctx context.Context) context.Context { return ctx },
+			fail: failingQuerier{failGetUserByID: true, err: fmt.Errorf("get user: %w", context.Canceled)},
+			msg:  "session user lookup",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newHarness(t, time.Now)
+			householdID := h.tdb.CreateHousehold(t, "Test Household")
+			userID := h.tdb.CreateUser(t, householdID, "a@example.com", "A")
+			cookie, err := h.auth.IssueSession(context.Background(), userID, "")
+			if err != nil {
+				t.Fatalf("IssueSession: %v", err)
+			}
+			tc.fail.Querier = h.tdb.Queries
+			h = h.withQuerier(tc.fail)
+			logged := captureLog(t)
+
+			_, ok, rec := h.resolveWithContext(tc.ctx(context.Background()), t, cookie.Value)
+
+			if ok {
+				t.Error("a lookup that did not answer still produced an authenticated request")
+			}
+			if len(rec.Result().Cookies()) != 0 {
+				t.Errorf("Set-Cookie header present = %v, want none", rec.Result().Cookies())
+			}
+			if out := logged.String(); !strings.Contains(out, `level=WARN msg="`+tc.msg+`"`) ||
+				strings.Contains(out, "level=ERROR") {
+				t.Errorf("want one Warn for %q and no Error; logged:\n%s", tc.msg, out)
+			}
+		})
 	}
 }

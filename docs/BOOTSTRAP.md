@@ -316,8 +316,10 @@ and lowers that rate for as long as it stays slow; nothing breaks, and it recove
 does.
 
 The queue moves what a login flood costs; it does not remove it, and the two backends pay
-differently. In Go a queued login is a parked goroutine, so a flood slows logins and no other
-endpoint. But nothing bounds how many wait: each holds its goroutine and client connection, a few
+differently. In both, what runs ahead of the queue is not capped: the first backoff read and the two
+credential lookups share the database pool with every endpoint, so a flood fast enough to saturate
+the pool slows everything, as it did before the cap. In Go a queued login is a parked goroutine, so
+the queue itself slows logins and no other endpoint. But nothing bounds how many wait: each holds its goroutine and client connection, a few
 tens of KiB rather than a hash's 19 MiB, for up to `HTTP_WRITE_TIMEOUT`, so a flood faster than the cap
 clears (about 80 logins a second) grows memory with its rate for as long as it lasts. It holds no
 database connection while it waits: pgx takes one per query. A client that leaves

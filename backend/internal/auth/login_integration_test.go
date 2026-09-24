@@ -1,8 +1,11 @@
 package auth_test
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -330,12 +333,22 @@ func TestLoginAnswers500AndRecordsNoFailureWhenNoArgonPermitComesFree(t *testing
 	release := auth.HoldArgonPermitsForTest()
 	defer release()
 
+	// The deadline bounds the backoff read too, and a read that overran it
+	// would also answer 500. The log says which wait ran out.
+	var logged bytes.Buffer
+	defaultLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logged, nil)))
+	defer slog.SetDefault(defaultLogger)
+
 	ctx, cancel := context.WithTimeout(ipContext("198.51.100.201"), 200*time.Millisecond)
 	defer cancel()
 	resp := h.login(ctx, t, "a@example.com", "wrong password entirely")
 
 	if _, is := resp.(api.LocalLogin500JSONResponse); !is {
 		t.Fatalf("response = %T, want 500", resp)
+	}
+	if !strings.Contains(logged.String(), "login: verify password") {
+		t.Errorf("the 500 did not come from the permit wait; logged:\n%s", logged.String())
 	}
 	var rows int
 	if err := h.tdb.Pool.QueryRow(context.Background(),

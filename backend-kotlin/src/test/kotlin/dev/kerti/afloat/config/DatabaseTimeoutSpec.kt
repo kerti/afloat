@@ -40,7 +40,7 @@ class DatabaseTimeoutSpec : SpringDatabaseSpec() {
 
         "cuts a statement that overruns HTTP_WRITE_TIMEOUT" {
             val startedAt = System.nanoTime()
-            val e= shouldThrow<Exception> { slow.sleep(seconds = 30) }
+            val e = shouldThrow<Exception> { slow.sleep(seconds = 30) }
             val elapsedSeconds = (System.nanoTime() - startedAt) / 1_000_000_000
             withClue(e.toString()) { e.wasCancelledByTimeout() shouldBe true }
 

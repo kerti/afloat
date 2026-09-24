@@ -1,0 +1,71 @@
+# The fixed response header set (#26, BOOTSTRAP.md §5.2), asserted by value.
+# Parity alone would not pin it: it only proves the two backends agree, so both
+# dropping Cache-Control would pass. Go writes these in its own middleware and
+# Kotlin gets them from Spring Security, so each kind of answer that takes a
+# different path out of either backend gets its own case: a handler's 200, an
+# envelope from a handler, an envelope from a guard that answers before any
+# handler runs, and the framework's own 404.
+#
+# Strict-Transport-Security is absent from both, and parity would catch it if
+# one started sending it: it is not in the permitted list.
+
+- name: security headers on a handler's 200
+  issue: "26"
+  request:
+    method: GET
+    path: /health
+  expect:
+    status: 200
+    headers: &security-headers
+      X-Content-Type-Options: nosniff
+      X-Frame-Options: DENY
+      Cache-Control: no-cache, no-store, max-age=0, must-revalidate
+      Pragma: no-cache
+      Expires: "0"
+      X-XSS-Protection: "0"
+    body_json:
+      status: ok
+      version: dev
+
+# The session probe the PWA polls: the response #26 names as the one whose
+# cacheability actually matters.
+- name: security headers on a handler's error envelope
+  issue: "26"
+  request:
+    method: GET
+    path: /me
+  expect:
+    status: 401
+    headers: *security-headers
+    body_json:
+      code: UNAUTHORIZED
+
+# Answered by the CSRF guard before any handler runs, and on a POST.
+- name: security headers on a guard's error envelope
+  issue: "26"
+  request:
+    method: POST
+    path: /auth/logout
+    headers:
+      Sec-Fetch-Site: cross-site
+  expect:
+    status: 403
+    headers: *security-headers
+    body_json:
+      code: CROSS_SITE_REQUEST_BLOCKED
+
+# Each backend's own unregistered-path 404, which no Afloat code writes. The
+# body differs by ruling (#24), so it is pinned the way that ruling's cases pin
+# it: against the same backend's answer for a second unregistered path.
+- name: security headers on an unregistered-path 404
+  issue: "26"
+  permit: [unmatched-path-404]
+  request:
+    method: GET
+    path: /no-such-route
+  expect:
+    status: 404
+    headers: *security-headers
+    same_as:
+      method: GET
+      path: /no-such-route-either

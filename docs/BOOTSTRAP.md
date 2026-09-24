@@ -293,7 +293,7 @@ ends its wait, and no hash runs for it. In Kotlin each queued login holds a Tomc
 long as it waits, and every endpoint shares those threads. A flood faster than the cap clears fills
 them, and then every endpoint waits. That is bounded by Tomcat's own limits, and it recovers when the
 flood stops. A client that leaves does not end its wait: the login still queues and then hashes for
-nobody. Whether Kotlin must match Go is open (#54), and so is whether Go's wait needs a bound.
+nobody. Whether Kotlin must match Go, and whether Go's wait needs a bound, are both open: #54.
 
 **The rate-limit key is the connection's own address, never `X-Forwarded-For`.** Self-hosting means
 there may be no proxy in front, so nothing strips that header and it is attacker-controlled — using

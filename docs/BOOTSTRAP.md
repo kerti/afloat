@@ -284,6 +284,18 @@ checked. The one Argon2 call outside the cap is generating Kotlin's dummy hash, 
 the class loads at startup, before any request can queue. Verifying against it takes a permit like any
 other hash.
 
+**A login reads its backoff twice, the second time holding its permit.** The first read, before the
+queue, answers a throttled caller without making it wait. It cannot be the only one: every login in a
+burst on one account reads it before any of them has failed, so they all pass it, all queue, and all
+have their passwords checked, at the cap's ~80 guesses a second for as long as the burst lasts, the
+backoff never applying. So the permit is held from a second read, through the hash, to the failure
+write. One caller's failure is written before the permit passes on, and the next caller reads it and
+answers `429` without hashing. At most the cap's worth of logins hold permits at once, so a burst on one
+account gets up to 4 guesses before the backoff applies, not the whole queue. The `429` is the same
+answer the first read gives, keyed on the address and the IP whether or not the account exists, so the
+wait before it tells a caller nothing the first read would not. The permit covers those two short
+statements as well as the hash.
+
 The queue moves what a login flood costs; it does not remove it, and the two backends pay
 differently. In Go a queued login is a parked goroutine, so a flood slows logins and no other
 endpoint. But nothing bounds how many wait: each holds its goroutine and connection, a few tens of KiB

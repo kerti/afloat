@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -62,6 +63,11 @@ func (h *Handlers) LocalLogin(ctx context.Context, request api.LocalLoginRequest
 		}
 		return internalError[api.LocalLoginResponseObject]()
 	}
+	// Deferred here, beside the acquire, so no return between the two can keep
+	// the permit: four kept would stall every login. Released early below, once
+	// checkPassword is done with it.
+	releasePermit := sync.OnceFunc(releaseArgonPermit)
+	defer releasePermit()
 
 	// A login that got its permit finishes, whatever the wait cost it. Queued
 	// behind a flood, a login reaches the head just before its deadline, and
@@ -73,6 +79,7 @@ func (h *Handlers) LocalLogin(ctx context.Context, request api.LocalLoginRequest
 	defer cancel()
 
 	refused, ok := h.checkPassword(ctx, keys, password, phc)
+	releasePermit()
 	if refused != nil {
 		return refused, nil
 	}
@@ -146,17 +153,15 @@ func (h *Handlers) resolve(ctx context.Context, email string) (db.User, string) 
 	return user, cred.PasswordHash
 }
 
-// checkPassword takes over the caller's Argon2 permit and holds it from a
-// second backoff read until any failure is recorded, then gives it back. The
-// first read, before the queue, sees none of the failures of the logins queued
+// checkPassword runs under the caller's Argon2 permit, from a second backoff
+// read until any failure is recorded; the caller gives the permit back once it
+// returns. The first read, before the queue, sees none of the failures of the logins queued
 // alongside it: a burst on one account all passed it, all queued, and all had
 // their passwords checked, the backoff never applying (#33). Read under the
 // permit instead, and written before the permit passes on, one caller's
 // failure throttles the next. At most the cap's worth of callers are checked
 // at once, so a burst gets that many guesses, not the whole queue.
 func (h *Handlers) checkPassword(ctx context.Context, keys []string, password, phc string) (refused api.LocalLoginResponseObject, ok bool) {
-	defer releaseArgonPermit()
-
 	if refused := h.throttled(ctx, keys); refused != nil {
 		return refused, false
 	}

@@ -39,33 +39,23 @@ class AuthService(
     // INVALID_CREDENTIALS, the compare is constant work, and an unknown address
     // still pays the hash.
     //
-    // Deliberately NOT @Transactional. The Argon2 verify takes tens of
-    // milliseconds of CPU, and a transaction spanning it pins a pooled
-    // connection for all of that — then recordFailure asks for a second one, so
-    // a burst of bad logins as wide as the pool deadlocks it. Each repository
-    // call is its own short transaction instead, which is also what makes the
-    // "logged, never raised" writes below survivable: one failed statement
-    // cannot abort the ones after it.
+    // Deliberately NOT @Transactional. A transaction spanning the verify pins a
+    // pooled connection for all of it, and the verify includes the wait for an
+    // Argon2 permit (#33), up to HTTP_WRITE_TIMEOUT: a login flood past the cap
+    // would park a connection per queued login and drain the pool for every
+    // endpoint. Each repository call is its own short transaction instead,
+    // which is also what makes the "logged, never raised" writes below
+    // survivable: one failed statement cannot abort the ones after it.
     fun login(email: String, password: String): Issue {
         val normalized = normalizeEmail(email)
         val keys = backoffKeys(normalized)
-        val now = clock.instant()
 
-        val remaining = try {
-            loginAttemptRepository.activeBackoffSeconds(keys)
-        } catch (e: DataAccessException) {
-            log.error("login: read backoff", e)
-            throw ApiException(500, ErrorCode.INTERNAL)
-        }
-        if (remaining != null) {
-            // Rounded up: Retry-After of 0 invites an immediate retry inside the window.
-            val retryAfter = remaining.toInt() + 1
-            throw ApiException(429, ErrorCode.TOO_MANY_ATTEMPTS, retryAfterSeconds = retryAfter)
-        }
+        // Read once before queueing, so a throttled caller is answered without
+        // waiting for a permit. checkPassword reads it again under the permit.
+        refuseWhileThrottled(keys)
 
-        val user = verify(normalized, password)
-        if (user == null) {
-            recordFailures(keys)
+        val (user, phc) = resolve(normalized)
+        if (!checkPassword(keys, password, phc) || user == null) {
             throw ApiException(401, ErrorCode.INVALID_CREDENTIALS)
         }
 
@@ -78,6 +68,10 @@ class AuthService(
             log.warn("login: clear attempts", e)
         }
 
+        // Read after the permit wait, which can run to HTTP_WRITE_TIMEOUT: read
+        // before it, a queued login's session would expire that much early.
+        // Go reads its clock when it issues the session too.
+        val now = clock.instant()
         val (token, hash) = TokenService.issue()
         val expiresAt = now.plus(appConfig.sessionTtl)
         try {
@@ -101,16 +95,49 @@ class AuthService(
         return Issue(sessionCookieFactory.set(token, expiresAt))
     }
 
-    private fun verify(normalizedEmail: String, password: String): User? {
-        val user = userRepository.findByEmail(normalizedEmail)
-        val hash = when {
-            user == null -> PasswordService.dummyHash
-            else -> credentialRepository.findByUserId(user.id)?.passwordHash ?: PasswordService.dummyHash
+    private fun refuseWhileThrottled(keys: List<String>) {
+        val remaining = try {
+            loginAttemptRepository.activeBackoffSeconds(keys)
+        } catch (e: DataAccessException) {
+            log.error("login: read backoff", e)
+            throw ApiException(500, ErrorCode.INTERNAL)
         }
-        // A dormant User (invited, never set a password) costs the same work as
-        // a real one, so timing cannot enumerate accounts either.
-        if (!passwordService.verify(password, hash)) return null
-        return user
+        if (remaining != null) {
+            // Rounded up: Retry-After of 0 invites an immediate retry inside the window.
+            val retryAfter = remaining.toInt() + 1
+            throw ApiException(429, ErrorCode.TOO_MANY_ATTEMPTS, retryAfterSeconds = retryAfter)
+        }
+    }
+
+    // The hash to check the password against, and the User it belongs to. With
+    // no credential it is the dummy hash and no User: a dormant User (invited,
+    // never set a password) or an unknown address costs the same work as a
+    // real one, so timing cannot enumerate accounts either.
+    private fun resolve(normalizedEmail: String): Pair<User?, String> {
+        val user = userRepository.findByEmail(normalizedEmail) ?: return null to PasswordService.dummyHash
+        val hash = credentialRepository.findByUserId(user.id)?.passwordHash
+            ?: return null to PasswordService.dummyHash
+        return user to hash
+    }
+
+    // Holds one Argon2 permit from a second backoff read until any failure is
+    // recorded. The first read, before the queue, sees none of the failures of
+    // the logins queued alongside it: a burst on one account all passed it, all
+    // queued, and all had their passwords checked, the backoff never applying
+    // (#33). Read under the permit instead, and written before the permit
+    // passes on, one caller's failure throttles the next. At most the cap's
+    // worth of callers are checked at once, so a burst gets that many guesses,
+    // not the whole queue.
+    private fun checkPassword(keys: List<String>, password: String, phc: String): Boolean = try {
+        passwordService.withPermit {
+            refuseWhileThrottled(keys)
+            passwordService.verifyHoldingPermit(password, phc).also { if (!it) recordFailures(keys) }
+        }
+    } catch (e: HashingUnavailableException) {
+        // Queued past the wait for an Argon2 permit (#33): the password was
+        // never checked, so this is neither a 401 nor a backoff failure.
+        log.error("login: wait for argon2 permit", e)
+        throw ApiException(500, ErrorCode.INTERNAL)
     }
 
     // A counter that cannot be written is logged, never raised: a 500 here

@@ -1,12 +1,14 @@
 package auth
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/base64"
 	"errors"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"unicode/utf8"
 
 	"golang.org/x/crypto/argon2"
@@ -27,6 +29,59 @@ const (
 	argonSaltLen   = 16
 	argonAlgo      = "argon2id"
 )
+
+// argonConcurrencyCap bounds how many Argon2id hashes run at once, process-wide
+// (#33, BOOTSTRAP.md §5.1). Each holds argonMemoryKiB for its duration,
+// allocated per call, so without a bound an unauthenticated caller chooses the
+// process's peak memory. At this cap, 4 × 19 MiB ≈ 76 MiB. A constant by
+// ruling, not an operator knob: retuning Argon2 must be checked against it.
+const argonConcurrencyCap = 4
+
+// Every Argon2id call holds a permit, the dummy hash included. A caller beyond
+// the cap queues rather than answering 429, which would leak that the server
+// is busy.
+var argonSem = make(chan struct{}, argonConcurrencyCap)
+
+// Exact, updated as each call takes a permit, so a test asserts the bound
+// itself rather than inferring it from memory or wall-clock time. argonWaiting
+// counts callers queued for one, so a test can act once a caller is queued
+// rather than after a guessed delay.
+var (
+	argonInFlight     atomic.Int32
+	argonPeakInFlight atomic.Int32
+	argonWaiting      atomic.Int32
+)
+
+// acquireArgonPermit waits for a permit until ctx ends. The request's own
+// context bounds the wait: its deadline is the handler timeout
+// (HTTP_WRITE_TIMEOUT), not a second timeout for this one step.
+func acquireArgonPermit(ctx context.Context) error {
+	// With ctx already ended and a permit free, the select below picks either
+	// case at random, and would hash for a caller that is no longer there.
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	argonWaiting.Add(1)
+	defer argonWaiting.Add(-1)
+	select {
+	case argonSem <- struct{}{}:
+		n := argonInFlight.Add(1)
+		for {
+			peak := argonPeakInFlight.Load()
+			if n <= peak || argonPeakInFlight.CompareAndSwap(peak, n) {
+				break
+			}
+		}
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func releaseArgonPermit() {
+	argonInFlight.Add(-1)
+	<-argonSem
+}
 
 // A floor and a denylist, no composition rules: forced symbols push people
 // towards predictable substitutions, and length is what actually helps.
@@ -60,23 +115,32 @@ func ValidatePasswordPolicy(password string) error {
 }
 
 // HashPassword returns a PHC string: $argon2id$v=19$m=...,t=...,p=...$salt$hash.
-func HashPassword(password string) (string, error) {
+// It waits for an Argon2 permit under ctx.
+func HashPassword(ctx context.Context, password string) (string, error) {
 	salt := make([]byte, argonSaltLen)
 	if _, err := rand.Read(salt); err != nil {
 		return "", fmt.Errorf("generate salt: %w", err)
 	}
+	if err := acquireArgonPermit(ctx); err != nil {
+		return "", fmt.Errorf("wait for argon2 permit: %w", err)
+	}
+	defer releaseArgonPermit()
 	sum := argon2.IDKey([]byte(password), salt, argonTime, argonMemoryKiB, argonThreads, argonKeyLen)
 	return buildPHC(argonMemoryKiB, argonTime, argonThreads, salt, sum), nil
 }
 
-// VerifyPassword checks a password against a stored PHC string, using that
-// string's own recorded cost parameters rather than the constants above — so a
-// retune does not invalidate existing hashes.
+// verifyHoldingPermit checks a password against a stored PHC string, using
+// that string's own recorded cost parameters rather than the constants above —
+// so a retune does not invalidate existing hashes.
 //
-// Returns false rather than an error for a hash it cannot parse: a corrupt row
-// must fail the login, not crash the handler, and the caller has no different
-// action to take either way.
-func VerifyPassword(password, phc string) bool {
+// The caller must already hold an Argon2 permit, and may go on holding it past
+// the hash: login keeps its permit until a failure is recorded (login.go).
+// Never call it without one.
+//
+// Returns false for a hash it cannot parse: a corrupt row must fail the login,
+// not crash the handler, and the caller has no different action to take
+// either way.
+func verifyHoldingPermit(password, phc string) bool {
 	params, salt, want, err := parsePHC(phc)
 	if err != nil {
 		return false

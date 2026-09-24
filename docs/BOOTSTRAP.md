@@ -252,6 +252,83 @@ all return one `INVALID_CREDENTIALS`; the comparison is constant-time; and a req
 address with no account still pays the full hashing cost, so timing cannot distinguish present from
 absent either. All three, not two of three.
 
+**Concurrent Argon2id hashing is capped at 4, process-wide, in both backends — a departure surfaced by
+#33.** `m=19456` KiB is allocated *per hash in flight*, not once, so with no bound an unauthenticated
+caller chooses the process's peak memory: 30 concurrent logins want `30 × 19 MiB ≈ 570 MiB`, and a Go
+process that exceeds available memory is killed outright rather than degrading — worse than a JVM
+`OutOfMemoryError` a handler can at least catch. Afloat's deployment target is a self-hosted box
+(`VISION.md`), where that is the whole machine. At the cap, `4 × 19 MiB ≈ 76 MiB` of Argon2 memory
+live at once. That is live memory, not the process's footprint: a finished hash's memory is reclaimed
+only when the garbage collector runs, and Go's default `GOGC=100` lets the heap reach about twice its
+live size first, so the peak can run to roughly double. Still bounded, which is the point. Retuning
+Argon2id's cost parameter later must be checked against this arithmetic before it ships, or the memory
+ceiling moves silently. The cap is a **fixed constant in both backends, not a §12 environment
+variable** — small enough to fit the smallest supported deployment, large enough (~80 hashes/sec at
+this cost, on a host with at least four cores) that a household's simultaneous logins are never
+serialised behind each other in practice.
+
+The dummy-cost-equalizer hash (the unknown-address path above) shares the **same** semaphore as a
+real hash, not a separate one — the bound is on total concurrent Argon2 work regardless of account
+validity, or bounding only the real path leaves the dummy path free to blow the same ceiling. A
+request beyond the cap **queues for a permit rather than answering 429 immediately**: an immediate
+429 would leak that the server is busy, which is not an account-level fact, and the login path's
+whole constant-work design (previous paragraph) is built to hide exactly that kind of signal. Queueing
+adds latency that is a function of load, not of the account being checked, so the enumeration-
+resistance property survives it. The wait is bounded by the timeout the request already has, not a
+second one invented for this step: in Go the request context's deadline, set by chi's `Timeout`
+middleware from `HTTP_WRITE_TIMEOUT`; in Kotlin, where a servlet request carries no deadline,
+`HTTP_WRITE_TIMEOUT` itself, counted from when the wait starts. Go's wait gets only what is left of
+the one request deadline, so a Kotlin login can wait longer. A login still queued when the wait runs
+out answers `500 INTERNAL` and records **no** backoff failure, because its password was never checked.
+
+**The deadline bounds the wait, not the login.** A login that took its permit in time finishes: the
+second backoff read, the hash, the failure write and, on success, the session. In Go that work runs on
+a context detached from the request, bounded by the handler timeout again, counted from the permit; in
+Kotlin each statement after the wait already has its own `HTTP_WRITE_TIMEOUT` as a transaction
+timeout. So in both backends a login can run longer than `HTTP_WRITE_TIMEOUT` end to end. In Go its
+answer can then miss the connection's write deadline (`HTTP_WRITE_TIMEOUT` plus the 5s grace, §12),
+but its failure is still recorded, and that is the part that matters.
+Bounding it by the request deadline instead lets a flood switch the backoff off: behind a queue
+filled faster than the cap clears, the login that gets a permit is the one about to run out of time,
+its hash carries it past the deadline, and the failure write then fails. Its guess was checked and
+answered `401`, but nothing was recorded, so the backoff never grows. Measured on Go before the fix,
+with the deadline scaled down to 300 ms: under a flood of unknown addresses, 4 to 9 guesses at one
+account were answered `401` against a recorded `failure_count` of 1. A client that leaves after its
+permit is taken no longer stops the login either; the answer is lost, but the failure is recorded.
+
+The one Argon2 call outside the cap is generating Kotlin's dummy hash, once per process when
+the class loads at startup, before any request can queue. Verifying against it takes a permit like any
+other hash.
+
+**A login reads its backoff twice, the second time holding its permit.** The first read, before the
+queue, answers a throttled caller without making it wait. It cannot be the only one: every login in a
+burst on one account reads it before any of them has failed, so they all pass it, all queue, and all
+have their passwords checked, at the cap's ~80 guesses a second for as long as the burst lasts, the
+backoff never applying. So the permit is held from a second read, through the hash, to the failure
+write. One caller's failure is written before the permit passes on, and the next caller reads it and
+answers `429` without hashing. At most the cap's worth of logins hold permits at once, so a burst on one
+account gets up to 4 guesses before the backoff applies, not the whole queue. The `429` is the same
+answer the first read gives, keyed on the address and the IP whether or not the account exists, so the
+wait before it tells a caller nothing the first read would not. The permit covers database round
+trips as well as the hash: the backoff read and, on a failure, one write per key (the address's and the
+IP's). So the cap's ~80 logins a second assumes a quick database. A slow one holds each permit longer
+and lowers that rate for as long as it stays slow; nothing breaks, and it recovers when the database
+does.
+
+The queue moves what a login flood costs; it does not remove it, and the two backends pay
+differently. In both, what runs ahead of the queue is not capped: the first backoff read and the two
+credential lookups share the database pool with every endpoint, so a flood fast enough to saturate
+the pool slows everything, as it did before the cap. In Go a queued login is a parked goroutine, so
+the queue itself slows logins and no other endpoint. But nothing bounds how many wait: each holds its goroutine and client connection, a few
+tens of KiB rather than a hash's 19 MiB, for up to `HTTP_WRITE_TIMEOUT`, so a flood faster than the cap
+clears (about 80 logins a second) grows memory with its rate for as long as it lasts. It holds no
+database connection while it waits: pgx takes one per query. A client that leaves
+ends its wait, and no hash runs for it. In Kotlin each queued login holds a Tomcat worker thread for as
+long as it waits, and every endpoint shares those threads. A flood faster than the cap clears fills
+them, and then every endpoint waits. That is bounded by Tomcat's own limits, and it recovers when the
+flood stops. A client that leaves does not end its wait: the login still queues and then hashes for
+nobody. Whether Kotlin must match Go, and whether Go's wait needs a bound, are both open: #54.
+
 **The rate-limit key is the connection's own address, never `X-Forwarded-For`.** Self-hosting means
 there may be no proxy in front, so nothing strips that header and it is attacker-controlled — using
 it means an attacker picks a fresh key per request and the per-IP backoff stops existing. Whatever
@@ -528,7 +605,7 @@ truth and fails if either backend's configuration drifts from it.
 | `LOG_LEVEL` | `info` | |
 | `AUTO_MIGRATE` | `true` | Apply migrations on boot. Off only to run against a database migrated by something else. |
 | `HTTP_READ_TIMEOUT` | `30s` | |
-| `HTTP_WRITE_TIMEOUT` | `60s` | Go: the handler-timeout middleware (`middleware.Timeout`, issue #30) uses the value itself; `http.Server.WriteTimeout` is the value plus a fixed 5s grace, because with the two equal the connection's write deadline passes first and the cut-off handler's 503 never reaches the client. Kotlin: the transaction manager's default timeout (`JpaTransactionManager.defaultTimeout`, issue #30) — a deadline on the whole transaction, not a per-statement cap: each statement gets the time left as its JDBC `queryTimeout`, and Postgres cancels one that overruns it. It covers every repository call, because each repository interface carries `@Transactional(readOnly = true)` (declared query methods get no transaction otherwise, and so no deadline), and every `@Transactional` service method. It deliberately does not cover the health probe's raw `SELECT 1`. Rounded up to whole seconds, minimum 1s, since JPA timeouts count in seconds; Go's is exact. A documented deliberate difference, not a gap to close the same way Go's was. Must be positive: both backends refuse to boot on `0` or a negative value, since `0` does not mean "no timeout" to the handler timeout but a deadline already passed. |
+| `HTTP_WRITE_TIMEOUT` | `60s` | Go: the handler-timeout middleware (`middleware.Timeout`, issue #30) uses the value itself; `http.Server.WriteTimeout` is the value plus a fixed 5s grace, because with the two equal the connection's write deadline passes first and the cut-off handler's 503 never reaches the client. The same deadline bounds a login's wait for an Argon2 permit (§5.1, #33). Kotlin: the transaction manager's default timeout (`JpaTransactionManager.defaultTimeout`, issue #30) — a deadline on the whole transaction, not a per-statement cap: each statement gets the time left as its JDBC `queryTimeout`, and Postgres cancels one that overruns it. It covers every repository call, because each repository interface carries `@Transactional(readOnly = true)` (declared query methods get no transaction otherwise, and so no deadline), and every `@Transactional` service method. It deliberately does not cover the health probe's raw `SELECT 1`. Rounded up to whole seconds, minimum 1s, since JPA timeouts count in seconds; Go's is exact. A documented deliberate difference, not a gap to close the same way Go's was. Separately, the value is also how long `PasswordService` waits for an Argon2 permit (§5.1, #33), since a servlet request carries no deadline of its own; that wait is exact, not rounded. Must be positive: both backends refuse to boot on `0` or a negative value, since `0` does not mean "no timeout" to the handler timeout but a deadline already passed. |
 | `HTTP_IDLE_TIMEOUT` | `120s` | |
 | `SHUTDOWN_TIMEOUT` | `10s` | |
 | `AUTH_LOCAL_ENABLED` | `true` | |

@@ -1,11 +1,13 @@
 package dev.kerti.afloat.auth
 
+import dev.kerti.afloat.testsupport.verifyUnderPermit
 import io.kotest.assertions.withClue
 import io.kotest.core.spec.style.StringSpec
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.shouldNotBe
 import io.kotest.matchers.string.shouldStartWith
 import org.springframework.security.crypto.argon2.Argon2PasswordEncoder
+import java.time.Duration
 import java.util.Base64
 
 // #14 tests 1-6. The cost parameters travel inside every PHC string, so these
@@ -13,7 +15,7 @@ import java.util.Base64
 // either backend must verify in the other (BOOTSTRAP.md §5.1).
 class PasswordServiceSpec : StringSpec({
 
-    val service = PasswordService()
+    val service = PasswordService(Duration.ofSeconds(30))
 
     // BOOTSTRAP §5.1's parameters, spelled the way the PHC string spells them.
     val mandatedPrefix = "\$argon2id\$v=19\$m=19456,t=2,p=1\$"
@@ -47,15 +49,15 @@ class PasswordServiceSpec : StringSpec({
         val phc = checkNotNull(cheaper.encode("correct horse battery staple"))
 
         phc shouldStartWith "\$argon2id\$v=19\$m=8192,t=1,p=1\$"
-        service.verify("correct horse battery staple", phc) shouldBe true
-        service.verify("not the password", phc) shouldBe false
+        service.verifyUnderPermit("correct horse battery staple", phc) shouldBe true
+        service.verifyUnderPermit("not the password", phc) shouldBe false
     }
 
     // verifyReturnsFalseForAMalformedPhcString
     "returns false for a malformed PHC string rather than throwing" {
         // A corrupt credentials row must fail the login, not escape the
         // handler as a 500 that says the row exists. Go's
-        // TestVerifyPasswordRejectsMalformedHashes covers the same shapes.
+        // TestVerifyRejectsMalformedHashes covers the same shapes.
         listOf(
             "",
             "not a phc string at all",
@@ -65,7 +67,7 @@ class PasswordServiceSpec : StringSpec({
             "\$argon2id\$v=19\$m=19456,t=2,p=1\$c2FsdA",
         ).forEach { phc ->
             withClue("malformed PHC: '$phc'") {
-                service.verify("correct horse battery staple", phc) shouldBe false
+                service.verifyUnderPermit("correct horse battery staple", phc) shouldBe false
             }
         }
     }
@@ -83,7 +85,7 @@ class PasswordServiceSpec : StringSpec({
             "\$2a\$10\$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy",
         ).forEach { phc ->
             withClue("unsupported PHC: '$phc'") {
-                service.verify("correct horse battery staple", phc) shouldBe false
+                service.verifyUnderPermit("correct horse battery staple", phc) shouldBe false
             }
         }
     }
@@ -105,8 +107,8 @@ class PasswordServiceSpec : StringSpec({
 
         fromGo.forEach { (plaintext, phc) ->
             withClue("Go-written hash for '$plaintext'") {
-                service.verify(plaintext, phc) shouldBe true
-                service.verify("$plaintext ", phc) shouldBe false
+                service.verifyUnderPermit(plaintext, phc) shouldBe true
+                service.verifyUnderPermit("$plaintext ", phc) shouldBe false
             }
         }
     }
@@ -117,8 +119,8 @@ class PasswordServiceSpec : StringSpec({
         val second = service.hash("correct horse battery staple")
 
         first shouldNotBe second
-        service.verify("correct horse battery staple", first) shouldBe true
-        service.verify("correct horse battery staple", second) shouldBe true
+        service.verifyUnderPermit("correct horse battery staple", first) shouldBe true
+        service.verifyUnderPermit("correct horse battery staple", second) shouldBe true
     }
 
     // The dummy is what an unknown or dormant address is verified against, so
@@ -126,7 +128,7 @@ class PasswordServiceSpec : StringSpec({
     // a constant it rejects early (see #14 test 23).
     "carries a dummy hash with the same parameters that nothing matches" {
         PasswordService.dummyHash shouldStartWith mandatedPrefix
-        service.verify("", PasswordService.dummyHash) shouldBe false
-        service.verify("correct horse battery staple", PasswordService.dummyHash) shouldBe false
+        service.verifyUnderPermit("", PasswordService.dummyHash) shouldBe false
+        service.verifyUnderPermit("correct horse battery staple", PasswordService.dummyHash) shouldBe false
     }
 })

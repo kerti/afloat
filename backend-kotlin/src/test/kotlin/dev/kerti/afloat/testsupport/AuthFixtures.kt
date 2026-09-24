@@ -1,5 +1,6 @@
 package dev.kerti.afloat.testsupport
 
+import dev.kerti.afloat.auth.PasswordService
 import org.springframework.jdbc.core.simple.JdbcClient
 import java.math.BigDecimal
 import java.security.SecureRandom
@@ -7,6 +8,11 @@ import java.time.Instant
 import java.time.LocalTime
 import java.util.UUID
 import javax.sql.DataSource
+
+// Login's check without the database: take a permit, check the password, give
+// the permit back.
+internal fun PasswordService.verifyUnderPermit(password: String, phc: String): Boolean =
+    withPermit { verifyHoldingPermit(password, phc) }
 
 // Rows are seeded through JdbcClient rather than the repositories: a fixture
 // that goes through JPA would assert the mapping it is meant to be independent

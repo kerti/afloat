@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -18,7 +19,8 @@ import (
 // response time answers "does this account exist?" regardless of what the
 // status code says. Generated once at startup from a value nobody knows.
 var dummyHash = func() string {
-	h, err := HashPassword("this password matches nothing, by construction")
+	// Package init: no request to carry a deadline, nothing yet holding a permit.
+	h, err := HashPassword(context.Background(), "this password matches nothing, by construction")
 	if err != nil {
 		// Only reachable if crypto/rand fails, in which case nothing about this
 		// process is trustworthy.
@@ -38,27 +40,50 @@ func (h *Handlers) LocalLogin(ctx context.Context, request api.LocalLoginRequest
 	password := request.Body.Password
 
 	keys := backoffKeys(ctx, email)
+	budget, hasBudget := handlerBudget(ctx)
 
-	wait, err := h.backoffRemaining(ctx, keys)
-	if err != nil {
-		slog.Error("login: read backoff", "err", err)
+	// Read once before queueing, so a throttled caller is answered without
+	// waiting for a permit. checkPassword reads it again under the permit.
+	if refused := h.throttled(ctx, keys); refused != nil {
+		return refused, nil
+	}
+
+	user, phc := h.resolve(ctx, email)
+
+	if err := acquireArgonPermit(ctx); err != nil {
+		// ctx ended while queued for an Argon2 permit (#33): the handler
+		// timeout passed, or the client went away. The password was never
+		// checked, so this is neither INVALID_CREDENTIALS nor a failure for the
+		// backoff to count. A client leaving is no fault of the server's, and
+		// a stream of dropped connections must not become a stream of errors.
+		if errors.Is(err, context.Canceled) {
+			slog.Warn("login: client left while waiting for an argon2 permit", "err", err)
+		} else {
+			slog.Error("login: wait for argon2 permit", "err", err)
+		}
 		return internalError[api.LocalLoginResponseObject]()
 	}
-	if wait > 0 {
-		// Rounded up: a Retry-After of 0 invites an immediate retry that is
-		// still inside the window.
-		retryAfter := int(wait.Seconds()) + 1
-		return api.LocalLogin429JSONResponse{
-			TooManyRequestsJSONResponse: api.TooManyRequestsJSONResponse{
-				Body:    api.Error{Code: api.TOOMANYATTEMPTS},
-				Headers: api.TooManyRequestsResponseHeaders{RetryAfter: &retryAfter},
-			},
-		}, nil
-	}
+	// Deferred here, beside the acquire, so no return between the two can keep
+	// the permit: four kept would stall every login. Released early below, once
+	// checkPassword is done with it.
+	releasePermit := sync.OnceFunc(releaseArgonPermit)
+	defer releasePermit()
 
-	user, ok := h.verify(ctx, email, password)
+	// A login that got its permit finishes, whatever the wait cost it. Queued
+	// behind a flood, a login reaches the head just before its deadline, and
+	// on the request's own ctx the hash would run past it and the failure
+	// write then fail: a checked guess answered 401 with nothing recorded, the
+	// backoff never growing (#33). From here on it has the handler timeout
+	// again, as each Kotlin statement after the wait has HTTP_WRITE_TIMEOUT.
+	ctx, cancel := afterPermit(ctx, budget, hasBudget)
+	defer cancel()
+
+	refused, ok := h.checkPassword(ctx, keys, password, phc)
+	releasePermit()
+	if refused != nil {
+		return refused, nil
+	}
 	if !ok {
-		h.recordFailure(ctx, keys)
 		return invalidCredentials()
 	}
 
@@ -82,18 +107,39 @@ func (h *Handlers) LocalLogin(ctx context.Context, request api.LocalLoginRequest
 	}, nil
 }
 
-// verify resolves the credential and checks the password, in constant work
-// regardless of which step fails.
-func (h *Handlers) verify(ctx context.Context, email, password string) (db.User, bool) {
+// throttled answers 429 while a backoff key is inside its window, or 500 if
+// the backoff cannot be read; nil lets the login go ahead.
+func (h *Handlers) throttled(ctx context.Context, keys []string) api.LocalLoginResponseObject {
+	wait, err := h.backoffRemaining(ctx, keys)
+	if err != nil {
+		slog.Error("login: read backoff", "err", err)
+		resp, _ := internalError[api.LocalLoginResponseObject]()
+		return resp
+	}
+	if wait <= 0 {
+		return nil
+	}
+	// Rounded up: a Retry-After of 0 invites an immediate retry that is still
+	// inside the window.
+	retryAfter := int(wait.Seconds()) + 1
+	return api.LocalLogin429JSONResponse{
+		TooManyRequestsJSONResponse: api.TooManyRequestsJSONResponse{
+			Body:    api.Error{Code: api.TOOMANYATTEMPTS},
+			Headers: api.TooManyRequestsResponseHeaders{RetryAfter: &retryAfter},
+		},
+	}
+}
+
+// resolve finds the hash to check the password against, and the User it
+// belongs to. With no credential it answers the dummy hash and no User, so an
+// unknown or dormant address costs the same work as a real one.
+func (h *Handlers) resolve(ctx context.Context, email string) (db.User, string) {
 	user, err := h.q.GetUserByEmail(ctx, email)
 	if err != nil {
 		if !errors.Is(err, pgx.ErrNoRows) {
 			slog.Error("login: look up user", "err", err)
 		}
-		// Pay the cost anyway: an unknown address must not return faster than a
-		// known one.
-		VerifyPassword(password, dummyHash)
-		return db.User{}, false
+		return db.User{}, dummyHash
 	}
 
 	cred, err := h.q.GetCredentialByUserID(ctx, user.ID)
@@ -102,14 +148,49 @@ func (h *Handlers) verify(ctx context.Context, email, password string) (db.User,
 			slog.Error("login: look up credential", "err", err)
 		}
 		// A dormant User — invited, never set a password. Same cost, same answer.
-		VerifyPassword(password, dummyHash)
-		return db.User{}, false
+		return db.User{}, dummyHash
 	}
+	return user, cred.PasswordHash
+}
 
-	if !VerifyPassword(password, cred.PasswordHash) {
-		return db.User{}, false
+// checkPassword runs under the caller's Argon2 permit, from a second backoff
+// read until any failure is recorded; the caller gives the permit back once it
+// returns. The first read, before the queue, sees none of the failures of the logins queued
+// alongside it: a burst on one account all passed it, all queued, and all had
+// their passwords checked, the backoff never applying (#33). Read under the
+// permit instead, and written before the permit passes on, one caller's
+// failure throttles the next. At most the cap's worth of callers are checked
+// at once, so a burst gets that many guesses, not the whole queue.
+func (h *Handlers) checkPassword(ctx context.Context, keys []string, password, phc string) (refused api.LocalLoginResponseObject, ok bool) {
+	if refused := h.throttled(ctx, keys); refused != nil {
+		return refused, false
 	}
-	return user, true
+	if !verifyHoldingPermit(password, phc) {
+		h.recordFailure(ctx, keys)
+		return nil, false
+	}
+	return nil, true
+}
+
+// handlerBudget is how long the handler was given: the time left on ctx's
+// deadline, read before anything has spent it.
+func handlerBudget(ctx context.Context) (time.Duration, bool) {
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return 0, false
+	}
+	return time.Until(deadline), true
+}
+
+// afterPermit detaches ctx from the request's cancellation and deadline, and
+// bounds it by budget again, counted from now. Without a budget, the request
+// had no deadline either, and neither does this.
+func afterPermit(ctx context.Context, budget time.Duration, hasBudget bool) (context.Context, context.CancelFunc) {
+	ctx = context.WithoutCancel(ctx)
+	if !hasBudget {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(ctx, budget)
 }
 
 // backoffRemaining reads the remaining backoff as seconds the database itself

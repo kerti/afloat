@@ -344,6 +344,22 @@ disagree on the backoff curve, on key normalisation, or on eviction, and every c
 still pass. A table keyed by ip/email with a `backoff_until` is identical by construction, testable,
 and survives a restart, which the in-memory version does not.
 
+**A database outage is not a statement about an account (#23, #27).** Only a lookup that genuinely
+found nothing counts as an absent user, credential or session: `pgx.ErrNoRows` in Go, an empty
+result in Kotlin. Every other failure — a dropped connection, an exhausted pool — answers login
+with `500 INTERNAL`, not `401 INVALID_CREDENTIALS`, and records **no** backoff failure. Session
+resolution **leaves the cookie alone** and lets the request continue unauthenticated, so `/me` answers
+`401` and the same cookie works again once the database is back. Answering an outage as though it were
+about the account costs something that outlives the outage: a password reset that was never needed,
+every address that tried to log in during it left sitting behind a backoff window, every active
+session logged out. This does not enumerate anything, even though the login route is otherwise kept
+uninformative (above): an outage is the same for every address, so a 500 tells a caller nothing
+about any one of them. **In Kotlin, "every other failure" includes `TransactionException`.** Every
+repository is `@Transactional`, so it takes its connection when the transaction begins, and a
+database that cannot lend one arrives as `CannotCreateTransactionException` — not a
+`DataAccessException`. A catch written for `DataAccessException` alone misses exactly the outage it
+was meant for, so the auth code tests both through `isDatabaseFailure()`.
+
 **Any instant the database also evaluates comes from the database.** `aa1f68f` moved
 `activeBackoffSeconds`, `findLive` and `touch` onto the database's `now()` rather than the app's,
 because a window the database evaluates (a session's absolute lifetime, an active backoff) must be

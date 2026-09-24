@@ -13,7 +13,6 @@ import dev.kerti.afloat.auth.data.UserRepository
 import dev.kerti.afloat.config.AppConfig
 import dev.kerti.afloat.httperr.ApiException
 import org.slf4j.LoggerFactory
-import org.springframework.dao.DataAccessException
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
 import java.time.Clock
@@ -64,7 +63,8 @@ class AuthService(
         // reason to refuse a session the password already earned.
         try {
             loginAttemptRepository.deleteByKeyIn(keys)
-        } catch (e: DataAccessException) {
+        } catch (e: RuntimeException) {
+            if (!e.isDatabaseFailure()) throw e
             log.warn("login: clear attempts", e)
         }
 
@@ -88,7 +88,8 @@ class AuthService(
                     userAgent = RequestContext.current()?.userAgent
                 )
             )
-        } catch (e: DataAccessException) {
+        } catch (e: RuntimeException) {
+            if (!e.isDatabaseFailure()) throw e
             log.error("login: issue session", e)
             throw ApiException(500, ErrorCode.INTERNAL)
         }
@@ -98,7 +99,8 @@ class AuthService(
     private fun refuseWhileThrottled(keys: List<String>) {
         val remaining = try {
             loginAttemptRepository.activeBackoffSeconds(keys)
-        } catch (e: DataAccessException) {
+        } catch (e: RuntimeException) {
+            if (!e.isDatabaseFailure()) throw e
             log.error("login: read backoff", e)
             throw ApiException(500, ErrorCode.INTERNAL)
         }
@@ -113,11 +115,18 @@ class AuthService(
     // no credential it is the dummy hash and no User: a dormant User (invited,
     // never set a password) or an unknown address costs the same work as a
     // real one, so timing cannot enumerate accounts either.
-    private fun resolve(normalizedEmail: String): Pair<User?, String> {
-        val user = userRepository.findByEmail(normalizedEmail) ?: return null to PasswordService.dummyHash
-        val hash = credentialRepository.findByUserId(user.id)?.passwordHash
-            ?: return null to PasswordService.dummyHash
-        return user to hash
+    //
+    // A lookup that failed says nothing about this account's credentials: 500,
+    // not 401, thrown before the permit queue and recordFailures, so an outage
+    // burns no backoff (#23).
+    private fun resolve(normalizedEmail: String): Pair<User?, String> = try {
+        val user = userRepository.findByEmail(normalizedEmail)
+        val hash = user?.let { credentialRepository.findByUserId(it.id)?.passwordHash }
+        if (user == null || hash == null) null to PasswordService.dummyHash else user to hash
+    } catch (e: RuntimeException) {
+        if (!e.isDatabaseFailure()) throw e
+        log.error("login: look up credential", e)
+        throw ApiException(500, ErrorCode.INTERNAL)
     }
 
     // Holds one Argon2 permit from a second backoff read until any failure is
@@ -146,7 +155,8 @@ class AuthService(
         keys.forEach {
             try {
                 loginAttemptRepository.recordFailure(it, FIRST_BACKOFF_SECONDS, MAX_BACKOFF_SECONDS)
-            } catch (e: DataAccessException) {
+            } catch (e: RuntimeException) {
+                if (!e.isDatabaseFailure()) throw e
                 log.error("login: record failure", e)
             }
         }
@@ -160,7 +170,8 @@ class AuthService(
         if (!token.isNullOrBlank()) {
             try {
                 sessionRepository.deleteRow(TokenService.hash(token))
-            } catch (e: DataAccessException) {
+            } catch (e: RuntimeException) {
+                if (!e.isDatabaseFailure()) throw e
                 log.error("logout: delete session", e)
                 throw ApiException(500, ErrorCode.INTERNAL)
             }

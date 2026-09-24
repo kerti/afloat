@@ -8,7 +8,6 @@ import jakarta.servlet.FilterChain
 import jakarta.servlet.http.HttpServletRequest
 import jakarta.servlet.http.HttpServletResponse
 import org.slf4j.LoggerFactory
-import org.springframework.dao.DataAccessException
 import org.springframework.http.HttpHeaders
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken
 import org.springframework.security.core.context.SecurityContextHolder
@@ -45,7 +44,8 @@ class SessionFilter(
                     TokenService.hash(token),
                     appConfig.sessionMaxLifetime.seconds,
                 )
-            } catch (e: DataAccessException) {
+            } catch (e: RuntimeException) {
+                if (!e.isDatabaseFailure()) throw e
                 // A lookup that failed says nothing about the session, so the
                 // cookie is left alone and the request continues
                 // unauthenticated (Go's session.go:131-138).
@@ -62,7 +62,8 @@ class SessionFilter(
             }
             val user = try {
                 userRepository.findById(session.userId).orElse(null)
-            } catch (e: DataAccessException) {
+            } catch (e: RuntimeException) {
+                if (!e.isDatabaseFailure()) throw e
                 log.error("session: look up user", e)
                 filterChain.doFilter(request, response)
                 return
@@ -102,7 +103,8 @@ class SessionFilter(
         val newExpiry = now.plus(appConfig.sessionTtl)
         try {
             sessionRepository.touch(session.id, newExpiry)
-        } catch (e: DataAccessException) {
+        } catch (e: RuntimeException) {
+            if (!e.isDatabaseFailure()) throw e
             // A failed refresh is not worth failing the request: the session is
             // still valid until its current expiry.
             log.warn("touch session", e)

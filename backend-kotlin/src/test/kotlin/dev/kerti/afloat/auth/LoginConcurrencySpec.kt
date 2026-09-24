@@ -1,11 +1,13 @@
 package dev.kerti.afloat.auth
 
 import dev.kerti.afloat.api.AuthApi
+import dev.kerti.afloat.config.AppConfig
 import dev.kerti.afloat.testsupport.AuthFixtures
 import dev.kerti.afloat.testsupport.WebDatabaseSpec
 import dev.kerti.afloat.testsupport.loginBody
 import io.kotest.assertions.withClue
 import io.kotest.matchers.collections.shouldBeEmpty
+import io.kotest.matchers.comparables.shouldBeGreaterThanOrEqualTo
 import io.kotest.matchers.ints.shouldBeInRange
 import io.kotest.matchers.longs.shouldBeLessThan
 import io.kotest.matchers.shouldBe
@@ -13,15 +15,19 @@ import org.mockito.ArgumentMatchers.any
 import org.mockito.ArgumentMatchers.anyString
 import org.mockito.Mockito.doAnswer
 import org.mockito.Mockito.doThrow
+import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.http.MediaType
 import org.springframework.jdbc.core.simple.JdbcClient
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean
 import org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post
 import org.springframework.transaction.support.TransactionSynchronizationManager
+import java.time.Instant
+import java.time.OffsetDateTime
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 
 // The login hashes for tens of milliseconds, and a transaction spanning that
 // would pin a pooled connection for all of it. "holds no transaction while it
@@ -34,6 +40,9 @@ class LoginConcurrencySpec : WebDatabaseSpec() {
 
     @MockitoSpyBean
     private lateinit var passwordService: PasswordService
+
+    @Autowired
+    private lateinit var appConfig: AppConfig
 
     // any() alone is null, which the lambda parameter's non-null check rejects
     // before Mockito sees the call, so it registers the matcher and hands over
@@ -115,6 +124,34 @@ class LoginConcurrencySpec : WebDatabaseSpec() {
             result.response.contentAsString shouldBe """{"code":"INTERNAL"}"""
             JdbcClient.create(dataSource).sql("SELECT key FROM login_attempts")
                 .query(String::class.java).list().shouldBeEmpty()
+        }
+
+        // The permit wait can run to HTTP_WRITE_TIMEOUT. A session timed from
+        // before it would expire that much early, and say it was created and
+        // last seen before the login had finished queueing.
+        "times the session from after the permit wait, not from before it" {
+            AuthFixtures.account(dataSource)
+            val permitTaken = AtomicReference<Instant>()
+            doAnswer { invocation ->
+                // Stands in for a queue: long enough that no clock resolution
+                // hides the difference.
+                Thread.sleep(100)
+                permitTaken.set(Instant.now())
+                invocation.callRealMethod()
+            }.`when`(passwordService).withPermit(anyBlock<Boolean>())
+
+            login("user@example.com", AuthFixtures.PASSWORD, "198.51.100.205").response.status shouldBe 204
+
+            val (createdAt, lastSeenAt, expiresAt) = JdbcClient.create(dataSource)
+                .sql("SELECT created_at, last_seen_at, expires_at FROM sessions")
+                .query { rs, _ ->
+                    (1..3).map { rs.getObject(it, OffsetDateTime::class.java).toInstant() }
+                }.single()
+            withClue("permit taken ${permitTaken.get()}; created $createdAt, last seen $lastSeenAt, expires $expiresAt") {
+                createdAt shouldBeGreaterThanOrEqualTo permitTaken.get()
+                lastSeenAt shouldBeGreaterThanOrEqualTo permitTaken.get()
+                expiresAt shouldBeGreaterThanOrEqualTo permitTaken.get().plus(appConfig.sessionTtl)
+            }
         }
 
         // A burst on one account passes the first backoff read before any of it

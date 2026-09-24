@@ -49,7 +49,6 @@ class AuthService(
     fun login(email: String, password: String): Issue {
         val normalized = normalizeEmail(email)
         val keys = backoffKeys(normalized)
-        val now = clock.instant()
 
         // Read once before queueing, so a throttled caller is answered without
         // waiting for a permit. checkPassword reads it again under the permit.
@@ -69,6 +68,10 @@ class AuthService(
             log.warn("login: clear attempts", e)
         }
 
+        // Read after the permit wait, which can run to HTTP_WRITE_TIMEOUT: read
+        // before it, a queued login's session would expire that much early.
+        // Go reads its clock when it issues the session too.
+        val now = clock.instant()
         val (token, hash) = TokenService.issue()
         val expiresAt = now.plus(appConfig.sessionTtl)
         try {

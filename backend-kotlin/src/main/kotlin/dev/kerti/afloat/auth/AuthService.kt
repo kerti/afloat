@@ -119,13 +119,22 @@ class AuthService(
     // A lookup that failed says nothing about this account's credentials: 500,
     // not 401, thrown before the permit queue and recordFailures, so an outage
     // burns no backoff (#23).
-    private fun resolve(normalizedEmail: String): Pair<User?, String> = try {
-        val user = userRepository.findByEmail(normalizedEmail)
-        val hash = user?.let { credentialRepository.findByUserId(it.id)?.passwordHash }
-        if (user == null || hash == null) null to PasswordService.dummyHash else user to hash
+    private fun resolve(normalizedEmail: String): Pair<User?, String> {
+        val user = lookUp("login: look up user") { userRepository.findByEmail(normalizedEmail) }
+            ?: return null to PasswordService.dummyHash
+        val hash = lookUp("login: look up credential") { credentialRepository.findByUserId(user.id) }
+            ?.passwordHash
+            ?: return null to PasswordService.dummyHash
+        return user to hash
+    }
+
+    // One of resolve's lookups, logged under its own name so the log says which
+    // failed, as Go's wrapped error does.
+    private inline fun <T> lookUp(what: String, query: () -> T): T = try {
+        query()
     } catch (e: RuntimeException) {
         if (!e.isDatabaseFailure()) throw e
-        log.error("login: look up credential", e)
+        log.error(what, e)
         throw ApiException(500, ErrorCode.INTERNAL)
     }
 

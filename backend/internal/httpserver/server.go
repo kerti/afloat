@@ -72,6 +72,19 @@ func New(d Deps) http.Handler {
 	// and no Content-Type (#29).
 	r.Use(recoverer)
 	r.Use(requestLogger)
+	// oapi-codegen's generated HandlerWithOptions (api.gen.go) mounts every
+	// operation unconditionally — one r.Post/r.Get call per route, inlined
+	// in a function we don't own — with no per-operation option to skip
+	// mounting and no per-route middleware hook (ChiServerOptions.Middlewares
+	// applies to every operation alike). Hand-editing that file is out
+	// (BOOTSTRAP.md §6; CI regenerates and diffs it away). So this one route
+	// is gated ahead of the generated mux instead: any request whose path
+	// matches is answered before CSRF or session middleware ever run, so a
+	// disabled login gives chi's ordinary 404 with no session row written.
+	// Enabled comes from d.System.LocalEnabled() — the same value
+	// GetAuthMethods reports — so the gate cannot drift from what
+	// /auth/methods tells the client.
+	r.Use(disabledLocalLogin404(d.System.LocalEnabled()))
 	// A body limit on every JSON route. Balances caps only its file uploads,
 	// which leaves an unbounded decode everywhere else.
 	r.Use(maxBodyBytes(1 << 20))

@@ -49,6 +49,7 @@ class SecurityConfiguration {
             .formLogin { it.disable() }
             .httpBasic { it.disable() }
             .logout { it.disable() }
+            .headers { header -> header.httpStrictTransportSecurity { it.disable() } }
             .sessionManagement { it.sessionCreationPolicy(SessionCreationPolicy.STATELESS) }
             .authorizeHttpRequests {
                 // An ERROR dispatch is authorized like any other since Spring

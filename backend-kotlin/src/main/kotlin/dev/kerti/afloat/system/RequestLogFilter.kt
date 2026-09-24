@@ -49,16 +49,19 @@ class RequestLogFilter : OncePerRequestFilter() {
         }
     }
 
-    // An inbound X-Request-Id is honoured so a reverse proxy's id survives into
-    // these lines, matching chi's middleware.RequestID on the Go side.
+    private fun isRequestIdChar(c: Char): Boolean =
+        c in 'a'..'z' || c in 'A'..'Z' || c in '0'..'9' || c == '-' || c == '_'
+
+    // An inbound X-Request-Id is honored so a reverse proxy's id survives into
+    // these lines.
     //
-    // SANITISED, which chi does not do: the header is attacker-controlled in a
-    // self-hosted deployment with nothing in front, and a value containing a
-    // newline writes an attacker-chosen second line into the log. Restricting
-    // it to the id alphabet and a length makes the worst case a useless id
-    // rather than a forged record.
+    // SANITIZED: the header is attacker-controlled in a self-hosted deployment
+    // with nothing in front, and a value containing a newline writes an
+    // attacker-chosen second line into the log. Restricting it to the ASCII id
+    // alphabet and a length makes the worst case a useless id rather than a
+    // forged record.
     private fun requestIdFor(request: HttpServletRequest): String {
-        val supplied = request.getHeader(REQUEST_ID_HEADER)?.filter { it.isLetterOrDigit() || it == '-' || it == '_' }
+        val supplied = request.getHeader(REQUEST_ID_HEADER)?.filter(::isRequestIdChar)
         return if (!supplied.isNullOrEmpty()) supplied.take(MAX_REQUEST_ID_LENGTH) else newRequestId()
     }
 

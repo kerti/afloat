@@ -528,7 +528,7 @@ truth and fails if either backend's configuration drifts from it.
 | `LOG_LEVEL` | `info` | |
 | `AUTO_MIGRATE` | `true` | Apply migrations on boot. Off only to run against a database migrated by something else. |
 | `HTTP_READ_TIMEOUT` | `30s` | |
-| `HTTP_WRITE_TIMEOUT` | `60s` | Go: enforced twice with one value — `http.Server.WriteTimeout` and the handler-timeout middleware (`middleware.Timeout`, issue #30). Kotlin has no enforcement yet; the ruling on #30 is a statement-level timeout (`@Transactional(timeout=...)`/JDBC `queryTimeout`) rather than a true request-level cutoff — a Spring MVC limitation, and a documented deliberate difference once built, not a gap to close the same way Go's was. |
+| `HTTP_WRITE_TIMEOUT` | `60s` | Go: enforced twice with one value — `http.Server.WriteTimeout` and the handler-timeout middleware (`middleware.Timeout`, issue #30). Kotlin: the transaction manager's default timeout (`JpaTransactionManager.defaultTimeout`, issue #30) — a deadline on the whole transaction, not a per-statement cap: each statement gets the time left as its JDBC `queryTimeout`, and Postgres cancels one that overruns it. It covers every repository call, because each repository interface carries `@Transactional(readOnly = true)` (declared query methods get no transaction otherwise, and so no deadline), and every `@Transactional` service method. It deliberately does not cover the health probe's raw `SELECT 1`. Rounded up to whole seconds, minimum 1s, since JPA timeouts count in seconds; Go's is exact. A documented deliberate difference, not a gap to close the same way Go's was. |
 | `HTTP_IDLE_TIMEOUT` | `120s` | |
 | `SHUTDOWN_TIMEOUT` | `10s` | |
 | `AUTH_LOCAL_ENABLED` | `true` | |

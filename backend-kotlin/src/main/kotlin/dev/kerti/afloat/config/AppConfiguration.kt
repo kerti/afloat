@@ -1,9 +1,12 @@
 package dev.kerti.afloat.config
 
+import jakarta.persistence.EntityManagerFactory
 import org.springframework.boot.jdbc.DataSourceBuilder
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
 import org.springframework.core.env.Environment
+import org.springframework.orm.jpa.JpaTransactionManager
+import org.springframework.transaction.PlatformTransactionManager
 import java.time.Clock
 import javax.sql.DataSource
 
@@ -33,4 +36,14 @@ class AppConfiguration {
     // a local offset (BOOTSTRAP.md §4).
     @Bean
     fun clock(): Clock = Clock.systemUTC()
+
+    @Bean
+    fun transactionManager(
+        entityManagerFactory: EntityManagerFactory,
+        appConfig: AppConfig,
+    ): PlatformTransactionManager {
+        val manager = JpaTransactionManager(entityManagerFactory)
+        manager.defaultTimeout = ((appConfig.writeTimeout.toMillis() + 999) / 1000).toInt().coerceAtLeast(1)
+        return manager
+    }
 }

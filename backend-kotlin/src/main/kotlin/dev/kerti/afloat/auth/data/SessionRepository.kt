@@ -7,6 +7,7 @@ import org.springframework.data.repository.query.Param
 import org.springframework.transaction.annotation.Transactional
 import java.time.Instant
 
+@Transactional(readOnly = true)
 interface SessionRepository : JpaRepository<Session, String> {
     // Both lifetimes enforced here: expires_at is the sliding window,
     // created_at is the absolute cap that stops a stolen cookie living forever

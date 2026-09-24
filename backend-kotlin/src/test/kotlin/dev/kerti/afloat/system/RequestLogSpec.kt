@@ -13,6 +13,7 @@ import io.kotest.assertions.withClue
 import io.kotest.matchers.collections.shouldHaveSize
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
+import io.kotest.matchers.string.shouldMatch
 import io.kotest.matchers.string.shouldNotContain
 import jakarta.servlet.http.Cookie
 import org.slf4j.LoggerFactory
@@ -123,6 +124,16 @@ class RequestLogSpec : WebDatabaseSpec() {
             ).andReturn()
 
             lines().single() shouldContain "request_id=abcdfgi1"
+        }
+
+        "supplies a request id in the response if it isn't provided in a request" {
+            val response = mockMvc.perform(
+                post(AuthApi.BASE_PATH + AuthApi.PATH_LOGOUT),
+            ).andReturn().response
+            val requestId = response.getHeader(RequestLogFilter.REQUEST_ID_HEADER)
+
+            requestId shouldMatch Regex("^[0-9a-f]{16}\$")
+            lines().single() shouldContain "request_id=$requestId"
         }
     }
 }

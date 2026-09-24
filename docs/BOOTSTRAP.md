@@ -285,11 +285,15 @@ the class loads at startup, before any request can queue. Verifying against it t
 other hash.
 
 The queue moves what a login flood costs; it does not remove it, and the two backends pay
-differently. In Go a queued login is a parked goroutine, so a flood slows logins and nothing else. In
-Kotlin each queued login holds a Tomcat worker thread for as long as it waits, and every endpoint
-shares those threads. A flood faster than the cap clears (about 80 logins a second) fills them, and
-then every endpoint waits. It is still bounded, and it recovers when the flood stops. Whether Kotlin
-must match Go here is open: #54.
+differently. In Go a queued login is a parked goroutine, so a flood slows logins and no other
+endpoint. But nothing bounds how many wait: each holds its goroutine and connection, a few tens of KiB
+rather than a hash's 19 MiB, for up to `HTTP_WRITE_TIMEOUT`, so a flood faster than the cap clears
+(about 80 logins a second) grows memory with its rate for as long as it lasts. A client that leaves
+ends its wait, and no hash runs for it. In Kotlin each queued login holds a Tomcat worker thread for as
+long as it waits, and every endpoint shares those threads. A flood faster than the cap clears fills
+them, and then every endpoint waits. That is bounded by Tomcat's own limits, and it recovers when the
+flood stops. A client that leaves does not end its wait: the login still queues and then hashes for
+nobody. Whether Kotlin must match Go is open (#54), and so is whether Go's wait needs a bound.
 
 **The rate-limit key is the connection's own address, never `X-Forwarded-For`.** Self-hosting means
 there may be no proxy in front, so nothing strips that header and it is attacker-controlled — using

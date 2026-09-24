@@ -39,10 +39,13 @@ class LoginConcurrencySpec : WebDatabaseSpec() {
         ).andReturn()
 
     init {
-        // Well past Hikari's default of 10, so a connection held per request
-        // cannot all be served at once.
+        // Past Hikari's default of 10, so a connection held per request cannot
+        // all be served at once, and three times the Argon2 cap. No wider: the
+        // cap runs the hashes four at a time, so twelve callers take three
+        // hashes' time end to end, which must stay well inside the bound below
+        // on a loaded machine (#33).
         "answers a burst of failed logins wider than the pool without stalling" {
-            val callers = 30
+            val callers = 12
             val ready = CountDownLatch(callers)
             val go = CountDownLatch(1)
             val pool = Executors.newFixedThreadPool(callers)
@@ -66,7 +69,7 @@ class LoginConcurrencySpec : WebDatabaseSpec() {
                 withClue("statuses: $results") { results.toSet() shouldBe setOf(401) }
                 // Deadlocked, every request waits out the 30 s connection timeout.
                 elapsedSeconds shouldBeLessThan 20L
-                // #33: thirty hashes in flight at once want ~570 MiB of heap.
+                // #33: twelve hashes in flight at once want ~230 MiB of heap.
                 // The dummy hash an unknown address pays shares the same cap.
                 passwordService.peakInFlight shouldBe PasswordService.ARGON_CONCURRENCY_CAP
             } finally {

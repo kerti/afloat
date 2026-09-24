@@ -99,9 +99,9 @@ func New(d Deps) http.Handler {
 	// which leaves an unbounded decode everywhere else.
 	r.Use(maxBodyBytes(1 << 20))
 	// The bare literal this used to read is gone (#30): HandlerTimeout is
-	// config.Config.WriteTimeout, so operators bound handler run-time and the
-	// server's http.Server.WriteTimeout with one variable, not two that can
-	// drift apart.
+	// config.Config.WriteTimeout, and main.go derives http.Server.WriteTimeout
+	// from the same value plus a grace, so operators set both with one
+	// variable and the cut-off handler's answer still reaches the client.
 	r.Use(middleware.Timeout(d.HandlerTimeout))
 	// Second CSRF layer, behind SameSite=Lax.
 	r.Use(crossSiteGuard)

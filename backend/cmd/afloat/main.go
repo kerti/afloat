@@ -28,6 +28,14 @@ import (
 // per stalled connection.
 const readHeaderTimeout = 5 * time.Second
 
+// writeTimeoutGrace is how much longer the connection's write deadline runs
+// than the handler timeout. Both come from HTTP_WRITE_TIMEOUT (#30), but they
+// cannot be equal: http.Server starts its deadline when the headers are read,
+// before middleware.Timeout starts its own, so the write deadline would always
+// pass first and the handler's 503 would be dropped with the connection. The
+// grace is the time that answer has to reach the client.
+const writeTimeoutGrace = 5 * time.Second
+
 func main() {
 	if err := run(); err != nil {
 		slog.Error("fatal", "err", err)
@@ -77,22 +85,13 @@ func run() error {
 			LocalEnabled:  cfg.AuthLocalEnabled,
 			GoogleEnabled: cfg.AuthGoogleEnabled,
 		}),
-		// Same variable as http.Server.WriteTimeout below: one bound on how long
-		// a handler may run, read once rather than a second literal that could
+		// The same variable newHTTPServer derives the write deadline from: one
+		// bound on how long a handler may run, not a second literal that could
 		// drift from it (#30).
 		HandlerTimeout: cfg.WriteTimeout,
 	})
 
-	srv := &http.Server{
-		Addr:    net.JoinHostPort("", strconv.Itoa(cfg.Port)),
-		Handler: handler,
-		// Separate from ReadTimeout: this one bounds a client that opens a
-		// connection and dribbles headers, which ReadTimeout does not cover.
-		ReadHeaderTimeout: readHeaderTimeout,
-		ReadTimeout:       cfg.ReadTimeout,
-		WriteTimeout:      cfg.WriteTimeout,
-		IdleTimeout:       cfg.IdleTimeout,
-	}
+	srv := newHTTPServer(cfg, handler)
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -117,6 +116,19 @@ func run() error {
 	}
 	slog.Info("stopped")
 	return nil
+}
+
+func newHTTPServer(cfg config.Config, handler http.Handler) *http.Server {
+	return &http.Server{
+		Addr:    net.JoinHostPort("", strconv.Itoa(cfg.Port)),
+		Handler: handler,
+		// Separate from ReadTimeout: this one bounds a client that opens a
+		// connection and dribbles headers, which ReadTimeout does not cover.
+		ReadHeaderTimeout: readHeaderTimeout,
+		ReadTimeout:       cfg.ReadTimeout,
+		WriteTimeout:      cfg.WriteTimeout + writeTimeoutGrace,
+		IdleTimeout:       cfg.IdleTimeout,
+	}
 }
 
 func newLogger(cfg config.Config) *slog.Logger {

@@ -64,7 +64,7 @@ class SessionFilter(
                 userRepository.findById(session.userId).orElse(null)
             } catch (e: RuntimeException) {
                 if (!e.isDatabaseFailure()) throw e
-                log.error("session: look up user", e)
+                log.error("session user lookup", e)
                 filterChain.doFilter(request, response)
                 return
             }

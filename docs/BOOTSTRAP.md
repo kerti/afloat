@@ -309,14 +309,18 @@ write. One caller's failure is written before the permit passes on, and the next
 answers `429` without hashing. At most the cap's worth of logins hold permits at once, so a burst on one
 account gets up to 4 guesses before the backoff applies, not the whole queue. The `429` is the same
 answer the first read gives, keyed on the address and the IP whether or not the account exists, so the
-wait before it tells a caller nothing the first read would not. The permit covers those two short
-statements as well as the hash.
+wait before it tells a caller nothing the first read would not. The permit covers database round
+trips as well as the hash: the backoff read and, on a failure, one write per key (the address's and the
+IP's). So the cap's ~80 logins a second assumes a quick database. A slow one holds each permit longer
+and lowers that rate for as long as it stays slow; nothing breaks, and it recovers when the database
+does.
 
 The queue moves what a login flood costs; it does not remove it, and the two backends pay
 differently. In Go a queued login is a parked goroutine, so a flood slows logins and no other
-endpoint. But nothing bounds how many wait: each holds its goroutine and connection, a few tens of KiB
-rather than a hash's 19 MiB, for up to `HTTP_WRITE_TIMEOUT`, so a flood faster than the cap clears
-(about 80 logins a second) grows memory with its rate for as long as it lasts. A client that leaves
+endpoint. But nothing bounds how many wait: each holds its goroutine and client connection, a few
+tens of KiB rather than a hash's 19 MiB, for up to `HTTP_WRITE_TIMEOUT`, so a flood faster than the cap
+clears (about 80 logins a second) grows memory with its rate for as long as it lasts. It holds no
+database connection while it waits: pgx takes one per query. A client that leaves
 ends its wait, and no hash runs for it. In Kotlin each queued login holds a Tomcat worker thread for as
 long as it waits, and every endpoint shares those threads. A flood faster than the cap clears fills
 them, and then every endpoint waits. That is bounded by Tomcat's own limits, and it recovers when the

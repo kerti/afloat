@@ -3,6 +3,7 @@ package dev.kerti.afloat.security
 import dev.kerti.afloat.api.AuthApi
 import dev.kerti.afloat.api.SystemApi
 import dev.kerti.afloat.auth.CrossSiteGuardFilter
+import dev.kerti.afloat.auth.DisabledLocalLogin404Filter
 import dev.kerti.afloat.auth.EnvelopeAccessDeniedHandler
 import dev.kerti.afloat.auth.EnvelopeAuthenticationEntryPoint
 import dev.kerti.afloat.auth.MaxBodyFilter
@@ -38,6 +39,7 @@ class SecurityConfiguration {
         appConfig: AppConfig,
         handlerMappings: List<HandlerMapping>,
     ): SecurityFilterChain {
+        val localLogin404 = DisabledLocalLogin404Filter(appConfig.authLocalEnabled, basePath + AuthApi.PATH_LOCAL_LOGIN)
         val maxBody = MaxBodyFilter()
         val crossSiteGuard = CrossSiteGuardFilter()
         val requestFacts = RequestFactsFilter()
@@ -47,6 +49,7 @@ class SecurityConfiguration {
             .formLogin { it.disable() }
             .httpBasic { it.disable() }
             .logout { it.disable() }
+            .headers { header -> header.httpStrictTransportSecurity { it.disable() } }
             .sessionManagement { it.sessionCreationPolicy(SessionCreationPolicy.STATELESS) }
             .authorizeHttpRequests {
                 // An ERROR dispatch is authorized like any other since Spring
@@ -87,8 +90,9 @@ class SecurityConfiguration {
             }
             // Go's order, anchored explicitly rather than inherited from the
             // order these lines happen to run in (server.go:75-86):
-            // maxBody -> crossSiteGuard -> requestFacts -> session.
+            // localLogin404 -> maxBody -> crossSiteGuard -> requestFacts -> session.
             .addFilterBefore(maxBody, UsernamePasswordAuthenticationFilter::class.java)
+            .addFilterBefore(localLogin404, MaxBodyFilter::class.java)
             .addFilterAfter(crossSiteGuard, MaxBodyFilter::class.java)
             .addFilterAfter(requestFacts, CrossSiteGuardFilter::class.java)
             .addFilterAfter(sessionFilter, RequestFactsFilter::class.java)

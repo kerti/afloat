@@ -58,6 +58,21 @@ func TestLoadRejectsUnusableCases(t *testing.T) {
 			yaml: "- name: x\n  request: {method: GET, path: /health}\n  expect: {status: 204, body_empty: true, body_raw: \"a\"}\n",
 			want: "cannot be combined",
 		},
+		{
+			name: "unknown profile",
+			yaml: "- name: x\n  profile: local-off\n  request: {method: GET, path: /health}\n  expect: {status: 200}\n",
+			want: "unknown profile",
+		},
+		{
+			name: "same_as with no method",
+			yaml: "- name: x\n  request: {method: GET, path: /health}\n  expect: {status: 404, same_as: {path: /nowhere}}\n",
+			want: "same_as.method is required",
+		},
+		{
+			name: "same_as path includes the api base",
+			yaml: "- name: x\n  request: {method: GET, path: /health}\n  expect: {status: 404, same_as: {method: GET, path: api/nowhere}}\n",
+			want: "same_as.path must start with /",
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := conformance.Load(writeCases(t, tc.yaml))
@@ -98,7 +113,11 @@ func TestCommittedFilesLoad(t *testing.T) {
 	if len(cases) == 0 {
 		t.Fatal("cases/ loaded zero cases")
 	}
-	if _, err := conformance.LoadPermitted("permitted-differences.yaml"); err != nil {
+	permitted, err := conformance.LoadPermitted("permitted-differences.yaml")
+	if err != nil {
 		t.Fatalf("permitted-differences.yaml: %v", err)
+	}
+	if err := conformance.CheckPermits(cases, permitted); err != nil {
+		t.Fatal(err)
 	}
 }

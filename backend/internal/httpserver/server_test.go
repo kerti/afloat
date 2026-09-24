@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -19,6 +20,12 @@ type fakeQuerier struct{ db.Querier }
 
 func (fakeQuerier) Ping(context.Context) (int32, error) { return 1, nil }
 
+// testHandlerTimeout is what production gets by default (config.Config's
+// HTTP_WRITE_TIMEOUT envDefault) — long enough that no test in this file
+// competes with it. TestHandlerTimeoutReadsConfig is the one test that
+// overrides it.
+const testHandlerTimeout = 60 * time.Second
+
 func newTestServer() http.Handler {
 	q := fakeQuerier{}
 	return New(Deps{
@@ -29,6 +36,7 @@ func newTestServer() http.Handler {
 			SessionMaxLifetime: 90 * 24 * time.Hour,
 			CookieSecure:       true,
 		}),
+		HandlerTimeout: testHandlerTimeout,
 	})
 }
 
@@ -96,7 +104,7 @@ func TestBodyIsCapped(t *testing.T) {
 	srv := newTestServer()
 
 	huge := strings.NewReader(`{"email":"` + strings.Repeat("a", 2<<20) + `"}`)
-	req := httptest.NewRequest(http.MethodPost, "/api/auth/local/login", huge)
+	req := httptest.NewRequest(http.MethodPost, localLoginPath, huge)
 	req.Header.Set("Content-Type", "application/json")
 
 	rec := httptest.NewRecorder()
@@ -121,7 +129,7 @@ func TestMalformedBodyIsTheEnvelope(t *testing.T) {
 		{"empty", ``},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			req := httptest.NewRequest(http.MethodPost, "/api/auth/local/login", strings.NewReader(tc.body))
+			req := httptest.NewRequest(http.MethodPost, localLoginPath, strings.NewReader(tc.body))
 			req.Header.Set("Content-Type", "application/json")
 
 			rec := httptest.NewRecorder()
@@ -159,8 +167,9 @@ func assertEnvelope(t *testing.T, rec *httptest.ResponseRecorder, wantCode strin
 // in-flight request with it.
 func TestPanicIsRecovered(t *testing.T) {
 	srv := New(Deps{
-		System: system.New(system.Deps{Querier: panicQuerier{}, LocalEnabled: true}),
-		Auth:   auth.New(auth.Deps{Querier: panicQuerier{}}),
+		System:         system.New(system.Deps{Querier: panicQuerier{}, LocalEnabled: true}),
+		Auth:           auth.New(auth.Deps{Querier: panicQuerier{}}),
+		HandlerTimeout: testHandlerTimeout,
 	})
 
 	rec := httptest.NewRecorder()
@@ -175,3 +184,250 @@ func TestPanicIsRecovered(t *testing.T) {
 type panicQuerier struct{ db.Querier }
 
 func (panicQuerier) Ping(context.Context) (int32, error) { panic("boom") }
+
+// The full pinned set (#26), asserted on a representative response. Not
+// Strict-Transport-Security, in either backend: whatever terminates TLS owns
+// it (BOOTSTRAP.md §5.2).
+func TestSecurityHeadersOnHealth(t *testing.T) {
+	srv := newTestServer()
+
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/health", nil))
+
+	want := map[string]string{
+		"X-Content-Type-Options": "nosniff",
+		"X-Frame-Options":        "DENY",
+		"Cache-Control":          "no-cache, no-store, max-age=0, must-revalidate",
+		"Pragma":                 "no-cache",
+		"Expires":                "0",
+		"X-XSS-Protection":       "0",
+	}
+	for header, value := range want {
+		if got := rec.Header().Get(header); got != value {
+			t.Errorf("%s = %q, want %q", header, got, value)
+		}
+	}
+	if got := rec.Header().Get("Strict-Transport-Security"); got != "" {
+		t.Errorf("Strict-Transport-Security = %q, want unset — the TLS terminator owns HSTS, not either backend", got)
+	}
+}
+
+var mintedRequestID = regexp.MustCompile(`^[0-9a-f]{16}$`)
+
+// The inbound rule Kotlin's RequestLogFilter applies, byte for byte: keep
+// ASCII letters, digits, '-' and '_', cut to 64, mint if nothing survives.
+func TestRequestIDFromInbound(t *testing.T) {
+	cases := []struct {
+		name, inbound, want string // want "" means a freshly minted id
+	}{
+		{"clean id is echoed", "caller-supplied_ID-42", "caller-supplied_ID-42"},
+		{"disallowed ASCII is dropped", "ab<c>d e;f/g.h:i", "abcdefghi"},
+		{"non-ASCII is dropped, not just decoded", "abcé字1", "abc1"},
+		{"cut to 64 after filtering", "<" + strings.Repeat("a", 70), strings.Repeat("a", 64)},
+		{"nothing survives, so one is minted", "<>;/.:", ""},
+		{"absent, so one is minted", "", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var inContext string
+			h := requestID(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+				inContext = requestIDFrom(r.Context())
+			}))
+			req := httptest.NewRequest(http.MethodGet, "/", nil)
+			if tc.inbound != "" {
+				req.Header.Set("X-Request-Id", tc.inbound)
+			}
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, req)
+
+			got := rec.Header().Get("X-Request-Id")
+			switch {
+			case tc.want == "" && !mintedRequestID.MatchString(got):
+				t.Errorf("X-Request-Id = %q, want a minted id (16 lowercase hex)", got)
+			case tc.want != "" && got != tc.want:
+				t.Errorf("X-Request-Id = %q, want %q", got, tc.want)
+			}
+			// requestLogger reads the context; the response must not name a
+			// different request than the log line does.
+			if inContext != got {
+				t.Errorf("context id = %q, response header = %q; they must be the same id", inContext, got)
+			}
+		})
+	}
+}
+
+// Through the whole router, so a later middleware that rewrote or dropped the
+// header would be caught — including on a response the router answers itself.
+func TestRequestIDOnEveryResponse(t *testing.T) {
+	srv := newTestServer()
+
+	for _, path := range []string{"/api/health", "/api/genuinely-unregistered"} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		req.Header.Set("X-Request-Id", "from-the-proxy")
+		rec := httptest.NewRecorder()
+		srv.ServeHTTP(rec, req)
+
+		if got := rec.Header().Get("X-Request-Id"); got != "from-the-proxy" {
+			t.Errorf("%s: X-Request-Id = %q, want the inbound id echoed", path, got)
+		}
+	}
+}
+
+// slowQuerier's Ping respects context cancellation the way pgx does against a
+// real deadline, standing in for a handler slow enough to hit HandlerTimeout.
+type slowQuerier struct {
+	db.Querier
+	delay time.Duration
+}
+
+func (s slowQuerier) Ping(ctx context.Context) (int32, error) {
+	select {
+	case <-ctx.Done():
+		return 0, ctx.Err()
+	case <-time.After(s.delay):
+		return 1, nil
+	}
+}
+
+// middleware.Timeout used to read a bare `30 * time.Second` literal (#30).
+// HandlerTimeout is set here to 20ms against a handler that would otherwise
+// take 2s: if the literal ever creeps back in, ctx would not cancel until
+// 30s and this test would time out waiting on the 2s Ping instead of
+// returning in well under a second.
+func TestHandlerTimeoutReadsConfig(t *testing.T) {
+	q := slowQuerier{delay: 2 * time.Second}
+	srv := New(Deps{
+		System:         system.New(system.Deps{Querier: q, Version: "test", LocalEnabled: true}),
+		Auth:           auth.New(auth.Deps{Querier: q}),
+		HandlerTimeout: 20 * time.Millisecond,
+	})
+
+	started := time.Now()
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/health", nil))
+	elapsed := time.Since(started)
+
+	if elapsed > 500*time.Millisecond {
+		t.Errorf("handler returned after %s, want it cut off near the configured 20ms HandlerTimeout (not left to run the full 2s, and not bound to the old 30s literal)", elapsed)
+	}
+	// GetHealth answers a cancelled Ping the same way it answers any other
+	// Ping error: 503, degraded, in its own JSON shape (system.go) — reached
+	// because Ping observed ctx.Done() and returned, not because
+	// middleware.Timeout's own deferred write raced it.
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusServiceUnavailable)
+	}
+}
+
+// spyQuerier's every unstubbed method panics (db.Querier is embedded nil),
+// which is deliberate: if disabledLocalLogin404 ever let a request through
+// to the handler, the test fails loudly on that panic rather than passing by
+// accident. CreateSession is the one method it does stub, so a session issued
+// in spite of the gate is a recorded fact, not a guess.
+type spyQuerier struct {
+	db.Querier
+	sessionCreated bool
+}
+
+func (q *spyQuerier) CreateSession(_ context.Context, _ db.CreateSessionParams) (db.Session, error) {
+	q.sessionCreated = true
+	return db.Session{}, nil
+}
+
+// issue #24 (Go side): with the local provider off, the login route must not
+// exist — a bare 404 indistinguishable from any other unmatched path, not a
+// 401/403 answered from inside the handler — and /auth/methods must still
+// report it accurately.
+func TestLocalLoginDisabledIsABareNotFound(t *testing.T) {
+	q := &spyQuerier{}
+	srv := New(Deps{
+		System: system.New(system.Deps{Querier: q, Version: "test", LocalEnabled: false}),
+		Auth: auth.New(auth.Deps{
+			Querier:            q,
+			SessionTTL:         30 * 24 * time.Hour,
+			SessionMaxLifetime: 90 * 24 * time.Hour,
+			CookieSecure:       true,
+		}),
+		HandlerTimeout: testHandlerTimeout,
+	})
+
+	body := `{"email":"a@example.com","password":"whatever-it-does-not-matter"}`
+	req := httptest.NewRequest(http.MethodPost, localLoginPath, strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("POST status = %d, want 404", rec.Code)
+	}
+
+	// GET too: with a method-scoped gate chi answers 405 here, which tells a
+	// prober the route exists.
+	reqGet := httptest.NewRequest(http.MethodGet, localLoginPath, nil)
+	recGet := httptest.NewRecorder()
+	srv.ServeHTTP(recGet, reqGet)
+
+	if recGet.Code != http.StatusNotFound {
+		t.Errorf("GET status = %d, want 404", recGet.Code)
+	}
+
+	// Not just any 404: the same one chi hands back for a path that was never
+	// registered — proof this isn't an error envelope wearing a 404, and that
+	// the route genuinely does not exist rather than existing-but-refusing.
+	unmatched := httptest.NewRecorder()
+
+	srv.ServeHTTP(unmatched, httptest.NewRequest(http.MethodGet, "/api/genuinely-unregistered", nil))
+	if ct, wantCt := rec.Header().Get("Content-Type"), unmatched.Header().Get("Content-Type"); ct != wantCt {
+		t.Errorf("POST Content-Type = %q, want %q (same as an unmatched route)", ct, wantCt)
+	}
+	if rec.Body.String() != unmatched.Body.String() {
+		t.Errorf("POST body = %q, want %q (same as an unmatched route)", rec.Body.String(), unmatched.Body.String())
+	}
+
+	if ct, wantCt := recGet.Header().Get("Content-Type"), unmatched.Header().Get("Content-Type"); ct != wantCt {
+		t.Errorf("GET Content-Type = %q, want %q (same as an unmatched route)", ct, wantCt)
+	}
+	if recGet.Body.String() != unmatched.Body.String() {
+		t.Errorf("GET body = %q, want %q (same as an unmatched route)", recGet.Body.String(), unmatched.Body.String())
+	}
+
+	if q.sessionCreated {
+		t.Error("a session was created even though the route should not exist")
+	}
+
+	// /auth/methods is the single source of truth for which providers exist,
+	// and gating the route must not drift from what it reports.
+	methodsRec := httptest.NewRecorder()
+	srv.ServeHTTP(methodsRec, httptest.NewRequest(http.MethodGet, "/api/auth/methods", nil))
+	var methods struct {
+		Local  bool `json:"local"`
+		Google bool `json:"google"`
+	}
+	if err := json.Unmarshal(methodsRec.Body.Bytes(), &methods); err != nil {
+		t.Fatalf("auth/methods body is not JSON: %v (%s)", err, methodsRec.Body.String())
+	}
+	if methods.Local {
+		t.Error("auth/methods reports local: true while the route is gated off")
+	}
+}
+
+// The mirror of the case above: with the default configuration (local
+// enabled), gating this route must be a no-op — LocalLogin behaves exactly as
+// it did before #24.
+func TestLocalLoginEnabledIsUnaffected(t *testing.T) {
+	srv := newTestServer()
+
+	// No body: the existing TestRoutesAreMountedUnderAPI already covers this
+	// exact case (400, not 404), reasserted here as the explicit "default
+	// config is unaffected" contrast to the disabled case above.
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, localLoginPath, nil))
+
+	if rec.Code == http.StatusNotFound {
+		t.Error("status = 404 with the local provider enabled; the route must still exist")
+	}
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400 (no body), not a gate-related change", rec.Code)
+	}
+}

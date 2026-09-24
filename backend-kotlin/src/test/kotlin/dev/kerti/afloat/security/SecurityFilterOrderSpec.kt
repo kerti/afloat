@@ -1,6 +1,7 @@
 package dev.kerti.afloat.security
 
 import dev.kerti.afloat.auth.CrossSiteGuardFilter
+import dev.kerti.afloat.auth.DisabledLocalLogin404Filter
 import dev.kerti.afloat.auth.MaxBodyFilter
 import dev.kerti.afloat.auth.RequestFactsFilter
 import dev.kerti.afloat.auth.SessionFilter
@@ -21,12 +22,13 @@ class SecurityFilterOrderSpec : DatabaseSpec() {
     private lateinit var filterChainProxy: FilterChainProxy
 
     init {
-        // Go's chain: maxBodyBytes -> crossSiteGuard -> RequestContextMiddleware
-        // -> SessionMiddleware (server.go:75-86). The session filter reads the
-        // facts the request-facts filter sets, so the order is load-bearing,
-        // not cosmetic.
+        // Go's chain: disabledLocalLogin404 -> maxBodyBytes -> crossSiteGuard
+        // -> RequestContextMiddleware -> SessionMiddleware (server.go:75-86).
+        // The session filter reads the facts the request-facts filter sets, so
+        // the order is load-bearing, not cosmetic.
         "runs the request filters in Go's order" {
             val filters = filterChainProxy.filterChains.first().filters
+            val localLogin404 = filters.indexOfFilter<DisabledLocalLogin404Filter>()
             val maxBody = filters.indexOfFilter<MaxBodyFilter>()
             val crossSite = filters.indexOfFilter<CrossSiteGuardFilter>()
             val facts = filters.indexOfFilter<RequestFactsFilter>()
@@ -34,11 +36,13 @@ class SecurityFilterOrderSpec : DatabaseSpec() {
 
             // indexOfFirst returns -1 for a filter that was never registered,
             // which would otherwise satisfy every ordering assertion below.
+            localLogin404 shouldBeGreaterThanOrEqual 0
             maxBody shouldBeGreaterThanOrEqual 0
             crossSite shouldBeGreaterThanOrEqual 0
             facts shouldBeGreaterThanOrEqual 0
             session shouldBeGreaterThanOrEqual 0
 
+            localLogin404 shouldBeLessThan maxBody
             maxBody shouldBeLessThan crossSite
             crossSite shouldBeLessThan facts
             facts shouldBeLessThan session

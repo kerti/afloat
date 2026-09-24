@@ -26,10 +26,15 @@ func TestLoadPermittedRejects(t *testing.T) {
 		yaml string
 		want string
 	}{
-		{"no header", "- why: because\n", "no header"},
+		{"no header", "- why: because\n", "neither `header` nor `name`"},
 		{"no why", "- header: Date\n", "has no `why`"},
 		{"provisional with no issue", "- header: X-Request-Id\n  why: pending\n  provisional: true\n", "cites no issue"},
 		{"duplicate", "- header: Date\n  why: a\n- header: date\n  why: b\n", "duplicate entry"},
+		{"global and scoped at once", "- header: Date\n  name: x\n  why: a\n", "not both"},
+		{"global with a body", "- header: Date\n  body: true\n  why: a\n", "needs a `name`"},
+		{"scoped with no issue", "- name: x\n  body: true\n  why: a\n", "case-scoped but cites no issue"},
+		{"scoped permitting nothing", "- name: x\n  issue: \"24\"\n  why: a\n", "permits nothing"},
+		{"duplicate name", "- name: x\n  issue: \"24\"\n  body: true\n  why: a\n- name: x\n  issue: \"24\"\n  body: true\n  why: b\n", "duplicate entry named"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := conformance.LoadPermitted(writePermitted(t, tc.yaml))
@@ -55,5 +60,63 @@ func TestPermittedMatchingIsCaseInsensitive(t *testing.T) {
 	}
 	if got := set.Provisional(); len(got) != 1 {
 		t.Errorf("Provisional() returned %d entries, want 1", len(got))
+	}
+}
+
+const scopedEntry = "- name: unmatched-404\n  issue: \"24\"\n  headers: [Content-Type]\n  body: true\n  why: a\n"
+
+// A case-scoped entry widens only the cases that cite it. Leaking to every
+// case would make it a global exemption with extra steps.
+func TestScopedPermitAppliesOnlyToCitingCases(t *testing.T) {
+	set, err := conformance.LoadPermitted(writePermitted(t, scopedEntry))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	header, body := set.ForCase(conformance.Case{Permit: []string{"unmatched-404"}})
+	if !header("content-type") || !body {
+		t.Errorf("citing case: header=%v body=%v, want both true", header("content-type"), body)
+	}
+
+	header, body = set.ForCase(conformance.Case{})
+	if header("Content-Type") || body {
+		t.Errorf("non-citing case: header=%v body=%v, want both false", header("Content-Type"), body)
+	}
+	if set.Allows("Content-Type") {
+		t.Error("a scoped header leaked into the global Allows")
+	}
+}
+
+func TestCheckPermits(t *testing.T) {
+	set, err := conformance.LoadPermitted(writePermitted(t, scopedEntry))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sameAs := &conformance.Request{Method: "GET", Path: "/nowhere"}
+	withSameAs := conformance.Case{Name: "a", Permit: []string{"unmatched-404"}}
+	withSameAs.Expect.SameAs = sameAs
+
+	for _, tc := range []struct {
+		name  string
+		cases []conformance.Case
+		want  string
+	}{
+		{"cites an undefined entry", []conformance.Case{withSameAs, {Name: "b", Permit: []string{"nope"}}}, "does not define"},
+		{"body permitted, body unpinned", []conformance.Case{{Name: "a", Permit: []string{"unmatched-404"}}}, "asserts nothing about the body"},
+		{"entry cited by nothing", []conformance.Case{{Name: "a"}}, "cited by no case"},
+		{"valid", []conformance.Case{withSameAs}, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := conformance.CheckPermits(tc.cases, set)
+			if tc.want == "" {
+				if err != nil {
+					t.Fatalf("want no error, got %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("want an error mentioning %q, got %v", tc.want, err)
+			}
+		})
 	}
 }

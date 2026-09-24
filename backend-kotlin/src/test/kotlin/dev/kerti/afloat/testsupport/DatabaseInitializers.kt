@@ -119,3 +119,12 @@ class InsecureCookieDatabaseInitializer : ApplicationContextInitializer<Configur
         )
     }
 }
+
+// A short statement budget for the timeout spec. Long enough that normal boot
+// and setup finish, short enough that pg_sleep(30) is cut off rather than run
+// to completion. Its own initializer class, so no other context inherits it.
+class StatementTimeoutDatabaseInitializer : ApplicationContextInitializer<ConfigurableApplicationContext> {
+    override fun initialize(context: ConfigurableApplicationContext) {
+        context.useDatabase(TestDatabase.shared(), "HTTP_WRITE_TIMEOUT" to "3s")
+    }
+}

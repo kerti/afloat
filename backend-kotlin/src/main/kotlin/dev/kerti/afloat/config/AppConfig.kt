@@ -114,6 +114,10 @@ data class AppConfig(
             if (cfg.logLevel != "debug" && cfg.logLevel != "info" && cfg.logLevel != "warn" && cfg.logLevel != "error") {
                 throw ConfigException("LOG_LEVEL '${cfg.logLevel}': want debug, info, warn or error")
             }
+
+            if (cfg.writeTimeout.isZero || cfg.writeTimeout.isNegative) {
+                throw ConfigException("HTTP_WRITE_TIMEOUT '${cfg.writeTimeout}': must be positive")
+            }
         }
 
         // Shared with AutoMigrateFlywayPropertySource: the §12 contract parses

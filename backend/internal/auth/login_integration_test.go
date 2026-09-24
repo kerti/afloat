@@ -324,6 +324,66 @@ func TestLoginConcurrencyBoundsArgon2AndAnswersEveryRequest(t *testing.T) {
 	}
 }
 
+// waitForArgonQueue returns once n callers are queued for an Argon2 permit, so
+// a test acts on the wait itself rather than on a guess at how long the reads
+// before it take.
+func waitForArgonQueue(t *testing.T, n int32) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for auth.ArgonWaitingForTest() != n {
+		if time.Now().After(deadline) {
+			t.Fatalf("%d callers queued for an Argon2 permit, want %d", auth.ArgonWaitingForTest(), n)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+// loginInBackground starts a login and returns where its answer will arrive.
+func (h harness) loginInBackground(ctx context.Context, email, password string) <-chan api.LocalLoginResponseObject {
+	answer := make(chan api.LocalLoginResponseObject, 1)
+	go func() {
+		resp, _ := h.auth.LocalLogin(ctx, api.LocalLoginRequestObject{
+			Body: &api.LocalLoginJSONRequestBody{
+				Email:    openapi_types.Email(email),
+				Password: password,
+			},
+		})
+		answer <- resp
+	}()
+	return answer
+}
+
+// passedDeadline is a context whose cancel reads as a passed deadline. The
+// test picks the moment, so the deadline lands in the permit wait and not in
+// a database read before it.
+type passedDeadline struct{ context.Context }
+
+func (c passedDeadline) Err() error {
+	if c.Context.Err() != nil {
+		return context.DeadlineExceeded
+	}
+	return nil
+}
+
+func captureLog(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var logged bytes.Buffer
+	defaultLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logged, nil)))
+	t.Cleanup(func() { slog.SetDefault(defaultLogger) })
+	return &logged
+}
+
+func (h harness) loginAttemptRows(t *testing.T) int {
+	t.Helper()
+	var rows int
+	if err := h.tdb.Pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM login_attempts`).Scan(&rows); err != nil {
+		t.Fatalf("query: %v", err)
+	}
+	return rows
+}
+
 // Queued past the handler's deadline for a permit, the password was never
 // checked: not a 401, and not a failure for the backoff to count.
 func TestLoginAnswers500AndRecordsNoFailureWhenNoArgonPermitComesFree(t *testing.T) {
@@ -333,29 +393,24 @@ func TestLoginAnswers500AndRecordsNoFailureWhenNoArgonPermitComesFree(t *testing
 	release := auth.HoldArgonPermitsForTest()
 	defer release()
 
-	// The deadline bounds the backoff read too, and a read that overran it
-	// would also answer 500. The log says which wait ran out.
-	var logged bytes.Buffer
-	defaultLogger := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(&logged, nil)))
-	defer slog.SetDefault(defaultLogger)
+	// The deadline would bound the backoff read too, and a read that overran
+	// it would also answer 500. The log says which wait ran out.
+	logged := captureLog(t)
 
-	ctx, cancel := context.WithTimeout(ipContext("198.51.100.201"), 200*time.Millisecond)
+	ctx, cancel := context.WithCancel(ipContext("198.51.100.201"))
 	defer cancel()
-	resp := h.login(ctx, t, "a@example.com", "wrong password entirely")
+	answer := h.loginInBackground(passedDeadline{ctx}, "a@example.com", "wrong password entirely")
+	waitForArgonQueue(t, 1)
+	cancel()
+	resp := <-answer
 
 	if _, is := resp.(api.LocalLogin500JSONResponse); !is {
 		t.Fatalf("response = %T, want 500", resp)
 	}
-	if !strings.Contains(logged.String(), "login: verify password") {
-		t.Errorf("the 500 did not come from the permit wait; logged:\n%s", logged.String())
+	if out := logged.String(); !strings.Contains(out, `level=ERROR msg="login: wait for argon2 permit"`) {
+		t.Errorf("the 500 did not come from the permit wait; logged:\n%s", out)
 	}
-	var rows int
-	if err := h.tdb.Pool.QueryRow(context.Background(),
-		`SELECT count(*) FROM login_attempts`).Scan(&rows); err != nil {
-		t.Fatalf("query: %v", err)
-	}
-	if rows != 0 {
+	if rows := h.loginAttemptRows(t); rows != 0 {
 		t.Errorf("%d login_attempts rows after a login that never checked its password, want 0", rows)
 	}
 }
@@ -370,18 +425,15 @@ func TestLoginLogsAClientLeavingWhileQueuedAsAWarning(t *testing.T) {
 	release := auth.HoldArgonPermitsForTest()
 	defer release()
 
-	var logged bytes.Buffer
-	defaultLogger := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(&logged, nil)))
-	defer slog.SetDefault(defaultLogger)
+	logged := captureLog(t)
 
 	// Cancelled, not timed out: what net/http does when the client goes away.
-	// Late enough that the backoff read and the lookups are done, so it lands
-	// in the permit wait.
 	ctx, cancel := context.WithCancel(ipContext("198.51.100.202"))
 	defer cancel()
-	time.AfterFunc(200*time.Millisecond, cancel)
-	resp := h.login(ctx, t, "a@example.com", "wrong password entirely")
+	answer := h.loginInBackground(ctx, "a@example.com", "wrong password entirely")
+	waitForArgonQueue(t, 1)
+	cancel()
+	resp := <-answer
 
 	if _, is := resp.(api.LocalLogin500JSONResponse); !is {
 		t.Fatalf("response = %T, want 500", resp)
@@ -390,12 +442,43 @@ func TestLoginLogsAClientLeavingWhileQueuedAsAWarning(t *testing.T) {
 		strings.Contains(out, "level=ERROR") {
 		t.Errorf("want one Warn for the client leaving and no Error; logged:\n%s", out)
 	}
-	var rows int
-	if err := h.tdb.Pool.QueryRow(context.Background(),
-		`SELECT count(*) FROM login_attempts`).Scan(&rows); err != nil {
-		t.Fatalf("query: %v", err)
-	}
-	if rows != 0 {
+	if rows := h.loginAttemptRows(t); rows != 0 {
 		t.Errorf("%d login_attempts rows after a login that never checked its password, want 0", rows)
+	}
+}
+
+// A burst on one account passes the first backoff read before any of it has
+// failed, and queues. Read only there, the backoff never applied: every
+// queued guess was checked. Read again under the permit, the first failures
+// throttle the rest, so at most the cap's worth are checked.
+func TestLoginBurstOnOneAccountIsThrottledUnderThePermit(t *testing.T) {
+	h := newHarness(t, time.Now)
+	h.seedCredentialedUser(t, "a@example.com")
+
+	release := auth.HoldArgonPermitsForTest()
+	defer release()
+
+	const n = 20
+	answers := make([]<-chan api.LocalLoginResponseObject, n)
+	for i := range n {
+		answers[i] = h.loginInBackground(ipContext("198.51.100.203"), "a@example.com", "wrong password entirely")
+	}
+	// Every one past the first read, so none of them saw a failure there.
+	waitForArgonQueue(t, n)
+	release()
+
+	var checked, throttled int
+	for i, answer := range answers {
+		switch resp := (<-answer).(type) {
+		case api.LocalLogin401JSONResponse:
+			checked++
+		case api.LocalLogin429JSONResponse:
+			throttled++
+		default:
+			t.Errorf("request %d = %T, want 401 or 429", i, resp)
+		}
+	}
+	if limit := int(auth.ArgonConcurrencyCapForTest()); checked < 1 || checked > limit {
+		t.Errorf("%d of %d queued guesses were checked, want 1 to %d; %d throttled", checked, n, limit, throttled)
 	}
 }

@@ -1,6 +1,9 @@
 package auth
 
-import "context"
+import (
+	"context"
+	"sync"
+)
 
 // Hooks for the auth_test integration tests. A _test.go file, so they are
 // compiled into this package's test binary and never into the server.
@@ -32,15 +35,22 @@ func ResetArgonPeakInFlightForTest() {
 	argonPeakInFlight.Store(0)
 }
 
+// ArgonWaitingForTest reports how many callers are queued for a permit.
+func ArgonWaitingForTest() int32 {
+	return argonWaiting.Load()
+}
+
 // HoldArgonPermitsForTest takes every permit, so the next Argon2 call queues
-// until its context ends, and returns the func that gives them back.
+// until its context ends, and returns the func that gives them back. That
+// func is safe to call more than once, so a test can release mid-way and still
+// defer it.
 func HoldArgonPermitsForTest() (release func()) {
 	for range argonConcurrencyCap {
 		argonSem <- struct{}{}
 	}
-	return func() {
+	return sync.OnceFunc(func() {
 		for range argonConcurrencyCap {
 			<-argonSem
 		}
-	}
+	})
 }

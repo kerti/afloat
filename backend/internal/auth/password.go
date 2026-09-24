@@ -43,10 +43,13 @@ const argonConcurrencyCap = 4
 var argonSem = make(chan struct{}, argonConcurrencyCap)
 
 // Exact, updated as each call takes a permit, so a test asserts the bound
-// itself rather than inferring it from memory or wall-clock time.
+// itself rather than inferring it from memory or wall-clock time. argonWaiting
+// counts callers queued for one, so a test can act once a caller is queued
+// rather than after a guessed delay.
 var (
 	argonInFlight     atomic.Int32
 	argonPeakInFlight atomic.Int32
+	argonWaiting      atomic.Int32
 )
 
 // acquireArgonPermit waits for a permit until ctx ends. The request's own
@@ -58,6 +61,8 @@ func acquireArgonPermit(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	argonWaiting.Add(1)
+	defer argonWaiting.Add(-1)
 	select {
 	case argonSem <- struct{}{}:
 		n := argonInFlight.Add(1)
@@ -134,17 +139,24 @@ func HashPassword(ctx context.Context, password string) (string, error) {
 // queued for an Argon2 permit (#33): the password was never checked, so the
 // caller must not treat it as a wrong one.
 func VerifyPassword(ctx context.Context, password, phc string) (bool, error) {
-	params, salt, want, err := parsePHC(phc)
-	if err != nil {
-		return false, nil
-	}
 	if err := acquireArgonPermit(ctx); err != nil {
 		return false, err
 	}
 	defer releaseArgonPermit()
+	return verifyHoldingPermit(password, phc), nil
+}
+
+// verifyHoldingPermit is VerifyPassword for a caller that already holds an
+// Argon2 permit, and must go on holding it past the hash: login keeps its
+// permit until a failure is recorded (login.go). Never call it without one.
+func verifyHoldingPermit(password, phc string) bool {
+	params, salt, want, err := parsePHC(phc)
+	if err != nil {
+		return false
+	}
 	got := argon2.IDKey([]byte(password), salt, params.time, params.memory, params.threads, uint32(len(want)))
 	// Constant time: a byte-wise comparison leaks how much of the hash matched.
-	return subtle.ConstantTimeCompare(got, want) == 1, nil
+	return subtle.ConstantTimeCompare(got, want) == 1
 }
 
 type argonParams struct {

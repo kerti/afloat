@@ -40,24 +40,15 @@ func (h *Handlers) LocalLogin(ctx context.Context, request api.LocalLoginRequest
 
 	keys := backoffKeys(ctx, email)
 
-	wait, err := h.backoffRemaining(ctx, keys)
-	if err != nil {
-		slog.Error("login: read backoff", "err", err)
-		return internalError[api.LocalLoginResponseObject]()
-	}
-	if wait > 0 {
-		// Rounded up: a Retry-After of 0 invites an immediate retry that is
-		// still inside the window.
-		retryAfter := int(wait.Seconds()) + 1
-		return api.LocalLogin429JSONResponse{
-			TooManyRequestsJSONResponse: api.TooManyRequestsJSONResponse{
-				Body:    api.Error{Code: api.TOOMANYATTEMPTS},
-				Headers: api.TooManyRequestsResponseHeaders{RetryAfter: &retryAfter},
-			},
-		}, nil
+	// Read once before queueing, so a throttled caller is answered without
+	// waiting for a permit. checkPassword reads it again under the permit.
+	if refused := h.throttled(ctx, keys); refused != nil {
+		return refused, nil
 	}
 
-	user, ok, err := h.verify(ctx, email, password)
+	user, phc := h.resolve(ctx, email)
+
+	refused, ok, err := h.checkPassword(ctx, keys, password, phc)
 	if err != nil {
 		// ctx ended while queued for an Argon2 permit (#33): the handler
 		// timeout passed, or the client went away. The password was never
@@ -67,12 +58,14 @@ func (h *Handlers) LocalLogin(ctx context.Context, request api.LocalLoginRequest
 		if errors.Is(err, context.Canceled) {
 			slog.Warn("login: client left while waiting for an argon2 permit", "err", err)
 		} else {
-			slog.Error("login: verify password", "err", err)
+			slog.Error("login: wait for argon2 permit", "err", err)
 		}
 		return internalError[api.LocalLoginResponseObject]()
 	}
+	if refused != nil {
+		return refused, nil
+	}
 	if !ok {
-		h.recordFailure(ctx, keys)
 		return invalidCredentials()
 	}
 
@@ -96,19 +89,39 @@ func (h *Handlers) LocalLogin(ctx context.Context, request api.LocalLoginRequest
 	}, nil
 }
 
-// verify resolves the credential and checks the password, in constant work
-// regardless of which step fails. An error is VerifyPassword's: no Argon2
-// permit before ctx ended, so no password was checked.
-func (h *Handlers) verify(ctx context.Context, email, password string) (db.User, bool, error) {
+// throttled answers 429 while a backoff key is inside its window, or 500 if
+// the backoff cannot be read; nil lets the login go ahead.
+func (h *Handlers) throttled(ctx context.Context, keys []string) api.LocalLoginResponseObject {
+	wait, err := h.backoffRemaining(ctx, keys)
+	if err != nil {
+		slog.Error("login: read backoff", "err", err)
+		resp, _ := internalError[api.LocalLoginResponseObject]()
+		return resp
+	}
+	if wait <= 0 {
+		return nil
+	}
+	// Rounded up: a Retry-After of 0 invites an immediate retry that is still
+	// inside the window.
+	retryAfter := int(wait.Seconds()) + 1
+	return api.LocalLogin429JSONResponse{
+		TooManyRequestsJSONResponse: api.TooManyRequestsJSONResponse{
+			Body:    api.Error{Code: api.TOOMANYATTEMPTS},
+			Headers: api.TooManyRequestsResponseHeaders{RetryAfter: &retryAfter},
+		},
+	}
+}
+
+// resolve finds the hash to check the password against, and the User it
+// belongs to. With no credential it answers the dummy hash and no User, so an
+// unknown or dormant address costs the same work as a real one.
+func (h *Handlers) resolve(ctx context.Context, email string) (db.User, string) {
 	user, err := h.q.GetUserByEmail(ctx, email)
 	if err != nil {
 		if !errors.Is(err, pgx.ErrNoRows) {
 			slog.Error("login: look up user", "err", err)
 		}
-		// Pay the cost anyway: an unknown address must not return faster than a
-		// known one.
-		_, err := VerifyPassword(ctx, password, dummyHash)
-		return db.User{}, false, err
+		return db.User{}, dummyHash
 	}
 
 	cred, err := h.q.GetCredentialByUserID(ctx, user.ID)
@@ -117,18 +130,33 @@ func (h *Handlers) verify(ctx context.Context, email, password string) (db.User,
 			slog.Error("login: look up credential", "err", err)
 		}
 		// A dormant User — invited, never set a password. Same cost, same answer.
-		_, err := VerifyPassword(ctx, password, dummyHash)
-		return db.User{}, false, err
+		return db.User{}, dummyHash
 	}
+	return user, cred.PasswordHash
+}
 
-	ok, err := VerifyPassword(ctx, password, cred.PasswordHash)
-	if err != nil {
-		return db.User{}, false, err
+// checkPassword holds one Argon2 permit from a second backoff read until any
+// failure is recorded. The first read, before the queue, sees none of the
+// failures of the logins queued alongside it: a burst on one account all
+// passed it, all queued, and all had their passwords checked, the backoff
+// never applying (#33). Read under the permit instead, and written before the
+// permit passes on, one caller's failure throttles the next. At most the cap's
+// worth of callers are checked at once, so a burst gets that many guesses, not
+// the whole queue. An error means no permit came free before ctx ended.
+func (h *Handlers) checkPassword(ctx context.Context, keys []string, password, phc string) (refused api.LocalLoginResponseObject, ok bool, err error) {
+	if err := acquireArgonPermit(ctx); err != nil {
+		return nil, false, err
 	}
-	if !ok {
-		return db.User{}, false, nil
+	defer releaseArgonPermit()
+
+	if refused := h.throttled(ctx, keys); refused != nil {
+		return refused, false, nil
 	}
-	return user, true, nil
+	if !verifyHoldingPermit(password, phc) {
+		h.recordFailure(ctx, keys)
+		return nil, false, nil
+	}
+	return nil, true, nil
 }
 
 // backoffRemaining reads the remaining backoff as seconds the database itself

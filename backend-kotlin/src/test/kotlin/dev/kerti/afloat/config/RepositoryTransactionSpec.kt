@@ -22,7 +22,7 @@ class RepositoryTransactionSpec : DatabaseSpec() {
             val authRepositories = repositories.map {
                 repositories.getRequiredRepositoryInformation(it).repositoryInterface
             }.filter {
-                it.packageName == "dev.kerti.afloat.auth.data"
+                it.packageName.startsWith("dev.kerti.afloat")
             }
 
             authRepositories.shouldNotBeEmpty()

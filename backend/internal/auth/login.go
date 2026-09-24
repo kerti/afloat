@@ -62,8 +62,13 @@ func (h *Handlers) LocalLogin(ctx context.Context, request api.LocalLoginRequest
 		// ctx ended while queued for an Argon2 permit (#33): the handler
 		// timeout passed, or the client went away. The password was never
 		// checked, so this is neither INVALID_CREDENTIALS nor a failure for the
-		// backoff to count.
-		slog.Error("login: verify password", "err", err)
+		// backoff to count. A client leaving is no fault of the server's, and
+		// a stream of dropped connections must not become a stream of errors.
+		if errors.Is(err, context.Canceled) {
+			slog.Warn("login: client left while waiting for an argon2 permit", "err", err)
+		} else {
+			slog.Error("login: verify password", "err", err)
+		}
 		return internalError[api.LocalLoginResponseObject]()
 	}
 	if !ok {

@@ -73,39 +73,6 @@ func releaseArgonSlot() {
 	<-argonSem
 }
 
-// ArgonConcurrencyCapForTest reports the fixed cap. Exported for tests in
-// other packages; nothing in production calls it.
-func ArgonConcurrencyCapForTest() int32 {
-	return argonConcurrencyCap
-}
-
-// ArgonPeakInFlightForTest reports the most Argon2 calls that have held a
-// permit at once since the last reset. Exported for tests in other packages;
-// nothing in production calls it.
-func ArgonPeakInFlightForTest() int32 {
-	return argonPeakInFlight.Load()
-}
-
-// ResetArgonPeakInFlightForTest zeroes ArgonPeakInFlightForTest. Exported for
-// tests in other packages; nothing in production calls it.
-func ResetArgonPeakInFlightForTest() {
-	argonPeakInFlight.Store(0)
-}
-
-// HoldArgonPermitsForTest takes every permit, so the next Argon2 call queues
-// until its context ends, and returns the func that gives them back. Exported
-// for tests in other packages; nothing in production calls it.
-func HoldArgonPermitsForTest() (release func()) {
-	for range argonConcurrencyCap {
-		argonSem <- struct{}{}
-	}
-	return func() {
-		for range argonConcurrencyCap {
-			<-argonSem
-		}
-	}
-}
-
 // A floor and a denylist, no composition rules: forced symbols push people
 // towards predictable substitutions, and length is what actually helps.
 const (

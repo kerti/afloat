@@ -39,13 +39,13 @@ class AuthService(
     // INVALID_CREDENTIALS, the compare is constant work, and an unknown address
     // still pays the hash.
     //
-    // Deliberately NOT @Transactional. The Argon2 verify takes tens of
-    // milliseconds of CPU, and a transaction spanning it pins a pooled
-    // connection for all of that — then recordFailure asks for a second one, so
-    // a burst of bad logins as wide as the pool deadlocks it. Each repository
-    // call is its own short transaction instead, which is also what makes the
-    // "logged, never raised" writes below survivable: one failed statement
-    // cannot abort the ones after it.
+    // Deliberately NOT @Transactional. A transaction spanning the verify pins a
+    // pooled connection for all of it, and the verify includes the wait for an
+    // Argon2 permit (#33), up to HTTP_WRITE_TIMEOUT: a login flood past the cap
+    // would park a connection per queued login and drain the pool for every
+    // endpoint. Each repository call is its own short transaction instead,
+    // which is also what makes the "logged, never raised" writes below
+    // survivable: one failed statement cannot abort the ones after it.
     fun login(email: String, password: String): Issue {
         val normalized = normalizeEmail(email)
         val keys = backoffKeys(normalized)

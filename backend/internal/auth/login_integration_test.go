@@ -486,6 +486,44 @@ func TestLoginHoldingItsPermitRecordsItsFailurePastTheDeadline(t *testing.T) {
 	}
 }
 
+// reportedDeadline reports a deadline but ends only when its parent does, so
+// the deadline can pass while a login is still queued and the login still
+// take its permit after it.
+type reportedDeadline struct {
+	context.Context
+	deadline time.Time
+}
+
+func (c reportedDeadline) Deadline() (time.Time, bool) { return c.deadline, true }
+
+// middleware.Timeout gives every real login a deadline, which none of the
+// tests above carry. Holding its permit, a login gets the handler's budget
+// again, counted from the permit. Here the request's deadline has passed by
+// then: bounded by it, or by no budget at all, the second backoff read fails
+// and the login answers 500.
+func TestLoginHoldingItsPermitGetsTheHandlerBudgetAgain(t *testing.T) {
+	h := newHarness(t, time.Now)
+	h.seedCredentialedUser(t, "a@example.com")
+
+	release := auth.HoldArgonPermitsForTest()
+	defer release()
+
+	// Ample for the read, the hash and two writes under -race on a loaded runner.
+	deadline := time.Now().Add(time.Second)
+	answer := h.loginInBackground(reportedDeadline{ipContext("198.51.100.205"), deadline}, "a@example.com", "wrong password entirely")
+	waitForArgonQueue(t, 1)
+	time.Sleep(time.Until(deadline) + 10*time.Millisecond)
+	release()
+	resp := <-answer
+
+	if _, is := resp.(api.LocalLogin401JSONResponse); !is {
+		t.Fatalf("response = %T, want 401", resp)
+	}
+	if rows := h.loginAttemptRows(t); rows != 2 {
+		t.Errorf("%d login_attempts rows after a checked wrong password, want 2", rows)
+	}
+}
+
 // A burst on one account passes the first backoff read before any of it has
 // failed, and queues. Read only there, the backoff never applied: every
 // queued guess was checked. Read again under the permit, the first failures

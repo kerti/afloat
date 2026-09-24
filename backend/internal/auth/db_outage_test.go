@@ -61,11 +61,11 @@ func (f failingQuerier) GetUserByID(ctx context.Context, id pgtype.UUID) (db.Use
 	return f.Querier.GetUserByID(ctx, id)
 }
 
-// #23: a database outage during either credential lookup is an
+// #23: a database outage during either of resolve's lookups is an
 // infrastructure failure, not a statement about this account's credentials. It
 // must answer 500, and — unlike a real INVALID_CREDENTIALS — must not burn a
 // backoff slot the account did nothing to earn.
-func TestLoginAnswers500OnDatabaseOutageDuringCredentialLookupAndDoesNotRecordFailure(t *testing.T) {
+func TestLoginAnswers500OnDatabaseOutageDuringALookupAndDoesNotRecordFailure(t *testing.T) {
 	for name, fail := range map[string]failingQuerier{
 		"user lookup":       {failGetUserByEmail: true},
 		"credential lookup": {failGetCredentialByUserID: true},
@@ -131,7 +131,7 @@ func TestLoginLogsAClientLeavingDuringALookupAsAWarning(t *testing.T) {
 			if _, is := resp.(api.LocalLogin500JSONResponse); !is {
 				t.Fatalf("response = %T, want 500", resp)
 			}
-			if out := logged.String(); !strings.Contains(out, `level=WARN msg="`+tc.msg+`"`) ||
+			if out := logged.String(); strings.Count(out, `level=WARN msg="`+tc.msg+`"`) != 1 ||
 				strings.Contains(out, "level=ERROR") {
 				t.Errorf("want one Warn for %q and no Error; logged:\n%s", tc.msg, out)
 			}
@@ -163,9 +163,6 @@ func TestSessionMiddlewareLeavesCookieAloneOnDatabaseOutageDuringUserLookup(t *t
 	_, ok, rec := h.resolve(t, cookie.Value)
 	if ok {
 		t.Error("a database outage resolving the User still produced an authenticated request")
-	}
-	if clearsCookie(rec) {
-		t.Error("a database outage cleared the session cookie; only pgx.ErrNoRows may do that")
 	}
 	if len(rec.Result().Cookies()) != 0 {
 		t.Errorf("Set-Cookie header present = %v, want none", rec.Result().Cookies())
@@ -218,7 +215,7 @@ func TestSessionMiddlewareLogsAClientLeavingDuringALookupAsAWarning(t *testing.T
 			if len(rec.Result().Cookies()) != 0 {
 				t.Errorf("Set-Cookie header present = %v, want none", rec.Result().Cookies())
 			}
-			if out := logged.String(); !strings.Contains(out, `level=WARN msg="`+tc.msg+`"`) ||
+			if out := logged.String(); strings.Count(out, `level=WARN msg="`+tc.msg+`"`) != 1 ||
 				strings.Contains(out, "level=ERROR") {
 				t.Errorf("want one Warn for %q and no Error; logged:\n%s", tc.msg, out)
 			}
@@ -277,7 +274,7 @@ func TestGetMeAndLogoutLogAClientLeavingAsAWarning(t *testing.T) {
 			default:
 				t.Fatalf("response = %T, want 500", resp)
 			}
-			if out := logged.String(); !strings.Contains(out, `level=WARN msg="`+tc.msg+`"`) ||
+			if out := logged.String(); strings.Count(out, `level=WARN msg="`+tc.msg+`"`) != 1 ||
 				strings.Contains(out, "level=ERROR") {
 				t.Errorf("want one Warn for %q and no Error; logged:\n%s", tc.msg, out)
 			}

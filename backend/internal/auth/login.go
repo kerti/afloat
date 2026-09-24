@@ -18,9 +18,7 @@ import (
 // response time answers "does this account exist?" regardless of what the
 // status code says. Generated once at startup from a value nobody knows.
 var dummyHash = func() string {
-	// context.Background(): this runs once at process startup, before any
-	// request exists to carry a deadline, and with nothing else contending for
-	// an Argon2 permit yet.
+	// Package init: no request to carry a deadline, nothing yet holding a permit.
 	h, err := HashPassword(context.Background(), "this password matches nothing, by construction")
 	if err != nil {
 		// Only reachable if crypto/rand fails, in which case nothing about this
@@ -61,13 +59,10 @@ func (h *Handlers) LocalLogin(ctx context.Context, request api.LocalLoginRequest
 
 	user, ok, err := h.verify(ctx, email, password)
 	if err != nil {
-		// Only reachable if ctx ended while queued for an Argon2 permit (#33):
-		// the password was never actually checked, so this must not be scored
-		// as a wrong password (backoff) or answered as INVALID_CREDENTIALS —
-		// neither is true. ctx's own deadline (chi's Timeout middleware) is
-		// what ended the wait, so this is the same "ran out of time" outcome
-		// any other slow step on this path already answers with, not a new
-		// distinct timeout status.
+		// ctx ended while queued for an Argon2 permit (#33): the handler
+		// timeout passed, or the client went away. The password was never
+		// checked, so this is neither INVALID_CREDENTIALS nor a failure for the
+		// backoff to count.
 		slog.Error("login: verify password", "err", err)
 		return internalError[api.LocalLoginResponseObject]()
 	}
@@ -97,14 +92,8 @@ func (h *Handlers) LocalLogin(ctx context.Context, request api.LocalLoginRequest
 }
 
 // verify resolves the credential and checks the password, in constant work
-// regardless of which step fails.
-//
-// A non-nil error means VerifyPassword never ran the hash at all — it timed
-// out queued for an Argon2 permit (#33) — which the caller must not treat as
-// a wrong password: that would both score a backoff failure for a request
-// that never checked a password, and would leak, in that request's timing
-// alone, that the server was under Argon2 load rather than that the
-// credential was wrong.
+// regardless of which step fails. An error is VerifyPassword's: no Argon2
+// permit before ctx ended, so no password was checked.
 func (h *Handlers) verify(ctx context.Context, email, password string) (db.User, bool, error) {
 	user, err := h.q.GetUserByEmail(ctx, email)
 	if err != nil {
@@ -113,10 +102,8 @@ func (h *Handlers) verify(ctx context.Context, email, password string) (db.User,
 		}
 		// Pay the cost anyway: an unknown address must not return faster than a
 		// known one.
-		if _, err := VerifyPassword(ctx, password, dummyHash); err != nil {
-			return db.User{}, false, err
-		}
-		return db.User{}, false, nil
+		_, err := VerifyPassword(ctx, password, dummyHash)
+		return db.User{}, false, err
 	}
 
 	cred, err := h.q.GetCredentialByUserID(ctx, user.ID)
@@ -125,10 +112,8 @@ func (h *Handlers) verify(ctx context.Context, email, password string) (db.User,
 			slog.Error("login: look up credential", "err", err)
 		}
 		// A dormant User — invited, never set a password. Same cost, same answer.
-		if _, err := VerifyPassword(ctx, password, dummyHash); err != nil {
-			return db.User{}, false, err
-		}
-		return db.User{}, false, nil
+		_, err := VerifyPassword(ctx, password, dummyHash)
+		return db.User{}, false, err
 	}
 
 	ok, err := VerifyPassword(ctx, password, cred.PasswordHash)

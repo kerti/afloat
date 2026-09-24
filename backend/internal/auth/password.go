@@ -30,40 +30,28 @@ const (
 	argonAlgo      = "argon2id"
 )
 
-// argonConcurrencyCap bounds how many Argon2id hashes may run at once,
-// process-wide (#33, BOOTSTRAP.md §5.1). Each hash holds argonMemoryKiB
-// live for its duration, and that memory is allocated per call, not once —
-// so with no bound, an unauthenticated caller sending concurrent logins
-// chooses the process's peak memory. At this cap: 4 × 19 MiB ≈ 76 MiB.
-//
-// Fixed by ruling, not an operator knob (BOOTSTRAP.md §12 stays untouched):
-// retuning it means changing this constant, which keeps the memory ceiling
-// arithmetic in one place next to the parameters it depends on rather than
-// letting a deployment drift it silently.
+// argonConcurrencyCap bounds how many Argon2id hashes run at once, process-wide
+// (#33, BOOTSTRAP.md §5.1). Each holds argonMemoryKiB for its duration,
+// allocated per call, so without a bound an unauthenticated caller chooses the
+// process's peak memory. At this cap, 4 × 19 MiB ≈ 76 MiB. A constant by
+// ruling, not an operator knob: retuning Argon2 must be checked against it.
 const argonConcurrencyCap = 4
 
-// argonSem is the semaphore every Argon2id call — real or dummy-cost-equalizer
-// — must hold for its duration. A request beyond the cap queues for a permit
-// rather than failing fast: an immediate 429 here would leak that the server
-// is busy, which the login path's constant-work design treats as worth
-// hiding, and queueing is the shape that preserves it (#33 ruling).
+// Every Argon2id call holds a permit, the dummy hash included. A caller beyond
+// the cap queues rather than answering 429, which would leak that the server
+// is busy.
 var argonSem = make(chan struct{}, argonConcurrencyCap)
 
-// argonInFlight counts hashes currently holding a permit, and
-// argonPeakInFlight is the highest value it has ever reached. Both exist so a
-// test can assert the concurrency bound directly — the actual peak, tracked
-// exactly as it happens — rather than infer it from memory or wall-clock
-// timing, either of which is what makes that kind of test flaky by machine.
+// Exact, updated as each call takes a permit, so a test asserts the bound
+// itself rather than inferring it from memory or wall-clock time.
 var (
 	argonInFlight     atomic.Int32
 	argonPeakInFlight atomic.Int32
 )
 
-// acquireArgonSlot blocks until a permit is free or ctx is done, whichever
-// comes first. Callers pass the incoming request's own context so a queued
-// wait is bounded by the same deadline the rest of that request already
-// answers to (chi's Timeout middleware, 30s) — deliberately not a new,
-// separate timeout invented for this one step.
+// acquireArgonSlot waits for a permit until ctx ends. The request's own
+// context bounds the wait: its deadline is the handler timeout
+// (HTTP_WRITE_TIMEOUT), not a second timeout for this one step.
 func acquireArgonSlot(ctx context.Context) error {
 	select {
 	case argonSem <- struct{}{}:
@@ -86,25 +74,36 @@ func releaseArgonSlot() {
 }
 
 // ArgonConcurrencyCapForTest reports the fixed cap. Exported for tests in
-// other packages; nothing in production calls it, and there is deliberately
-// no setter — the cap is a fixed constant (#33 ruling), not something even a
-// test may change.
+// other packages; nothing in production calls it.
 func ArgonConcurrencyCapForTest() int32 {
 	return argonConcurrencyCap
 }
 
-// ArgonPeakInFlightForTest reports the highest number of Argon2 calls ever
-// concurrently holding a permit since the last reset. Exported for tests in
-// other packages; nothing in production calls it.
+// ArgonPeakInFlightForTest reports the most Argon2 calls that have held a
+// permit at once since the last reset. Exported for tests in other packages;
+// nothing in production calls it.
 func ArgonPeakInFlightForTest() int32 {
 	return argonPeakInFlight.Load()
 }
 
-// ResetArgonPeakInFlightForTest zeroes the value ArgonPeakInFlightForTest
-// reports, so a test measures only the load it generates itself. Exported for
+// ResetArgonPeakInFlightForTest zeroes ArgonPeakInFlightForTest. Exported for
 // tests in other packages; nothing in production calls it.
 func ResetArgonPeakInFlightForTest() {
 	argonPeakInFlight.Store(0)
+}
+
+// HoldArgonPermitsForTest takes every permit, so the next Argon2 call queues
+// until its context ends, and returns the func that gives them back. Exported
+// for tests in other packages; nothing in production calls it.
+func HoldArgonPermitsForTest() (release func()) {
+	for range argonConcurrencyCap {
+		argonSem <- struct{}{}
+	}
+	return func() {
+		for range argonConcurrencyCap {
+			<-argonSem
+		}
+	}
 }
 
 // A floor and a denylist, no composition rules: forced symbols push people
@@ -139,10 +138,7 @@ func ValidatePasswordPolicy(password string) error {
 }
 
 // HashPassword returns a PHC string: $argon2id$v=19$m=...,t=...,p=...$salt$hash.
-//
-// Waits for an Argon2 permit under ctx first (#33) — the same bound
-// VerifyPassword observes, so a future caller on the hot path (e.g.
-// registration) cannot add to peak concurrent Argon2 work outside the cap.
+// It waits for an Argon2 permit under ctx, like VerifyPassword.
 func HashPassword(ctx context.Context, password string) (string, error) {
 	salt := make([]byte, argonSaltLen)
 	if _, err := rand.Read(salt); err != nil {
@@ -162,9 +158,9 @@ func HashPassword(ctx context.Context, password string) (string, error) {
 //
 // Returns (false, nil) rather than an error for a hash it cannot parse: a
 // corrupt row must fail the login, not crash the handler, and the caller has
-// no different action to take either way. A non-nil error means the call
-// never ran the hash at all — ctx ended while queued for an Argon2 permit —
-// which the caller must not treat the same as a wrong password (#33).
+// no different action to take either way. An error means ctx ended while
+// queued for an Argon2 permit (#33): the password was never checked, so the
+// caller must not treat it as a wrong one.
 func VerifyPassword(ctx context.Context, password, phc string) (bool, error) {
 	params, salt, want, err := parsePHC(phc)
 	if err != nil {

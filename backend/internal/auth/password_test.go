@@ -2,9 +2,11 @@ package auth
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"golang.org/x/crypto/argon2"
 )
@@ -129,25 +131,18 @@ func TestPasswordLengthIsCountedInRunes(t *testing.T) {
 	}
 }
 
-// The product bug from #33: unbounded concurrent Argon2 calls let an
-// unauthenticated caller choose the process's peak memory. This proves the
-// bound directly — argonPeakInFlight is updated exactly at the moment each
-// call actually holds a permit (password.go), so the assertion below is the
-// real peak, not an inference from memory or wall-clock timing, which is what
-// made the equivalent Kotlin test flaky by machine (issue #33).
+// #33: every Argon2 hash holds its 19 MiB for its duration, so the number in
+// flight is the peak memory. Asserted on the counter taken with each permit,
+// not on memory or elapsed time. Half the calls take the dummy-hash path an
+// unknown address takes, which must share the one cap.
 func TestVerifyPasswordBoundsConcurrentArgon2Calls(t *testing.T) {
 	phc, err := HashPassword(context.Background(), "correct horse battery staple")
 	if err != nil {
 		t.Fatalf("HashPassword: %v", err)
 	}
-
-	// Isolate this test's peak from whatever earlier tests in this file left
-	// behind — those run sequentially, so the true concurrent peak they could
-	// have left is 1, but resetting keeps the assertion honest regardless.
 	argonPeakInFlight.Store(0)
 
-	const n = 20 // n >> argonConcurrencyCap, so the cap is what limits it, not n itself.
-
+	const n = 20
 	var wg sync.WaitGroup
 	results := make([]struct {
 		ok  bool
@@ -157,41 +152,45 @@ func TestVerifyPasswordBoundsConcurrentArgon2Calls(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			// A mix: even indices check the real hash, odd ones the dummy-cost
-			// path an unknown account takes — both must share the one cap.
 			password, target := "correct horse battery staple", phc
 			if i%2 == 1 {
 				password, target = "wrong password entirely", dummyHash
 			}
-			ok, err := VerifyPassword(context.Background(), password, target)
-			results[i].ok, results[i].err = ok, err
+			results[i].ok, results[i].err = VerifyPassword(context.Background(), password, target)
 		}(i)
 	}
 	wg.Wait()
 
 	for i, r := range results {
 		if r.err != nil {
-			t.Errorf("call %d: unexpected error (resource exhaustion, not a timeout): %v", i, r.err)
+			t.Errorf("call %d: unexpected error: %v", i, r.err)
+		}
+		if want := i%2 == 0; r.ok != want {
+			t.Errorf("call %d: verified = %v, want %v", i, r.ok, want)
 		}
 	}
-	for i := 0; i < n; i += 2 {
-		if !results[i].ok {
-			t.Errorf("call %d: correct password did not verify", i)
-		}
-	}
-	for i := 1; i < n; i += 2 {
-		if results[i].ok {
-			t.Errorf("call %d: wrong password verified", i)
-		}
-	}
-
-	if got := argonPeakInFlight.Load(); got > argonConcurrencyCap {
-		t.Errorf("peak concurrent Argon2 calls = %d, want <= %d", got, argonConcurrencyCap)
-	}
+	// Exactly the cap: above it the bound failed, below it the burst never
+	// contended and proved nothing.
 	if got := argonPeakInFlight.Load(); got != argonConcurrencyCap {
-		// Not a hard requirement of the cap itself, but if 20 calls fired at
-		// once never even reached the cap, the concurrency in this test setup
-		// is not real and the assertion above proves nothing.
-		t.Errorf("peak concurrent Argon2 calls = %d, want exactly %d (20 calls should have saturated the cap)", got, argonConcurrencyCap)
+		t.Errorf("peak concurrent Argon2 calls = %d, want %d", got, argonConcurrencyCap)
+	}
+}
+
+// Queued past ctx, no password was checked: an error, never a false the
+// caller would score as a wrong password. Every permit is held first, so the
+// select in acquireArgonSlot has only ctx.Done() to take; with a permit free,
+// it would pick at random.
+func TestArgonCallsReturnTheContextErrorWhenNoPermitComesFree(t *testing.T) {
+	release := HoldArgonPermitsForTest()
+	defer release()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	if ok, err := VerifyPassword(ctx, "wrong password entirely", dummyHash); !errors.Is(err, context.DeadlineExceeded) || ok {
+		t.Errorf("VerifyPassword = (%v, %v), want (false, context.DeadlineExceeded)", ok, err)
+	}
+	if phc, err := HashPassword(ctx, "correct horse battery staple"); !errors.Is(err, context.DeadlineExceeded) || phc != "" {
+		t.Errorf("HashPassword = (%q, %v), want (\"\", context.DeadlineExceeded)", phc, err)
 	}
 }

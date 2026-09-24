@@ -270,10 +270,14 @@ func TestBackoffAppliesPerEmailAcrossAddresses(t *testing.T) {
 // in flight is exactly the cap.
 func TestLoginConcurrencyBoundsArgon2AndAnswersEveryRequest(t *testing.T) {
 	h := newHarness(t, time.Now)
-	h.seedCredentialedUser(t, "known@example.com")
+	const n = 20
+	// One account per request: the first failure on a shared address sets its
+	// backoff, and any request reading it after that would 429 instead.
+	for i := 0; i < n; i += 2 {
+		h.seedCredentialedUser(t, fmt.Sprintf("known-%d@example.com", i))
+	}
 	auth.ResetArgonPeakInFlightForTest()
 
-	const n = 20
 	type result struct {
 		resp api.LocalLoginResponseObject
 		err  error
@@ -288,7 +292,7 @@ func TestLoginConcurrencyBoundsArgon2AndAnswersEveryRequest(t *testing.T) {
 			// A fresh IP each, or the per-IP backoff would 429 the second
 			// arrival and mask what this checks.
 			ip := fmt.Sprintf("198.51.100.%d", 150+i)
-			email := "known@example.com"
+			email := fmt.Sprintf("known-%d@example.com", i)
 			if i%2 == 1 {
 				email = fmt.Sprintf("nobody-%d@example.com", i)
 			}

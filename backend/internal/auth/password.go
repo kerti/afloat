@@ -49,10 +49,10 @@ var (
 	argonPeakInFlight atomic.Int32
 )
 
-// acquireArgonSlot waits for a permit until ctx ends. The request's own
+// acquireArgonPermit waits for a permit until ctx ends. The request's own
 // context bounds the wait: its deadline is the handler timeout
 // (HTTP_WRITE_TIMEOUT), not a second timeout for this one step.
-func acquireArgonSlot(ctx context.Context) error {
+func acquireArgonPermit(ctx context.Context) error {
 	select {
 	case argonSem <- struct{}{}:
 		n := argonInFlight.Add(1)
@@ -68,7 +68,7 @@ func acquireArgonSlot(ctx context.Context) error {
 	}
 }
 
-func releaseArgonSlot() {
+func releaseArgonPermit() {
 	argonInFlight.Add(-1)
 	<-argonSem
 }
@@ -111,10 +111,10 @@ func HashPassword(ctx context.Context, password string) (string, error) {
 	if _, err := rand.Read(salt); err != nil {
 		return "", fmt.Errorf("generate salt: %w", err)
 	}
-	if err := acquireArgonSlot(ctx); err != nil {
-		return "", fmt.Errorf("wait for argon2 slot: %w", err)
+	if err := acquireArgonPermit(ctx); err != nil {
+		return "", fmt.Errorf("wait for argon2 permit: %w", err)
 	}
-	defer releaseArgonSlot()
+	defer releaseArgonPermit()
 	sum := argon2.IDKey([]byte(password), salt, argonTime, argonMemoryKiB, argonThreads, argonKeyLen)
 	return buildPHC(argonMemoryKiB, argonTime, argonThreads, salt, sum), nil
 }
@@ -133,10 +133,10 @@ func VerifyPassword(ctx context.Context, password, phc string) (bool, error) {
 	if err != nil {
 		return false, nil
 	}
-	if err := acquireArgonSlot(ctx); err != nil {
+	if err := acquireArgonPermit(ctx); err != nil {
 		return false, err
 	}
-	defer releaseArgonSlot()
+	defer releaseArgonPermit()
 	got := argon2.IDKey([]byte(password), salt, params.time, params.memory, params.threads, uint32(len(want)))
 	// Constant time: a byte-wise comparison leaks how much of the hash matched.
 	return subtle.ConstantTimeCompare(got, want) == 1, nil

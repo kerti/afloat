@@ -178,7 +178,7 @@ func TestVerifyPasswordBoundsConcurrentArgon2Calls(t *testing.T) {
 
 // Queued past ctx, no password was checked: an error, never a false the
 // caller would score as a wrong password. Every permit is held first, so the
-// select in acquireArgonSlot has only ctx.Done() to take; with a permit free,
+// select in acquireArgonPermit has only ctx.Done() to take; with a permit free,
 // it would pick at random.
 func TestArgonCallsReturnTheContextErrorWhenNoPermitComesFree(t *testing.T) {
 	release := HoldArgonPermitsForTest()

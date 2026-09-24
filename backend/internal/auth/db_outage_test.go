@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/kerti/afloat/backend/internal/api"
+	"github.com/kerti/afloat/backend/internal/auth"
 	"github.com/kerti/afloat/backend/internal/db"
 )
 
@@ -216,6 +217,65 @@ func TestSessionMiddlewareLogsAClientLeavingDuringALookupAsAWarning(t *testing.T
 			}
 			if len(rec.Result().Cookies()) != 0 {
 				t.Errorf("Set-Cookie header present = %v, want none", rec.Result().Cookies())
+			}
+			if out := logged.String(); !strings.Contains(out, `level=WARN msg="`+tc.msg+`"`) ||
+				strings.Contains(out, "level=ERROR") {
+				t.Errorf("want one Warn for %q and no Error; logged:\n%s", tc.msg, out)
+			}
+		})
+	}
+}
+
+// GetMe is the client's session probe on every load, so a client that leaves
+// mid-request is as common there as in SessionMiddleware: Warn, not Error, on
+// GetMe's household lookup and on Logout's delete. Both still answer 500.
+func TestGetMeAndLogoutLogAClientLeavingAsAWarning(t *testing.T) {
+	gone := func() context.Context {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		return ctx
+	}
+
+	for name, tc := range map[string]struct {
+		call func(h harness, user db.User, token string) (any, error)
+		msg  string
+	}{
+		"me": {
+			call: func(h harness, user db.User, _ string) (any, error) {
+				return h.auth.GetMe(auth.WithUser(gone(), user), api.GetMeRequestObject{})
+			},
+			msg: "me: look up household",
+		},
+		"logout": {
+			call: func(h harness, _ db.User, token string) (any, error) {
+				return h.auth.Logout(auth.ContextForTest(gone(), "198.51.100.52", "", token), api.LogoutRequestObject{})
+			},
+			msg: "logout: delete session",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newHarness(t, time.Now)
+			householdID := h.tdb.CreateHousehold(t, "Test Household")
+			userID := h.tdb.CreateUser(t, householdID, "a@example.com", "A")
+			user, err := h.tdb.Queries.GetUserByID(context.Background(), userID)
+			if err != nil {
+				t.Fatalf("GetUserByID: %v", err)
+			}
+			cookie, err := h.auth.IssueSession(context.Background(), userID, "")
+			if err != nil {
+				t.Fatalf("IssueSession: %v", err)
+			}
+			logged := captureLog(t)
+
+			resp, err := tc.call(h, user, cookie.Value)
+			if err != nil {
+				t.Fatalf("call: %v", err)
+			}
+
+			switch resp.(type) {
+			case api.GetMe500JSONResponse, api.Logout500JSONResponse:
+			default:
+				t.Fatalf("response = %T, want 500", resp)
 			}
 			if out := logged.String(); !strings.Contains(out, `level=WARN msg="`+tc.msg+`"`) ||
 				strings.Contains(out, "level=ERROR") {

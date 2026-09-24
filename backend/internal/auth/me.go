@@ -31,7 +31,7 @@ func (h *Handlers) GetMe(ctx context.Context, _ api.GetMeRequestObject) (api.Get
 			// A User whose Household is gone cannot be served coherently.
 			slog.Error("me: household missing for user", "household_id", user.HouseholdID)
 		} else {
-			slog.Error("me: look up household", "err", err)
+			logQueryError("me: look up household", err)
 		}
 		return internalError[api.GetMeResponseObject]()
 	}
@@ -48,7 +48,7 @@ func (h *Handlers) Logout(ctx context.Context, _ api.LogoutRequestObject) (api.L
 	// exempt from the soft-delete rule (BOOTSTRAP.md §4).
 	if token := sessionTokenFrom(ctx); token != "" {
 		if err := h.q.DeleteSession(ctx, HashToken(token)); err != nil {
-			slog.Error("logout: delete session", "err", err)
+			logQueryError("logout: delete session", err)
 			return internalError[api.LogoutResponseObject]()
 		}
 	}

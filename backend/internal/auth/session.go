@@ -155,8 +155,16 @@ func (h *Handlers) SessionMiddleware(next http.Handler) http.Handler {
 
 		user, err := h.q.GetUserByID(ctx, session.UserID)
 		if err != nil {
-			// The session outlived its User — soft-deleted, most likely.
-			h.ClearSessionCookie(w)
+			if errors.Is(err, pgx.ErrNoRows) {
+				// The session outlived its User — soft-deleted, most likely.
+				h.ClearSessionCookie(w)
+			} else {
+				// An infrastructure failure is not a statement about this
+				// user's session: leave the cookie alone. The request
+				// proceeds unauthenticated, same as the session-lookup branch
+				// above (#27).
+				slog.Error("session user lookup", "err", err)
+			}
 			next.ServeHTTP(w, r)
 			return
 		}

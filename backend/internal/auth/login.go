@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
 	"sync"
@@ -48,7 +49,13 @@ func (h *Handlers) LocalLogin(ctx context.Context, request api.LocalLoginRequest
 		return refused, nil
 	}
 
-	user, phc := h.resolve(ctx, email)
+	user, phc, err := h.resolve(ctx, email)
+	if err != nil {
+		// An outage is not a statement about this account's credentials (#23):
+		// not a 401, and no backoff failure the account did nothing to earn.
+		slog.Error("login: resolve credential", "err", err)
+		return internalError[api.LocalLoginResponseObject]()
+	}
 
 	if err := acquireArgonPermit(ctx); err != nil {
 		// ctx ended while queued for an Argon2 permit (#33): the handler
@@ -133,24 +140,27 @@ func (h *Handlers) throttled(ctx context.Context, keys []string) api.LocalLoginR
 // resolve finds the hash to check the password against, and the User it
 // belongs to. With no credential it answers the dummy hash and no User, so an
 // unknown or dormant address costs the same work as a real one.
-func (h *Handlers) resolve(ctx context.Context, email string) (db.User, string) {
+//
+// Only pgx.ErrNoRows means no credential. Any other error is an outage and is
+// returned, so the caller answers 500 rather than a 401 about this account.
+func (h *Handlers) resolve(ctx context.Context, email string) (db.User, string, error) {
 	user, err := h.q.GetUserByEmail(ctx, email)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return db.User{}, dummyHash, nil
+	}
 	if err != nil {
-		if !errors.Is(err, pgx.ErrNoRows) {
-			slog.Error("login: look up user", "err", err)
-		}
-		return db.User{}, dummyHash
+		return db.User{}, "", fmt.Errorf("look up user: %w", err)
 	}
 
 	cred, err := h.q.GetCredentialByUserID(ctx, user.ID)
-	if err != nil {
-		if !errors.Is(err, pgx.ErrNoRows) {
-			slog.Error("login: look up credential", "err", err)
-		}
+	if errors.Is(err, pgx.ErrNoRows) {
 		// A dormant User — invited, never set a password. Same cost, same answer.
-		return db.User{}, dummyHash
+		return db.User{}, dummyHash, nil
 	}
-	return user, cred.PasswordHash
+	if err != nil {
+		return db.User{}, "", fmt.Errorf("look up credential: %w", err)
+	}
+	return user, cred.PasswordHash, nil
 }
 
 // checkPassword runs under the caller's Argon2 permit, from a second backoff

@@ -6,8 +6,10 @@ import dev.kerti.afloat.testsupport.WebDatabaseSpec
 import dev.kerti.afloat.testsupport.loginBody
 import io.kotest.assertions.withClue
 import io.kotest.matchers.collections.shouldBeEmpty
+import io.kotest.matchers.ints.shouldBeInRange
 import io.kotest.matchers.longs.shouldBeLessThan
 import io.kotest.matchers.shouldBe
+import org.mockito.ArgumentMatchers.any
 import org.mockito.ArgumentMatchers.anyString
 import org.mockito.Mockito.doAnswer
 import org.mockito.Mockito.doThrow
@@ -32,6 +34,11 @@ class LoginConcurrencySpec : WebDatabaseSpec() {
 
     @MockitoSpyBean
     private lateinit var passwordService: PasswordService
+
+    // any() alone is null, which the lambda parameter's non-null check rejects
+    // before Mockito sees the call, so it registers the matcher and hands over
+    // a lambda instead.
+    private fun <T> anyBlock(): () -> T = any<() -> T>() ?: { error("a matcher placeholder, never called") }
 
     private fun login(email: String, password: String, from: String) =
         mockMvc.perform(
@@ -89,7 +96,7 @@ class LoginConcurrencySpec : WebDatabaseSpec() {
             doAnswer { invocation ->
                 inTransaction.set(TransactionSynchronizationManager.isActualTransactionActive())
                 invocation.callRealMethod()
-            }.`when`(passwordService).verify(anyString(), anyString())
+            }.`when`(passwordService).verifyHoldingPermit(anyString(), anyString())
 
             login("user@example.com", "wrong password", "198.51.100.200").response.status shouldBe 401
 
@@ -100,7 +107,7 @@ class LoginConcurrencySpec : WebDatabaseSpec() {
         // not a 401, and not a failure for the backoff to count.
         "answers 500 and records no failure when no hashing permit comes free" {
             AuthFixtures.account(dataSource)
-            doThrow(HashingUnavailableException()).`when`(passwordService).verify(anyString(), anyString())
+            doThrow(HashingUnavailableException()).`when`(passwordService).withPermit(anyBlock<Boolean>())
 
             val result = login("user@example.com", "wrong password", "198.51.100.201")
 
@@ -108,6 +115,54 @@ class LoginConcurrencySpec : WebDatabaseSpec() {
             result.response.contentAsString shouldBe """{"code":"INTERNAL"}"""
             JdbcClient.create(dataSource).sql("SELECT key FROM login_attempts")
                 .query(String::class.java).list().shouldBeEmpty()
+        }
+
+        // A burst on one account passes the first backoff read before any of it
+        // has failed, and queues. Read only there, the backoff never applied:
+        // every queued guess was checked. Read again under the permit, the first
+        // failures throttle the rest, so at most the cap's worth are checked.
+        "checks at most the cap's worth of a burst queued on one account" {
+            AuthFixtures.account(dataSource)
+            val cap = PasswordService.ARGON_CONCURRENCY_CAP
+            val callers = 12
+            val holding = CountDownLatch(cap)
+            val release = CountDownLatch(1)
+            val holders = Executors.newFixedThreadPool(cap)
+            val pool = Executors.newFixedThreadPool(callers)
+            try {
+                repeat(cap) {
+                    holders.submit {
+                        passwordService.withPermit {
+                            holding.countDown()
+                            release.await()
+                        }
+                    }
+                }
+                holding.await(10, TimeUnit.SECONDS) shouldBe true
+
+                val statuses = (1..callers).map {
+                    pool.submit<Int> { login("user@example.com", "wrong password", "198.51.100.203").response.status }
+                }
+                // Every one past the first read, so none of them saw a failure there.
+                val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10)
+                while (passwordService.queuedForPermit != callers) {
+                    check(System.nanoTime() < deadline) {
+                        "${passwordService.queuedForPermit} callers queued for a permit, want $callers"
+                    }
+                    Thread.sleep(1)
+                }
+                release.countDown()
+
+                val results = statuses.map { it.get(60, TimeUnit.SECONDS) }
+                withClue("statuses: $results") {
+                    results.toSet() shouldBe setOf(401, 429)
+                    results.count { it == 401 } shouldBeInRange 1..cap
+                }
+            } finally {
+                release.countDown()
+                holders.shutdown()
+                pool.shutdownNow()
+            }
         }
     }
 }

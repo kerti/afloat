@@ -10,9 +10,11 @@ import java.util.concurrent.Semaphore
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 
-// Thrown when no Argon2 permit came free within the wait. The password was
-// never checked, so this is neither a match nor a mismatch.
-class HashingUnavailableException : RuntimeException("no Argon2 permit within the wait")
+// Thrown when no Argon2 permit came free within the wait, or the wait was
+// interrupted. The password was never checked, so this is neither a match nor
+// a mismatch.
+class HashingUnavailableException(cause: Throwable? = null) :
+    RuntimeException("no Argon2 permit within the wait", cause)
 
 @Component
 class PasswordService internal constructor(private val permitWait: Duration) {
@@ -38,27 +40,42 @@ class PasswordService internal constructor(private val permitWait: Duration) {
 
     internal fun resetPeakInFlight() = peak.set(0)
 
+    // Callers queued for a permit, so a test can act once one is queued rather
+    // than after a guessed delay.
+    internal val queuedForPermit: Int get() = permits.queueLength
+
     fun hash(password: String): String = withPermit { checkNotNull(encoder.encode(password)) }
 
+    fun verify(password: String, phc: String): Boolean = withPermit { verifyHoldingPermit(password, phc) }
+
+    // verify for a caller that already holds a permit, and must go on holding
+    // it past the hash: login keeps its permit until a failure is recorded
+    // (AuthService.login). Never call it without one. The semaphore is not
+    // reentrant, so calling verify here instead would take a second permit.
+    //
     // A corrupt row must fail the login, not crash the handler. The decoder
     // throws whatever the malformation happens to produce - IllegalArgument for
     // a bad number, ArrayIndexOutOfBounds for missing segments,
     // UnsupportedOperation for an algorithm or version it does not implement -
     // so the catch is by outcome, not by exception type. Go's VerifyPassword
     // returns a bool for the same reason.
-    fun verify(password: String, phc: String): Boolean = withPermit {
-        try {
-            encoder.matches(password, phc)
-        } catch (e: RuntimeException) {
-            log.warn("password verify: unusable stored hash", e)
-            false
-        }
+    internal fun verifyHoldingPermit(password: String, phc: String): Boolean = try {
+        encoder.matches(password, phc)
+    } catch (e: RuntimeException) {
+        log.warn("password verify: unusable stored hash", e)
+        false
     }
 
     internal fun <T> withPermit(block: () -> T): T {
-        if (!permits.tryAcquire(permitWait.toNanos(), TimeUnit.NANOSECONDS)) {
-            throw HashingUnavailableException()
+        val acquired = try {
+            permits.tryAcquire(permitWait.toNanos(), TimeUnit.NANOSECONDS)
+        } catch (e: InterruptedException) {
+            // Whoever interrupted still needs to see it, and the caller gets
+            // the permit-wait answer, not the catch-all's.
+            Thread.currentThread().interrupt()
+            throw HashingUnavailableException(e)
         }
+        if (!acquired) throw HashingUnavailableException()
         try {
             peak.accumulateAndGet(inFlight.incrementAndGet(), ::maxOf)
             return block()

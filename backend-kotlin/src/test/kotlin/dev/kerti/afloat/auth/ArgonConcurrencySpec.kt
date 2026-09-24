@@ -69,4 +69,19 @@ class ArgonConcurrencySpec : StringSpec({
             pool.shutdown()
         }
     }
+
+    // An interrupted wait checked no password either, so the caller gets the
+    // permit-wait answer rather than the catch-all's, and the interrupt is
+    // still there for whoever sent it.
+    "throws HashingUnavailableException for an interrupted wait, keeping the interrupt" {
+        val service = PasswordService(Duration.ofSeconds(30))
+        Thread.currentThread().interrupt()
+        try {
+            shouldThrow<HashingUnavailableException> {
+                service.verify("wrong password", PasswordService.dummyHash)
+            }
+        } finally {
+            Thread.interrupted() shouldBe true
+        }
+    }
 })

@@ -38,7 +38,7 @@ class LoginHashingCostSpec : WebDatabaseSpec() {
             // The work happens, and it happens against a hash with the mandated
             // parameters - so an unknown address cannot be told from a real one
             // by how long the answer took.
-            verify(passwordService).verify(AuthFixtures.PASSWORD, PasswordService.dummyHash)
+            verify(passwordService).verifyHoldingPermit(AuthFixtures.PASSWORD, PasswordService.dummyHash)
         }
 
         // The dormant User: invited, owns data, never set a password. Same cost.
@@ -48,7 +48,7 @@ class LoginHashingCostSpec : WebDatabaseSpec() {
             val result = login("dormant@example.com", AuthFixtures.PASSWORD, "198.51.100.21")
 
             result.response.status shouldBe 401
-            verify(passwordService).verify(AuthFixtures.PASSWORD, PasswordService.dummyHash)
+            verify(passwordService).verifyHoldingPermit(AuthFixtures.PASSWORD, PasswordService.dummyHash)
         }
 
         // backoffIsCheckedBeforeCredentialsAreVerified
@@ -66,7 +66,7 @@ class LoginHashingCostSpec : WebDatabaseSpec() {
             result.response.status shouldBe 429
             // A throttled request must be cheap, or the backoff becomes the
             // amplifier it was meant to prevent.
-            verify(passwordService, never()).verify(anyString(), anyString())
+            verify(passwordService, never()).verifyHoldingPermit(anyString(), anyString())
         }
     }
 }

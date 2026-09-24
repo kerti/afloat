@@ -21,10 +21,13 @@ import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
-// The login hashes for tens of milliseconds. A transaction spanning that pins a
-// pooled connection, and recordFailure then wants a second one, so a burst of
-// bad logins as wide as the pool wedged every request for the pool's 30 s
-// connection timeout — from an unauthenticated caller.
+// The login hashes for tens of milliseconds, and a transaction spanning that
+// would pin a pooled connection for all of it. "holds no transaction while it
+// hashes" is the guard against that one: made @Transactional, login still
+// clears the burst in seconds, because recordFailure joins the caller's
+// transaction rather than taking a second connection. The burst guards the
+// rest: bad logins wider than the pool, from an unauthenticated caller, each
+// reaching the hash and the failure write, all answer 401 without stalling.
 class LoginConcurrencySpec : WebDatabaseSpec() {
 
     @MockitoSpyBean
@@ -46,6 +49,9 @@ class LoginConcurrencySpec : WebDatabaseSpec() {
         // on a loaded machine (#33).
         "answers a burst of failed logins wider than the pool without stalling" {
             val callers = 12
+            // Half against a real account, half an unknown address, so the
+            // real hash and the dummy hash have to share the one cap.
+            (2..callers step 2).forEach { AuthFixtures.account(dataSource, email = "known$it@example.com") }
             val ready = CountDownLatch(callers)
             val go = CountDownLatch(1)
             val pool = Executors.newFixedThreadPool(callers)
@@ -58,7 +64,8 @@ class LoginConcurrencySpec : WebDatabaseSpec() {
                         go.await()
                         // Distinct email and address: no backoff row is shared,
                         // so every one of them reaches the hash and the write.
-                        login("nobody$n@example.com", "wrong password", "198.51.100.$n").response.status
+                        val email = if (n % 2 == 0) "known$n@example.com" else "nobody$n@example.com"
+                        login(email, "wrong password", "198.51.100.$n").response.status
                     }
                 }
                 ready.await()
@@ -70,7 +77,6 @@ class LoginConcurrencySpec : WebDatabaseSpec() {
                 // Deadlocked, every request waits out the 30 s connection timeout.
                 elapsedSeconds shouldBeLessThan 20L
                 // #33: twelve hashes in flight at once want ~230 MiB of heap.
-                // The dummy hash an unknown address pays shares the same cap.
                 passwordService.peakInFlight shouldBe PasswordService.ARGON_CONCURRENCY_CAP
             } finally {
                 pool.shutdownNow()

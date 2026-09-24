@@ -18,7 +18,9 @@ class HashingUnavailableException : RuntimeException("no Argon2 permit within th
 class PasswordService internal constructor(private val permitWait: Duration) {
 
     // A servlet request carries no deadline to wait against, so the wait is
-    // HTTP_WRITE_TIMEOUT: the bound Go's handler timeout puts on the same wait.
+    // HTTP_WRITE_TIMEOUT, counted from when it starts. Go's wait gets whatever
+    // is left of the request's handler timeout, so a Kotlin login can run
+    // longer end to end than a Go one (BOOTSTRAP.md §5.1).
     @Autowired
     constructor(appConfig: AppConfig) : this(appConfig.writeTimeout)
 

@@ -1,5 +1,6 @@
 package dev.kerti.afloat.auth
 
+import dev.kerti.afloat.testsupport.AuthFixtures
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.StringSpec
 import io.kotest.matchers.shouldBe
@@ -20,14 +21,20 @@ class ArgonConcurrencySpec : StringSpec({
         val go = CountDownLatch(1)
         val pool = Executors.newFixedThreadPool(callers)
         try {
-            val results = (1..callers).map {
+            // Half the right password against a real hash, half the dummy hash
+            // an unknown address pays: both share the one cap.
+            val results = (1..callers).map { n ->
                 pool.submit<Boolean> {
                     go.await()
-                    service.verify("wrong password", PasswordService.dummyHash)
+                    if (n % 2 == 0) {
+                        service.verify(AuthFixtures.PASSWORD, AuthFixtures.PASSWORD_PHC)
+                    } else {
+                        service.verify("wrong password", PasswordService.dummyHash)
+                    }
                 }
             }
             go.countDown()
-            results.map { it.get(60, TimeUnit.SECONDS) }.toSet() shouldBe setOf(false)
+            results.map { it.get(60, TimeUnit.SECONDS) } shouldBe (1..callers).map { it % 2 == 0 }
         } finally {
             pool.shutdownNow()
         }

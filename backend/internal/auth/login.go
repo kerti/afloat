@@ -137,10 +137,12 @@ func (h *Handlers) throttled(ctx context.Context, keys []string) api.LocalLoginR
 	}
 }
 
-// logQueryError logs a query that failed on the request's own ctx: login's
-// lookups before the permit, SessionMiddleware's, GetMe's and Logout's. At Warn
-// when the client went away, as the permit wait does, since a stream of
-// dropped connections must not read as a stream of errors (#33).
+// logQueryError logs a failed query at Warn when the client went away, as the
+// permit wait does, since a stream of dropped connections must not read as a
+// stream of errors (#33). Only a query on the request's own ctx can see that:
+// login's before the permit, SessionMiddleware's, GetMe's and Logout's. The
+// backoff read under the permit runs detached (afterPermit), so it always
+// logs Error.
 func logQueryError(msg string, err error) {
 	if errors.Is(err, context.Canceled) {
 		slog.Warn(msg, "err", err)

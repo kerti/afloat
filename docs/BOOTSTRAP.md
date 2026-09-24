@@ -271,10 +271,13 @@ request beyond the cap **queues for a permit rather than answering 429 immediate
 429 would leak that the server is busy, which is not an account-level fact, and the login path's
 whole constant-work design (previous paragraph) is built to hide exactly that kind of signal. Queueing
 adds latency that is a function of load, not of the account being checked, so the enumeration-
-resistance property survives it. The wait is bounded by the incoming request's own context deadline —
-chi's `Timeout` middleware in Go, its Kotlin-side equivalent — not a second, separate timeout invented
-for this one step; a request that times out queued answers however that path already answers a timeout,
-same as it would if any other step were slow.
+resistance property survives it. The wait is bounded by the timeout the request already has, not a
+second one invented for this step: in Go the request context's deadline, set by chi's `Timeout`
+middleware from `HTTP_WRITE_TIMEOUT`; in Kotlin, where a servlet request carries no deadline,
+`HTTP_WRITE_TIMEOUT` itself. A login still queued when the wait runs out answers `500 INTERNAL` and
+records **no** backoff failure, because its password was never checked. The one Argon2 call outside
+the cap is generating Kotlin's dummy hash, once per process on first use. Verifying against it takes a
+permit like any other hash.
 
 **The rate-limit key is the connection's own address, never `X-Forwarded-For`.** Self-hosting means
 there may be no proxy in front, so nothing strips that header and it is attacker-controlled — using

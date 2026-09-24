@@ -6,6 +6,7 @@ import io.kotest.matchers.shouldBe
 import io.kotest.matchers.shouldNotBe
 import io.kotest.matchers.string.shouldStartWith
 import org.springframework.security.crypto.argon2.Argon2PasswordEncoder
+import java.time.Duration
 import java.util.Base64
 
 // #14 tests 1-6. The cost parameters travel inside every PHC string, so these
@@ -13,7 +14,7 @@ import java.util.Base64
 // either backend must verify in the other (BOOTSTRAP.md §5.1).
 class PasswordServiceSpec : StringSpec({
 
-    val service = PasswordService()
+    val service = PasswordService(Duration.ofSeconds(30))
 
     // BOOTSTRAP §5.1's parameters, spelled the way the PHC string spells them.
     val mandatedPrefix = "\$argon2id\$v=19\$m=19456,t=2,p=1\$"

@@ -109,8 +109,15 @@ class AuthService(
         }
         // A dormant User (invited, never set a password) costs the same work as
         // a real one, so timing cannot enumerate accounts either.
-        if (!passwordService.verify(password, hash)) return null
-        return user
+        val matches = try {
+            passwordService.verify(password, hash)
+        } catch (e: HashingUnavailableException) {
+            // Queued past the wait for an Argon2 permit (#33): the password was
+            // never checked, so this is neither a 401 nor a backoff failure.
+            log.error("login: verify password", e)
+            throw ApiException(500, ErrorCode.INTERNAL)
+        }
+        return if (matches) user else null
     }
 
     // A counter that cannot be written is logged, never raised: a 500 here

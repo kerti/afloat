@@ -178,8 +178,7 @@ func TestVerifyPasswordBoundsConcurrentArgon2Calls(t *testing.T) {
 
 // Queued past ctx, no password was checked: an error, never a false the
 // caller would score as a wrong password. Every permit is held first, so the
-// select in acquireArgonPermit has only ctx.Done() to take; with a permit free,
-// it would pick at random.
+// call waits and the deadline passes during the wait, not before it.
 func TestArgonCallsReturnTheContextErrorWhenNoPermitComesFree(t *testing.T) {
 	release := HoldArgonPermitsForTest()
 	defer release()
@@ -192,5 +191,26 @@ func TestArgonCallsReturnTheContextErrorWhenNoPermitComesFree(t *testing.T) {
 	}
 	if phc, err := HashPassword(ctx, "correct horse battery staple"); !errors.Is(err, context.DeadlineExceeded) || phc != "" {
 		t.Errorf("HashPassword = (%q, %v), want (\"\", context.DeadlineExceeded)", phc, err)
+	}
+}
+
+// A ctx that ended before the call never hashes, even with every permit free.
+// Without the check ahead of the select, which picks a ready case at random,
+// each call here would hash half the time.
+func TestArgonCallsNeverHashForAnEndedContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	argonPeakInFlight.Store(0)
+
+	for range 20 {
+		if ok, err := VerifyPassword(ctx, "wrong password entirely", dummyHash); !errors.Is(err, context.Canceled) || ok {
+			t.Fatalf("VerifyPassword = (%v, %v), want (false, context.Canceled)", ok, err)
+		}
+		if phc, err := HashPassword(ctx, "correct horse battery staple"); !errors.Is(err, context.Canceled) || phc != "" {
+			t.Fatalf("HashPassword = (%q, %v), want (\"\", context.Canceled)", phc, err)
+		}
+	}
+	if got := argonPeakInFlight.Load(); got != 0 {
+		t.Errorf("peak concurrent Argon2 calls = %d, want 0: a hash ran for an ended context", got)
 	}
 }

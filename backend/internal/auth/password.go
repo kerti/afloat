@@ -53,6 +53,11 @@ var (
 // context bounds the wait: its deadline is the handler timeout
 // (HTTP_WRITE_TIMEOUT), not a second timeout for this one step.
 func acquireArgonPermit(ctx context.Context) error {
+	// With ctx already ended and a permit free, the select below picks either
+	// case at random, and would hash for a caller that is no longer there.
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	select {
 	case argonSem <- struct{}{}:
 		n := argonInFlight.Add(1)

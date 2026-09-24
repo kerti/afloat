@@ -115,7 +115,7 @@ func ValidatePasswordPolicy(password string) error {
 }
 
 // HashPassword returns a PHC string: $argon2id$v=19$m=...,t=...,p=...$salt$hash.
-// It waits for an Argon2 permit under ctx, like VerifyPassword.
+// It waits for an Argon2 permit under ctx.
 func HashPassword(ctx context.Context, password string) (string, error) {
 	salt := make([]byte, argonSaltLen)
 	if _, err := rand.Read(salt); err != nil {
@@ -129,26 +129,17 @@ func HashPassword(ctx context.Context, password string) (string, error) {
 	return buildPHC(argonMemoryKiB, argonTime, argonThreads, salt, sum), nil
 }
 
-// VerifyPassword checks a password against a stored PHC string, using that
-// string's own recorded cost parameters rather than the constants above — so a
-// retune does not invalidate existing hashes.
+// verifyHoldingPermit checks a password against a stored PHC string, using
+// that string's own recorded cost parameters rather than the constants above —
+// so a retune does not invalidate existing hashes.
 //
-// Returns (false, nil) rather than an error for a hash it cannot parse: a
-// corrupt row must fail the login, not crash the handler, and the caller has
-// no different action to take either way. An error means ctx ended while
-// queued for an Argon2 permit (#33): the password was never checked, so the
-// caller must not treat it as a wrong one.
-func VerifyPassword(ctx context.Context, password, phc string) (bool, error) {
-	if err := acquireArgonPermit(ctx); err != nil {
-		return false, err
-	}
-	defer releaseArgonPermit()
-	return verifyHoldingPermit(password, phc), nil
-}
-
-// verifyHoldingPermit is VerifyPassword for a caller that already holds an
-// Argon2 permit, and must go on holding it past the hash: login keeps its
-// permit until a failure is recorded (login.go). Never call it without one.
+// The caller must already hold an Argon2 permit, and may go on holding it past
+// the hash: login keeps its permit until a failure is recorded (login.go).
+// Never call it without one.
+//
+// Returns false for a hash it cannot parse: a corrupt row must fail the login,
+// not crash the handler, and the caller has no different action to take
+// either way.
 func verifyHoldingPermit(password, phc string) bool {
 	params, salt, want, err := parsePHC(phc)
 	if err != nil {

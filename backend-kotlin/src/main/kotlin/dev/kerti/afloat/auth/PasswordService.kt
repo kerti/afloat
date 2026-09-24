@@ -46,18 +46,16 @@ class PasswordService internal constructor(private val permitWait: Duration) {
 
     fun hash(password: String): String = withPermit { checkNotNull(encoder.encode(password)) }
 
-    fun verify(password: String, phc: String): Boolean = withPermit { verifyHoldingPermit(password, phc) }
-
-    // verify for a caller that already holds a permit, and must go on holding
-    // it past the hash: login keeps its permit until a failure is recorded
-    // (AuthService.login). Never call it without one. The semaphore is not
-    // reentrant, so calling verify here instead would take a second permit.
+    // Checks a password against a stored PHC string. The caller must already
+    // hold a permit, and may go on holding it past the hash: login keeps its
+    // permit until a failure is recorded (AuthService.login). Never call it
+    // without one.
     //
     // A corrupt row must fail the login, not crash the handler. The decoder
     // throws whatever the malformation happens to produce - IllegalArgument for
     // a bad number, ArrayIndexOutOfBounds for missing segments,
     // UnsupportedOperation for an algorithm or version it does not implement -
-    // so the catch is by outcome, not by exception type. Go's VerifyPassword
+    // so the catch is by outcome, not by exception type. Go's verifyHoldingPermit
     // returns a bool for the same reason.
     internal fun verifyHoldingPermit(password: String, phc: String): Boolean = try {
         encoder.matches(password, phc)

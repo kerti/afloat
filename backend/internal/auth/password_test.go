@@ -43,20 +43,30 @@ func TestHashPasswordSaltsEveryHash(t *testing.T) {
 	}
 }
 
+// verify is login's check without the database: take a permit, check the
+// password, give the permit back.
+func verify(password, phc string) bool {
+	if err := acquireArgonPermit(context.Background()); err != nil {
+		panic(err) // context.Background never ends
+	}
+	defer releaseArgonPermit()
+	return verifyHoldingPermit(password, phc)
+}
+
 func TestVerifyPassword(t *testing.T) {
 	phc, err := HashPassword(context.Background(), "correct horse battery staple")
 	if err != nil {
 		t.Fatalf("HashPassword: %v", err)
 	}
 
-	if ok, err := VerifyPassword(context.Background(), "correct horse battery staple", phc); err != nil || !ok {
-		t.Errorf("the correct password did not verify: ok=%v err=%v", ok, err)
+	if !verify("correct horse battery staple", phc) {
+		t.Error("the correct password did not verify")
 	}
-	if ok, err := VerifyPassword(context.Background(), "Correct horse battery staple", phc); err != nil || ok {
-		t.Errorf("a differently-cased password verified: ok=%v err=%v", ok, err)
+	if verify("Correct horse battery staple", phc) {
+		t.Error("a differently-cased password verified")
 	}
-	if ok, err := VerifyPassword(context.Background(), "", phc); err != nil || ok {
-		t.Errorf("an empty password verified: ok=%v err=%v", ok, err)
+	if verify("", phc) {
+		t.Error("an empty password verified")
 	}
 }
 
@@ -71,8 +81,8 @@ func TestVerifyPasswordRejectsMalformedHashes(t *testing.T) {
 		"$argon2id$v=19$m=bad,t=2,p=1$c2FsdA$aGFzaA",
 		"$argon2id$v=19$m=19456,t=2,p=1$!!!notbase64$aGFzaA",
 	} {
-		if ok, err := VerifyPassword(context.Background(), "anything", phc); err != nil || ok {
-			t.Errorf("malformed hash verified: %q (ok=%v err=%v)", phc, ok, err)
+		if verify("anything", phc) {
+			t.Errorf("malformed hash verified: %q", phc)
 		}
 	}
 }
@@ -89,11 +99,11 @@ func TestVerifyPasswordHonoursTheHashesOwnParameters(t *testing.T) {
 	sum := argon2.IDKey([]byte("hunter2hunter2"), salt, otherTime, otherMemory, otherThreads, argonKeyLen)
 	phc := buildPHC(otherMemory, otherTime, otherThreads, salt, sum)
 
-	if ok, err := VerifyPassword(context.Background(), "hunter2hunter2", phc); err != nil || !ok {
-		t.Errorf("a hash with non-default parameters failed to verify: ok=%v err=%v", ok, err)
+	if !verify("hunter2hunter2", phc) {
+		t.Error("a hash with non-default parameters failed to verify")
 	}
-	if ok, err := VerifyPassword(context.Background(), "wrong password here", phc); err != nil || ok {
-		t.Errorf("a wrong password verified against non-default parameters: ok=%v err=%v", ok, err)
+	if verify("wrong password here", phc) {
+		t.Error("a wrong password verified against non-default parameters")
 	}
 }
 
@@ -135,7 +145,7 @@ func TestPasswordLengthIsCountedInRunes(t *testing.T) {
 // flight is the peak memory. Asserted on the counter taken with each permit,
 // not on memory or elapsed time. Half the calls take the dummy-hash path an
 // unknown address takes, which must share the one cap.
-func TestVerifyPasswordBoundsConcurrentArgon2Calls(t *testing.T) {
+func TestConcurrentArgon2CallsAreBoundedByTheCap(t *testing.T) {
 	phc, err := HashPassword(context.Background(), "correct horse battery staple")
 	if err != nil {
 		t.Fatalf("HashPassword: %v", err)
@@ -144,10 +154,7 @@ func TestVerifyPasswordBoundsConcurrentArgon2Calls(t *testing.T) {
 
 	const n = 20
 	var wg sync.WaitGroup
-	results := make([]struct {
-		ok  bool
-		err error
-	}, n)
+	results := make([]bool, n)
 	for i := range n {
 		wg.Add(1)
 		go func(i int) {
@@ -156,17 +163,14 @@ func TestVerifyPasswordBoundsConcurrentArgon2Calls(t *testing.T) {
 			if i%2 == 1 {
 				password, target = "wrong password entirely", dummyHash
 			}
-			results[i].ok, results[i].err = VerifyPassword(context.Background(), password, target)
+			results[i] = verify(password, target)
 		}(i)
 	}
 	wg.Wait()
 
-	for i, r := range results {
-		if r.err != nil {
-			t.Errorf("call %d: unexpected error: %v", i, r.err)
-		}
-		if want := i%2 == 0; r.ok != want {
-			t.Errorf("call %d: verified = %v, want %v", i, r.ok, want)
+	for i, ok := range results {
+		if want := i%2 == 0; ok != want {
+			t.Errorf("call %d: verified = %v, want %v", i, ok, want)
 		}
 	}
 	// Exactly the cap: above it the bound failed, below it the burst never
@@ -176,19 +180,21 @@ func TestVerifyPasswordBoundsConcurrentArgon2Calls(t *testing.T) {
 	}
 }
 
-// Queued past ctx, no password was checked: an error, never a false the
-// caller would score as a wrong password. Every permit is held first, so the
-// call waits and the deadline passes during the wait, not before it.
+// Queued past ctx, no password was checked: an error the caller cannot mistake
+// for a wrong password. Every permit is held first, so each call waits and its
+// deadline passes during the wait, not before it.
 func TestArgonCallsReturnTheContextErrorWhenNoPermitComesFree(t *testing.T) {
 	release := HoldArgonPermitsForTest()
 	defer release()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
-
-	if ok, err := VerifyPassword(ctx, "wrong password entirely", dummyHash); !errors.Is(err, context.DeadlineExceeded) || ok {
-		t.Errorf("VerifyPassword = (%v, %v), want (false, context.DeadlineExceeded)", ok, err)
+	if err := acquireArgonPermit(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("acquireArgonPermit = %v, want context.DeadlineExceeded", err)
 	}
+
+	ctx, cancel = context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
 	if phc, err := HashPassword(ctx, "correct horse battery staple"); !errors.Is(err, context.DeadlineExceeded) || phc != "" {
 		t.Errorf("HashPassword = (%q, %v), want (\"\", context.DeadlineExceeded)", phc, err)
 	}
@@ -203,8 +209,8 @@ func TestArgonCallsNeverHashForAnEndedContext(t *testing.T) {
 	argonPeakInFlight.Store(0)
 
 	for range 20 {
-		if ok, err := VerifyPassword(ctx, "wrong password entirely", dummyHash); !errors.Is(err, context.Canceled) || ok {
-			t.Fatalf("VerifyPassword = (%v, %v), want (false, context.Canceled)", ok, err)
+		if err := acquireArgonPermit(ctx); !errors.Is(err, context.Canceled) {
+			t.Fatalf("acquireArgonPermit = %v, want context.Canceled", err)
 		}
 		if phc, err := HashPassword(ctx, "correct horse battery staple"); !errors.Is(err, context.Canceled) || phc != "" {
 			t.Fatalf("HashPassword = (%q, %v), want (\"\", context.Canceled)", phc, err)

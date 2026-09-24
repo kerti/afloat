@@ -1,6 +1,7 @@
 package dev.kerti.afloat.auth
 
 import dev.kerti.afloat.testsupport.AuthFixtures
+import dev.kerti.afloat.testsupport.verifyUnderPermit
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.StringSpec
 import io.kotest.matchers.shouldBe
@@ -27,9 +28,9 @@ class ArgonConcurrencySpec : StringSpec({
                 pool.submit<Boolean> {
                     go.await()
                     if (n % 2 == 0) {
-                        service.verify(AuthFixtures.PASSWORD, AuthFixtures.PASSWORD_PHC)
+                        service.verifyUnderPermit(AuthFixtures.PASSWORD, AuthFixtures.PASSWORD_PHC)
                     } else {
-                        service.verify("wrong password", PasswordService.dummyHash)
+                        service.verifyUnderPermit("wrong password", PasswordService.dummyHash)
                     }
                 }
             }
@@ -62,7 +63,7 @@ class ArgonConcurrencySpec : StringSpec({
             holding.await(10, TimeUnit.SECONDS) shouldBe true
 
             shouldThrow<HashingUnavailableException> {
-                service.verify("wrong password", PasswordService.dummyHash)
+                service.verifyUnderPermit("wrong password", PasswordService.dummyHash)
             }
         } finally {
             release.countDown()
@@ -78,7 +79,7 @@ class ArgonConcurrencySpec : StringSpec({
         Thread.currentThread().interrupt()
         try {
             shouldThrow<HashingUnavailableException> {
-                service.verify("wrong password", PasswordService.dummyHash)
+                service.verifyUnderPermit("wrong password", PasswordService.dummyHash)
             }
         } finally {
             Thread.interrupted() shouldBe true

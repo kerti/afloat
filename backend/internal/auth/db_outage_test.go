@@ -3,13 +3,14 @@ package auth_test
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/kerti/afloat/backend/internal/api"
-	"github.com/kerti/afloat/backend/internal/auth"
 	"github.com/kerti/afloat/backend/internal/db"
 )
 
@@ -20,49 +21,43 @@ var errOutage = errors.New("db_outage_test: simulated outage")
 
 // failingQuerier wraps a real Querier and fails exactly the calls the test
 // names, delegating everything else — so a "database is down for this one
-// query" scenario can be exercised without faking the whole database.
+// query" scenario can be exercised without faking the whole database. The
+// failure is errOutage unless err says otherwise.
 type failingQuerier struct {
 	db.Querier
 
 	failGetUserByEmail        bool
 	failGetCredentialByUserID bool
 	failGetUserByID           bool
+	err                       error
+}
+
+func (f failingQuerier) failure() error {
+	if f.err != nil {
+		return f.err
+	}
+	return errOutage
 }
 
 func (f failingQuerier) GetUserByEmail(ctx context.Context, email string) (db.User, error) {
 	if f.failGetUserByEmail {
-		return db.User{}, errOutage
+		return db.User{}, f.failure()
 	}
 	return f.Querier.GetUserByEmail(ctx, email)
 }
 
 func (f failingQuerier) GetCredentialByUserID(ctx context.Context, userID pgtype.UUID) (db.Credential, error) {
 	if f.failGetCredentialByUserID {
-		return db.Credential{}, errOutage
+		return db.Credential{}, f.failure()
 	}
 	return f.Querier.GetCredentialByUserID(ctx, userID)
 }
 
 func (f failingQuerier) GetUserByID(ctx context.Context, id pgtype.UUID) (db.User, error) {
 	if f.failGetUserByID {
-		return db.User{}, errOutage
+		return db.User{}, f.failure()
 	}
 	return f.Querier.GetUserByID(ctx, id)
-}
-
-// withQuerier swaps h's Handlers for one wired to q, reusing h's existing
-// TestDB — a fresh newHarness call would re-truncate the tables and erase
-// whatever the test already seeded.
-func (h harness) withQuerier(q db.Querier) harness {
-	h.auth = auth.New(auth.Deps{
-		Querier:            q,
-		Beginner:           h.tdb.Pool,
-		SessionTTL:         testTTL,
-		SessionMaxLifetime: testMaxLifetime,
-		CookieSecure:       true,
-		Now:                h.now,
-	})
-	return h
 }
 
 // #23: a database outage during either credential lookup is an
@@ -91,6 +86,56 @@ func TestLoginAnswers500OnDatabaseOutageDuringCredentialLookupAndDoesNotRecordFa
 			}
 			if rows := h.loginAttemptRows(t); rows != 0 {
 				t.Errorf("login_attempts rows = %d, want 0 — an outage must not leave a backoff window behind", rows)
+			}
+		})
+	}
+}
+
+// A client that leaves before the permit ends the lookups ahead of it, and is
+// no more the server's fault there than in the permit wait: Warn, not Error,
+// on either lookup that runs on the request's ctx. Still a 500 and no failure
+// recorded, as for any lookup that did not answer.
+func TestLoginLogsAClientLeavingDuringALookupAsAWarning(t *testing.T) {
+	for name, tc := range map[string]struct {
+		ctx  func(context.Context) context.Context
+		fail failingQuerier
+		msg  string
+	}{
+		// A real cancelled request: pgx gives back context.Canceled from the
+		// first query, which is the backoff read.
+		"backoff read": {
+			ctx: func(ctx context.Context) context.Context {
+				ctx, cancel := context.WithCancel(ctx)
+				cancel()
+				return ctx
+			},
+			msg: "login: read backoff",
+		},
+		// The backoff read answered and the client left during the next one.
+		"credential lookup": {
+			ctx:  func(ctx context.Context) context.Context { return ctx },
+			fail: failingQuerier{failGetUserByEmail: true, err: fmt.Errorf("get user: %w", context.Canceled)},
+			msg:  "login: resolve credential",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newHarness(t, time.Now)
+			h.seedCredentialedUser(t, "a@example.com")
+			tc.fail.Querier = h.tdb.Queries
+			h = h.withQuerier(tc.fail)
+			logged := captureLog(t)
+
+			resp := h.login(tc.ctx(ipContext("198.51.100.51")), t, "a@example.com", goodPassword)
+
+			if _, is := resp.(api.LocalLogin500JSONResponse); !is {
+				t.Fatalf("response = %T, want 500", resp)
+			}
+			if out := logged.String(); !strings.Contains(out, `level=WARN msg="`+tc.msg+`"`) ||
+				strings.Contains(out, "level=ERROR") {
+				t.Errorf("want one Warn for %q and no Error; logged:\n%s", tc.msg, out)
+			}
+			if rows := h.loginAttemptRows(t); rows != 0 {
+				t.Errorf("login_attempts rows = %d, want 0", rows)
 			}
 		})
 	}

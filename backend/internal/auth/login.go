@@ -53,7 +53,7 @@ func (h *Handlers) LocalLogin(ctx context.Context, request api.LocalLoginRequest
 	if err != nil {
 		// An outage is not a statement about this account's credentials (#23):
 		// not a 401, and no backoff failure the account did nothing to earn.
-		slog.Error("login: resolve credential", "err", err)
+		logLoginError("login: resolve credential", err)
 		return internalError[api.LocalLoginResponseObject]()
 	}
 
@@ -119,7 +119,7 @@ func (h *Handlers) LocalLogin(ctx context.Context, request api.LocalLoginRequest
 func (h *Handlers) throttled(ctx context.Context, keys []string) api.LocalLoginResponseObject {
 	wait, err := h.backoffRemaining(ctx, keys)
 	if err != nil {
-		slog.Error("login: read backoff", "err", err)
+		logLoginError("login: read backoff", err)
 		resp, _ := internalError[api.LocalLoginResponseObject]()
 		return resp
 	}
@@ -135,6 +135,18 @@ func (h *Handlers) throttled(ctx context.Context, keys []string) api.LocalLoginR
 			Headers: api.TooManyRequestsResponseHeaders{RetryAfter: &retryAfter},
 		},
 	}
+}
+
+// logLoginError logs a lookup that failed before the permit, while ctx is
+// still the request's: at Warn when the client went away, as the permit wait
+// does, since a stream of dropped connections must not read as a stream of
+// errors (#33).
+func logLoginError(msg string, err error) {
+	if errors.Is(err, context.Canceled) {
+		slog.Warn(msg, "err", err)
+		return
+	}
+	slog.Error(msg, "err", err)
 }
 
 // resolve finds the hash to check the password against, and the User it

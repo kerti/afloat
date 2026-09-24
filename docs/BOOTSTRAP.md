@@ -277,10 +277,19 @@ adds latency that is a function of load, not of the account being checked, so th
 resistance property survives it. The wait is bounded by the timeout the request already has, not a
 second one invented for this step: in Go the request context's deadline, set by chi's `Timeout`
 middleware from `HTTP_WRITE_TIMEOUT`; in Kotlin, where a servlet request carries no deadline,
-`HTTP_WRITE_TIMEOUT` itself. A login still queued when the wait runs out answers `500 INTERNAL` and
-records **no** backoff failure, because its password was never checked. The one Argon2 call outside
-the cap is generating Kotlin's dummy hash, once per process when the class loads at startup, before any
-request can queue. Verifying against it takes a permit like any other hash.
+`HTTP_WRITE_TIMEOUT` itself, counted from when the wait starts. Go's wait gets only what is left of
+the one request deadline, so a Kotlin login can run longer end to end. A login still queued when the
+wait runs out answers `500 INTERNAL` and records **no** backoff failure, because its password was never
+checked. The one Argon2 call outside the cap is generating Kotlin's dummy hash, once per process when
+the class loads at startup, before any request can queue. Verifying against it takes a permit like any
+other hash.
+
+The queue moves what a login flood costs; it does not remove it, and the two backends pay
+differently. In Go a queued login is a parked goroutine, so a flood slows logins and nothing else. In
+Kotlin each queued login holds a Tomcat worker thread for as long as it waits, and every endpoint
+shares those threads. A flood faster than the cap clears (about 80 logins a second) fills them, and
+then every endpoint waits. It is still bounded, and it recovers when the flood stops. Whether Kotlin
+must match Go here is open: #54.
 
 **The rate-limit key is the connection's own address, never `X-Forwarded-For`.** Self-hosting means
 there may be no proxy in front, so nothing strips that header and it is attacker-controlled — using

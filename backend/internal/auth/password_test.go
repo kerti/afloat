@@ -53,7 +53,7 @@ func verify(password, phc string) bool {
 	return verifyHoldingPermit(password, phc)
 }
 
-func TestVerifyPassword(t *testing.T) {
+func TestVerify(t *testing.T) {
 	phc, err := HashPassword(context.Background(), "correct horse battery staple")
 	if err != nil {
 		t.Fatalf("HashPassword: %v", err)
@@ -71,7 +71,7 @@ func TestVerifyPassword(t *testing.T) {
 }
 
 // A corrupt row must fail the login, not crash the handler.
-func TestVerifyPasswordRejectsMalformedHashes(t *testing.T) {
+func TestVerifyRejectsMalformedHashes(t *testing.T) {
 	for _, phc := range []string{
 		"",
 		"not a phc string",
@@ -89,7 +89,7 @@ func TestVerifyPasswordRejectsMalformedHashes(t *testing.T) {
 
 // A hash carrying different cost parameters must still verify, or retuning the
 // constants would lock every existing user out.
-func TestVerifyPasswordHonoursTheHashesOwnParameters(t *testing.T) {
+func TestVerifyHonoursTheHashesOwnParameters(t *testing.T) {
 	const (
 		otherMemory  = 8 * 1024
 		otherTime    = 1

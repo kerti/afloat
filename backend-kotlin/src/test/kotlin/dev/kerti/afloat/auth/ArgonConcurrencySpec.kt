@@ -13,7 +13,7 @@ import java.util.concurrent.TimeUnit
 // #33: every Argon2 hash holds its 19 MiB for its duration, so the number in
 // flight is the heap's peak. The bound is asserted on the counter PasswordService
 // keeps as each call takes a permit, not on memory or elapsed time. Go's
-// TestVerifyPasswordBoundsConcurrentArgon2Calls.
+// TestConcurrentArgon2CallsAreBoundedByTheCap.
 class ArgonConcurrencySpec : StringSpec({
 
     "never runs more hashes at once than the cap, and a burst reaches it" {

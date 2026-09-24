@@ -57,7 +57,7 @@ class PasswordServiceSpec : StringSpec({
     "returns false for a malformed PHC string rather than throwing" {
         // A corrupt credentials row must fail the login, not escape the
         // handler as a 500 that says the row exists. Go's
-        // TestVerifyPasswordRejectsMalformedHashes covers the same shapes.
+        // TestVerifyRejectsMalformedHashes covers the same shapes.
         listOf(
             "",
             "not a phc string at all",

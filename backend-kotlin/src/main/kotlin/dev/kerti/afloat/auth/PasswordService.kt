@@ -80,12 +80,13 @@ class PasswordService internal constructor(private val permitWait: Duration) {
 
         // Verified against when no credentials exist, so an unknown or dormant
         // address costs the same Argon2id work as a real one. Generated once
-        // from a value nobody knows. Outside the permits: it runs once per
-        // process, and a companion has no bean to wait on.
-        val dummyHash: String by lazy {
-            checkNotNull(
-                encoder.encode("this password matches nothing, by construction")
-            )
-        }
+        // from a value nobody knows, when the class loads at startup, as Go's
+        // is at package init: generated lazily, the first unknown address
+        // paid for two hashes and answered slower than every one after it.
+        // Outside the permits: nothing else is hashing yet, and a companion
+        // has no bean to wait on.
+        val dummyHash: String = checkNotNull(
+            encoder.encode("this password matches nothing, by construction")
+        )
     }
 }

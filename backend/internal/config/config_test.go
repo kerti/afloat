@@ -13,6 +13,7 @@ func setEnv(t *testing.T, kv map[string]string) {
 	for _, k := range []string{
 		"DATABASE_URL", "PORT", "LOG_FORMAT", "LOG_LEVEL", "AUTO_MIGRATE",
 		"AUTH_LOCAL_ENABLED", "AUTH_GOOGLE_ENABLED", "COOKIE_SECURE", "VERSION",
+		"HTTP_WRITE_TIMEOUT",
 	} {
 		if old, ok := os.LookupEnv(k); ok {
 			t.Cleanup(func() { _ = os.Setenv(k, old) })
@@ -92,6 +93,9 @@ func TestLoadRejectsBadEnums(t *testing.T) {
 		{"log format", "LOG_FORMAT", "xml"},
 		{"log level", "LOG_LEVEL", "verbose"},
 		{"port", "PORT", "70000"},
+		// 0 would cancel every request on arrival (#30), not disable the bound.
+		{"zero write timeout", "HTTP_WRITE_TIMEOUT", "0s"},
+		{"negative write timeout", "HTTP_WRITE_TIMEOUT", "-1s"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			setEnv(t, map[string]string{"DATABASE_URL": "postgres://x/y", tc.key: tc.value})

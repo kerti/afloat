@@ -103,5 +103,11 @@ func (c Config) validate() error {
 	default:
 		return fmt.Errorf("LOG_LEVEL %q: want debug, info, warn or error", c.LogLevel)
 	}
+	// http.Server reads 0 as "no timeout", but the same value also feeds
+	// middleware.Timeout (#30), where 0 is a deadline already passed: every
+	// request would be cancelled on arrival. Refused at boot, in both backends.
+	if c.WriteTimeout <= 0 {
+		return fmt.Errorf("HTTP_WRITE_TIMEOUT (%s) must be positive", c.WriteTimeout)
+	}
 	return nil
 }

@@ -63,8 +63,8 @@ afloat:
   # against the BOOTSTRAP.md §12 table; PORT is bound by Boot at server.port and
   # reaches AppConfig the same way.
   database-url: ${DATABASE_URL:}
-  # LOG_FORMAT is bound-but-deferred (issue #13 §6), like HTTP_WRITE_TIMEOUT
-  # above: no logging sink reads it yet, until the JSON encoder lands.
+  # LOG_FORMAT is bound-but-deferred (issue #13 §6): no logging sink reads it
+  # yet, until the JSON encoder lands.
   log-format: ${LOG_FORMAT:text}
   log-level: ${LOG_LEVEL:info}
   auto-migrate: ${AUTO_MIGRATE:true}

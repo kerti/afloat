@@ -19,6 +19,8 @@ data class AppConfig(
     val authGoogleEnabled: Boolean,
     val sessionTtl: Duration,
     val sessionMaxLifetime: Duration,
+    val loginFirstBackoff: Duration,
+    val loginMaxBackoff: Duration,
     val cookieSecure: Boolean,
     val version: String,
 ) {
@@ -44,6 +46,8 @@ data class AppConfig(
             "AUTH_GOOGLE_ENABLED" to "afloat.auth-google-enabled",
             "SESSION_TTL" to "afloat.session-ttl",
             "SESSION_MAX_LIFETIME" to "afloat.session-max-lifetime",
+            "LOGIN_FIRST_BACKOFF" to "afloat.login-first-backoff",
+            "LOGIN_MAX_BACKOFF" to "afloat.login-max-backoff",
             "COOKIE_SECURE" to "afloat.cookie-secure",
             "VERSION" to "afloat.version",
         )
@@ -83,6 +87,8 @@ data class AppConfig(
                 authGoogleEnabled = parseBool("AUTH_GOOGLE_ENABLED", required("AUTH_GOOGLE_ENABLED")),
                 sessionTtl = parseDuration("SESSION_TTL", required("SESSION_TTL")),
                 sessionMaxLifetime = parseDuration("SESSION_MAX_LIFETIME", required("SESSION_MAX_LIFETIME")),
+                loginFirstBackoff = parseDuration("LOGIN_FIRST_BACKOFF", required("LOGIN_FIRST_BACKOFF")),
+                loginMaxBackoff = parseDuration("LOGIN_MAX_BACKOFF", required("LOGIN_MAX_BACKOFF")),
                 cookieSecure = parseBool("COOKIE_SECURE", required("COOKIE_SECURE")),
                 version = required("VERSION").takeIf { it.isNotBlank() } ?: DEFAULT_VERSION,
             )
@@ -113,6 +119,16 @@ data class AppConfig(
 
             if (cfg.logLevel != "debug" && cfg.logLevel != "info" && cfg.logLevel != "warn" && cfg.logLevel != "error") {
                 throw ConfigException("LOG_LEVEL '${cfg.logLevel}': want debug, info, warn or error")
+            }
+
+            // A zero first window is no backoff at all, and a cap below it
+            // would make the second failure's window shorter than the first's.
+            if (cfg.loginFirstBackoff.isZero || cfg.loginFirstBackoff.isNegative) {
+                throw ConfigException("LOGIN_FIRST_BACKOFF '${cfg.loginFirstBackoff}': must be positive")
+            }
+
+            if (cfg.loginMaxBackoff < cfg.loginFirstBackoff) {
+                throw ConfigException("LOGIN_MAX_BACKOFF ('${cfg.loginMaxBackoff}') is shorter than LOGIN_FIRST_BACKOFF ('${cfg.loginFirstBackoff}')")
             }
 
             if (cfg.writeTimeout.isZero || cfg.writeTimeout.isNegative) {

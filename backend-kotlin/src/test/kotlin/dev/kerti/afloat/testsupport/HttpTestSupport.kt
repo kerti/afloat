@@ -34,8 +34,20 @@ fun String.cookieAttributes(): Map<String, String> =
 fun loginBody(email: String, password: String): String =
     """{"email":${email.jsonString()},"password":${password.jsonString()}}"""
 
-private fun String.jsonString(): String =
-    "\"" + replace("\\", "\\\\").replace("\"", "\\\"") + "\""
+// RFC 8259 §7: a control character must be escaped, so an address padded with
+// a tab still arrives as JSON rather than as INVALID_JSON_BODY.
+private fun String.jsonString(): String = buildString {
+    append('"')
+    for (c in this@jsonString) {
+        when {
+            c == '\\' -> append("\\\\")
+            c == '"' -> append("\\\"")
+            c < ' ' -> append("\\u%04x".format(c.code))
+            else -> append(c)
+        }
+    }
+    append('"')
+}
 
 // A flat JSON object read WITHOUT a mapper, as name -> raw value text: a string
 // keeps its quotes, a number and a boolean do not. Deliberately not

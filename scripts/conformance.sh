@@ -73,6 +73,9 @@ common_env() {
   echo "SHUTDOWN_TIMEOUT=10s"
   echo "SESSION_TTL=720h"
   echo "SESSION_MAX_LIFETIME=2160h"
+  # What cases/login.yaml's windows assume: 1s, then 2s.
+  echo "LOGIN_FIRST_BACKOFF=1s"
+  echo "LOGIN_MAX_BACKOFF=5m"
   # Off because the harness speaks plain HTTP to localhost. A Secure cookie is
   # never sent back over http://, so leaving it on would make every session
   # case fail for a reason that is not a divergence.

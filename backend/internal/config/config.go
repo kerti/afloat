@@ -52,6 +52,12 @@ type Config struct {
 	SessionTTL         time.Duration `env:"SESSION_TTL" envDefault:"720h"`
 	SessionMaxLifetime time.Duration `env:"SESSION_MAX_LIFETIME" envDefault:"2160h"`
 
+	// The login backoff (BOOTSTRAP.md §5.1): LoginFirstBackoff after the first
+	// failure, doubling per failure after it, capped at LoginMaxBackoff. The
+	// curve these defaults produce is contract/testdata/login_backoff.json.
+	LoginFirstBackoff time.Duration `env:"LOGIN_FIRST_BACKOFF" envDefault:"1s"`
+	LoginMaxBackoff   time.Duration `env:"LOGIN_MAX_BACKOFF" envDefault:"5m"`
+
 	// Off only for local development over plain HTTP. Every deployment leaves it
 	// on — a session cookie without Secure travels in clear (BOOTSTRAP.md §5.1).
 	CookieSecure bool `env:"COOKIE_SECURE" envDefault:"true"`
@@ -102,6 +108,15 @@ func (c Config) validate() error {
 	case "debug", "info", "warn", "error":
 	default:
 		return fmt.Errorf("LOG_LEVEL %q: want debug, info, warn or error", c.LogLevel)
+	}
+	// A zero first window is no backoff at all, and a cap below it would make
+	// the second failure's window shorter than the first's.
+	if c.LoginFirstBackoff <= 0 {
+		return fmt.Errorf("LOGIN_FIRST_BACKOFF (%s) must be positive", c.LoginFirstBackoff)
+	}
+	if c.LoginMaxBackoff < c.LoginFirstBackoff {
+		return fmt.Errorf("LOGIN_MAX_BACKOFF (%s) is shorter than LOGIN_FIRST_BACKOFF (%s)",
+			c.LoginMaxBackoff, c.LoginFirstBackoff)
 	}
 	// http.Server reads 0 as "no timeout", but the same value also feeds
 	// middleware.Timeout (#30), where 0 is a deadline already passed: every

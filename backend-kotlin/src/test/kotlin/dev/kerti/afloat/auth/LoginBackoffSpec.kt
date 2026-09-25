@@ -1,15 +1,12 @@
 package dev.kerti.afloat.auth
 
 import dev.kerti.afloat.api.AuthApi
-import dev.kerti.afloat.auth.data.LoginAttemptRepository
 import dev.kerti.afloat.testsupport.AuthFixtures
 import dev.kerti.afloat.testsupport.WebDatabaseSpec
 import dev.kerti.afloat.testsupport.loginBody
-import io.kotest.assertions.withClue
 import io.kotest.matchers.collections.shouldContainExactlyInAnyOrder
 import io.kotest.matchers.doubles.shouldBeLessThan
 import io.kotest.matchers.shouldBe
-import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.http.HttpHeaders
 import org.springframework.http.MediaType
 import org.springframework.jdbc.core.simple.JdbcClient
@@ -21,9 +18,6 @@ import kotlin.math.abs
 // it lives in login_attempts rather than in process memory precisely so two
 // backends cannot drift where contract conformance would never see it.
 class LoginBackoffSpec : WebDatabaseSpec() {
-
-    @Autowired
-    private lateinit var loginAttempts: LoginAttemptRepository
 
     private fun login(
         email: String,
@@ -64,41 +58,9 @@ class LoginBackoffSpec : WebDatabaseSpec() {
             abs(backoffSecondsFor("email:user@example.com") - 1.0) shouldBeLessThan 1.0
         }
 
-        // backoffDoublesPerFailureAndCapsAtFiveMinutes
-        // Driven through the repository rather than through HTTP: the second
-        // request would be answered 429 by the window the first one just set,
-        // so the curve is unreachable end-to-end. The SQL expression IS the
-        // curve - the same shape Go's backend/queries/auth.sql uses - so that
-        // is what gets hammered here.
-        "doubles per failure and caps at five minutes" {
-            val expected = listOf(
-                1 to 1.0,     // insert
-                2 to 2.0,     // failure_count read as 1
-                3 to 4.0,
-                4 to 8.0,
-                5 to 16.0,
-                6 to 32.0,
-                7 to 64.0,
-                8 to 128.0,
-                9 to 256.0,
-                10 to 300.0,  // 512 clamped to the five-minute cap
-                11 to 300.0,
-                12 to 300.0,
-            )
+        // The doubling and the cap are LoginBackoffFixtureSpec's, read from
+        // contract/testdata/login_backoff.json, which Go's suite reads too (#16).
 
-            expected.forEach { (attempt, seconds) ->
-                loginAttempts.recordFailure(
-                    "email:curve@example.com",
-                    AuthService.FIRST_BACKOFF_SECONDS,
-                    AuthService.MAX_BACKOFF_SECONDS,
-                )
-                withClue("failure $attempt should back off ${seconds}s") {
-                    abs(backoffSecondsFor("email:curve@example.com") - seconds) shouldBeLessThan 1.0
-                }
-            }
-        }
-
-        // backoffIsKeyedPerIpAndPerEmailTogether
         "records both the ip and the email key on a failure" {
             AuthFixtures.account(dataSource)
 

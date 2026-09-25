@@ -246,8 +246,8 @@ func (h *Handlers) recordFailure(ctx context.Context, keys []string) {
 	for _, key := range keys {
 		if err := h.q.RecordLoginFailure(ctx, db.RecordLoginFailureParams{
 			Key:          key,
-			FirstBackoff: intervalFrom(firstBackoff),
-			MaxBackoff:   intervalFrom(maxBackoff),
+			FirstBackoff: intervalFrom(h.firstBackoff),
+			MaxBackoff:   intervalFrom(h.maxBackoff),
 		}); err != nil {
 			slog.Error("login: record failure", "key", key, "err", err)
 		}

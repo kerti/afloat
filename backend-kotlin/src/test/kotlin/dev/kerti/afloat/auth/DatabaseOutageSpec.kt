@@ -17,7 +17,7 @@ import io.kotest.matchers.shouldBe
 import jakarta.servlet.http.Cookie
 import org.mockito.ArgumentMatchers.any
 import org.mockito.ArgumentMatchers.anyCollection
-import org.mockito.ArgumentMatchers.anyLong
+import org.mockito.ArgumentMatchers.anyDouble
 import org.mockito.ArgumentMatchers.anyString
 import org.mockito.Mockito.doThrow
 import org.springframework.beans.factory.config.BeanPostProcessor
@@ -168,7 +168,7 @@ class DatabaseOutageSpec : WebDatabaseSpec() {
             // A 500 here would answer a wrong password differently from a right one.
             "still answers 401 when a failure cannot be recorded ($kind)" {
                 val account = AuthFixtures.account(dataSource)
-                doThrow(outage).`when`(loginAttemptRepository).recordFailure(anyString(), anyLong(), anyLong())
+                doThrow(outage).`when`(loginAttemptRepository).recordFailure(anyString(), anyDouble(), anyDouble())
 
                 val (result, logged) = loggedByAuthService { login(account.email, "not the password") }
 

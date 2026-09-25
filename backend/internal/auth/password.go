@@ -7,7 +7,9 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
-	"strings"
+	"math"
+	"regexp"
+	"strconv"
 	"sync/atomic"
 	"unicode/utf8"
 
@@ -156,42 +158,49 @@ type argonParams struct {
 	threads uint8
 }
 
+// phcShape is the one PHC spelling both backends accept (contract/testdata/
+// argon2.json, #16): argon2id, version 19, the three parameters in that order,
+// unpadded standard base64, a hash of at least 4 bytes. Anything looser
+// verified in one backend and not the other: Sscanf read "v=19x" as 19 and
+// ignored text after the parameters, Atoi read "v=019" as 19, and Spring's
+// decoder ignores a sixth field and accepts base64 padding.
+// BouncyCastle's ceiling on Argon2 memory, in KiB: 16 GiB.
+const argonMaxMemory = 1 << 24
+
+var phcShape = regexp.MustCompile(`^\$argon2id\$v=19\$m=(\d+),t=(\d+),p=(\d+)\$([A-Za-z0-9+/]+)\$([A-Za-z0-9+/]{6,})$`)
+
 func parsePHC(phc string) (argonParams, []byte, []byte, error) {
-	parts := strings.Split(phc, "$")
-	// ["", algo, v=..., m=...,t=...,p=..., salt, hash]
-	if len(parts) != 6 {
-		return argonParams{}, nil, nil, errors.New("malformed PHC string")
+	m := phcShape.FindStringSubmatch(phc)
+	if m == nil {
+		return argonParams{}, nil, nil, errors.New("not an argon2id PHC string")
 	}
-	if parts[1] != argonAlgo {
-		return argonParams{}, nil, nil, fmt.Errorf("unsupported algorithm %q", parts[1])
-	}
-
-	var version int
-	if _, err := fmt.Sscanf(parts[2], "v=%d", &version); err != nil {
-		return argonParams{}, nil, nil, fmt.Errorf("parse version: %w", err)
-	}
-	if version != argon2.Version {
-		return argonParams{}, nil, nil, fmt.Errorf("unsupported argon2 version %d", version)
-	}
-
-	var p argonParams
-	if _, err := fmt.Sscanf(parts[3], "m=%d,t=%d,p=%d", &p.memory, &p.time, &p.threads); err != nil {
-		return argonParams{}, nil, nil, fmt.Errorf("parse parameters: %w", err)
+	memory, errM := strconv.ParseUint(m[1], 10, 32)
+	iterations, errT := strconv.ParseUint(m[2], 10, 32)
+	threads, errP := strconv.ParseUint(m[3], 10, 8)
+	// argon2.IDKey panics on zero iterations or zero parallelism, so a
+	// malformed stored string would crash a login into the recoverer's 500
+	// where Kotlin answers "does not verify". Below 8 KiB per lane both
+	// libraries quietly raise memory to that floor, so the string no longer
+	// states the work done, and at m=0 only Spring refuses. Above 2^24 KiB
+	// BouncyCastle refuses (its default argon2.max_memory_exp) and x/crypto
+	// would try to allocate it. Spring reads iterations as an int.
+	if err := errors.Join(errM, errT, errP); err != nil ||
+		iterations < 1 || iterations > math.MaxInt32 ||
+		threads < 1 || memory < 8*threads || memory > argonMaxMemory {
+		return argonParams{}, nil, nil, errors.New("argon2 parameters out of range")
 	}
 
-	salt, err := base64.RawStdEncoding.DecodeString(parts[4])
+	salt, err := base64.RawStdEncoding.DecodeString(m[4])
 	if err != nil {
 		return argonParams{}, nil, nil, fmt.Errorf("decode salt: %w", err)
 	}
-	hash, err := base64.RawStdEncoding.DecodeString(parts[5])
+	hash, err := base64.RawStdEncoding.DecodeString(m[5])
 	if err != nil {
 		return argonParams{}, nil, nil, fmt.Errorf("decode hash: %w", err)
 	}
-	return p, salt, hash, nil
+	return argonParams{memory: uint32(memory), time: uint32(iterations), threads: uint8(threads)}, salt, hash, nil
 }
 
-// buildPHC assembles the stored representation. Split out so tests can build a
-// hash with parameters other than the current constants.
 func buildPHC(memory, time uint32, threads uint8, salt, sum []byte) string {
 	return fmt.Sprintf("$%s$v=%d$m=%d,t=%d,p=%d$%s$%s",
 		argonAlgo, argon2.Version, memory, time, threads,

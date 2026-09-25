@@ -353,6 +353,19 @@ disagree on the backoff curve, on key normalisation, or on eviction, and every c
 still pass. A table keyed by ip/email with a `backoff_until` is identical by construction, testable,
 and survives a restart, which the in-memory version does not.
 
+The curve is `LOGIN_FIRST_BACKOFF` (default `1s`) after the first failure, doubling per failure,
+capped at `LOGIN_MAX_BACKOFF` (default `5m`) — §12. The doubling stops once it passes the cap, however
+many failures follow: unclamped, it overflowed Postgres's interval at the 45th, and from then on the key was
+never throttled again. What those defaults produce, and which keys a
+failure writes, is `contract/testdata/login_backoff.json`; both suites read it, and each holds its
+own defaults to it (#16). The same goes for Argon2id: `contract/testdata/argon2.json` carries hashes
+minted by each backend, which must verify in both, and strings neither may accept. The accepted
+spelling is exactly `$argon2id$v=19$m=…,t=…,p=…$salt$hash`, unpadded standard base64,
+`8p ≤ m ≤ 2²⁴` KiB (BouncyCastle's ceiling), `1 ≤ t ≤ 2³¹−1`, `1 ≤ p ≤ 255`, a hash of at least 4 bytes,
+and no base64 segment of a length that cannot decode: Spring's decoder is looser than that and Go's
+parser was, and a malformed stored
+string answers "does not verify" in both, never an exception or a panic.
+
 **A database outage is not a statement about an account (#23, #27).** Only a lookup that genuinely
 found nothing counts as an absent user, credential or session: `pgx.ErrNoRows` in Go, an empty
 result in Kotlin. Every other failure — a dropped connection, an exhausted pool — answers login
@@ -711,6 +724,8 @@ truth and fails if either backend's configuration drifts from it.
 | `AUTH_GOOGLE_ENABLED` | `false` | Planned, not built (PRD §4.1). |
 | `SESSION_TTL` | `720h` | The sliding window (§5.1). |
 | `SESSION_MAX_LIFETIME` | `2160h` | The absolute cap from `created_at` (§5.1). |
+| `LOGIN_FIRST_BACKOFF` | `1s` | The login backoff after the first failure; doubles per failure (§5.1). Must be positive. |
+| `LOGIN_MAX_BACKOFF` | `5m` | The backoff's cap. Not shorter than `LOGIN_FIRST_BACKOFF`. Both backends refuse to boot on either violation. |
 | `COOKIE_SECURE` | `true` | Off only for local development over plain HTTP. |
 | `VERSION` | `dev` | Stamped at build time; reported by `GET /api/health`. |
 

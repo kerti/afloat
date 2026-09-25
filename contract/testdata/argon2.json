@@ -1,0 +1,245 @@
+{
+  "_comment": [
+    "Argon2id PHC strings both backends must read the same way (BOOTSTRAP.md §5.1, issue #16).",
+    "`verifies`: minted by each backend, at the §5.1 cost and at another, so verification is proven in both",
+    "directions and is shown to read the cost from the string rather than from the current constants.",
+    "`rejects`: each must answer 'does not verify' in both backends - never an error, a panic or a 500.",
+    "The accepted shape is exactly $argon2id$v=19$m=<n>,t=<n>,p=<n>$<salt>$<hash>: unpadded standard base64,",
+    "8*p <= m <= 2^24 (KiB), 1 <= t <= 2^31-1, 1 <= p <= 255, a hash of at least 4 bytes, and neither base64",
+    "segment of a length that cannot decode (1 mod 4).",
+    "A reject row that tests a shape rule carries the tag a lenient parser would compute for the parameters",
+    "it reads, so only the rule refuses it, not a tag mismatch. `minted_by` names what computed the tag:",
+    "go (x/crypto/argon2), bouncycastle (Argon2BytesGenerator, for what x/crypto cannot express), or absent",
+    "where no tag can be computed. Each backend's suite recomputes the tags it can mint, so a tag that stops",
+    "being genuine fails there. Regenerate an entry by minting it, never by editing the tag."
+  ],
+  "verifies": [
+    {
+      "minted_by": "go",
+      "cost": "default",
+      "password": "correct horse battery staple",
+      "phc": "$argon2id$v=19$m=19456,t=2,p=1$M6bmkF0B1tq3WPmzGs3mpQ$ipot4Ss0cTnDO3H3/I1pGxs1OItkMQsR1zeehdSA800"
+    },
+    {
+      "minted_by": "go",
+      "cost": "default",
+      "password": "pässwörd 🔐 ünïcode",
+      "phc": "$argon2id$v=19$m=19456,t=2,p=1$gkClYciGhYBWoSg7InfRAg$An0NrsfE2j6wBTcWc6bYBfNljflQkVby008b6ItAxhc"
+    },
+    {
+      "minted_by": "go",
+      "cost": "m=8192,t=3,p=2",
+      "password": "a password minted at another cost",
+      "phc": "$argon2id$v=19$m=8192,t=3,p=2$LDN/2oy55EDWotPNrj6GdQ$7OaQ5Lh293D4q6EwsJHTi03DuIOu0uDKaJRNIHn+9ko"
+    },
+    {
+      "minted_by": "kotlin",
+      "cost": "default",
+      "password": "correct horse battery staple",
+      "phc": "$argon2id$v=19$m=19456,t=2,p=1$f6u3WOHMCRUa2krTaaaVKw$uHSgFtjphgJ2mviHKI8xAUnTFf2CNJACsUGpeNG/kEk"
+    },
+    {
+      "minted_by": "kotlin",
+      "cost": "default",
+      "password": "pässwörd 🔐 ünïcode",
+      "phc": "$argon2id$v=19$m=19456,t=2,p=1$oBxfOFKP9jMt0pYp07T2fA$TzbPatyWeHcPB/KeykDyEiDlL8i4wYfvZQjIWyGBwjw"
+    },
+    {
+      "minted_by": "kotlin",
+      "cost": "m=8192,t=3,p=2",
+      "password": "a password minted at another cost",
+      "phc": "$argon2id$v=19$m=8192,t=3,p=2$SUVjp6O3W4SpiAl/98s2vw$EaQ0zcogYlb5tDAFdstTqg3yX/7eWt/d4I45pnL9ekY"
+    }
+  ],
+  "rejects": [
+    {
+      "why": "wrong password, Go-minted hash",
+      "password": "Correct horse battery staple",
+      "phc": "$argon2id$v=19$m=19456,t=2,p=1$M6bmkF0B1tq3WPmzGs3mpQ$ipot4Ss0cTnDO3H3/I1pGxs1OItkMQsR1zeehdSA800"
+    },
+    {
+      "why": "wrong password, Kotlin-minted hash",
+      "password": "correct horse battery staple ",
+      "phc": "$argon2id$v=19$m=19456,t=2,p=1$f6u3WOHMCRUa2krTaaaVKw$uHSgFtjphgJ2mviHKI8xAUnTFf2CNJACsUGpeNG/kEk"
+    },
+    {
+      "why": "empty string",
+      "password": "correct horse battery staple",
+      "phc": ""
+    },
+    {
+      "why": "too few fields",
+      "password": "correct horse battery staple",
+      "phc": "$argon2id$v=19$m=19456,t=2,p=1$M6bmkF0B1tq3WPmzGs3mpQ"
+    },
+    {
+      "why": "too many fields",
+      "password": "correct horse battery staple",
+      "phc": "$argon2id$v=19$m=19456,t=2,p=1$M6bmkF0B1tq3WPmzGs3mpQ$ipot4Ss0cTnDO3H3/I1pGxs1OItkMQsR1zeehdSA800$extra"
+    },
+    {
+      "why": "not argon2 at all",
+      "password": "correct horse battery staple",
+      "phc": "$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy"
+    },
+    {
+      "why": "argon2i, not argon2id",
+      "minted_by": "bouncycastle",
+      "password": "correct horse battery staple",
+      "phc": "$argon2i$v=19$m=19456,t=2,p=1$M6bmkF0B1tq3WPmzGs3mpQ$X2EATdhM1W17JjMEwb9jW+koAtC0S/IISKu8I76xlxQ"
+    },
+    {
+      "why": "argon2d, not argon2id",
+      "minted_by": "bouncycastle",
+      "password": "correct horse battery staple",
+      "phc": "$argon2d$v=19$m=19456,t=2,p=1$M6bmkF0B1tq3WPmzGs3mpQ$ymg16tXjEfy/Y9fct3fKdocH4pE/vSrDKKBFV3J35dQ"
+    },
+    {
+      "why": "version 16, not 19",
+      "minted_by": "bouncycastle",
+      "password": "correct horse battery staple",
+      "phc": "$argon2id$v=16$m=19456,t=2,p=1$M6bmkF0B1tq3WPmzGs3mpQ$4a/8qi3kvWylwUUNrP22SwP9bxTHO14RsPspxEKWkhM"
+    },
+    {
+      "why": "version unparseable",
+      "password": "correct horse battery staple",
+      "phc": "$argon2id$v=x$m=19456,t=2,p=1$M6bmkF0B1tq3WPmzGs3mpQ$ipot4Ss0cTnDO3H3/I1pGxs1OItkMQsR1zeehdSA800"
+    },
+    {
+      "why": "parameters missing",
+      "password": "correct horse battery staple",
+      "phc": "$argon2id$v=19$$M6bmkF0B1tq3WPmzGs3mpQ$ipot4Ss0cTnDO3H3/I1pGxs1OItkMQsR1zeehdSA800"
+    },
+    {
+      "why": "parameters unparseable",
+      "password": "correct horse battery staple",
+      "phc": "$argon2id$v=19$m=a,t=b,p=c$M6bmkF0B1tq3WPmzGs3mpQ$ipot4Ss0cTnDO3H3/I1pGxs1OItkMQsR1zeehdSA800"
+    },
+    {
+      "why": "zero iterations",
+      "password": "correct horse battery staple",
+      "phc": "$argon2id$v=19$m=19456,t=0,p=1$M6bmkF0B1tq3WPmzGs3mpQ$ipot4Ss0cTnDO3H3/I1pGxs1OItkMQsR1zeehdSA800"
+    },
+    {
+      "why": "zero parallelism",
+      "password": "correct horse battery staple",
+      "phc": "$argon2id$v=19$m=19456,t=2,p=0$M6bmkF0B1tq3WPmzGs3mpQ$ipot4Ss0cTnDO3H3/I1pGxs1OItkMQsR1zeehdSA800"
+    },
+    {
+      "why": "memory below the minimum",
+      "minted_by": "go",
+      "password": "correct horse battery staple",
+      "phc": "$argon2id$v=19$m=1,t=2,p=1$M6bmkF0B1tq3WPmzGs3mpQ$Ew90WOC2z/7/92eyKqNLSXXB68drfD1z9DEhXvaWhWI"
+    },
+    {
+      "why": "memory zero",
+      "minted_by": "go",
+      "password": "correct horse battery staple",
+      "phc": "$argon2id$v=19$m=0,t=2,p=1$M6bmkF0B1tq3WPmzGs3mpQ$PaFrAV4nKVT0ah/Zb0wJvR93GBN+8Ce91fLVImT4qCc"
+    },
+    {
+      "why": "memory below 8 KiB per lane",
+      "minted_by": "go",
+      "password": "correct horse battery staple",
+      "phc": "$argon2id$v=19$m=15,t=2,p=2$M6bmkF0B1tq3WPmzGs3mpQ$MV/cGp/gTU3mksDsg7U7JY3lcaMbkwTvl4YaXX/iDAg"
+    },
+    {
+      "why": "memory beyond 2^24 KiB: BouncyCastle's ceiling, and x/crypto has none",
+      "password": "correct horse battery staple",
+      "phc": "$argon2id$v=19$m=16777217,t=1,p=1$M6bmkF0B1tq3WPmzGs3mpQ$ipot4Ss0cTnDO3H3/I1pGxs1OItkMQsR1zeehdSA800"
+    },
+    {
+      "why": "iterations beyond 2^31-1: fits Go's uint32, not Spring's int",
+      "password": "correct horse battery staple",
+      "phc": "$argon2id$v=19$m=19456,t=2147483648,p=1$M6bmkF0B1tq3WPmzGs3mpQ$ipot4Ss0cTnDO3H3/I1pGxs1OItkMQsR1zeehdSA800"
+    },
+    {
+      "why": "salt not base64",
+      "password": "correct horse battery staple",
+      "phc": "$argon2id$v=19$m=19456,t=2,p=1$***$ipot4Ss0cTnDO3H3/I1pGxs1OItkMQsR1zeehdSA800"
+    },
+    {
+      "why": "salt empty",
+      "password": "correct horse battery staple",
+      "phc": "$argon2id$v=19$m=19456,t=2,p=1$$ipot4Ss0cTnDO3H3/I1pGxs1OItkMQsR1zeehdSA800"
+    },
+    {
+      "why": "salt of a length base64 cannot decode",
+      "password": "correct horse battery staple",
+      "phc": "$argon2id$v=19$m=19456,t=2,p=1$M6bmk$ipot4Ss0cTnDO3H3/I1pGxs1OItkMQsR1zeehdSA800"
+    },
+    {
+      "why": "hash not base64",
+      "password": "correct horse battery staple",
+      "phc": "$argon2id$v=19$m=19456,t=2,p=1$M6bmkF0B1tq3WPmzGs3mpQ$***"
+    },
+    {
+      "why": "hash empty: must not verify every password",
+      "password": "correct horse battery staple",
+      "phc": "$argon2id$v=19$m=19456,t=2,p=1$M6bmkF0B1tq3WPmzGs3mpQ$"
+    },
+    {
+      "why": "hash truncated",
+      "password": "correct horse battery staple",
+      "phc": "$argon2id$v=19$m=19456,t=2,p=1$M6bmkF0B1tq3WPmzGs3mpQ$ipot4Ss0cTnDO3H3/I1pGxs1OItkMQsR1ze"
+    },
+    {
+      "why": "hash of a length base64 cannot decode",
+      "password": "correct horse battery staple",
+      "phc": "$argon2id$v=19$m=19456,t=2,p=1$M6bmkF0B1tq3WPmzGs3mpQ$ipot4Ss0cTnDO3H3/I1pGxs1OItkMQsR1zeehdSA8"
+    },
+    {
+      "why": "hash shorter than 4 bytes",
+      "minted_by": "go",
+      "password": "correct horse battery staple",
+      "phc": "$argon2id$v=19$m=19456,t=2,p=1$M6bmkF0B1tq3WPmzGs3mpQ$ugtC"
+    },
+    {
+      "why": "version with trailing text",
+      "password": "correct horse battery staple",
+      "phc": "$argon2id$v=19x$m=19456,t=2,p=1$M6bmkF0B1tq3WPmzGs3mpQ$ipot4Ss0cTnDO3H3/I1pGxs1OItkMQsR1zeehdSA800"
+    },
+    {
+      "why": "version with a leading zero",
+      "minted_by": "go",
+      "password": "correct horse battery staple",
+      "phc": "$argon2id$v=019$m=19456,t=2,p=1$M6bmkF0B1tq3WPmzGs3mpQ$ipot4Ss0cTnDO3H3/I1pGxs1OItkMQsR1zeehdSA800"
+    },
+    {
+      "why": "parameters with trailing text",
+      "password": "correct horse battery staple",
+      "phc": "$argon2id$v=19$m=19456,t=2,p=1x$M6bmkF0B1tq3WPmzGs3mpQ$ipot4Ss0cTnDO3H3/I1pGxs1OItkMQsR1zeehdSA800"
+    },
+    {
+      "why": "parameters in another order",
+      "password": "correct horse battery staple",
+      "phc": "$argon2id$v=19$t=2,m=19456,p=1$M6bmkF0B1tq3WPmzGs3mpQ$ipot4Ss0cTnDO3H3/I1pGxs1OItkMQsR1zeehdSA800"
+    },
+    {
+      "why": "parameters with spaces",
+      "password": "correct horse battery staple",
+      "phc": "$argon2id$v=19$m=19456, t=2, p=1$M6bmkF0B1tq3WPmzGs3mpQ$ipot4Ss0cTnDO3H3/I1pGxs1OItkMQsR1zeehdSA800"
+    },
+    {
+      "why": "parallelism beyond 255",
+      "minted_by": "bouncycastle",
+      "password": "correct horse battery staple",
+      "phc": "$argon2id$v=19$m=19456,t=2,p=256$M6bmkF0B1tq3WPmzGs3mpQ$qdY5b0CmOllWSIQetF+FQxmqLd+9lmL14WMDl+QCI7Q"
+    },
+    {
+      "why": "salt with base64 padding",
+      "password": "correct horse battery staple",
+      "phc": "$argon2id$v=19$m=19456,t=2,p=1$M6bmkF0B1tq3WPmzGs3mpQ==$ipot4Ss0cTnDO3H3/I1pGxs1OItkMQsR1zeehdSA800"
+    },
+    {
+      "why": "hash with base64 padding",
+      "password": "correct horse battery staple",
+      "phc": "$argon2id$v=19$m=19456,t=2,p=1$M6bmkF0B1tq3WPmzGs3mpQ$ipot4Ss0cTnDO3H3/I1pGxs1OItkMQsR1zeehdSA800="
+    },
+    {
+      "why": "base64url alphabet, not standard",
+      "password": "correct horse battery staple",
+      "phc": "$argon2id$v=19$m=19456,t=2,p=1$M6bmkF0B1tq3WPmzGs3mpQ$ipot4Ss0cTnDO3H3_I1pGxs1OItkMQsR1zeehdSA800"
+    }
+  ]
+}

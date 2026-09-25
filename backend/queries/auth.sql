@@ -80,9 +80,16 @@ VALUES ($1, 1, now() + sqlc.arg(first_backoff)::interval)
 ON CONFLICT (key) DO UPDATE SET
     failure_count = login_attempts.failure_count + 1,
     -- Exponential, capped: 2^n seconds from the first failure, never longer
-    -- than the cap. Backoff, never a hard lockout.
+    -- than the cap. Backoff, never a hard lockout. The exponent stops one past
+    -- the first doubling that reaches the cap: unclamped, the product
+    -- overflows interval at failure 45 at 1s, the statement fails, the row
+    -- stops updating and its key is never throttled again.
     backoff_until = now() + least(
-        sqlc.arg(first_backoff)::interval * pow(2, login_attempts.failure_count),
+        sqlc.arg(first_backoff)::interval * pow(2, least(
+            login_attempts.failure_count,
+            ceil(log(2, extract(epoch FROM sqlc.arg(max_backoff)::interval)
+                / extract(epoch FROM sqlc.arg(first_backoff)::interval)))::int + 1
+        )),
         sqlc.arg(max_backoff)::interval
     ),
     updated_at = now();

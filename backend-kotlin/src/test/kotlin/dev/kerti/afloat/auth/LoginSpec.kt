@@ -245,6 +245,10 @@ class LoginSpec : WebDatabaseSpec() {
             val invalidJson = """{"code":"INVALID_JSON_BODY"}"""
             listOf(
                 "" to invalidJson,
+                " \n\t" to invalidJson,
+                // Jackson reads null, and Spring then refuses a required body
+                // that is null.
+                "null" to invalidJson,
                 """{}""" to validation("email", "required"),
                 """{"password":"x"}""" to validation("email", "required"),
                 // kin-openapi and Jackson would both reach password first; the

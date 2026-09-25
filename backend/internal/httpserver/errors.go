@@ -22,8 +22,11 @@ import (
 // requestErrorHandler covers a body the generated code could not decode. The
 // spec-validating middleware (openapi_validate.go) reads and checks every
 // declared body first, so malformed JSON and a body cut short by maxBodyBytes'
-// 1 MiB cap are answered there; this stays wired for a body that passes the
-// contract and still fails the generated decode, which should not happen.
+// 1 MiB cap are answered there. What reaches this is a body that passes the
+// contract and still fails the generated decode: a duplicate key whose earlier
+// value has the wrong type. kin-openapi checks only the last value, where
+// encoding/json type-checks every one, as Jackson does. The error text names
+// the JSON kind (number, array), never the value.
 func requestErrorHandler(w http.ResponseWriter, r *http.Request, err error) {
 	slog.Warn("request body rejected", "path", r.URL.Path, "err", err)
 	httperr.Write(w, http.StatusBadRequest, httperr.CodeInvalidJSONBody, nil)

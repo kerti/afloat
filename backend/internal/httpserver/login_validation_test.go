@@ -87,7 +87,7 @@ func TestLoginRequestValidation(t *testing.T) {
 		},
 		{
 			// kin-openapi checks present properties before required ones, so
-			// it finds password's first; Kotlin reports the least field name.
+			// it finds password's first; the (field, rule) sort says email.
 			name:      "email absent and password empty",
 			body:      `{"password":""}`,
 			wantField: "email",
@@ -130,6 +130,13 @@ func TestLoginRequestValidation(t *testing.T) {
 			body:      `{"email":"  a@example.com  "}`,
 			wantField: "password",
 			wantRule:  "required",
+		},
+		{
+			// Of a duplicate key, the last value is the one validated.
+			name:      "email duplicated, the last not an address",
+			body:      `{"email":"a@example.com","password":"a valid password","email":"not-an-email"}`,
+			wantField: "email",
+			wantRule:  "email",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -174,6 +181,9 @@ func TestLoginRequestValidationUndecodableBodyIsInvalidJSONBody(t *testing.T) {
 		{name: "unknown property beside an absent field", body: `{"password":"","admin":true}`},
 		{name: "null beside an absent field", body: `{"password":null}`},
 		{name: "boolean where a string belongs", body: `{"email":"a@example.com","password":true}`},
+		// kin-openapi validates only the last value; the generated decode
+		// (requestErrorHandler) and Jackson type-check every one.
+		{name: "duplicate key, the earlier of the wrong type", body: `{"email":"a@example.com","password":5,"password":"a valid password"}`},
 		{name: "malformed JSON", body: `{"email": `},
 		{name: "data after the JSON value", body: `{"email":"a@example.com","password":"a valid password"} x`},
 		{name: "a second JSON value", body: `{"email":"a@example.com","password":"a valid password"}{}`},
@@ -498,6 +508,16 @@ func TestLoginCountsPasswordLengthInCodePoints(t *testing.T) {
 		t.Fatalf("status = %d, want 400 (body %s)", rec.Code, rec.Body.String())
 	}
 	assertValidationArgs(t, rec, "password", "max")
+}
+
+// Of a duplicate key, the last value is the one read: an earlier value that is
+// not an address does not stop the login. Kotlin's LoginSpec "reads the last
+// value of a duplicate key, as Go does" logs in with the same shape of body.
+func TestLoginReadsTheLastOfADuplicateKey(t *testing.T) {
+	rec, called := postLoginToSpy(`{"email":"not-an-email","password":"a valid password","email":"a@example.com"}`)
+	if !called {
+		t.Errorf("the last, valid email did not reach the handler: status %d (body %s)", rec.Code, rec.Body.String())
+	}
 }
 
 // A body declared as Latin-1 is still read as UTF-8, so 4096 "é" are 4096

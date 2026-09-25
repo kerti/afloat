@@ -114,18 +114,18 @@ func TestLoginRequestValidationRootTypeMismatchIsInvalidJSONBody(t *testing.T) {
 	assertEnvelope(t, rec, "INVALID_JSON_BODY")
 }
 
-// spyQuerier records whether GetUserByEmail was reached, standing in for
+// emailLookupSpy records whether GetUserByEmail was reached, standing in for
 // "did the handler start doing Argon2 work". verify() (login.go) calls
 // VerifyPassword unconditionally once it gets past the lookup — for both a
 // found and an unknown address, by design (enumeration resistance) — so a
 // GetUserByEmail that was never called is proof the handler, and therefore
 // Argon2, never ran at all.
-type spyQuerier struct {
+type emailLookupSpy struct {
 	db.Querier
 	called *bool
 }
 
-func (s spyQuerier) GetUserByEmail(context.Context, string) (db.User, error) {
+func (s emailLookupSpy) GetUserByEmail(context.Context, string) (db.User, error) {
 	*s.called = true
 	return db.User{}, pgx.ErrNoRows
 }
@@ -135,7 +135,7 @@ func (s spyQuerier) GetUserByEmail(context.Context, string) (db.User, error) {
 // (#18's acceptance criteria, BOOTSTRAP.md §5.1's length cap).
 func TestLoginDoesNotHashAnOversizePassword(t *testing.T) {
 	called := false
-	q := spyQuerier{called: &called}
+	q := emailLookupSpy{called: &called}
 	srv := New(Deps{
 		System: system.New(system.Deps{Querier: q, Version: "test", LocalEnabled: true}),
 		Auth: auth.New(auth.Deps{
@@ -144,6 +144,7 @@ func TestLoginDoesNotHashAnOversizePassword(t *testing.T) {
 			SessionMaxLifetime: 90 * 24 * time.Hour,
 			CookieSecure:       true,
 		}),
+		HandlerTimeout: testHandlerTimeout,
 	})
 
 	body := `{"email":"a@example.com","password":"` + strings.Repeat("a", 4097) + `"}`
@@ -173,7 +174,7 @@ func TestLoginOverHTTPTrimsAPaddedEmailAndSucceeds(t *testing.T) {
 	userID := tdb.CreateUser(t, householdID, "a@example.com", "Test User")
 
 	const password = "kucing oranye di atap"
-	hash, err := auth.HashPassword(password)
+	hash, err := auth.HashPassword(context.Background(), password)
 	if err != nil {
 		t.Fatalf("HashPassword: %v", err)
 	}
@@ -193,6 +194,7 @@ func TestLoginOverHTTPTrimsAPaddedEmailAndSucceeds(t *testing.T) {
 			SessionMaxLifetime: 90 * 24 * time.Hour,
 			CookieSecure:       true,
 		}),
+		HandlerTimeout: testHandlerTimeout,
 	})
 
 	body := `{"email":"  A@Example.COM  ","password":"` + password + `"}`

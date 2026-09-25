@@ -163,6 +163,9 @@ func TestLoginRequestValidationUndecodableBodyIsInvalidJSONBody(t *testing.T) {
 		noContentType bool
 	}{
 		{name: "empty body", body: ``},
+		{name: "only whitespace", body: " \n\t"},
+		// Jackson reads null, and Spring then refuses a required body that is null.
+		{name: "root is null", body: `null`},
 		{name: "root is not an object", body: `["not","an","object"]`},
 		{name: "field of the wrong type", body: `{"email":5,"password":"a valid password"}`},
 		{name: "field is null", body: `{"email":null,"password":"a valid password"}`},

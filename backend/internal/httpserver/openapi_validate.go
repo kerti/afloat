@@ -167,7 +167,8 @@ func openapiRequestValidator() func(http.Handler) http.Handler {
 // and Spring reads them as JSON. The parameters are left for the decoder,
 // which ignores them.
 //
-// ASCII letters only, as Spring lowercases: strings.ToLower also folds U+0130
+// ASCII letters only: Spring refuses any other character as a token before it
+// lowercases, so only ASCII ever folds there. strings.ToLower also folds U+0130
 // to "i", which made "applİcation/json" JSON here and a bad token there.
 func canonicalMediaType(h http.Header) {
 	contentType := h.Get("Content-Type")
@@ -277,8 +278,8 @@ func collectFailures(err error, found *[]failure) (fault error) {
 			collectBodyFailures(e.Err, found)
 			return nil
 		}
-		// A required body that is empty, or a Content-Type the operation does
-		// not list. kin-openapi's text for these carries no body content.
+		// A Content-Type the operation does not list. kin-openapi's text for it
+		// quotes the header, never the body.
 		*found = append(*found, failure{undecodable: e.Error()})
 		return nil
 	default:
@@ -303,8 +304,8 @@ func collectBodyFailures(err error, found *[]failure) {
 		})
 	default:
 		// The body did not parse (a *ParseError, which strictJSONBodyDecoder
-		// keeps to an offset), or could not be read at all, e.g. cut short by
-		// maxBodyBytes.
+		// keeps to an offset), was empty (ErrInvalidRequired), or could not be
+		// read at all, e.g. cut short by maxBodyBytes.
 		*found = append(*found, failure{undecodable: err.Error()})
 	}
 }

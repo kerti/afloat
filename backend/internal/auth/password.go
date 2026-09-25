@@ -164,6 +164,9 @@ type argonParams struct {
 // verified in one backend and not the other: Sscanf read "v=19x" as 19 and
 // ignored text after the parameters, Atoi read "v=019" as 19, and Spring's
 // decoder ignores a sixth field and accepts base64 padding.
+// BouncyCastle's ceiling on Argon2 memory, in KiB: 16 GiB.
+const argonMaxMemory = 1 << 24
+
 var phcShape = regexp.MustCompile(`^\$argon2id\$v=19\$m=(\d+),t=(\d+),p=(\d+)\$([A-Za-z0-9+/]+)\$([A-Za-z0-9+/]{6,})$`)
 
 func parsePHC(phc string) (argonParams, []byte, []byte, error) {
@@ -178,11 +181,12 @@ func parsePHC(phc string) (argonParams, []byte, []byte, error) {
 	// malformed stored string would crash a login into the recoverer's 500
 	// where Kotlin answers "does not verify". Below 8 KiB per lane both
 	// libraries quietly raise memory to that floor, so the string no longer
-	// states the work done, and at m=0 only Spring refuses. Spring reads memory
-	// and iterations as an int.
+	// states the work done, and at m=0 only Spring refuses. Above 2^24 KiB
+	// BouncyCastle refuses (its default argon2.max_memory_exp) and x/crypto
+	// would try to allocate it. Spring reads iterations as an int.
 	if err := errors.Join(errM, errT, errP); err != nil ||
 		iterations < 1 || iterations > math.MaxInt32 ||
-		threads < 1 || memory < 8*threads || memory > math.MaxInt32 {
+		threads < 1 || memory < 8*threads || memory > argonMaxMemory {
 		return argonParams{}, nil, nil, errors.New("argon2 parameters out of range")
 	}
 

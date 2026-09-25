@@ -352,8 +352,9 @@ failure writes, is `contract/testdata/login_backoff.json`; both suites read it, 
 own defaults to it (#16). The same goes for Argon2id: `contract/testdata/argon2.json` carries hashes
 minted by each backend, which must verify in both, and strings neither may accept. The accepted
 spelling is exactly `$argon2id$v=19$m=…,t=…,p=…$salt$hash`, unpadded standard base64,
-`8p ≤ m ≤ 2³¹−1`, `1 ≤ t ≤ 2³¹−1`, `1 ≤ p ≤ 255`, and a hash of at least 4 bytes: Spring's decoder is
-looser than that and Go's parser was, and a malformed stored
+`8p ≤ m ≤ 2²⁴` KiB (BouncyCastle's ceiling), `1 ≤ t ≤ 2³¹−1`, `1 ≤ p ≤ 255`, a hash of at least 4 bytes,
+and no base64 segment of a length that cannot decode: Spring's decoder is looser than that and Go's
+parser was, and a malformed stored
 string answers "does not verify" in both, never an exception or a panic.
 
 **A database outage is not a statement about an account (#23, #27).** Only a lookup that genuinely

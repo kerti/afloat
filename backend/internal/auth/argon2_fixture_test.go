@@ -1,9 +1,15 @@
 package auth
 
 import (
+	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"os"
+	"regexp"
+	"strconv"
 	"testing"
+
+	"golang.org/x/crypto/argon2"
 )
 
 // The PHC strings both backends must read alike (contract/testdata/argon2.json,
@@ -19,6 +25,7 @@ type argon2Fixture struct {
 	} `json:"verifies"`
 	Rejects []struct {
 		Why      string `json:"why"`
+		MintedBy string `json:"minted_by"`
 		Password string `json:"password"`
 		PHC      string `json:"phc"`
 	} `json:"rejects"`
@@ -71,5 +78,44 @@ func TestArgon2FixtureRejects(t *testing.T) {
 				t.Errorf("verified, want refused: %q", c.PHC)
 			}
 		})
+	}
+}
+
+// A reject row that tests a shape rule is worth something only while its tag is
+// the one a lenient parser would compute: with any other tag it is refused by
+// the mismatch, and the rule it names goes untested. So the Go-minted tags are
+// recomputed here from whatever the string says, read as loosely as the old
+// Sscanf parser read it. Kotlin's PasswordFixtureSpec does the same for the
+// BouncyCastle-minted ones.
+var lenientPHC = regexp.MustCompile(`^\$argon2id\$v=(\d+)\$m=(\d+),t=(\d+),p=(\d+)\$([^$]+)\$([^$]+)$`)
+
+func TestArgon2FixtureGoMintedTagsAreGenuine(t *testing.T) {
+	minted := 0
+	for _, c := range loadArgon2Fixture(t).Rejects {
+		if c.MintedBy != "go" {
+			continue
+		}
+		minted++
+		t.Run(c.Why, func(t *testing.T) {
+			f := lenientPHC.FindStringSubmatch(c.PHC)
+			if f == nil {
+				t.Fatalf("not even loosely an argon2id PHC string: %q", c.PHC)
+			}
+			memory, _ := strconv.ParseUint(f[2], 10, 32)
+			iterations, _ := strconv.ParseUint(f[3], 10, 32)
+			threads, _ := strconv.ParseUint(f[4], 10, 8)
+			salt, errS := base64.RawStdEncoding.DecodeString(f[5])
+			tag, errH := base64.RawStdEncoding.DecodeString(f[6])
+			if errS != nil || errH != nil {
+				t.Fatalf("salt or tag does not decode: %q", c.PHC)
+			}
+			got := argon2.IDKey([]byte(c.Password), salt, uint32(iterations), uint32(memory), uint8(threads), uint32(len(tag)))
+			if !bytes.Equal(got, tag) {
+				t.Errorf("tag is not what x/crypto computes for these parameters, so only the mismatch refuses it: %q", c.PHC)
+			}
+		})
+	}
+	if minted == 0 {
+		t.Fatal("no Go-minted reject rows: the shape rules they test have no genuine tag behind them")
 	}
 }

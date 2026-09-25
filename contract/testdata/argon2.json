@@ -5,11 +5,13 @@
     "directions and is shown to read the cost from the string rather than from the current constants.",
     "`rejects`: each must answer 'does not verify' in both backends - never an error, a panic or a 500.",
     "The accepted shape is exactly $argon2id$v=19$m=<n>,t=<n>,p=<n>$<salt>$<hash>: unpadded standard base64,",
-    "8*p <= m <= 2^31-1, 1 <= t <= 2^31-1, 1 <= p <= 255, and a hash of at least 4 bytes.",
+    "8*p <= m <= 2^24 (KiB), 1 <= t <= 2^31-1, 1 <= p <= 255, a hash of at least 4 bytes, and neither base64",
+    "segment of a length that cannot decode (1 mod 4).",
     "A reject row that tests a shape rule carries the tag a lenient parser would compute for the parameters",
     "it reads, so only the rule refuses it, not a tag mismatch. `minted_by` names what computed the tag:",
     "go (x/crypto/argon2), bouncycastle (Argon2BytesGenerator, for what x/crypto cannot express), or absent",
-    "where no tag can be computed. Regenerate an entry by minting it, never by editing the tag."
+    "where no tag can be computed. Each backend's suite recomputes the tags it can mint, so a tag that stops",
+    "being genuine fails there. Regenerate an entry by minting it, never by editing the tag."
   ],
   "verifies": [
     {
@@ -142,9 +144,9 @@
       "phc": "$argon2id$v=19$m=15,t=2,p=2$M6bmkF0B1tq3WPmzGs3mpQ$MV/cGp/gTU3mksDsg7U7JY3lcaMbkwTvl4YaXX/iDAg"
     },
     {
-      "why": "memory beyond 2^31-1: fits Go's uint32, not Spring's int",
+      "why": "memory beyond 2^24 KiB: BouncyCastle's ceiling, and x/crypto has none",
       "password": "correct horse battery staple",
-      "phc": "$argon2id$v=19$m=2147483648,t=1,p=1$M6bmkF0B1tq3WPmzGs3mpQ$ipot4Ss0cTnDO3H3/I1pGxs1OItkMQsR1zeehdSA800"
+      "phc": "$argon2id$v=19$m=16777217,t=1,p=1$M6bmkF0B1tq3WPmzGs3mpQ$ipot4Ss0cTnDO3H3/I1pGxs1OItkMQsR1zeehdSA800"
     },
     {
       "why": "iterations beyond 2^31-1: fits Go's uint32, not Spring's int",
@@ -162,6 +164,11 @@
       "phc": "$argon2id$v=19$m=19456,t=2,p=1$$ipot4Ss0cTnDO3H3/I1pGxs1OItkMQsR1zeehdSA800"
     },
     {
+      "why": "salt of a length base64 cannot decode",
+      "password": "correct horse battery staple",
+      "phc": "$argon2id$v=19$m=19456,t=2,p=1$M6bmk$ipot4Ss0cTnDO3H3/I1pGxs1OItkMQsR1zeehdSA800"
+    },
+    {
       "why": "hash not base64",
       "password": "correct horse battery staple",
       "phc": "$argon2id$v=19$m=19456,t=2,p=1$M6bmkF0B1tq3WPmzGs3mpQ$***"
@@ -175,6 +182,11 @@
       "why": "hash truncated",
       "password": "correct horse battery staple",
       "phc": "$argon2id$v=19$m=19456,t=2,p=1$M6bmkF0B1tq3WPmzGs3mpQ$ipot4Ss0cTnDO3H3/I1pGxs1OItkMQsR1ze"
+    },
+    {
+      "why": "hash of a length base64 cannot decode",
+      "password": "correct horse battery staple",
+      "phc": "$argon2id$v=19$m=19456,t=2,p=1$M6bmkF0B1tq3WPmzGs3mpQ$ipot4Ss0cTnDO3H3/I1pGxs1OItkMQsR1zeehdSA8"
     },
     {
       "why": "hash shorter than 4 bytes",

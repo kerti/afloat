@@ -43,7 +43,9 @@ class LoginBackoffFixtureSpec : WebDatabaseSpec() {
                     (failuresWanted > recorded) shouldBe true
                 }
                 while (recorded < failuresWanted) {
-                    loginAttempts.recordFailure("email:curve@example.com", first.toSecondsDouble(), max.toSecondsDouble())
+                    withClue("recording failure ${recorded + 1}") {
+                        loginAttempts.recordFailure("email:curve@example.com", first.toSecondsDouble(), max.toSecondsDouble())
+                    }
                     recorded++
                 }
                 val (failures, window) = JdbcClient.create(dataSource)

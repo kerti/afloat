@@ -153,11 +153,12 @@ class ApiExceptionHandler {
         // One @Size carries both bounds, where Go writes them as separate
         // `min=` and `max=` tags and reports whichever failed. Collapsing both
         // to "max" hands the frontend the key for "too long" when the value was
-        // too short, so the bound is recovered from the constraint itself.
+        // too short, so the bound is recovered from the constraint itself. A
+        // string is measured as CodePointSizeValidator measures it.
         private fun sizeBound(min: Int?, rejected: Any?): String {
             if (min == null) return "max"
             val length = when (rejected) {
-                is CharSequence -> rejected.length
+                is CharSequence -> Character.codePointCount(rejected, 0, rejected.length)
                 is Collection<*> -> rejected.size
                 is Map<*, *> -> rejected.size
                 is Array<*> -> rejected.size

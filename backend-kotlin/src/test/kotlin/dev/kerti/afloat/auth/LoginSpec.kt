@@ -252,6 +252,7 @@ class LoginSpec : WebDatabaseSpec() {
                 // Hibernate's @Email alone calls "" valid.
                 """{"email":"","password":"x"}""" to validation("email", "email"),
                 """{"email":"   ","password":"x"}""" to validation("email", "email"),
+                """{"email":"  user@example.com  "}""" to validation("password", "required"),
                 """{"email":5,"password":"x"}""" to invalidJson,
                 """{"email":"user@example.com","password":true}""" to invalidJson,
                 """{"email":null,"password":"x"}""" to invalidJson,
@@ -259,6 +260,7 @@ class LoginSpec : WebDatabaseSpec() {
                 """{"password":"","admin":true}""" to invalidJson,
                 """["user@example.com"]""" to invalidJson,
                 """{"email":"user@example.com","password":"x"} x""" to invalidJson,
+                """{"password":"x"} x""" to invalidJson,
                 """{"email":"user@example.com","password":"x"}{}""" to invalidJson,
             ).forEach { (body, expected) ->
                 withClue(body) {
@@ -275,17 +277,32 @@ class LoginSpec : WebDatabaseSpec() {
                 .query(Long::class.java).single() shouldBe 0L
         }
 
-        // Go's rows that no String body can carry: bytes that are not UTF-8, and
-        // a JSON body not declared as JSON.
+        // Go's rows that no String body can carry: bytes that are not UTF-8 JSON
+        // text, which Jackson alone would read (JsonTextAdvice), and a JSON body
+        // not declared as JSON.
         "answers a body that is not UTF-8 JSON exactly as Go does" {
             AuthFixtures.account(dataSource)
-            val notUtf8 = """{"email":"user@example.com","password":"x""".toByteArray() +
-                0xff.toByte() + """"}""".toByteArray()
+            fun bytes(vararg parts: Any): ByteArray = parts.fold(ByteArray(0)) { acc, part ->
+                acc + when (part) {
+                    is String -> part.toByteArray()
+                    is Int -> byteArrayOf(part.toByte())
+                    else -> error("unexpected part $part")
+                }
+            }
+            val valid = loginBody("user@example.com", AuthFixtures.PASSWORD)
+            val notUtf8 = bytes("""{"email":"user@example.com","password":"x""", 0xff, """"}""")
+            val latin1 = MediaType(MediaType.APPLICATION_JSON, Charsets.ISO_8859_1)
             listOf(
-                MediaType.APPLICATION_JSON to notUtf8,
-                MediaType.TEXT_PLAIN to loginBody("user@example.com", AuthFixtures.PASSWORD).toByteArray(),
-            ).forEach { (type, body) ->
-                withClue(type) {
+                Triple("not UTF-8", MediaType.APPLICATION_JSON, notUtf8),
+                Triple("overlong UTF-8", MediaType.APPLICATION_JSON, bytes("""{"email":"user@example.com","password":"x""", 0xc0, 0xa0, """"}""")),
+                Triple("overlong UTF-8 beside an absent field", MediaType.APPLICATION_JSON, bytes("""{"password":"x""", 0xc0, 0xa0, """"}""")),
+                Triple("byte order mark", MediaType.APPLICATION_JSON, bytes(0xef, 0xbb, 0xbf, valid)),
+                Triple("UTF-16", MediaType.APPLICATION_JSON, valid.toByteArray(Charsets.UTF_16LE)),
+                // application/json has no charset parameter (RFC 8259 §11).
+                Triple("not UTF-8, declared as Latin-1", latin1, notUtf8),
+                Triple("not declared as JSON", MediaType.TEXT_PLAIN, valid.toByteArray()),
+            ).forEach { (name, type, body) ->
+                withClue(name) {
                     val result = mockMvc.perform(post(loginPath).contentType(type).content(body)).andReturn()
 
                     result.response.status shouldBe 400
@@ -358,6 +375,12 @@ class LoginSpec : WebDatabaseSpec() {
             val longEmail = "a".repeat(310) + "@example.com" // 322 characters
             val overLongEmail = login(longEmail, AuthFixtures.PASSWORD)
             val overLongPassword = login("user@example.com", "a".repeat(4097))
+            // Length is counted in code points, as JSON Schema and Go count it
+            // (TestLoginCountsPasswordLengthInCodePoints): an emoji is one
+            // character, not two UTF-16 units.
+            val emoji = "\uD83D\uDE00"
+            val longestEmojiPassword = login("user@example.com", emoji.repeat(4096))
+            val overLongEmojiPassword = login("user@example.com", emoji.repeat(4097))
 
             withClue("email of ${longEmail.length} characters") {
                 overLongEmail.response.status shouldBe 400
@@ -369,6 +392,13 @@ class LoginSpec : WebDatabaseSpec() {
                 // The other bound of the same @Size: the ceiling still reports
                 // "max", so recovering the failing bound did not invert it.
                 overLongPassword.response.contentAsString shouldContain "\"rule\":\"max\""
+            }
+            withClue("password of 4096 emoji") {
+                longestEmojiPassword.response.status shouldBe 401
+            }
+            withClue("password of 4097 emoji") {
+                overLongEmojiPassword.response.contentAsString shouldBe
+                    """{"code":"VALIDATION","args":{"field":"password","rule":"max"}}"""
             }
         }
     }

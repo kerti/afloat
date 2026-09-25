@@ -1,11 +1,9 @@
 package dev.kerti.afloat.httperr
 
 import com.fasterxml.jackson.annotation.JsonProperty
-import dev.kerti.afloat.api.model.LocalLoginRequest
 import jakarta.validation.ConstraintViolation
 import jakarta.validation.Validator
 import org.springframework.core.MethodParameter
-import org.springframework.http.HttpHeaders
 import org.springframework.http.HttpInputMessage
 import org.springframework.http.converter.HttpMessageConverter
 import org.springframework.web.bind.annotation.ControllerAdvice
@@ -14,8 +12,6 @@ import tools.jackson.core.JacksonException
 import tools.jackson.databind.JsonNode
 import tools.jackson.databind.json.JsonMapper
 import tools.jackson.databind.node.ObjectNode
-import java.io.ByteArrayInputStream
-import java.io.InputStream
 import java.lang.reflect.Type
 import kotlin.reflect.KClass
 import kotlin.reflect.KParameter
@@ -50,10 +46,10 @@ class AbsentFieldAdvice(
         methodParameter: MethodParameter,
         targetType: Type,
         converterType: Class<out HttpMessageConverter<*>>,
-    ): Boolean = (targetType as? Class<*>)?.packageName == GENERATED_MODELS
+    ): Boolean = isGeneratedModel(targetType)
 
-    // Buffering is bounded by MaxBodyFilter's 1 MiB; an over-long body throws
-    // from readAllBytes and Spring answers it as unreadable, as before.
+    // JsonTextAdvice has already buffered the body and refused one that is not
+    // UTF-8 JSON text.
     override fun beforeBodyRead(
         inputMessage: HttpInputMessage,
         parameter: MethodParameter,
@@ -62,7 +58,7 @@ class AbsentFieldAdvice(
     ): HttpInputMessage {
         val bytes = inputMessage.body.readAllBytes()
         absentFields(bytes, (targetType as Class<*>).kotlin)?.let { throw it }
-        return Replayed(inputMessage.headers, bytes)
+        return BufferedBody(inputMessage.headers, bytes)
     }
 
     private fun absentFields(bytes: ByteArray, type: KClass<*>): AbsentFieldsException? {
@@ -111,16 +107,6 @@ class AbsentFieldAdvice(
         findAnnotation<JsonProperty>()?.required == true || (!isOptional && !type.isMarkedNullable)
 
     private fun KParameter.wireName(): String = findAnnotation<JsonProperty>()?.value ?: name.orEmpty()
-
-    private class Replayed(private val headers: HttpHeaders, private val bytes: ByteArray) : HttpInputMessage {
-        override fun getHeaders(): HttpHeaders = headers
-
-        override fun getBody(): InputStream = ByteArrayInputStream(bytes)
-    }
-
-    private companion object {
-        val GENERATED_MODELS: String = LocalLoginRequest::class.java.packageName
-    }
 }
 
 // Kotlin property names, not wire names: ApiExceptionHandler spells both kinds

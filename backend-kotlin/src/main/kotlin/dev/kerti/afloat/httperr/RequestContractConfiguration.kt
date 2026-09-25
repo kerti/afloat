@@ -3,6 +3,7 @@ package dev.kerti.afloat.httperr
 import jakarta.validation.ConstraintValidator
 import jakarta.validation.ConstraintValidatorContext
 import jakarta.validation.constraints.Email
+import jakarta.validation.constraints.Size
 import org.hibernate.validator.HibernateValidatorConfiguration
 import org.springframework.boot.jackson.autoconfigure.JsonMapperBuilderCustomizer
 import org.springframework.boot.validation.autoconfigure.ValidationConfigurationCustomizer
@@ -29,6 +30,22 @@ class RequestContractConfiguration {
         mapping.constraintDefinition(Email::class.java)
             .includeExistingValidators(false)
             .validatedBy(TrimmedEmailValidator::class.java)
+        hibernate.addMapping(mapping)
+    }
+
+    // `minLength` and `maxLength` count characters as JSON Schema does, one per
+    // code point, which is what kin-openapi's loop counts (its comment says
+    // UTF-16 units; the loop does not). Hibernate's @Size counts UTF-16 units,
+    // so a password of emoji was twice as long here as in Go. The existing
+    // validators stay for collections, maps and arrays; for a String, the more
+    // specific type, this one is chosen.
+    @Bean
+    fun codePointSizeValidation(): ValidationConfigurationCustomizer = ValidationConfigurationCustomizer { configuration ->
+        val hibernate = configuration as HibernateValidatorConfiguration
+        val mapping = hibernate.createConstraintMapping()
+        mapping.constraintDefinition(Size::class.java)
+            .includeExistingValidators(true)
+            .validatedBy(CodePointSizeValidator::class.java)
         hibernate.addMapping(mapping)
     }
 
@@ -62,6 +79,18 @@ class TrimmedEmailValidator : ConstraintValidator<Email, CharSequence> {
                 """@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*""",
         )
     }
+}
+
+// @Size on a String, measured in code points (codePointSizeValidation).
+class CodePointSizeValidator : ConstraintValidator<Size, String> {
+    private var bounds = 0..Int.MAX_VALUE
+
+    override fun initialize(constraint: Size) {
+        bounds = constraint.min..constraint.max
+    }
+
+    override fun isValid(value: String?, context: ConstraintValidatorContext?): Boolean =
+        value == null || value.codePointCount(0, value.length) in bounds
 }
 
 // Go's strings.TrimSpace, not Kotlin's trim(): the two disagree on U+0085,

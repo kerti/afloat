@@ -6,7 +6,6 @@ import org.springframework.core.Ordered
 import org.springframework.core.annotation.Order
 import org.springframework.http.HttpHeaders
 import org.springframework.http.HttpInputMessage
-import org.springframework.http.MediaType
 import org.springframework.http.converter.HttpMessageConverter
 import org.springframework.http.converter.HttpMessageNotReadableException
 import org.springframework.web.bind.annotation.ControllerAdvice
@@ -22,10 +21,9 @@ import java.nio.charset.StandardCharsets
 // spec-validating middleware reads it (strictJSONBodyDecoder in
 // backend/internal/httpserver/openapi_validate.go). Jackson alone is looser:
 // it decodes overlong and out-of-range UTF-8, skips a byte order mark, and
-// detects UTF-16 and UTF-32 from the bytes; Spring hands it a body declared in
-// any non-Unicode charset through that charset's decoder. Go answers
-// INVALID_JSON_BODY for each of those bodies and reads every body as UTF-8
-// whatever its header claims, so this does too.
+// detects UTF-16 and UTF-32 from the bytes. Go answers INVALID_JSON_BODY for
+// each of those bodies, so this does too. Utf8CharsetFilter has already
+// relabelled whatever charset the header claimed as UTF-8.
 //
 // First of the request body advice, so AbsentFieldAdvice never reads a body
 // this one refuses.
@@ -51,9 +49,7 @@ class JsonTextAdvice : RequestBodyAdviceAdapter() {
         if (!isJsonText(bytes)) {
             throw HttpMessageNotReadableException("request body is not UTF-8 JSON text", inputMessage)
         }
-        val headers = HttpHeaders.copyOf(inputMessage.headers)
-        headers.contentType?.let { headers.contentType = MediaType(it, StandardCharsets.UTF_8) }
-        return BufferedBody(headers, bytes)
+        return BufferedBody(inputMessage.headers, bytes)
     }
 }
 
@@ -68,7 +64,7 @@ internal fun isJsonText(bytes: ByteArray): Boolean {
     } catch (_: CharacterCodingException) {
         return false
     }
-    return !text.startsWith('﻿') && '\u0000' !in text
+    return !text.startsWith('\uFEFF') && '\u0000' !in text
 }
 
 // Only the generated models are the contract's request bodies, as only a

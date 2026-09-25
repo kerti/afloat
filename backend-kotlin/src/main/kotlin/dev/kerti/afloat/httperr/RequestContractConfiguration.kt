@@ -7,8 +7,10 @@ import jakarta.validation.constraints.Size
 import org.hibernate.validator.HibernateValidatorConfiguration
 import org.springframework.boot.jackson.autoconfigure.JsonMapperBuilderCustomizer
 import org.springframework.boot.validation.autoconfigure.ValidationConfigurationCustomizer
+import org.springframework.boot.web.servlet.FilterRegistrationBean
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
+import org.springframework.core.Ordered
 import tools.jackson.databind.cfg.CoercionAction
 import tools.jackson.databind.cfg.CoercionInputShape
 import tools.jackson.databind.type.LogicalType
@@ -60,6 +62,14 @@ class RequestContractConfiguration {
                 .setCoercion(CoercionInputShape.Boolean, CoercionAction.Fail)
         }
     }
+
+    // A servlet filter, not a link in the security chain: it must run before
+    // Spring MVC parses the Content-Type, and Go has no filter it mirrors.
+    @Bean
+    fun utf8CharsetFilter(): FilterRegistrationBean<Utf8CharsetFilter> =
+        FilterRegistrationBean(Utf8CharsetFilter()).apply {
+            order = Ordered.HIGHEST_PRECEDENCE + 20
+        }
 }
 
 // The contract's `format: email`, as Go's spec-validating middleware reads it:

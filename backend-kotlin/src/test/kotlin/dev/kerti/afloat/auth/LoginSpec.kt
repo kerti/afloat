@@ -19,6 +19,7 @@ import io.kotest.matchers.shouldNotBe
 import io.kotest.matchers.string.shouldContain
 import io.kotest.matchers.string.shouldNotContain
 import org.springframework.beans.factory.annotation.Autowired
+import org.springframework.http.HttpHeaders
 import org.springframework.http.MediaType
 import org.springframework.jdbc.core.simple.JdbcClient
 import org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post
@@ -301,6 +302,9 @@ class LoginSpec : WebDatabaseSpec() {
                 // application/json has no charset parameter (RFC 8259 §11).
                 Triple("not UTF-8, declared as Latin-1", latin1, notUtf8),
                 Triple("not declared as JSON", MediaType.TEXT_PLAIN, valid.toByteArray()),
+                // Spring's JSON converter reads any +json type; the contract
+                // declares application/json alone.
+                Triple("declared as another JSON type", MediaType("application", "vnd.api+json"), valid.toByteArray()),
             ).forEach { (name, type, body) ->
                 withClue(name) {
                     val result = mockMvc.perform(post(loginPath).contentType(type).content(body)).andReturn()
@@ -311,6 +315,31 @@ class LoginSpec : WebDatabaseSpec() {
             }
             JdbcClient.create(dataSource).sql("SELECT count(*) FROM login_attempts")
                 .query(Long::class.java).single() shouldBe 0L
+        }
+
+        // A media type is case-insensitive and may have whitespace around it
+        // (RFC 9110 §8.3.1), and a body is UTF-8 whatever charset is claimed,
+        // even one the JDK does not know (Utf8CharsetFilter). Go's
+        // TestLoginReadsEverySpellingOfTheJSONMediaType sends the same headers.
+        "reads every spelling of the JSON media type as Go does" {
+            listOf(
+                "Application/JSON",
+                "APPLICATION/JSON; CHARSET=UTF-8",
+                "application/json ; charset=utf-8",
+                "\tapplication/json\t;charset=utf-8",
+                "application/json; charset=utf-16",
+                "application/json; charset=bogus",
+            ).forEach { contentType ->
+                withClue(contentType) {
+                    val result = mockMvc.perform(
+                        post(loginPath).header(HttpHeaders.CONTENT_TYPE, contentType)
+                            .content("""{"email":"not-an-email","password":"a valid password"}""")
+                    ).andReturn()
+
+                    result.response.status shouldBe 400
+                    result.response.contentAsString shouldBe """{"code":"VALIDATION","args":{"field":"email","rule":"email"}}"""
+                }
+            }
         }
 
         // The envelope #14 test 26 is actually about: a field that is present
@@ -381,6 +410,14 @@ class LoginSpec : WebDatabaseSpec() {
             val emoji = "\uD83D\uDE00"
             val longestEmojiPassword = login("user@example.com", emoji.repeat(4096))
             val overLongEmojiPassword = login("user@example.com", emoji.repeat(4097))
+            // Read as UTF-8 whatever the header claims (Utf8CharsetFilter;
+            // TestLoginReadsABodyDeclaredLatin1AsUTF8): 4096 "é" are 4096
+            // characters, not the 8192 a Latin-1 reading makes of their bytes.
+            val latin1Password = mockMvc.perform(
+                post(loginPath).contentType(MediaType(MediaType.APPLICATION_JSON, Charsets.ISO_8859_1))
+                    .content(loginBody("latin1@example.com", "é".repeat(4096)).toByteArray())
+                    .with { it.remoteAddr = "198.51.100.${nextAddress++}"; it }
+            ).andReturn()
 
             withClue("email of ${longEmail.length} characters") {
                 overLongEmail.response.status shouldBe 400
@@ -399,6 +436,9 @@ class LoginSpec : WebDatabaseSpec() {
             withClue("password of 4097 emoji") {
                 overLongEmojiPassword.response.contentAsString shouldBe
                     """{"code":"VALIDATION","args":{"field":"password","rule":"max"}}"""
+            }
+            withClue("password of 4096 characters declared as Latin-1") {
+                latin1Password.response.status shouldBe 401
             }
         }
     }

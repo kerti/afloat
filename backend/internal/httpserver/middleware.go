@@ -59,10 +59,10 @@ func requestLogger(next http.Handler) http.Handler {
 	})
 }
 
-// localLoginPath is /api/auth/local/login's full mounted path — the one route
-// disabledLocalLogin404 gates. It is spelled out here rather than derived from
-// the generated api package, which has no constant for it.
-const localLoginPath = "/api/auth/local/login"
+// localLoginPath is the login route's full mounted path — the one route
+// disabledLocalLogin404 gates. The prefix is the spec's (basePath); the rest is
+// spelled out, because the generated api package has no constant for it.
+var localLoginPath = basePath + "/auth/local/login"
 
 // disabledLocalLogin404 makes /api/auth/local/login answer a bare 404
 // when the local provider is off, matching how GET /api/auth/methods already

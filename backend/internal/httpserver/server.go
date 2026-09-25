@@ -57,8 +57,8 @@ func (s *Server) GetMe(ctx context.Context, r api.GetMeRequestObject) (api.GetMe
 	return s.auth.GetMe(ctx, r)
 }
 
-// New builds the router: the API under /api, with the middleware every request
-// passes through.
+// New builds the router: the API under the contract's base path (basePath,
+// /api today), with the middleware every request passes through.
 //
 // Middleware is written as func(http.Handler) http.Handler and stays free of
 // chi types, so the stdlib exit ADR-0001 describes remains cheap.
@@ -117,8 +117,8 @@ func New(d Deps) http.Handler {
 	// means a new authenticated endpoint cannot be added without deciding.
 	r.Use(d.Auth.SessionMiddleware)
 
-	// The contract's servers entry is /api, so the generated routes mount under
-	// it rather than carrying the prefix in every path.
+	// The generated routes mount under the contract's servers entry (basePath)
+	// rather than carrying the prefix in every path.
 	//
 	// Both option structs are supplied rather than taking HandlerFromMux and
 	// NewStrictHandler: their defaults answer with http.Error, i.e. text/plain
@@ -128,7 +128,7 @@ func New(d Deps) http.Handler {
 		RequestErrorHandlerFunc:  requestErrorHandler,
 		ResponseErrorHandlerFunc: responseErrorHandler,
 	})
-	r.Mount("/api", api.HandlerWithOptions(strict, api.ChiServerOptions{
+	r.Mount(basePath, api.HandlerWithOptions(strict, api.ChiServerOptions{
 		BaseRouter:       chi.NewRouter(),
 		ErrorHandlerFunc: paramErrorHandler,
 		// Per-operation, not r.Use above: this only ever runs once chi has

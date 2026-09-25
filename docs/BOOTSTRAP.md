@@ -516,6 +516,13 @@ Spring's default the day someone enabled TLS on Tomcat or trusted forwarded head
 
 CI regenerates and runs `git diff --exit-code`, mirroring Balances' `backend-gen-ts-types-check`.
 
+**The base path is the spec's `servers[0].url` in both backends (#17).** Kotlin's generator bakes it
+into each controller's `@RequestMapping`; oapi-codegen emits nothing for it, so Go reads it from the
+embedded spec at startup (`httpserver/basepath.go`) and refuses to boot on an entry it cannot mount
+at. There is no separate gate on a spec change: Go's generated code is diffed above, Kotlin's is
+regenerated on every build, and whether the two then *agree* is what the conformance harness —
+a required check — exists to prove.
+
 > **This is contract-first; Balances is code-first.** Balances generates TypeScript *from Go*
 > (`backend/tools/gen-routes`, `gen-ts-types`). That tooling cannot be lifted across — with two
 > backends the spec has to lead.

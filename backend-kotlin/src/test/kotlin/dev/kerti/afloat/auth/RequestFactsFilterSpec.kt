@@ -35,6 +35,30 @@ class RequestFactsFilterSpec : StringSpec({
         seen shouldBe RequestFacts("203.0.113.7", "afloat-test/1.0", "token-abc")
     }
 
+    // sessions.user_agent is one column both backends write. Go stores an
+    // empty header as NULL, so an empty header must not arrive here as ''
+    // (#32 item 4). The harness cannot send one: net/http drops an empty
+    // User-Agent rather than sending it.
+    "carries an empty user agent as none at all" {
+        val request = MockHttpServletRequest().apply {
+            remoteAddr = "203.0.113.7"
+            addHeader("User-Agent", "")
+        }
+        var seen: RequestFacts? = null
+        val chain = MockFilterChain(object : HttpServlet() {
+            override fun service(
+                req: HttpServletRequest,
+                res: HttpServletResponse,
+            ) {
+                seen = RequestContext.current()
+            }
+        })
+
+        RequestFactsFilter().doFilter(request, MockHttpServletResponse(), chain)
+
+        withClue("facts: $seen") { seen?.userAgent.shouldBeNull() }
+    }
+
     "clears the context once the request is done" {
         val request = MockHttpServletRequest().apply { remoteAddr = "203.0.113.7" }
 

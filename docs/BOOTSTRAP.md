@@ -413,12 +413,14 @@ the same, and each one's login tests drive the same table:
 - A body that is not an instance of the declared shape is `INVALID_JSON_BODY` with no `args`, whatever
   else is wrong with it. That covers malformed JSON (anything after the value, bytes that are not
   strict UTF-8, a byte order mark and a UTF-16 or UTF-32 body included), a body not sent as
-  `application/json`, a non-object root, a wrong type (no scalar coercion: `5` is not a string), a
-  `null`, and a property the schema does not declare. A body is read as UTF-8 whatever `charset` its
-  `Content-Type` claims: `application/json` has no such parameter (RFC 8259 §11).
+  `application/json` (another `+json` type included), a non-object root, a wrong type (no scalar
+  coercion: `5` is not a string), a `null`, and a property the schema does not declare.
+- The media type is matched case-insensitively, whitespace around it ignored (RFC 9110 §8.3.1). A
+  body is read as UTF-8 whatever `charset` its `Content-Type` claims, a name neither backend knows
+  included: `application/json` has no such parameter (RFC 8259 §11).
 - Otherwise every failing field competes, an absent required one (`rule: required`) included. The
   reported one is the least by wire field name, then by rule.
-- `rule` uses go-playground/validator's tag names: `required`, `min`, `max`, `email`, `pattern`.
+- `rule` uses go-playground/validator's tag names (`required`, `min`, `max`, `email`), plus `pattern`.
 - `minLength` and `maxLength` count code points, JSON Schema's characters: an emoji is one, not two
   UTF-16 units or four bytes.
 - `format: email` trims, then validates: a padded address is accepted and trimmed again for the
@@ -429,9 +431,10 @@ the same, and each one's login tests drive the same table:
 
 Go gets this from the spec-validating middleware (`httpserver/openapi_validate.go`). Its generated
 models carry `format: email` as a plain `string` (`oapi-codegen.yaml`), so the decode does not check
-the address a second time. Kotlin gets it from Bean Validation plus five pieces in `httperr/`:
-`JsonTextAdvice`, which refuses a body that is not UTF-8 JSON text before Jackson's looser reading
-sees it; `AbsentFieldAdvice`, which stops Jackson failing on the first absent field before the others
+the address a second time, and it lowercases the media type, which kin-openapi compares byte for
+byte. Kotlin gets it from Bean Validation plus six pieces in `httperr/`: `Utf8CharsetFilter`, which
+relabels any `charset` as UTF-8 before Spring parses the header; `JsonTextAdvice`, which refuses a
+body that is not UTF-8 JSON text before Jackson's looser reading sees it; `AbsentFieldAdvice`, which stops Jackson failing on the first absent field before the others
 are validated; `TrimmedEmailValidator`; `CodePointSizeValidator`; and a Jackson coercion guard.
 
 ### Response headers

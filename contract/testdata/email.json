@@ -18,8 +18,8 @@
     "\r\na@example.com",
     "\u000ba@example.com\f",
     "\u0085a@example.com",
-    " a@example.com　",
-    " a@example.com "
+    "\u00a0a@example.com\u3000",
+    "\u2028a@example.com\u202f"
   ],
   "invalid": [
     "",
@@ -45,7 +45,7 @@
     "Bob <a@example.com>",
     "a@example.com (comment)",
     "\u001ca@example.com",
-    "​a@example.com",
-    "﻿a@example.com"
+    "\u200ba@example.com",
+    "\ufeffa@example.com"
   ]
 }

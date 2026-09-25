@@ -71,6 +71,9 @@ func New(d Deps) http.Handler {
 	// and so requestLogger can read the id from context.
 	r.Use(requestID)
 	r.Use(securityHeaders)
+	// Before anything routes: a percent-encoded path is its decoded route
+	// (#56), as Spring has always read it.
+	r.Use(routeOnDecodedPath)
 	// middleware.RealIP is deliberately NOT mounted. It rewrites RemoteAddr from
 	// X-Forwarded-For, which nothing strips in a self-hosted deployment with no
 	// proxy in front — so an attacker would choose their own rate-limit key and

@@ -1,7 +1,9 @@
 package dev.kerti.afloat.httperr
 
 import dev.kerti.afloat.testsupport.DatabaseSpec
+import io.kotest.assertions.withClue
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.string.shouldContain
 import jakarta.servlet.Filter
 import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.boot.test.context.TestConfiguration
@@ -12,15 +14,17 @@ import org.springframework.core.Ordered
 import org.springframework.test.context.DynamicPropertyRegistry
 import org.springframework.test.context.DynamicPropertySource
 import java.net.ServerSocket
+import java.net.Socket
 import java.net.URI
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
 
-// A failure past DispatcherServlet reaches Boot's /error, not
-// ApiExceptionHandler (#32 item 1). MockMvc never makes that ERROR dispatch -
-// it is the servlet container's - so this runs a real Tomcat and sends it real
-// requests, with a filter that throws on one path.
+// What reaches the container's /error dispatch: a failure past
+// DispatcherServlet, which ApiExceptionHandler never sees (#32 item 1), and a
+// path the firewall refuses (#56). MockMvc makes neither - the firewall and
+// the ERROR dispatch are the container's - so this runs a real Tomcat and sends
+// it real requests, with a filter that throws on one path.
 //
 // DEFINED_PORT on a port found free, not RANDOM_PORT: that sets server.port to
 // 0, which AppConfig refuses, as it would from an operator.
@@ -60,6 +64,9 @@ class ErrorDispatchSpec : DatabaseSpec() {
         return HttpClient.newHttpClient().send(request.build(), HttpResponse.BodyHandlers.ofString())
     }
 
+    private fun headersWithoutPerResponse(response: HttpResponse<String>) =
+        response.headers().map().filterKeys { it.lowercase() !in setOf("date", "x-request-id") }
+
     init {
         "answers a filter that throws with the envelope, not Boot's error body" {
             val response = get("/api/boom")
@@ -67,6 +74,82 @@ class ErrorDispatchSpec : DatabaseSpec() {
             response.statusCode() shouldBe 500
             response.body() shouldBe """{"code":"INTERNAL"}"""
             response.headers().firstValue("Content-Type").orElse("") shouldBe "application/json"
+            // The fixed set, as on any other response (#26): Go's
+            // securityHeaders middleware is ahead of its recoverer.
+            response.headers().firstValue("X-Content-Type-Options").orElse("") shouldBe "nosniff"
+            response.headers().firstValue("Cache-Control").orElse("") shouldBe
+                "no-cache, no-store, max-age=0, must-revalidate"
+        }
+
+        // #56: a path the firewall refuses is a path that does not exist, and
+        // answers exactly as one does - status, every header but the
+        // per-response ones, and the empty body. Only a real Tomcat runs the
+        // firewall and the /error dispatch it leads to.
+        "answers a path the firewall refuses exactly like an unregistered one" {
+            val unregistered = get("/api/no-such-route")
+            unregistered.statusCode() shouldBe 404
+            listOf(
+                "/api/health;x=1", "/api//health", "/api/./health", "/api/h%25ealth", "/api/auth%2Fmethods",
+                "/api/health%5C", "/api/auth%5Cmethods",
+                // Requested directly, /error is a path the API does not have.
+                "/error",
+            ).forEach { path ->
+                val refused = get(path)
+                withClue(path) {
+                    refused.statusCode() shouldBe 404
+                    refused.body() shouldBe ""
+                    headersWithoutPerResponse(refused) shouldBe headersWithoutPerResponse(unregistered)
+                }
+            }
+        }
+
+        // The firewall refuses more than paths. A malformed request on a route
+        // that exists is a 400, never the "no such path" 404: an unknown method,
+        // and a header value holding a control character (Tomcat reads header
+        // bytes as Latin-1, so 0x85 arrives as U+0085). Raw socket for the
+        // header, since java.net.http will not send the byte.
+        "answers a request the firewall refuses for its method or a header with a bare 400" {
+            val unregistered = get("/api/no-such-route")
+            val method = HttpClient.newHttpClient().send(
+                HttpRequest.newBuilder(URI("http://localhost:$port/api/health"))
+                    .method("FOO", HttpRequest.BodyPublishers.noBody()).build(),
+                HttpResponse.BodyHandlers.ofString(),
+            )
+            withClue("FOO /api/health") {
+                method.statusCode() shouldBe 400
+                method.body() shouldBe ""
+                // Tomcat closes the connection after any 400 and says so; that
+                // is the connector's framing, not a header this app writes.
+                headersWithoutPerResponse(method) - "connection" shouldBe headersWithoutPerResponse(unregistered)
+            }
+
+            val raw = Socket("localhost", port).use { socket ->
+                socket.getOutputStream().write(
+                    "GET /api/health HTTP/1.1\r\nHost: localhost\r\nUser-Agent: x".toByteArray() +
+                        byteArrayOf(0x85.toByte()) + "y\r\nConnection: close\r\n\r\n".toByteArray(),
+                )
+                socket.getInputStream().readAllBytes().toString(Charsets.ISO_8859_1)
+            }
+            withClue(raw) {
+                raw.lineSequence().first().trim() shouldBe "HTTP/1.1 400"
+                raw.lowercase() shouldContain "x-content-type-options: nosniff"
+                raw.substringAfter("\r\n\r\n") shouldBe ""
+            }
+
+            // The same refusal for a header first read inside MVC rather than
+            // by a filter: Accept, read by content negotiation. It used to fall
+            // into ApiExceptionHandler's catch-all as a 500.
+            val accept = Socket("localhost", port).use { socket ->
+                socket.getOutputStream().write(
+                    "GET /api/health HTTP/1.1\r\nHost: localhost\r\nAccept: application/json, x/".toByteArray() +
+                        byteArrayOf(0x85.toByte()) + "\r\nConnection: close\r\n\r\n".toByteArray(),
+                )
+                socket.getInputStream().readAllBytes().toString(Charsets.ISO_8859_1)
+            }
+            withClue(accept) {
+                accept.lineSequence().first().trim() shouldBe "HTTP/1.1 400"
+                accept.substringAfter("\r\n\r\n") shouldBe ""
+            }
         }
 
         // A browser asks for HTML. Boot's BasicErrorController has an HTML

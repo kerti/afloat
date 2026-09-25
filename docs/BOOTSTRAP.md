@@ -450,6 +450,32 @@ sees it; `AbsentFieldAdvice`, which stops Jackson failing on the first absent fi
 others are validated; `TrimmedEmailValidator`; `CodePointSizeValidator`; and a Jackson coercion
 guard.
 
+**Paths and the body cap (#56).** Three rules, each a case in `contract/conformance/cases/routing.yaml`:
+
+- **A percent-encoded path is its decoded route** (RFC 3986 §6.2.2.2): `/api/auth/local/%6Cogin` is
+  login on both. Go's `routeOnDecodedPath` clears `RawPath` so chi routes on the decoded path;
+  Spring always has. **An encoded slash never becomes a separator:** Go keeps the raw path for chi
+  when it holds `%2F`, and Kotlin passes `%2F` through Tomcat (`TomcatConfiguration`) to Spring
+  Security's firewall rather than decoding it.
+- **A path the firewall refuses is a path that does not exist.** `;`, `//`, a dot segment, an encoded
+  slash, backslash or percent: Kotlin's `RequestRejectedHandler` answers the bare 404 an unregistered
+  path gets, headers included, never the firewall's 400 with Boot's error body. Go's router finds no
+  such route. No `ErrorCode` for it. Tomcat passes `%2F` and `%5C` through to the firewall
+  (`TomcatConfiguration`) rather than refusing them itself. A literal backslash, `%00` and invalid
+  UTF-8 are still refused by Tomcat, with its own 400 page, before Spring sees them — a known gap, #64.
+  The firewall's other refusals — a header value with a control character, a
+  method it does not know — are a malformed request on a route that exists, not a missing route, and get
+  a bare 400 with the same headers, whether a filter or MVC read the header first. Go refuses neither,
+  and whether Kotlin should is open: #67 (header values, which include ordinary UTF-8 such as an em
+  dash), #66 (methods). And `/error`, Boot's error page, is not an API path when asked for directly: a
+  bare 404, as on Go, for every method but OPTIONS (#66). The disabled-login gate compares the decoded path in
+  both backends, so no spelling of the login path escapes it.
+- **The 1 MiB cap meets only the bytes a handler reads**, as Go's `MaxBytesReader` does: a declared
+  `Content-Length` is not refused up front, and `/health` or logout answers normally with any body.
+  Go's spec validator runs with its copy of the spec stripped of security requirements, because
+  kin-openapi reads the whole body into memory before calling even a no-op `AuthenticationFunc`,
+  and under the cap that read made an oversize body on logout or `/me` a 401.
+
 ### Response headers
 
 Both backends send this fixed set on every response, as explicit middleware on Go and Spring

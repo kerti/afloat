@@ -1,93 +1,136 @@
 package dev.kerti.afloat.config
 
 import java.time.Duration
-import kotlin.math.abs
 
+// Go's time.ParseDuration, ported line for line so the two backends read every
+// duration variable identically (BOOTSTRAP.md §12): ns, us (and both micro
+// signs), ms, s, m, h, never d; fractions (`1.5h`, `.5s`, `1.h`); a bare `0`
+// with or without a sign; no whitespace.
+//
+// Unsigned 64-bit arithmetic throughout, as Go's is. An earlier version summed
+// in a Double, which is exact only to 2^53 ns (about 104 days), so a value past
+// that parsed to a different Duration than Go's (#32 item 5). The overflow
+// bound is Go's too: a magnitude past 2^63 ns is refused, and exactly 2^63 is
+// allowed only when negative.
 object DurationParser {
 
-    private const val OVERFLOW_LIMIT = Long.MAX_VALUE.toDouble()
+    private val LIMIT: ULong = 1uL shl 63
 
-    // The mantissa is Go's, not a tidier version of it: leadingInt followed by
-    // an optional leadingFraction, where EITHER may be empty as long as one of
-    // them is not. So `1.5h`, `.5s` and `1.h` all parse in Go, and a
-    // `[0-9]+(\.[0-9]+)?` shape silently refuses the last two.
-    //
-    // `ms` precedes `s`, and `m` follows both, or `1ms` would match `m` and
-    // leave a stray `s` for the reconstruction check to reject.
-    private val durationPattern =
-        "((?:[0-9]+(?:\\.[0-9]*)?)|(?:\\.[0-9]+))(ns|us|µs|μs|ms|s|m|h)".toRegex()
+    private val units: Map<String, ULong> = mapOf(
+        "ns" to 1uL,
+        "us" to 1_000uL,
+        "µs" to 1_000uL, // U+00B5, the micro sign
+        "μs" to 1_000uL, // U+03BC, Greek mu
+        "ms" to 1_000_000uL,
+        "s" to 1_000_000_000uL,
+        "m" to 60_000_000_000uL,
+        "h" to 3_600_000_000_000uL,
+    )
 
-    /*
-    Pure function to parse duration so the app can reach configuration parity
-    with its Go counterpart. Accepts ns, us (and both micro signs), ms, s, m, h.
-    Does not accept d (days). Allows fractional inputs (1.5h). Expects no
-    whitespace.
-     */
     fun parse(input: String): Duration {
-        if (input.isEmpty()) {
-            throw IllegalArgumentException("Duration string cannot be empty")
+        var s = input
+        var neg = false
+        if (s.isNotEmpty() && (s[0] == '-' || s[0] == '+')) {
+            neg = s[0] == '-'
+            s = s.substring(1)
         }
+        // Go's one special case: nothing else in the grammar allows a
+        // component with no unit.
+        if (s == "0") return Duration.ZERO
+        if (s.isEmpty()) invalid(input)
 
-        // Go's one special case: a bare zero needs no unit, with or without a
-        // sign. Nothing else in the grammar allows a unitless component, so it
-        // is handled here rather than bent into the pattern.
-        if (input == "0" || input == "+0" || input == "-0") {
-            return Duration.ZERO
-        }
+        var d = 0uL
+        while (s.isNotEmpty()) {
+            if (!(s[0] == '.' || s[0] in '0'..'9')) invalid(input)
 
-        val matches = durationPattern.findAll(input).toList()
-        if (matches.isEmpty()) {
-            throw IllegalArgumentException("Duration string cannot be empty")
-        }
+            val beforeInt = s.length
+            val (v0, afterInt) = leadingInt(s) ?: overflow(input)
+            var v = v0
+            s = afterInt
+            val pre = beforeInt != s.length
 
-        val sign = if (input.substring(0, 1).matches("[+-]".toRegex())) {
-            input.substring(0, 1)
-        } else {
-            ""
-        }
-        val signMultiplier = if (sign == "-") {
-            -1
-        } else {
-            1
-        }
-
-        val reconstructed = sign.plus(matches.joinToString("") { it.value })
-        if (input != reconstructed) {
-            throw IllegalArgumentException("Invalid duration format or unsupported unit in: '$input'")
-        }
-
-        var totalNanosDouble = 0.0
-
-        for (match in matches) {
-            val (valueStr, unit) = match.destructured
-            val value = valueStr.toDouble()
-
-            val multiplier = when (unit) {
-                "h" -> 3_600_000_000_000.0
-                "m" -> 60_000_000_000.0
-                "s" -> 1_000_000_000.0
-                "ms" -> 1_000_000.0
-                // Go spells microseconds three ways, and an operator who copies
-                // a value out of Go's own docs gets one of the two it does not
-                // occur to anyone to test.
-                "us", "µs", "μs" -> 1_000.0
-                "ns" -> 1.0
-                else -> throw IllegalArgumentException("Unsupported unit '${unit}'")
+            var f = 0uL
+            var scale = 1.0
+            var post = false
+            if (s.isNotEmpty() && s[0] == '.') {
+                s = s.substring(1)
+                val beforeFraction = s.length
+                val fraction = leadingFraction(s)
+                f = fraction.value
+                scale = fraction.scale
+                s = fraction.rest
+                post = beforeFraction != s.length
             }
+            // `.s` and `.` have neither half of a number.
+            if (!pre && !post) invalid(input)
 
-            val componentNanos = value * multiplier * signMultiplier
+            var i = 0
+            while (i < s.length && !(s[i] == '.' || s[i] in '0'..'9')) i++
+            if (i == 0) throw IllegalArgumentException("Missing unit in duration '$input'")
+            val u = s.substring(0, i)
+            s = s.substring(i)
+            val unit = units[u] ?: throw IllegalArgumentException("Unknown unit '$u' in duration '$input'")
 
-            if (abs(componentNanos) >= OVERFLOW_LIMIT) {
-                throw IllegalArgumentException("Duration component will overflow: '$valueStr$unit' in '$input'")
+            if (v > LIMIT / unit) overflow(input)
+            v *= unit
+            if (f > 0uL) {
+                // float64(f) * (float64(unit) / scale), truncated, as in Go.
+                v += (f.toDouble() * (unit.toDouble() / scale)).toULong()
+                if (v > LIMIT) overflow(input)
             }
-
-            if (abs(totalNanosDouble) + abs(componentNanos) >= OVERFLOW_LIMIT) {
-                throw IllegalArgumentException("Duration string total will overflow: '$input'")
-            }
-
-            totalNanosDouble += componentNanos
+            d += v
+            if (d > LIMIT) overflow(input)
         }
 
-        return Duration.ofNanos(totalNanosDouble.toLong())
+        if (neg) return Duration.ofNanos(-d.toLong())
+        if (d > LIMIT - 1uL) overflow(input)
+        return Duration.ofNanos(d.toLong())
     }
+
+    // Go's leadingInt: null on overflow past 2^63.
+    private fun leadingInt(s: String): Pair<ULong, String>? {
+        var x = 0uL
+        var i = 0
+        while (i < s.length && s[i] in '0'..'9') {
+            if (x > LIMIT / 10uL) return null
+            x = x * 10uL + (s[i] - '0').toULong()
+            if (x > LIMIT) return null
+            i++
+        }
+        return x to s.substring(i)
+    }
+
+    private class Fraction(val value: ULong, val scale: Double, val rest: String)
+
+    // Go's leadingFraction: digits past what fits are consumed and ignored,
+    // never an error.
+    private fun leadingFraction(s: String): Fraction {
+        var x = 0uL
+        var scale = 1.0
+        var overflow = false
+        var i = 0
+        while (i < s.length && s[i] in '0'..'9') {
+            if (!overflow) {
+                if (x > (LIMIT - 1uL) / 10uL) {
+                    overflow = true
+                } else {
+                    val y = x * 10uL + (s[i] - '0').toULong()
+                    if (y > LIMIT) {
+                        overflow = true
+                    } else {
+                        x = y
+                        scale *= 10
+                    }
+                }
+            }
+            i++
+        }
+        return Fraction(x, scale, s.substring(i))
+    }
+
+    private fun invalid(input: String): Nothing =
+        throw IllegalArgumentException("Invalid duration '$input'")
+
+    private fun overflow(input: String): Nothing =
+        throw IllegalArgumentException("Duration '$input' overflows")
 }

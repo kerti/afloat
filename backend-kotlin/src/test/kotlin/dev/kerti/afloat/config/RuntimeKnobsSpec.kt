@@ -15,9 +15,10 @@ open class RuntimeKnobsSpec : StringSpec({
     // The gap AppConfig.bind-then-forget opened: every knob a runtime keeps in
     // AppConfig must reach the layer that uses it. Each leaf must resolve to the
     // exact placeholder and its default, so a resolved value or a dropped default
-    // is called out. HTTP_WRITE_TIMEOUT and LOG_FORMAT are bound-but-deferred
-    // (issue #13 §6: no Tomcat equivalent, no logging sink yet) and are therefore
-    // deliberate omissions until they are wired.
+    // is called out. HTTP_WRITE_TIMEOUT is wired as the transaction manager's
+    // default timeout (AppConfiguration.transactionManager, #30) - a bean, not a
+    // Spring leaf - so it has no row here; LOG_FORMAT stays bound-but-deferred
+    // (issue #13 §6: no logging sink yet) and is the one deliberate omission.
     //
     // Three of these knobs are marked relayed: NormalizedServerTimeoutPropertySource
     // is added first and answers their keys from the parsed afloat.* leaf, so at

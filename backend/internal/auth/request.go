@@ -59,15 +59,3 @@ func clientIP(r *http.Request) string {
 	}
 	return host
 }
-
-// ContextForTest builds the request-scoped context a handler expects, without a
-// real request. Exported for tests in other packages; nothing in production
-// calls it.
-func ContextForTest(ctx context.Context, ip, userAgent, sessionToken string) context.Context {
-	ctx = context.WithValue(ctx, clientIPKey{}, ip)
-	ctx = context.WithValue(ctx, userAgentKey{}, userAgent)
-	if sessionToken != "" {
-		ctx = context.WithValue(ctx, sessionTokenKey{}, sessionToken)
-	}
-	return ctx
-}

@@ -16,6 +16,7 @@ import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.dao.QueryTimeoutException
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean
 import org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get
+import org.springframework.transaction.CannotCreateTransactionException
 import java.time.Instant
 import java.util.UUID
 
@@ -36,29 +37,35 @@ class SessionTouchFailureSpec : WebDatabaseSpec() {
     private fun anyInstant(): Instant = any(Instant::class.java) ?: Instant.EPOCH
 
     init {
-        // aFailedTouchDoesNotFailTheRequest
-        "serves the request when the session refresh fails" {
-            val account = AuthFixtures.account(dataSource)
-            val token = UUID.randomUUID().toString()
-            AuthFixtures.session(
-                dataSource,
-                account.userId,
-                sha256Hex(token),
-                // Past half the TTL, so the filter will try to refresh.
-                expiresAt = Instant.now().plus(appConfig.sessionTtl.dividedBy(2)).minusSeconds(60),
-            )
-            doThrow(QueryTimeoutException("touch failed"))
-                .`when`(sessionRepository).touch(anyString(), anyInstant())
+        // aFailedTouchDoesNotFailTheRequest. Both families an outage arrives as
+        // (#27): touch takes its connection when its transaction begins, so a
+        // pool with none to lend throws CannotCreateTransactionException.
+        listOf(
+            QueryTimeoutException("touch failed"),
+            CannotCreateTransactionException("touch failed"),
+        ).forEach { failure ->
+            "serves the request when the session refresh fails (${failure.javaClass.simpleName})" {
+                val account = AuthFixtures.account(dataSource)
+                val token = UUID.randomUUID().toString()
+                AuthFixtures.session(
+                    dataSource,
+                    account.userId,
+                    sha256Hex(token),
+                    // Past half the TTL, so the filter will try to refresh.
+                    expiresAt = Instant.now().plus(appConfig.sessionTtl.dividedBy(2)).minusSeconds(60),
+                )
+                doThrow(failure).`when`(sessionRepository).touch(anyString(), anyInstant())
 
-            val result = mockMvc.perform(
-                get(AuthApi.BASE_PATH + AuthApi.PATH_GET_ME)
-                    .cookie(Cookie(SessionCookieFactory.COOKIE_NAME, token))
-            ).andReturn()
+                val result = mockMvc.perform(
+                    get(AuthApi.BASE_PATH + AuthApi.PATH_GET_ME)
+                        .cookie(Cookie(SessionCookieFactory.COOKIE_NAME, token))
+                ).andReturn()
 
-            // The session is valid until its current expiry regardless.
-            result.response.status shouldBe 200
-            // And no refreshed cookie is sent, because nothing was extended.
-            result.response.getHeaders("Set-Cookie").firstOrNull().shouldBeNull()
+                // The session is valid until its current expiry regardless.
+                result.response.status shouldBe 200
+                // And no refreshed cookie is sent, because nothing was extended.
+                result.response.getHeaders("Set-Cookie").firstOrNull().shouldBeNull()
+            }
         }
     }
 }

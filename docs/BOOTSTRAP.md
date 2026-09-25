@@ -61,6 +61,8 @@ Stated because the values alone read as an oversight, and the next person to tid
 | Kotlin backend | `5183` |
 | Postgres | `5184` |
 | Postgres, throwaway test container | `5185` |
+| Go backend, conformance `local-disabled` pair | `5186` |
+| Kotlin backend, conformance `local-disabled` pair | `5187` |
 
 **The two backends must differ.** Not a tidiness preference — Afloat's premise is two implementations
 of one contract, so parity work means running both at once. A shared port makes the project's central
@@ -76,7 +78,7 @@ Chosen against three constraints, which matter more than the specific numbers:
    — where an outbound connection can transiently hold the port, so a bind fails at random and does
    not reproduce. Afloat's Postgres was briefly on `55432`: exactly this bug, waiting.
 
-Contiguous because one fact is easier to hold than five, and `5181` sits above Vite's `5173` so it
+Contiguous because one fact is easier to hold than seven, and `5181` sits above Vite's `5173` so it
 still reads as the frontend. Go takes the lower backend number, matching *canonical* everywhere else.
 
 **This is Afloat's own allocation and claims nothing about any other project.** No registry, no
@@ -250,6 +252,83 @@ all return one `INVALID_CREDENTIALS`; the comparison is constant-time; and a req
 address with no account still pays the full hashing cost, so timing cannot distinguish present from
 absent either. All three, not two of three.
 
+**Concurrent Argon2id hashing is capped at 4, process-wide, in both backends — a departure surfaced by
+#33.** `m=19456` KiB is allocated *per hash in flight*, not once, so with no bound an unauthenticated
+caller chooses the process's peak memory: 30 concurrent logins want `30 × 19 MiB ≈ 570 MiB`, and a Go
+process that exceeds available memory is killed outright rather than degrading — worse than a JVM
+`OutOfMemoryError` a handler can at least catch. Afloat's deployment target is a self-hosted box
+(`VISION.md`), where that is the whole machine. At the cap, `4 × 19 MiB ≈ 76 MiB` of Argon2 memory
+live at once. That is live memory, not the process's footprint: a finished hash's memory is reclaimed
+only when the garbage collector runs, and Go's default `GOGC=100` lets the heap reach about twice its
+live size first, so the peak can run to roughly double. Still bounded, which is the point. Retuning
+Argon2id's cost parameter later must be checked against this arithmetic before it ships, or the memory
+ceiling moves silently. The cap is a **fixed constant in both backends, not a §12 environment
+variable** — small enough to fit the smallest supported deployment, large enough (~80 hashes/sec at
+this cost, on a host with at least four cores) that a household's simultaneous logins are never
+serialised behind each other in practice.
+
+The dummy-cost-equalizer hash (the unknown-address path above) shares the **same** semaphore as a
+real hash, not a separate one — the bound is on total concurrent Argon2 work regardless of account
+validity, or bounding only the real path leaves the dummy path free to blow the same ceiling. A
+request beyond the cap **queues for a permit rather than answering 429 immediately**: an immediate
+429 would leak that the server is busy, which is not an account-level fact, and the login path's
+whole constant-work design (previous paragraph) is built to hide exactly that kind of signal. Queueing
+adds latency that is a function of load, not of the account being checked, so the enumeration-
+resistance property survives it. The wait is bounded by the timeout the request already has, not a
+second one invented for this step: in Go the request context's deadline, set by chi's `Timeout`
+middleware from `HTTP_WRITE_TIMEOUT`; in Kotlin, where a servlet request carries no deadline,
+`HTTP_WRITE_TIMEOUT` itself, counted from when the wait starts. Go's wait gets only what is left of
+the one request deadline, so a Kotlin login can wait longer. A login still queued when the wait runs
+out answers `500 INTERNAL` and records **no** backoff failure, because its password was never checked.
+
+**The deadline bounds the wait, not the login.** A login that took its permit in time finishes: the
+second backoff read, the hash, the failure write and, on success, the session. In Go that work runs on
+a context detached from the request, bounded by the handler timeout again, counted from the permit; in
+Kotlin each statement after the wait already has its own `HTTP_WRITE_TIMEOUT` as a transaction
+timeout. So in both backends a login can run longer than `HTTP_WRITE_TIMEOUT` end to end. In Go its
+answer can then miss the connection's write deadline (`HTTP_WRITE_TIMEOUT` plus the 5s grace, §12),
+but its failure is still recorded, and that is the part that matters.
+Bounding it by the request deadline instead lets a flood switch the backoff off: behind a queue
+filled faster than the cap clears, the login that gets a permit is the one about to run out of time,
+its hash carries it past the deadline, and the failure write then fails. Its guess was checked and
+answered `401`, but nothing was recorded, so the backoff never grows. Measured on Go before the fix,
+with the deadline scaled down to 300 ms: under a flood of unknown addresses, 4 to 9 guesses at one
+account were answered `401` against a recorded `failure_count` of 1. A client that leaves after its
+permit is taken no longer stops the login either; the answer is lost, but the failure is recorded.
+
+The one Argon2 call outside the cap is generating Kotlin's dummy hash, once per process when
+the class loads at startup, before any request can queue. Verifying against it takes a permit like any
+other hash.
+
+**A login reads its backoff twice, the second time holding its permit.** The first read, before the
+queue, answers a throttled caller without making it wait. It cannot be the only one: every login in a
+burst on one account reads it before any of them has failed, so they all pass it, all queue, and all
+have their passwords checked, at the cap's ~80 guesses a second for as long as the burst lasts, the
+backoff never applying. So the permit is held from a second read, through the hash, to the failure
+write. One caller's failure is written before the permit passes on, and the next caller reads it and
+answers `429` without hashing. At most the cap's worth of logins hold permits at once, so a burst on one
+account gets up to 4 guesses before the backoff applies, not the whole queue. The `429` is the same
+answer the first read gives, keyed on the address and the IP whether or not the account exists, so the
+wait before it tells a caller nothing the first read would not. The permit covers database round
+trips as well as the hash: the backoff read and, on a failure, one write per key (the address's and the
+IP's). So the cap's ~80 logins a second assumes a quick database. A slow one holds each permit longer
+and lowers that rate for as long as it stays slow; nothing breaks, and it recovers when the database
+does.
+
+The queue moves what a login flood costs; it does not remove it, and the two backends pay
+differently. In both, what runs ahead of the queue is not capped: the first backoff read and the two
+credential lookups share the database pool with every endpoint, so a flood fast enough to saturate
+the pool slows everything, as it did before the cap. In Go a queued login is a parked goroutine, so
+the queue itself slows logins and no other endpoint. But nothing bounds how many wait: each holds its goroutine and client connection, a few
+tens of KiB rather than a hash's 19 MiB, for up to `HTTP_WRITE_TIMEOUT`, so a flood faster than the cap
+clears (about 80 logins a second) grows memory with its rate for as long as it lasts. It holds no
+database connection while it waits: pgx takes one per query. A client that leaves
+ends its wait, and no hash runs for it. In Kotlin each queued login holds a Tomcat worker thread for as
+long as it waits, and every endpoint shares those threads. A flood faster than the cap clears fills
+them, and then every endpoint waits. That is bounded by Tomcat's own limits, and it recovers when the
+flood stops. A client that leaves does not end its wait: the login still queues and then hashes for
+nobody. Whether Kotlin must match Go, and whether Go's wait needs a bound, are both open: #54.
+
 **The rate-limit key is the connection's own address, never `X-Forwarded-For`.** Self-hosting means
 there may be no proxy in front, so nothing strips that header and it is attacker-controlled — using
 it means an attacker picks a fresh key per request and the per-IP backoff stops existing. Whatever
@@ -264,6 +343,29 @@ divergence contract conformance cannot catch (§4's Jackson footgun again). Two 
 disagree on the backoff curve, on key normalisation, or on eviction, and every contract test would
 still pass. A table keyed by ip/email with a `backoff_until` is identical by construction, testable,
 and survives a restart, which the in-memory version does not.
+
+**A database outage is not a statement about an account (#23, #27).** Only a lookup that genuinely
+found nothing counts as an absent user, credential or session: `pgx.ErrNoRows` in Go, an empty
+result in Kotlin. Every other failure — a dropped connection, an exhausted pool — answers login
+with `500 INTERNAL`, not `401 INVALID_CREDENTIALS`, and records **no** backoff failure. Session
+resolution **leaves the cookie alone** and lets the request continue unauthenticated, so `/me` answers
+`401` and the same cookie works again once the database is back. Answering an outage as though it were
+about the account costs something that outlives the outage: a password reset that was never needed,
+every address that tried to log in during it left sitting behind a backoff window, every active
+session logged out. A 500 is not an answer about any one address: an outage that takes the database
+down fails the lookups for every address alike. It is not quite uniform, though. A known address makes
+one more query before the Argon2 permit than an unknown one (the credential lookup), so under a starved
+pool its 500s come a little more often, and a caller flooding logins could compare the rates. That
+residual, and the extra round trip it rides on, is #55.
+
+**In Kotlin, "every other failure" includes `TransactionException`.** Every repository is
+`@Transactional`, so it takes its connection when the transaction begins, and a database that cannot
+lend one arrives as `CannotCreateTransactionException` — not a `DataAccessException`. A catch written
+for `DataAccessException` alone misses exactly the outage it was meant for, so the auth code tests both
+through `isDatabaseFailure()`. That test leaves out `TransactionUsageException`, an illegal propagation
+or isolation setting, so that misuse fails loudly instead of being served as an outage. It is not the
+only bug-class family: `DataAccessException`'s own (`InvalidDataAccessApiUsageException`,
+`BadSqlGrammarException`) still count as outages, as every error but `pgx.ErrNoRows` does in Go.
 
 **Any instant the database also evaluates comes from the database.** `aa1f68f` moved
 `activeBackoffSeconds`, `findLive` and `touch` onto the database's `now()` rather than the app's,
@@ -304,6 +406,34 @@ apps behind one hostname on different paths would have them silently overwrite e
 The error envelope is Balances ADR-0027 exactly: `{"code": "SCREAMING_SNAKE", "args": {...}}`, no
 `message` field, `args` values JSON primitives only. `VALIDATION` carries `{field, rule}` and reports
 the first failing field only.
+
+### Response headers
+
+Both backends send this fixed set on every response, as explicit middleware on Go and Spring
+Security's defaults on Kotlin (issue #26):
+
+| Header | Value |
+|---|---|
+| `X-Content-Type-Options` | `nosniff` |
+| `X-Frame-Options` | `DENY` |
+| `Cache-Control` | `no-cache, no-store, max-age=0, must-revalidate` |
+| `Pragma` | `no-cache` |
+| `Expires` | `0` |
+| `X-XSS-Protection` | `0` |
+| `X-Request-Id` | The inbound id, sanitised; otherwise one minted server-side (below). |
+
+**`X-Request-Id`** is honoured inbound so a reverse proxy's id survives into both backends' logs,
+but the header is attacker-controlled when nothing sits in front, so it is sanitised first: keep only
+ASCII `A–Z`, `a–z`, `0–9`, `-` and `_` (every other byte dropped, not replaced), then cut to 64. If
+nothing survives, or none was sent, mint one: 8 random bytes as 16 lowercase hex characters. Go
+implements this itself rather than using chi's `middleware.RequestID`, which echoes unfiltered and
+mints ids that carry the hostname and a request counter.
+
+**Neither backend sends `Strict-Transport-Security`.** HSTS is policy about the operator's domain
+(`max-age`, `includeSubDomains`), not about Afloat, and whatever terminates TLS owns it — the reverse
+proxy in any deployment this document supports. Kotlin disables Spring Security's HSTS writer
+explicitly: it only fires on a secure request, so it is silent today, but it would start sending
+Spring's default the day someone enabled TLS on Tomcat or trusted forwarded headers.
 
 ## 6. The API contract
 
@@ -498,7 +628,7 @@ truth and fails if either backend's configuration drifts from it.
 | `LOG_LEVEL` | `info` | |
 | `AUTO_MIGRATE` | `true` | Apply migrations on boot. Off only to run against a database migrated by something else. |
 | `HTTP_READ_TIMEOUT` | `30s` | |
-| `HTTP_WRITE_TIMEOUT` | `60s` | |
+| `HTTP_WRITE_TIMEOUT` | `60s` | Go: the handler-timeout middleware (`middleware.Timeout`, issue #30) uses the value itself; `http.Server.WriteTimeout` is the value plus a fixed 5s grace, because with the two equal the connection's write deadline passes first and the cut-off handler's 503 never reaches the client. The same deadline bounds a login's wait for an Argon2 permit (§5.1, #33). Kotlin: the transaction manager's default timeout (`JpaTransactionManager.defaultTimeout`, issue #30) — a deadline on the whole transaction, not a per-statement cap: each statement gets the time left as its JDBC `queryTimeout`, and Postgres cancels one that overruns it. It covers every repository call, because each repository interface carries `@Transactional(readOnly = true)` (declared query methods get no transaction otherwise, and so no deadline), and every `@Transactional` service method. It deliberately does not cover the health probe's raw `SELECT 1`. Rounded up to whole seconds, minimum 1s, since JPA timeouts count in seconds; Go's is exact. A documented deliberate difference, not a gap to close the same way Go's was. Separately, the value is also how long `PasswordService` waits for an Argon2 permit (§5.1, #33), since a servlet request carries no deadline of its own; that wait is exact, not rounded. Must be positive: both backends refuse to boot on `0` or a negative value, since `0` does not mean "no timeout" to the handler timeout but a deadline already passed. |
 | `HTTP_IDLE_TIMEOUT` | `120s` | |
 | `SHUTDOWN_TIMEOUT` | `10s` | |
 | `AUTH_LOCAL_ENABLED` | `true` | |

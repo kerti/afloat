@@ -14,22 +14,28 @@ import (
 // internalError is the only response an unexpected failure may produce. The
 // cause is logged where it happened; the client is told nothing about it.
 func internalError[T any]() (T, error) {
+	// Switched on &zero, not zero: T is an interface, so zero is nil and a
+	// type switch on it matches no case, and a nil response object makes the
+	// strict handler write nothing at all, which net/http sends as a 200.
 	var zero T
-	switch any(zero).(type) {
-	case api.LocalLoginResponseObject:
-		return any(api.LocalLogin500JSONResponse{
+	var resp any
+	switch any(&zero).(type) {
+	case *api.LocalLoginResponseObject:
+		resp = api.LocalLogin500JSONResponse{
 			InternalErrorJSONResponse: api.InternalErrorJSONResponse{Code: api.INTERNAL},
-		}).(T), nil
-	case api.GetMeResponseObject:
-		return any(api.GetMe500JSONResponse{
+		}
+	case *api.GetMeResponseObject:
+		resp = api.GetMe500JSONResponse{
 			InternalErrorJSONResponse: api.InternalErrorJSONResponse{Code: api.INTERNAL},
-		}).(T), nil
-	case api.LogoutResponseObject:
-		return any(api.Logout500JSONResponse{
+		}
+	case *api.LogoutResponseObject:
+		resp = api.Logout500JSONResponse{
 			InternalErrorJSONResponse: api.InternalErrorJSONResponse{Code: api.INTERNAL},
-		}).(T), nil
+		}
+	default:
+		panic(fmt.Sprintf("auth: no 500 response for %T", &zero))
 	}
-	return zero, nil
+	return resp.(T), nil
 }
 
 // formatDayStartsAt renders a Postgres `time` as HH:MM, the shape the contract

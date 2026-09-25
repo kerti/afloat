@@ -29,23 +29,34 @@ type harness struct {
 func newHarness(t *testing.T, clock func() time.Time) harness {
 	t.Helper()
 	tdb := testutil.NewTestDB(t)
-	return harness{
-		tdb: tdb,
-		now: clock,
-		auth: auth.New(auth.Deps{
-			Querier:            tdb.Queries,
-			Beginner:           tdb.Pool,
-			SessionTTL:         testTTL,
-			SessionMaxLifetime: testMaxLifetime,
-			CookieSecure:       true,
-			Now:                clock,
-		}),
-	}
+	return harness{tdb: tdb, now: clock}.withQuerier(tdb.Queries)
+}
+
+// withQuerier swaps h's Handlers for one wired to q, reusing h's existing
+// TestDB — a fresh newHarness call would re-truncate the tables and erase
+// whatever the test already seeded.
+func (h harness) withQuerier(q db.Querier) harness {
+	h.auth = auth.New(auth.Deps{
+		Querier:            q,
+		Beginner:           h.tdb.Pool,
+		SessionTTL:         testTTL,
+		SessionMaxLifetime: testMaxLifetime,
+		CookieSecure:       true,
+		Now:                h.now,
+	})
+	return h
 }
 
 // resolve runs a request through SessionMiddleware and reports whether a User
 // came out the other side — which is the only thing callers care about.
 func (h harness) resolve(t *testing.T, token string) (db.User, bool, *httptest.ResponseRecorder) {
+	t.Helper()
+	return h.resolveWithContext(context.Background(), t, token)
+}
+
+// resolveWithContext is resolve for a request carrying ctx, such as one whose
+// client has already gone.
+func (h harness) resolveWithContext(ctx context.Context, t *testing.T, token string) (db.User, bool, *httptest.ResponseRecorder) {
 	t.Helper()
 
 	var got db.User
@@ -54,7 +65,7 @@ func (h harness) resolve(t *testing.T, token string) (db.User, bool, *httptest.R
 		got, found = auth.UserFromContext(r.Context())
 	})
 
-	req := httptest.NewRequest(http.MethodGet, "/api/me", nil)
+	req := httptest.NewRequestWithContext(ctx, http.MethodGet, "/api/me", nil)
 	if token != "" {
 		req.AddCookie(&http.Cookie{Name: auth.SessionCookieName, Value: token})
 	}
@@ -327,7 +338,8 @@ func TestStaleSessionIsTouchedAndKeepsItsPlaintextToken(t *testing.T) {
 	}
 }
 
-// A session outliving its User — soft-deleted — must not resolve.
+// A session outliving its User — soft-deleted — must not resolve, and clears
+// the cookie so the browser stops presenting it.
 func TestSessionOfSoftDeletedUserDoesNotResolve(t *testing.T) {
 	h := newHarness(t, time.Now)
 
@@ -343,8 +355,14 @@ func TestSessionOfSoftDeletedUserDoesNotResolve(t *testing.T) {
 		t.Fatalf("soft-delete user: %v", err)
 	}
 
-	if _, ok, _ := h.resolve(t, cookie.Value); ok {
+	_, ok, rec := h.resolve(t, cookie.Value)
+	if ok {
 		t.Error("a soft-deleted User's session still resolved")
+	}
+	// The one GetUserByID error that does clear it: an outage must not (#27),
+	// so the clear is conditional and needs pinning from this side too.
+	if !clearsCookie(rec) {
+		t.Error("a soft-deleted User's session did not clear the cookie; the browser keeps presenting it")
 	}
 }
 

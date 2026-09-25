@@ -96,6 +96,12 @@ func strictJSONBodyDecoder(body io.Reader, _ http.Header, _ *openapi3.SchemaRef,
 	dec.UseNumber()
 	var value any
 	if err := dec.Decode(&value); err != nil {
+		// A syntax error's text quotes the offending character, and in a login
+		// body that can be one from the password: its offset is enough.
+		var syntaxErr *json.SyntaxError
+		if errors.As(err, &syntaxErr) {
+			return nil, &openapi3filter.ParseError{Kind: openapi3filter.KindInvalidFormat, Reason: fmt.Sprintf("malformed JSON at offset %d", syntaxErr.Offset)}
+		}
 		return nil, &openapi3filter.ParseError{Kind: openapi3filter.KindInvalidFormat, Cause: err}
 	}
 	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
@@ -160,13 +166,21 @@ func openapiRequestValidator() func(http.Handler) http.Handler {
 // INVALID_JSON_BODY. HTTP calls those the same media type (RFC 9110 §8.3.1),
 // and Spring reads them as JSON. The parameters are left for the decoder,
 // which ignores them.
+//
+// ASCII letters only, as Spring lowercases: strings.ToLower also folds U+0130
+// to "i", which made "applİcation/json" JSON here and a bad token there.
 func canonicalMediaType(h http.Header) {
 	contentType := h.Get("Content-Type")
 	if contentType == "" {
 		return
 	}
 	mediaType, params, hasParams := strings.Cut(contentType, ";")
-	canonical := strings.ToLower(strings.Trim(mediaType, " \t"))
+	canonical := strings.Map(func(r rune) rune {
+		if 'A' <= r && r <= 'Z' {
+			return r + 'a' - 'A'
+		}
+		return r
+	}, strings.Trim(mediaType, " \t"))
 	if hasParams {
 		canonical += ";" + params
 	}
@@ -288,9 +302,9 @@ func collectBodyFailures(err error, found *[]failure) {
 			undecodable: fmt.Sprintf("%s at /%s", e.SchemaField, strings.Join(pointer, "/")),
 		})
 	default:
-		// The body did not parse (a *ParseError, whose JSON decoder text names
-		// a character or offset, never the body), or could not be read at all,
-		// e.g. cut short by maxBodyBytes.
+		// The body did not parse (a *ParseError, which strictJSONBodyDecoder
+		// keeps to an offset), or could not be read at all, e.g. cut short by
+		// maxBodyBytes.
 		*found = append(*found, failure{undecodable: err.Error()})
 	}
 }
@@ -327,9 +341,10 @@ func parameterRule(err error) string {
 // httperr.WriteValidation and Kotlin's ruleOf already share —
 // go-playground/validator's tag names, plus pattern — or "" for a keyword
 // Kotlin enforces by failing the decode instead (type, nullable,
-// additionalProperties, enum, ...), which is INVALID_JSON_BODY, not VALIDATION. The same goes for every
-// format but email: Kotlin's generated field for date, date-time or uuid is a
-// typed one, and a bad value fails Jackson, not Bean Validation.
+// additionalProperties, enum, ...), which is INVALID_JSON_BODY, not
+// VALIDATION. The same goes for every format but email: Kotlin's generated
+// field for date, date-time or uuid is a typed one, and a bad value fails
+// Jackson, not Bean Validation.
 func constraintRule(err *openapi3.SchemaError) string {
 	switch err.SchemaField {
 	case "required":

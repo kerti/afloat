@@ -157,10 +157,12 @@ func TestLoginRequestValidationUndecodableBodyIsInvalidJSONBody(t *testing.T) {
 	srv := newTestServer()
 
 	for _, tc := range []struct {
-		name        string
-		body        string
-		contentType string
+		name          string
+		body          string
+		contentType   string
+		noContentType bool
 	}{
+		{name: "empty body", body: ``},
 		{name: "root is not an object", body: `["not","an","object"]`},
 		{name: "field of the wrong type", body: `{"email":5,"password":"a valid password"}`},
 		{name: "field is null", body: `{"email":null,"password":"a valid password"}`},
@@ -182,13 +184,19 @@ func TestLoginRequestValidationUndecodableBodyIsInvalidJSONBody(t *testing.T) {
 		// UTF-8 whatever the header claims.
 		{name: "not UTF-8, declared as Latin-1", body: `{"email":"a@example.com","password":"a valid ` + "\xff" + `password"}`, contentType: "application/json; charset=ISO-8859-1"},
 		{name: "not declared as JSON", body: `{"email":"a@example.com","password":"a valid password"}`, contentType: "text/plain"},
+		{name: "not declared at all", body: `{"email":"a@example.com","password":"a valid password"}`, noContentType: true},
+		// Only ASCII letters fold: U+0130 lowercases to "i" in Unicode, and
+		// Spring refuses it as a token.
+		{name: "declared with a non-ASCII letter", body: `{"email":"a@example.com","password":"a valid password"}`, contentType: "appl\u0130cation/json"},
 		// Spring's JSON converter reads any +json type; the contract declares
 		// application/json alone.
 		{name: "declared as another JSON type", body: `{"email":"a@example.com","password":"a valid password"}`, contentType: "application/vnd.api+json"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			req := httptest.NewRequest(http.MethodPost, "/api/auth/local/login", strings.NewReader(tc.body))
-			req.Header.Set("Content-Type", cmp.Or(tc.contentType, "application/json"))
+			if !tc.noContentType {
+				req.Header.Set("Content-Type", cmp.Or(tc.contentType, "application/json"))
+			}
 
 			rec := httptest.NewRecorder()
 			srv.ServeHTTP(rec, req)
@@ -206,7 +214,8 @@ func TestLoginRequestValidationUndecodableBodyIsInvalidJSONBody(t *testing.T) {
 
 // A media type is case-insensitive and may have whitespace around it (RFC 9110
 // §8.3.1), and a body is UTF-8 whatever charset is claimed, even one no
-// decoder knows: each of these is JSON, read and validated, as Kotlin reads it
+// decoder knows. Every other parameter is ignored, even one Spring could not
+// parse: each of these is JSON, read and validated, as Kotlin reads it
 // (LoginSpec "reads every spelling of the JSON media type as Go does").
 func TestLoginReadsEverySpellingOfTheJSONMediaType(t *testing.T) {
 	srv := newTestServer()
@@ -218,6 +227,9 @@ func TestLoginReadsEverySpellingOfTheJSONMediaType(t *testing.T) {
 		"\tapplication/json\t;charset=utf-8",
 		"application/json; charset=utf-16",
 		"application/json; charset=bogus",
+		"application/json; foo=a b",
+		"application/json; foo=",
+		`application/json; foo="bar`,
 	} {
 		t.Run(contentType, func(t *testing.T) {
 			req := httptest.NewRequest(http.MethodPost, "/api/auth/local/login", strings.NewReader(`{"email":"not-an-email","password":"a valid password"}`))
@@ -255,6 +267,9 @@ func TestLoginRequestValidationDoesNotLogTheRejectedValue(t *testing.T) {
 	for _, body := range []string{
 		`["` + secret + `"]`,
 		`{"email":"a@example.com","password":["` + secret + `"]}`,
+		// encoding/json's text for a bad escape quotes the character after the
+		// backslash, which here is the password's.
+		`{"email":"a@example.com","password":"a\~"}`,
 	} {
 		req := httptest.NewRequest(http.MethodPost, "/api/auth/local/login", strings.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
@@ -264,7 +279,7 @@ func TestLoginRequestValidationDoesNotLogTheRejectedValue(t *testing.T) {
 	if !strings.Contains(logged.String(), "request body rejected by contract") {
 		t.Fatalf("nothing logged for a rejected body: %q", logged.String())
 	}
-	if strings.Contains(logged.String(), secret) {
+	if strings.Contains(logged.String(), secret) || strings.Contains(logged.String(), "~") {
 		t.Errorf("log carries the rejected value: %q", logged.String())
 	}
 }

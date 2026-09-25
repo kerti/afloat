@@ -1,0 +1,346 @@
+# Request-body validation on POST /auth/local/login (#18, #21; merged in
+# #51). The ruling: a body that cannot be decoded into the request type is
+# INVALID_JSON_BODY with no args, whatever else is wrong with it; otherwise the
+# first failure by (field, rule) order is VALIDATION with {field, rule}.
+#
+# A sample, not the whole table: each backend's own suite carries every row
+# (Go login_validation_test.go, Kotlin LoginSpec). What the harness adds is the
+# real server in front of each - Tomcat and net/http, not MockMvc and
+# httptest - and the rows. No refusal here burns backoff: a body that never
+# named a credential is not a failed login.
+
+- name: validation - email absent is email/required
+  issue: "21"
+  request:
+    method: POST
+    path: /auth/local/login
+    headers:
+      Content-Type: application/json
+    body: '{"password":"a valid password"}'
+  expect:
+    status: 400
+    body_json: {code: VALIDATION, args: {field: email, rule: required}}
+    cookies: {}
+    rows: &no-attempts
+      - sql: SELECT count(*)::int AS n FROM login_attempts
+        rows: [{n: 0}]
+
+- name: validation - password absent is password/required
+  issue: "21"
+  request:
+    method: POST
+    path: /auth/local/login
+    headers:
+      Content-Type: application/json
+    body: '{"email":"a@example.com"}'
+  expect:
+    status: 400
+    body_json: {code: VALIDATION, args: {field: password, rule: required}}
+    cookies: {}
+    rows: *no-attempts
+
+- name: validation - empty object is email/required
+  issue: "21"
+  request:
+    method: POST
+    path: /auth/local/login
+    headers:
+      Content-Type: application/json
+    body: '{}'
+  expect:
+    status: 400
+    body_json: {code: VALIDATION, args: {field: email, rule: required}}
+    cookies: {}
+    rows: *no-attempts
+
+- name: validation - password empty is password/min
+  issue: "21"
+  request:
+    method: POST
+    path: /auth/local/login
+    headers:
+      Content-Type: application/json
+    body: '{"email":"a@example.com","password":""}'
+  expect:
+    status: 400
+    body_json: {code: VALIDATION, args: {field: password, rule: min}}
+    cookies: {}
+    rows: *no-attempts
+
+- name: validation - password over 4096 characters is password/max
+  issue: "21"
+  request:
+    method: POST
+    path: /auth/local/login
+    headers:
+      Content-Type: application/json
+    body: '{"email":"a@example.com","password":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}'
+  expect:
+    status: 400
+    body_json: {code: VALIDATION, args: {field: password, rule: max}}
+    cookies: {}
+    rows: *no-attempts
+
+- name: validation - email over 320 characters is email/max
+  issue: "21"
+  request:
+    method: POST
+    path: /auth/local/login
+    headers:
+      Content-Type: application/json
+    body: '{"email":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa@example.com","password":"a valid password"}'
+  expect:
+    status: 400
+    body_json: {code: VALIDATION, args: {field: email, rule: max}}
+    cookies: {}
+    rows: *no-attempts
+
+- name: validation - email not an address is email/email
+  issue: "21"
+  request:
+    method: POST
+    path: /auth/local/login
+    headers:
+      Content-Type: application/json
+    body: '{"email":"not-an-email","password":"a valid password"}'
+  expect:
+    status: 400
+    body_json: {code: VALIDATION, args: {field: email, rule: email}}
+    cookies: {}
+    rows: *no-attempts
+
+- name: validation - email only whitespace is email/email
+  issue: "21"
+  request:
+    method: POST
+    path: /auth/local/login
+    headers:
+      Content-Type: application/json
+    body: '{"email":"   ","password":"a valid password"}'
+  expect:
+    status: 400
+    body_json: {code: VALIDATION, args: {field: email, rule: email}}
+    cookies: {}
+    rows: *no-attempts
+
+- name: validation - email absent and password empty is email/required
+  issue: "21"
+  request:
+    method: POST
+    path: /auth/local/login
+    headers:
+      Content-Type: application/json
+    body: '{"password":""}'
+  expect:
+    status: 400
+    body_json: {code: VALIDATION, args: {field: email, rule: required}}
+    cookies: {}
+    rows: *no-attempts
+
+- name: validation - email invalid and password empty is email/email
+  issue: "21"
+  request:
+    method: POST
+    path: /auth/local/login
+    headers:
+      Content-Type: application/json
+    body: '{"email":"not-an-email","password":""}'
+  expect:
+    status: 400
+    body_json: {code: VALIDATION, args: {field: email, rule: email}}
+    cookies: {}
+    rows: *no-attempts
+
+- name: validation - email padded and password absent is password/required
+  issue: "21"
+  request:
+    method: POST
+    path: /auth/local/login
+    headers:
+      Content-Type: application/json
+    body: '{"email":"  a@example.com  "}'
+  expect:
+    status: 400
+    body_json: {code: VALIDATION, args: {field: password, rule: required}}
+    cookies: {}
+    rows: *no-attempts
+
+- name: validation - empty body is INVALID_JSON_BODY
+  issue: "21"
+  request:
+    method: POST
+    path: /auth/local/login
+    headers:
+      Content-Type: application/json
+    body: ''
+  expect:
+    status: 400
+    body_json: {code: INVALID_JSON_BODY}
+    cookies: {}
+    rows: *no-attempts
+
+- name: validation - root is null is INVALID_JSON_BODY
+  issue: "21"
+  request:
+    method: POST
+    path: /auth/local/login
+    headers:
+      Content-Type: application/json
+    body: 'null'
+  expect:
+    status: 400
+    body_json: {code: INVALID_JSON_BODY}
+    cookies: {}
+    rows: *no-attempts
+
+- name: validation - root is an array is INVALID_JSON_BODY
+  issue: "21"
+  request:
+    method: POST
+    path: /auth/local/login
+    headers:
+      Content-Type: application/json
+    body: '["not","an","object"]'
+  expect:
+    status: 400
+    body_json: {code: INVALID_JSON_BODY}
+    cookies: {}
+    rows: *no-attempts
+
+- name: validation - field of the wrong type is INVALID_JSON_BODY
+  issue: "21"
+  request:
+    method: POST
+    path: /auth/local/login
+    headers:
+      Content-Type: application/json
+    body: '{"email":5,"password":"a valid password"}'
+  expect:
+    status: 400
+    body_json: {code: INVALID_JSON_BODY}
+    cookies: {}
+    rows: *no-attempts
+
+- name: validation - field is null is INVALID_JSON_BODY
+  issue: "21"
+  request:
+    method: POST
+    path: /auth/local/login
+    headers:
+      Content-Type: application/json
+    body: '{"email":null,"password":"a valid password"}'
+  expect:
+    status: 400
+    body_json: {code: INVALID_JSON_BODY}
+    cookies: {}
+    rows: *no-attempts
+
+- name: validation - unknown property is INVALID_JSON_BODY
+  issue: "21"
+  request:
+    method: POST
+    path: /auth/local/login
+    headers:
+      Content-Type: application/json
+    body: '{"email":"a@example.com","password":"a valid password","admin":true}'
+  expect:
+    status: 400
+    body_json: {code: INVALID_JSON_BODY}
+    cookies: {}
+    rows: *no-attempts
+
+- name: validation - unknown property beside an absent field is INVALID_JSON_BODY
+  issue: "21"
+  request:
+    method: POST
+    path: /auth/local/login
+    headers:
+      Content-Type: application/json
+    body: '{"password":"","admin":true}'
+  expect:
+    status: 400
+    body_json: {code: INVALID_JSON_BODY}
+    cookies: {}
+    rows: *no-attempts
+
+- name: validation - malformed JSON is INVALID_JSON_BODY
+  issue: "21"
+  request:
+    method: POST
+    path: /auth/local/login
+    headers:
+      Content-Type: application/json
+    body: '{"email": '
+  expect:
+    status: 400
+    body_json: {code: INVALID_JSON_BODY}
+    cookies: {}
+    rows: *no-attempts
+
+- name: validation - data after the JSON value is INVALID_JSON_BODY
+  issue: "21"
+  request:
+    method: POST
+    path: /auth/local/login
+    headers:
+      Content-Type: application/json
+    body: '{"email":"a@example.com","password":"a valid password"} x'
+  expect:
+    status: 400
+    body_json: {code: INVALID_JSON_BODY}
+    cookies: {}
+    rows: *no-attempts
+
+- name: validation - duplicate key, the earlier of the wrong type is INVALID_JSON_BODY
+  issue: "21"
+  request:
+    method: POST
+    path: /auth/local/login
+    headers:
+      Content-Type: application/json
+    body: '{"email":"a@example.com","password":5,"password":"a valid password"}'
+  expect:
+    status: 400
+    body_json: {code: INVALID_JSON_BODY}
+    cookies: {}
+    rows: *no-attempts
+
+- name: validation - declared as text/plain is INVALID_JSON_BODY
+  issue: "21"
+  request:
+    method: POST
+    path: /auth/local/login
+    headers:
+      Content-Type: text/plain
+    body: '{"email":"a@example.com","password":"a valid password"}'
+  expect:
+    status: 400
+    body_json: {code: INVALID_JSON_BODY}
+    cookies: {}
+    rows: *no-attempts
+
+- name: validation - declared as another JSON type is INVALID_JSON_BODY
+  issue: "21"
+  request:
+    method: POST
+    path: /auth/local/login
+    headers:
+      Content-Type: application/vnd.api+json
+    body: '{"email":"a@example.com","password":"a valid password"}'
+  expect:
+    status: 400
+    body_json: {code: INVALID_JSON_BODY}
+    cookies: {}
+    rows: *no-attempts
+
+- name: validation - no Content-Type is INVALID_JSON_BODY
+  issue: "21"
+  request:
+    method: POST
+    path: /auth/local/login
+    body: '{"email":"a@example.com","password":"a valid password"}'
+  expect:
+    status: 400
+    body_json: {code: INVALID_JSON_BODY}
+    cookies: {}
+    rows: *no-attempts

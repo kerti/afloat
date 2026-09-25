@@ -1,0 +1,13 @@
+# GET /auth/methods on the default profile. The local-disabled answer is in
+# auth-local-disabled.yaml.
+
+- name: auth methods reports local on and google off
+  request:
+    method: GET
+    path: /auth/methods
+  expect:
+    status: 200
+    body_json:
+      local: true
+      google: false
+    cookies: {}

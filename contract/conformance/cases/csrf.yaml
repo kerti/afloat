@@ -1,0 +1,152 @@
+# The cross-site guard (BOOTSTRAP.md §5, "a second CSRF layer behind
+# SameSite=Lax"): a non-safe method is refused when Sec-Fetch-Site says the
+# request came from elsewhere, or - with no Sec-Fetch-Site - when Origin names
+# another host. Safe methods pass untouched. The guard answers before any
+# handler runs, so a refused login burns no backoff.
+#
+# Host is set explicitly where Origin is compared, because each backend
+# listens on its own port and the case must mean the same thing on both.
+
+- name: csrf - cross-site login is blocked
+  request:
+    method: POST
+    path: /auth/local/login
+    headers:
+      Content-Type: application/json
+      Sec-Fetch-Site: cross-site
+    body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+  expect:
+    status: 403
+    body_json: {code: CROSS_SITE_REQUEST_BLOCKED}
+    cookies: {}
+    rows:
+      - sql: SELECT (SELECT count(*) FROM sessions)::int AS sessions, (SELECT count(*) FROM login_attempts)::int AS attempts
+        rows: [{sessions: 0, attempts: 0}]
+
+- name: csrf - same-site is not same-origin, and is blocked
+  request:
+    method: POST
+    path: /auth/local/login
+    headers:
+      Content-Type: application/json
+      Sec-Fetch-Site: same-site
+    body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+  expect:
+    status: 403
+    body_json: {code: CROSS_SITE_REQUEST_BLOCKED}
+    cookies: {}
+
+- name: csrf - same-origin login passes
+  request:
+    method: POST
+    path: /auth/local/login
+    headers:
+      Content-Type: application/json
+      Sec-Fetch-Site: same-origin
+    body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+  expect:
+    status: 204
+    body_empty: true
+    cookies:
+      afloat_session: &session-cookie
+        value_pattern: '[A-Za-z0-9_-]{43}'
+        path: /
+        max_age: 2592000
+        http_only: true
+        secure: false
+        same_site: Lax
+        expires: max-age
+
+# A user typing the URL, or a bookmark.
+- name: csrf - Sec-Fetch-Site none passes
+  request:
+    method: POST
+    path: /auth/local/login
+    headers:
+      Content-Type: application/json
+      Sec-Fetch-Site: none
+    body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+  expect:
+    status: 204
+    body_empty: true
+    cookies:
+      afloat_session: *session-cookie
+
+# Sec-Fetch-Site wins where both are sent: a browser that sends it knows.
+- name: csrf - Sec-Fetch-Site same-origin wins over a foreign Origin
+  request:
+    method: POST
+    path: /auth/local/login
+    headers:
+      Content-Type: application/json
+      Sec-Fetch-Site: same-origin
+      Origin: http://evil.example
+    body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+  expect:
+    status: 204
+    body_empty: true
+    cookies:
+      afloat_session: *session-cookie
+
+- name: csrf - a foreign Origin with no Sec-Fetch-Site is blocked
+  request:
+    method: POST
+    path: /auth/local/login
+    headers:
+      Content-Type: application/json
+      Host: afloat.test
+      Origin: http://evil.example
+    body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+  expect:
+    status: 403
+    body_json: {code: CROSS_SITE_REQUEST_BLOCKED}
+    cookies: {}
+
+- name: csrf - a matching Origin with no Sec-Fetch-Site passes
+  request:
+    method: POST
+    path: /auth/local/login
+    headers:
+      Content-Type: application/json
+      Host: afloat.test
+      Origin: http://afloat.test
+    body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+  expect:
+    status: 204
+    body_empty: true
+    cookies:
+      afloat_session: *session-cookie
+
+# Logout is a POST too: a cross-site page must not be able to sign a user out.
+- name: csrf - cross-site logout is blocked and the session survives
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /auth/logout
+    headers:
+      Sec-Fetch-Site: cross-site
+  expect:
+    status: 403
+    body_json: {code: CROSS_SITE_REQUEST_BLOCKED}
+    cookies: {}
+    rows:
+      - sql: SELECT count(*)::int AS n FROM sessions
+        rows: [{n: 1}]
+
+- name: csrf - a safe method is never blocked
+  request:
+    method: GET
+    path: /auth/methods
+    headers:
+      Sec-Fetch-Site: cross-site
+      Origin: http://evil.example
+  expect:
+    status: 200
+    body_json: {local: true, google: false}

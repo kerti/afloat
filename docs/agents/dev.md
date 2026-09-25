@@ -31,7 +31,9 @@ file grows as real targets land.
   differing means *the case file is incomplete*, which is its own finding. `make check` compiles the
   module and runs `go test -short` there, which validates the committed case files without needing a
   live backend. Read `contract/conformance/README.md` before adding a case — in particular, a case
-  for a decision that has not landed pins today's accident.
+  for a decision that has not landed pins today's accident. **It empties `afloat_go` and
+  `afloat_kotlin`**: every case truncates every table and applies `contract/conformance/fixtures/seed.sql`,
+  so anything a local run of either backend left in them is gone afterwards.
 - `make sync-kotlin-migrations` — copies `db/migrations/V*.sql` into
   `backend-kotlin/src/main/resources/db/migration`. The Kotlin backend carries its migrations inside
   the jar, so it needs its own copy; the copy is **generated output and never hand-edited**, and

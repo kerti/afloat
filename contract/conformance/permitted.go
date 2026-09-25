@@ -10,10 +10,12 @@ import (
 
 // PermittedDifference is something the two backends are allowed to differ on.
 //
-// Two kinds. A global entry names one `header` and applies to every case. A
+// Three kinds. A global entry names one `header` and applies to every case. A
 // case-scoped entry has a `name`, lists `headers` and/or `body`, and applies
 // only to the cases that cite it under `permit:` - for a difference that is
-// legitimate on one answer and would be a bug on any other.
+// legitimate on one answer and would be a bug on any other. A column entry
+// names one `table.column` the persisted-state comparison skips, on every
+// case.
 //
 // Milestone "Base parity" axis 1 is "identical observable responses ... plus a
 // documented and tested list of permitted differences". This file is that list,
@@ -36,6 +38,11 @@ type PermittedDifference struct {
 	// something about the body, which is what CheckPermits enforces.
 	Body bool `yaml:"body"`
 
+	// Column is "table.column", left out of the persisted-state comparison.
+	// For a value one backend cannot reproduce from the other's, such as a
+	// hash of a random token; every other column is compared.
+	Column string `yaml:"column"`
+
 	// Why is required prose. Protocol facts (Date) need only this.
 	Why string `yaml:"why"`
 
@@ -54,6 +61,7 @@ type PermittedDifference struct {
 type PermittedSet struct {
 	byHeader map[string]PermittedDifference
 	byName   map[string]PermittedDifference
+	byColumn map[string]PermittedDifference
 }
 
 func LoadPermitted(path string) (*PermittedSet, error) {
@@ -68,6 +76,7 @@ func LoadPermitted(path string) (*PermittedSet, error) {
 	set := &PermittedSet{
 		byHeader: make(map[string]PermittedDifference, len(entries)),
 		byName:   map[string]PermittedDifference{},
+		byColumn: map[string]PermittedDifference{},
 	}
 	for _, e := range entries {
 		if err := e.validate(); err != nil {
@@ -78,6 +87,13 @@ func LoadPermitted(path string) (*PermittedSet, error) {
 				return nil, fmt.Errorf("%s: duplicate entry named %q", path, e.Name)
 			}
 			set.byName[e.Name] = e
+			continue
+		}
+		if e.Column != "" {
+			if _, dup := set.byColumn[e.Column]; dup {
+				return nil, fmt.Errorf("%s: duplicate entry for column %q", path, e.Column)
+			}
+			set.byColumn[e.Column] = e
 			continue
 		}
 		key := strings.ToLower(e.Header)
@@ -92,12 +108,24 @@ func LoadPermitted(path string) (*PermittedSet, error) {
 func (e PermittedDifference) validate() error {
 	hasHeader := strings.TrimSpace(e.Header) != ""
 	hasName := strings.TrimSpace(e.Name) != ""
-	label := e.Header + e.Name
+	hasColumn := strings.TrimSpace(e.Column) != ""
+	label := e.Header + e.Name + e.Column
+	kinds := 0
+	for _, has := range []bool{hasHeader, hasName, hasColumn} {
+		if has {
+			kinds++
+		}
+	}
 	switch {
-	case hasHeader && hasName:
-		return fmt.Errorf("%q: an entry is global (`header`) or case-scoped (`name`), not both", label)
-	case !hasHeader && !hasName:
-		return fmt.Errorf("an entry has neither `header` nor `name`")
+	case kinds > 1:
+		return fmt.Errorf("%q: an entry is one of `header`, `name` or `column`, not several", label)
+	case kinds == 0:
+		return fmt.Errorf("an entry has none of `header`, `name` or `column`")
+	}
+	if hasColumn {
+		if t, c, ok := strings.Cut(e.Column, "."); !ok || t == "" || c == "" || strings.Contains(c, ".") {
+			return fmt.Errorf("%q: a column entry is written table.column", label)
+		}
 	}
 	if strings.TrimSpace(e.Why) == "" {
 		return fmt.Errorf("%q has no `why`", label)
@@ -105,7 +133,7 @@ func (e PermittedDifference) validate() error {
 	if e.Provisional && strings.TrimSpace(e.Issue) == "" {
 		return fmt.Errorf("%q is provisional but cites no issue", label)
 	}
-	if hasHeader && (len(e.Headers) > 0 || e.Body) {
+	if (hasHeader || hasColumn) && (len(e.Headers) > 0 || e.Body) {
 		return fmt.Errorf("%q: `headers` and `body` belong to a case-scoped entry, which needs a `name`", label)
 	}
 	if hasName {
@@ -124,6 +152,12 @@ func (e PermittedDifference) validate() error {
 // Allows reports whether a header may differ on every case.
 func (p *PermittedSet) Allows(header string) bool {
 	_, ok := p.byHeader[strings.ToLower(header)]
+	return ok
+}
+
+// MasksColumn reports whether the persisted-state comparison skips a column.
+func (p *PermittedSet) MasksColumn(table, column string) bool {
+	_, ok := p.byColumn[table+"."+column]
 	return ok
 }
 
@@ -173,7 +207,7 @@ func CheckPermits(cases []Case, p *PermittedSet) error {
 // how much of its own allowlist is temporary rather than letting it calcify.
 func (p *PermittedSet) Provisional() []PermittedDifference {
 	var out []PermittedDifference
-	for _, m := range []map[string]PermittedDifference{p.byHeader, p.byName} {
+	for _, m := range []map[string]PermittedDifference{p.byHeader, p.byName, p.byColumn} {
 		for _, e := range m {
 			if e.Provisional {
 				out = append(out, e)

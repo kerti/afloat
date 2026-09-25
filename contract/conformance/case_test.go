@@ -73,6 +73,75 @@ func TestLoadRejectsUnusableCases(t *testing.T) {
 			yaml: "- name: x\n  request: {method: GET, path: /health}\n  expect: {status: 404, same_as: {method: GET, path: api/nowhere}}\n",
 			want: "same_as.path must start with /",
 		},
+		{
+			name: "given step with neither request nor sql",
+			yaml: "- name: x\n  given: [{status: 204}]\n  request: {method: GET, path: /me}\n  expect: {status: 200}\n",
+			want: "none of request, sql or outage",
+		},
+		{
+			name: "given step that is both request and sql",
+			yaml: "- name: x\n  given: [{request: {method: GET, path: /me}, status: 200, sql: SELECT 1}]\n  request: {method: GET, path: /me}\n  expect: {status: 200}\n",
+			want: "not several",
+		},
+		{
+			// A setup login that silently failed would make every assertion
+			// after it about the wrong state.
+			name: "given request with no status",
+			yaml: "- name: x\n  given: [{request: {method: GET, path: /me}}]\n  request: {method: GET, path: /me}\n  expect: {status: 200}\n",
+			want: "given[0].status is required",
+		},
+		{
+			name: "given request path includes the api base",
+			yaml: "- name: x\n  given: [{request: {method: GET, path: api/me}, status: 200}]\n  request: {method: GET, path: /me}\n  expect: {status: 200}\n",
+			want: "given[0].request.path must start with /",
+		},
+		{
+			name: "status on an sql step",
+			yaml: "- name: x\n  given: [{sql: SELECT 1, status: 200}]\n  request: {method: GET, path: /me}\n  expect: {status: 200}\n",
+			want: "belongs to a request step",
+		},
+		{
+			name: "outage before another step",
+			yaml: "- name: x\n  given: [{outage: true}, {sql: SELECT 1}]\n  request: {method: GET, path: /me}\n  expect: {status: 200}\n",
+			want: "must be the last given step",
+		},
+		{
+			name: "cookie with neither value nor pattern",
+			yaml: "- name: x\n  request: {method: GET, path: /me}\n  expect: {status: 200, cookies: {s: {path: /, max_age: 0, http_only: true, secure: false, same_site: Lax, expires: past}}}\n",
+			want: "one of value or value_pattern is required",
+		},
+		{
+			name: "cookie with both value and pattern",
+			yaml: "- name: x\n  request: {method: GET, path: /me}\n  expect: {status: 200, cookies: {s: {value: a, value_pattern: a, path: /, max_age: 0, http_only: true, secure: false, same_site: Lax, expires: past}}}\n",
+			want: "mutually exclusive",
+		},
+		{
+			// Every attribute is pinned, or a case quietly stops asserting one.
+			name: "cookie missing attributes",
+			yaml: "- name: x\n  request: {method: GET, path: /me}\n  expect: {status: 200, cookies: {s: {value: a, expires: past}}}\n",
+			want: "missing: path, max_age, http_only, secure, same_site",
+		},
+		{
+			name: "cookie with an unknown expires relation",
+			yaml: "- name: x\n  request: {method: GET, path: /me}\n  expect: {status: 200, cookies: {s: {value: a, path: /, max_age: 0, http_only: true, secure: false, same_site: Lax, expires: soon}}}\n",
+			want: "expires must be",
+		},
+		{
+			name: "cookie with a bad pattern",
+			yaml: "- name: x\n  request: {method: GET, path: /me}\n  expect: {status: 200, cookies: {s: {value_pattern: \"[\", path: /, max_age: 0, http_only: true, secure: false, same_site: Lax, expires: past}}}\n",
+			want: "value_pattern",
+		},
+		{
+			name: "rows with no sql",
+			yaml: "- name: x\n  request: {method: GET, path: /me}\n  expect: {status: 200, rows: [{rows: []}]}\n",
+			want: "expect.rows[0].sql is required",
+		},
+		{
+			// An omitted list must not read as "asserts no rows".
+			name: "rows with no expected rows",
+			yaml: "- name: x\n  request: {method: GET, path: /me}\n  expect: {status: 200, rows: [{sql: SELECT 1}]}\n",
+			want: "write `rows: []`",
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := conformance.Load(writeCases(t, tc.yaml))

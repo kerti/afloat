@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"math"
 	"regexp"
 	"strconv"
 	"sync/atomic"
@@ -159,34 +160,37 @@ type argonParams struct {
 
 // phcShape is the one PHC spelling both backends accept (contract/testdata/
 // argon2.json, #16): argon2id, version 19, the three parameters in that order,
-// unpadded standard base64. Anything looser verified in one backend and not the
-// other: Sscanf read "v=19x" as 19 and ignored text after the parameters, and
-// Spring's decoder ignores a sixth field and accepts base64 padding.
-var phcShape = regexp.MustCompile(`^\$argon2id\$v=(\d+)\$m=(\d+),t=(\d+),p=(\d+)\$([A-Za-z0-9+/]+)\$([A-Za-z0-9+/]+)$`)
+// unpadded standard base64, a hash of at least 4 bytes. Anything looser
+// verified in one backend and not the other: Sscanf read "v=19x" as 19 and
+// ignored text after the parameters, Atoi read "v=019" as 19, and Spring's
+// decoder ignores a sixth field and accepts base64 padding.
+var phcShape = regexp.MustCompile(`^\$argon2id\$v=19\$m=(\d+),t=(\d+),p=(\d+)\$([A-Za-z0-9+/]+)\$([A-Za-z0-9+/]{6,})$`)
 
 func parsePHC(phc string) (argonParams, []byte, []byte, error) {
 	m := phcShape.FindStringSubmatch(phc)
 	if m == nil {
 		return argonParams{}, nil, nil, errors.New("not an argon2id PHC string")
 	}
-	if version, err := strconv.Atoi(m[1]); err != nil || version != argon2.Version {
-		return argonParams{}, nil, nil, fmt.Errorf("unsupported argon2 version %q", m[1])
-	}
-	memory, errM := strconv.ParseUint(m[2], 10, 32)
-	iterations, errT := strconv.ParseUint(m[3], 10, 32)
-	threads, errP := strconv.ParseUint(m[4], 10, 8)
+	memory, errM := strconv.ParseUint(m[1], 10, 32)
+	iterations, errT := strconv.ParseUint(m[2], 10, 32)
+	threads, errP := strconv.ParseUint(m[3], 10, 8)
 	// argon2.IDKey panics on zero iterations or zero parallelism, so a
 	// malformed stored string would crash a login into the recoverer's 500
-	// where Kotlin answers "does not verify".
-	if err := errors.Join(errM, errT, errP); err != nil || iterations < 1 || threads < 1 {
+	// where Kotlin answers "does not verify". Below 8 KiB per lane both
+	// libraries quietly raise memory to that floor, so the string no longer
+	// states the work done, and at m=0 only Spring refuses. Spring reads memory
+	// and iterations as an int.
+	if err := errors.Join(errM, errT, errP); err != nil ||
+		iterations < 1 || iterations > math.MaxInt32 ||
+		threads < 1 || memory < 8*threads || memory > math.MaxInt32 {
 		return argonParams{}, nil, nil, errors.New("argon2 parameters out of range")
 	}
 
-	salt, err := base64.RawStdEncoding.DecodeString(m[5])
+	salt, err := base64.RawStdEncoding.DecodeString(m[4])
 	if err != nil {
 		return argonParams{}, nil, nil, fmt.Errorf("decode salt: %w", err)
 	}
-	hash, err := base64.RawStdEncoding.DecodeString(m[6])
+	hash, err := base64.RawStdEncoding.DecodeString(m[5])
 	if err != nil {
 		return argonParams{}, nil, nil, fmt.Errorf("decode hash: %w", err)
 	}

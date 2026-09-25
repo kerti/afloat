@@ -73,13 +73,19 @@ func TestBackoffCurveMatchesTheSharedFixture(t *testing.T) {
 	ctx := context.Background()
 	const key = "email:curve@example.com"
 
+	recorded := 0
 	for _, step := range fx.Curve {
-		if err := h.tdb.Queries.RecordLoginFailure(ctx, db.RecordLoginFailureParams{
-			Key:          key,
-			FirstBackoff: pgtype.Interval{Microseconds: first.Microseconds(), Valid: true},
-			MaxBackoff:   pgtype.Interval{Microseconds: maxBackoff.Microseconds(), Valid: true},
-		}); err != nil {
-			t.Fatalf("RecordLoginFailure: %v", err)
+		if step.Failures <= recorded {
+			t.Fatalf("curve rows must ascend: %d after %d", step.Failures, recorded)
+		}
+		for ; recorded < step.Failures; recorded++ {
+			if err := h.tdb.Queries.RecordLoginFailure(ctx, db.RecordLoginFailureParams{
+				Key:          key,
+				FirstBackoff: pgtype.Interval{Microseconds: first.Microseconds(), Valid: true},
+				MaxBackoff:   pgtype.Interval{Microseconds: maxBackoff.Microseconds(), Valid: true},
+			}); err != nil {
+				t.Fatalf("RecordLoginFailure, failure %d: %v", recorded+1, err)
+			}
 		}
 		var failures int
 		var window float64

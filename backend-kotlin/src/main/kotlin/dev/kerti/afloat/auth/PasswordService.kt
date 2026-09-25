@@ -90,21 +90,27 @@ class PasswordService internal constructor(private val permitWait: Duration) {
     companion object {
         private val log = LoggerFactory.getLogger(PasswordService::class.java)
 
-        // Fixed by the #33 ruling, not an operator knob: 4 x 19 MiB ~ 76 MiB of
         // The one PHC spelling both backends accept, Go's phcShape: argon2id,
         // version 19, the three parameters in that order, unpadded standard
-        // base64, at least one iteration and 1..255 lanes (Go reads the lane
-        // count into a byte).
+        // base64, a hash of at least 4 bytes, 1..255 lanes (Go reads the lane
+        // count into a byte), at least one iteration, and at least 8 KiB of
+        // memory per lane. Below that floor both libraries quietly raise
+        // memory to it, so the string no longer states the work done, and at
+        // m=0 only this decoder refuses. It reads memory and iterations as an
+        // Int where Go reads a uint32, so that bound is held here too rather
+        // than left to whichever throws.
         private val PHC_SHAPE =
-            Regex("""^[$]argon2id[$]v=19[$]m=(\d+),t=(\d+),p=(\d+)[$][A-Za-z0-9+/]+[$][A-Za-z0-9+/]+$""")
+            Regex("""^[$]argon2id[$]v=19[$]m=(\d+),t=(\d+),p=(\d+)[$][A-Za-z0-9+/]+[$][A-Za-z0-9+/]{6,}$""")
 
         internal fun hasPhcShape(phc: String): Boolean {
-            val (memory, iterations, lanes) = PHC_SHAPE.matchEntire(phc)?.destructured ?: return false
-            return memory.toUIntOrNull() != null &&
-                (iterations.toUIntOrNull() ?: 0u) >= 1u &&
-                (lanes.toUByteOrNull() ?: 0u) >= 1u
+            val (m, t, p) = PHC_SHAPE.matchEntire(phc)?.destructured ?: return false
+            val memory = m.toIntOrNull() ?: return false
+            val iterations = t.toIntOrNull() ?: return false
+            val lanes = p.toIntOrNull() ?: return false
+            return iterations >= 1 && lanes in 1..255 && memory >= 8 * lanes
         }
 
+        // Fixed by the #33 ruling, not an operator knob: 4 x 19 MiB ~ 76 MiB of
         // Argon2 memory at most (BOOTSTRAP.md §5.1). Go's argonConcurrencyCap.
         internal const val ARGON_CONCURRENCY_CAP = 4
 

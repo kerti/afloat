@@ -26,9 +26,13 @@ interface LoginAttemptRepository : JpaRepository<LoginAttempt, String> {
     // Exponential, capped: the first window doubled per failure, never longer
     // than the cap (LOGIN_FIRST_BACKOFF, LOGIN_MAX_BACKOFF). Seconds as a
     // double, not a Long, so a sub-second setting is not truncated where Go's
-    // interval keeps it; make_interval takes fractional seconds. Backoff, never a hard lockout: a lockout on a self-hosted
-    // household app locks the household out of its own data. Mirrors the sqlc
-    // query in backend/queries/auth.sql exactly. Its own transaction, and
+    // interval keeps it; make_interval takes fractional seconds. The exponent
+    // stops one past the first doubling that reaches the cap: unclamped, the
+    // product overflows interval at failure 45 at 1s, the statement fails,
+    // the row stops updating and its key is never throttled again. Backoff,
+    // never a hard lockout: a lockout on a self-hosted household app locks the
+    // household out of its own data. Mirrors the sqlc query in
+    // backend/queries/auth.sql exactly. Its own transaction, and
     // AuthService.login holds none: a failure here aborts only this statement.
     @Transactional
     @Modifying(clearAutomatically = true)
@@ -38,7 +42,10 @@ interface LoginAttemptRepository : JpaRepository<LoginAttempt, String> {
         ON CONFLICT (key) DO UPDATE SET
             failure_count = login_attempts.failure_count + 1,
             backoff_until = now() + least(
-                make_interval(secs => :firstBackoff) * pow(2, login_attempts.failure_count),
+                make_interval(secs => :firstBackoff) * pow(2, least(
+                    login_attempts.failure_count,
+                    CAST(ceil(log(2, CAST(:maxBackoff / :firstBackoff AS numeric))) AS int) + 1
+                )),
                 make_interval(secs => :maxBackoff)
             ),
             updated_at = now()

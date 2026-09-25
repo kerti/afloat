@@ -36,8 +36,16 @@ class LoginBackoffFixtureSpec : WebDatabaseSpec() {
             val curve = fixture.get("curve").toList()
             curve.shouldNotBeEmpty()
 
+            var recorded = 0
             curve.forEach { step ->
-                loginAttempts.recordFailure("email:curve@example.com", first.toSecondsDouble(), max.toSecondsDouble())
+                val failuresWanted = step.get("failures").asInt()
+                withClue("curve rows must ascend: $failuresWanted after $recorded") {
+                    (failuresWanted > recorded) shouldBe true
+                }
+                while (recorded < failuresWanted) {
+                    loginAttempts.recordFailure("email:curve@example.com", first.toSecondsDouble(), max.toSecondsDouble())
+                    recorded++
+                }
                 val (failures, window) = JdbcClient.create(dataSource)
                     .sql(
                         """
@@ -47,8 +55,8 @@ class LoginBackoffFixtureSpec : WebDatabaseSpec() {
                     )
                     .query { rs, _ -> rs.getInt(1) to rs.getDouble(2) }
                     .single()
-                withClue("after failure ${step.get("failures").asInt()}") {
-                    failures shouldBe step.get("failures").asInt()
+                withClue("after failure $failuresWanted") {
+                    failures shouldBe failuresWanted
                     window shouldBe step.get("backoff_seconds").asDouble()
                 }
             }

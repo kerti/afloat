@@ -233,9 +233,16 @@ VALUES ($1, 1, now() + $2::interval)
 ON CONFLICT (key) DO UPDATE SET
     failure_count = login_attempts.failure_count + 1,
     -- Exponential, capped: 2^n seconds from the first failure, never longer
-    -- than the cap. Backoff, never a hard lockout.
+    -- than the cap. Backoff, never a hard lockout. The exponent stops one past
+    -- the first doubling that reaches the cap: unclamped, the product
+    -- overflows interval at failure 45 at 1s, the statement fails, the row
+    -- stops updating and its key is never throttled again.
     backoff_until = now() + least(
-        $2::interval * pow(2, login_attempts.failure_count),
+        $2::interval * pow(2, least(
+            login_attempts.failure_count,
+            ceil(log(2, extract(epoch FROM $3::interval)
+                / extract(epoch FROM $2::interval)))::int + 1
+        )),
         $3::interval
     ),
     updated_at = now()

@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"sort"
 	"strings"
@@ -42,6 +43,12 @@ type Case struct {
 	// unregistered-path 404 - must not become invisible on every other.
 	Permit []string `yaml:"permit"`
 
+	// Given runs before Request, on the same backend and the same cookie jar,
+	// after the database is reset to the seed. It is how a case reaches a
+	// state - signed in, throttled, a session near its expiry - without
+	// asserting on the way there, beyond each request step's status.
+	Given []Step `yaml:"given"`
+
 	Request Request `yaml:"request"`
 	Expect  Expect  `yaml:"expect"`
 
@@ -57,6 +64,26 @@ type Request struct {
 	// Body is sent verbatim. A string rather than a map, because some cases
 	// exist precisely to send bytes that are not valid JSON.
 	Body string `yaml:"body"`
+}
+
+// Step is one thing Given does: a request whose status must match, or SQL run
+// against that backend's own database. Exactly one of the two.
+type Step struct {
+	Request *Request `yaml:"request"`
+	// Status is required on a request step: a setup login that silently
+	// failed would otherwise make every assertion after it about the wrong
+	// state.
+	Status int `yaml:"status"`
+
+	// SQL moves persisted state where no request can, such as a session's
+	// expiry into the past. Run as one statement batch, no results read.
+	SQL string `yaml:"sql"`
+
+	// Outage takes the backend's database away - every connection it holds
+	// terminated, every new one refused - until the case's request has been
+	// answered. It is how a case reaches #23 and #27: what a backend says
+	// when the database, not the caller, is the problem.
+	Outage bool `yaml:"outage"`
 }
 
 // Expect is the asserted answer. Anything NOT named here is still compared
@@ -82,6 +109,54 @@ type Expect struct {
 	// exactly like an unregistered path" (#24) holds on each backend even where
 	// the two backends' unregistered-path answers are permitted to differ.
 	SameAs *Request `yaml:"same_as"`
+
+	// Cookies asserts every Set-Cookie on the answer, by cookie name. A nil map
+	// asserts nothing; an empty one (`cookies: {}`) asserts that no cookie is
+	// set at all, and any cookie not named is a failure.
+	Cookies map[string]CookieExpect `yaml:"cookies"`
+
+	// Rows are queries run against the backend's own database after the
+	// request, each with the rows it must return. Persisted state is axis 2
+	// of the milestone: a response can be right while the row behind it is
+	// not.
+	Rows []RowsExpect `yaml:"rows"`
+}
+
+// CookieExpect is one Set-Cookie, attribute by attribute. Every field but
+// Domain is required, so a case cannot quietly leave an attribute unpinned.
+type CookieExpect struct {
+	// Value is compared exactly; ValuePattern is a regular expression the
+	// whole value must match, for a minted token. Exactly one of the two.
+	Value        *string `yaml:"value"`
+	ValuePattern string  `yaml:"value_pattern"`
+
+	Path *string `yaml:"path"`
+	// Domain empty asserts the attribute is absent: the session cookie is
+	// host-only (BOOTSTRAP.md §5).
+	Domain   string `yaml:"domain"`
+	MaxAge   *int   `yaml:"max_age"`
+	HttpOnly *bool  `yaml:"http_only"`
+	Secure   *bool  `yaml:"secure"`
+	SameSite string `yaml:"same_site"`
+
+	// Expires is a relation, because the value is an instant: `absent`,
+	// `past` (at or before the response's Date), or `max-age` (Date plus
+	// Max-Age, to within ExpiresTolerance).
+	Expires string `yaml:"expires"`
+}
+
+const (
+	ExpiresAbsent = "absent"
+	ExpiresPast   = "past"
+	ExpiresMaxAge = "max-age"
+)
+
+// RowsExpect is a query and the rows it must return, in order. Cast in SQL
+// to text, integer or boolean: a column of any other type is refused, so
+// that the comparison never depends on how a driver renders a timestamp.
+type RowsExpect struct {
+	SQL  string           `yaml:"sql"`
+	Rows []map[string]any `yaml:"rows"`
 }
 
 const (
@@ -148,11 +223,8 @@ func (c *Case) validate() error {
 	if strings.TrimSpace(c.Name) == "" {
 		return fmt.Errorf("a case has no name")
 	}
-	if c.Request.Method == "" {
-		return fmt.Errorf("%s: request.method is required", c.Name)
-	}
-	if !strings.HasPrefix(c.Request.Path, "/") {
-		return fmt.Errorf("%s: request.path must start with / and exclude the /api base", c.Name)
+	if err := c.Request.validate(c.Name, "request"); err != nil {
+		return err
 	}
 	if c.Expect.Status == 0 {
 		return fmt.Errorf("%s: expect.status is required", c.Name)
@@ -167,12 +239,103 @@ func (c *Case) validate() error {
 		return fmt.Errorf("%s: unknown profile %q, want one of %v", c.Name, c.Profile, Profiles)
 	}
 	if s := c.Expect.SameAs; s != nil {
-		if s.Method == "" {
-			return fmt.Errorf("%s: expect.same_as.method is required", c.Name)
+		if err := s.validate(c.Name, "expect.same_as"); err != nil {
+			return err
 		}
-		if !strings.HasPrefix(s.Path, "/") {
-			return fmt.Errorf("%s: expect.same_as.path must start with / and exclude the /api base", c.Name)
+	}
+	for i, g := range c.Given {
+		at := fmt.Sprintf("given[%d]", i)
+		kinds := 0
+		for _, set := range []bool{g.Request != nil, strings.TrimSpace(g.SQL) != "", g.Outage} {
+			if set {
+				kinds++
+			}
 		}
+		if kinds > 1 {
+			return fmt.Errorf("%s: %s is one of request, sql or outage, not several", c.Name, at)
+		}
+		switch {
+		case g.Outage:
+			if g.Status != 0 {
+				return fmt.Errorf("%s: %s.status belongs to a request step", c.Name, at)
+			}
+			if i != len(c.Given)-1 {
+				return fmt.Errorf("%s: %s: an outage must be the last given step, since nothing after it can reach the database", c.Name, at)
+			}
+		case g.Request != nil:
+			if err := g.Request.validate(c.Name, at+".request"); err != nil {
+				return err
+			}
+			if g.Status == 0 {
+				return fmt.Errorf("%s: %s.status is required on a request step", c.Name, at)
+			}
+		case strings.TrimSpace(g.SQL) != "":
+			if g.Status != 0 {
+				return fmt.Errorf("%s: %s.status belongs to a request step", c.Name, at)
+			}
+		default:
+			return fmt.Errorf("%s: %s has none of request, sql or outage", c.Name, at)
+		}
+	}
+	for name, ck := range c.Expect.Cookies {
+		if err := ck.validate(); err != nil {
+			return fmt.Errorf("%s: expect.cookies.%s: %w", c.Name, name, err)
+		}
+	}
+	for i, r := range c.Expect.Rows {
+		if strings.TrimSpace(r.SQL) == "" {
+			return fmt.Errorf("%s: expect.rows[%d].sql is required", c.Name, i)
+		}
+		if r.Rows == nil {
+			return fmt.Errorf("%s: expect.rows[%d].rows is required; write `rows: []` to assert none", c.Name, i)
+		}
+	}
+	return nil
+}
+
+func (r *Request) validate(caseName, at string) error {
+	if r.Method == "" {
+		return fmt.Errorf("%s: %s.method is required", caseName, at)
+	}
+	if !strings.HasPrefix(r.Path, "/") {
+		return fmt.Errorf("%s: %s.path must start with / and exclude the /api base", caseName, at)
+	}
+	return nil
+}
+
+func (ck *CookieExpect) validate() error {
+	switch {
+	case ck.Value != nil && ck.ValuePattern != "":
+		return fmt.Errorf("value and value_pattern are mutually exclusive")
+	case ck.Value == nil && ck.ValuePattern == "":
+		return fmt.Errorf("one of value or value_pattern is required")
+	}
+	if ck.ValuePattern != "" {
+		if _, err := regexp.Compile(ck.ValuePattern); err != nil {
+			return fmt.Errorf("value_pattern: %w", err)
+		}
+	}
+	missing := []string{}
+	if ck.Path == nil {
+		missing = append(missing, "path")
+	}
+	if ck.MaxAge == nil {
+		missing = append(missing, "max_age")
+	}
+	if ck.HttpOnly == nil {
+		missing = append(missing, "http_only")
+	}
+	if ck.Secure == nil {
+		missing = append(missing, "secure")
+	}
+	if ck.SameSite == "" {
+		missing = append(missing, "same_site")
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("every attribute is pinned, and these are missing: %s", strings.Join(missing, ", "))
+	}
+	if !slices.Contains([]string{ExpiresAbsent, ExpiresPast, ExpiresMaxAge}, ck.Expires) {
+		return fmt.Errorf("expires must be %s, %s or %s, not %q", ExpiresAbsent, ExpiresPast, ExpiresMaxAge, ck.Expires)
 	}
 	return nil
 }

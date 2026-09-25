@@ -1,0 +1,177 @@
+# GET /me and the session behind it (BOOTSTRAP.md §5.1): a sliding window of
+# SESSION_TTL (720h), refreshed once less than half of it remains, inside an
+# absolute cap of SESSION_MAX_LIFETIME (2160h) from created_at. A session
+# that fails any check is refused as UNAUTHORIZED and its cookie cleared, so
+# the client stops presenting it.
+#
+# The given SQL moves a session in time where no request can; each backend's
+# own suite has the clock seams for the rest.
+
+- name: me with a fresh session is the user and their household
+  given: &signed-in
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: GET
+    path: /me
+  expect:
+    status: 200
+    # Every Household default comes from the schema (fixtures/seed.sql sets
+    # none of them), so this also pins that both read the defaults alike.
+    # expected_monthly_income is null in the row and absent here: the contract
+    # makes it optional as well as nullable, both backends omit it, and the
+    # client must read absent as null.
+    body_json:
+      id: 0192f0a0-0000-7000-8000-0000000000a1
+      household_id: 0192f0a0-0000-7000-8000-000000000001
+      email: alice@example.com
+      display_name: Alice
+      locale: en-GB
+      time_zone: Asia/Jakarta
+      household_display_name: Conformance Household
+      reporting_currency: IDR
+      period_start_day: 1
+      day_starts_at: "04:00"
+      allowance_mode: adaptive
+    # More than half the window remains, so nothing is refreshed.
+    cookies: {}
+    rows:
+      - sql: SELECT count(*)::int AS n FROM sessions
+        rows: [{n: 1}]
+
+- name: me with no cookie is unauthorized
+  request:
+    method: GET
+    path: /me
+  expect:
+    status: 401
+    body_json: {code: UNAUTHORIZED}
+    # Nothing was presented, so there is nothing to clear.
+    cookies: {}
+
+- name: me with an unknown token is unauthorized and clears the cookie
+  request:
+    method: GET
+    path: /me
+    headers:
+      Cookie: afloat_session=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+  expect:
+    status: 401
+    body_json: {code: UNAUTHORIZED}
+    cookies:
+      afloat_session: &cleared-cookie
+        value: ""
+        path: /
+        max_age: 0
+        http_only: true
+        secure: false
+        same_site: Lax
+        expires: past
+
+# Less than half the window left: the expiry slides to a full SESSION_TTL from
+# now, and the cookie is re-sent with it.
+- name: me with a session past half its window refreshes it
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+    - sql: UPDATE sessions SET expires_at = now() + interval '1 hour'
+  request:
+    method: GET
+    path: /me
+  expect:
+    status: 200
+    body_json:
+      id: 0192f0a0-0000-7000-8000-0000000000a1
+      household_id: 0192f0a0-0000-7000-8000-000000000001
+      email: alice@example.com
+      display_name: Alice
+      locale: en-GB
+      time_zone: Asia/Jakarta
+      household_display_name: Conformance Household
+      reporting_currency: IDR
+      period_start_day: 1
+      day_starts_at: "04:00"
+      allowance_mode: adaptive
+    cookies:
+      afloat_session:
+        value_pattern: '[A-Za-z0-9_-]{43}'
+        path: /
+        max_age: 2592000
+        http_only: true
+        secure: false
+        same_site: Lax
+        expires: max-age
+    rows:
+      - sql: |
+          SELECT round(extract(epoch FROM expires_at - now()) / 60)::int AS expires_in_minutes
+          FROM sessions
+        rows: [{expires_in_minutes: 43200}]
+
+- name: me with an expired session is unauthorized and clears the cookie
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+    - sql: UPDATE sessions SET expires_at = now() - interval '1 second'
+  request:
+    method: GET
+    path: /me
+  expect:
+    status: 401
+    body_json: {code: UNAUTHORIZED}
+    cookies:
+      afloat_session: *cleared-cookie
+
+# The absolute cap: a session still inside its sliding window but created more
+# than SESSION_MAX_LIFETIME ago is over, however recently it was used.
+- name: me with a session past its absolute lifetime is unauthorized
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+    - sql: UPDATE sessions SET created_at = now() - interval '2160 hours 1 second'
+  request:
+    method: GET
+    path: /me
+  expect:
+    status: 401
+    body_json: {code: UNAUTHORIZED}
+    cookies:
+      afloat_session: *cleared-cookie
+
+- name: me for a user deleted after signing in is unauthorized
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+    - sql: UPDATE users SET deleted_at = now() WHERE email = 'alice@example.com'
+  request:
+    method: GET
+    path: /me
+  expect:
+    status: 401
+    body_json: {code: UNAUTHORIZED}
+    cookies:
+      afloat_session: *cleared-cookie

@@ -101,11 +101,16 @@ func (h *Handlers) sessionCookie(token string, expires time.Time) *http.Cookie {
 // ClearedSessionCookie is the cookie that expires the client's copy. Anything
 // that invalidates a session owes the client this, or the browser keeps
 // presenting a token that can never work.
+//
+// Expires is the epoch as well as Max-Age=0, because Spring's ResponseCookie
+// always writes both (#32 item 2). A zero time.Time would leave Expires off,
+// and the two backends' clearing headers would differ by an attribute.
 func (h *Handlers) ClearedSessionCookie() *http.Cookie {
 	return &http.Cookie{
 		Name:     SessionCookieName,
 		Value:    "",
 		Path:     "/",
+		Expires:  time.Unix(0, 0).UTC(),
 		MaxAge:   -1,
 		HttpOnly: true,
 		Secure:   h.cookieSecure,

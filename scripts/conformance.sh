@@ -171,4 +171,6 @@ AFLOAT_GO_BASE_URL="http://localhost:${GO_PORT}/api" \
 AFLOAT_KOTLIN_BASE_URL="http://localhost:${KOTLIN_PORT}/api" \
 AFLOAT_GO_LOCAL_DISABLED_BASE_URL="http://localhost:${GO_LOCAL_DISABLED_PORT}/api" \
 AFLOAT_KOTLIN_LOCAL_DISABLED_BASE_URL="http://localhost:${KOTLIN_LOCAL_DISABLED_PORT}/api" \
-  go test -v ./...
+AFLOAT_GO_DATABASE_URL="$GO_DATABASE_URL" \
+AFLOAT_KOTLIN_DATABASE_URL="$KOTLIN_DATABASE_URL" \
+  go test -count=1 -v ./...

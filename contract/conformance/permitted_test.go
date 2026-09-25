@@ -26,14 +26,18 @@ func TestLoadPermittedRejects(t *testing.T) {
 		yaml string
 		want string
 	}{
-		{"no header", "- why: because\n", "neither `header` nor `name`"},
+		{"no header", "- why: because\n", "none of `header`, `name` or `column`"},
 		{"no why", "- header: Date\n", "has no `why`"},
 		{"provisional with no issue", "- header: X-Request-Id\n  why: pending\n  provisional: true\n", "cites no issue"},
 		{"duplicate", "- header: Date\n  why: a\n- header: date\n  why: b\n", "duplicate entry"},
-		{"global and scoped at once", "- header: Date\n  name: x\n  why: a\n", "not both"},
+		{"global and scoped at once", "- header: Date\n  name: x\n  why: a\n", "not several"},
 		{"global with a body", "- header: Date\n  body: true\n  why: a\n", "needs a `name`"},
 		{"scoped with no issue", "- name: x\n  body: true\n  why: a\n", "case-scoped but cites no issue"},
 		{"scoped permitting nothing", "- name: x\n  issue: \"24\"\n  why: a\n", "permits nothing"},
+		{"column not written table.column", "- column: sessions\n  why: a\n", "table.column"},
+		{"column with a body", "- column: sessions.id\n  body: true\n  why: a\n", "needs a `name`"},
+		{"column and header at once", "- column: sessions.id\n  header: Date\n  why: a\n", "not several"},
+		{"duplicate column", "- column: sessions.id\n  why: a\n- column: sessions.id\n  why: b\n", "duplicate entry for column"},
 		{"duplicate name", "- name: x\n  issue: \"24\"\n  body: true\n  why: a\n- name: x\n  issue: \"24\"\n  body: true\n  why: b\n", "duplicate entry named"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -118,5 +122,20 @@ func TestCheckPermits(t *testing.T) {
 				t.Fatalf("want an error mentioning %q, got %v", tc.want, err)
 			}
 		})
+	}
+}
+
+func TestMasksColumnIsExact(t *testing.T) {
+	set, err := conformance.LoadPermitted(writePermitted(t, "- column: sessions.id\n  why: a\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !set.MasksColumn("sessions", "id") {
+		t.Error("MasksColumn(sessions, id) = false, want true")
+	}
+	for _, tc := range [][2]string{{"users", "id"}, {"sessions", "user_id"}} {
+		if set.MasksColumn(tc[0], tc[1]) {
+			t.Errorf("MasksColumn(%s, %s) = true, want false", tc[0], tc[1])
+		}
 	}
 }

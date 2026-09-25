@@ -8,10 +8,15 @@ the *same* — every divergence found so far (#18 through #33) was found by a
 person reading two codebases, because no test runs against both. That does not
 survive the domain, where the divergences become arithmetic.
 
-This is **step 1** of three: the runner, the case format, the boot script, and
-one case. Step 2 adds the rest of the cases as the Wave 1 decisions land — a
-case written before its decision pins today's accident rather than tomorrow's
-answer. Step 3 wires it as a CI job and adds it to branch protection.
+Steps 1 and 2 of three are done: the runner, the case format and the boot
+script, then a case for every endpoint, every reachable `ErrorCode`, the
+session cookie attribute by attribute, and the rows each call leaves behind.
+Step 3 is the `conformance` job in `.github/workflows/ci.yml`; adding it to
+branch protection is the last piece.
+
+Not covered, on purpose: the Argon2 concurrency cap (#33) has no observable
+answer to assert without a load test, and #30's handler timeout is internal and
+differs by design (§12). Routing shapes wait on their ruling in #56.
 
 ## Running it
 
@@ -23,7 +28,11 @@ It needs docker (for Postgres), a Go toolchain and a JDK. The script owns the
 whole lifecycle: one database per backend from `db/migrations`, a pair of
 servers per [profile](#profiles) started as plain processes on their §1 ports,
 a readiness wait on `GET /api/health`, and a teardown that prints every log if
-anything failed.
+anything failed. A full run takes about ten seconds once both are built.
+
+**It empties both dev databases.** Every case truncates every Afloat table in
+`afloat_go` and `afloat_kotlin` and applies the seed, so whatever a local run of
+either backend left there is gone afterwards.
 
 To drive an already-running pair by hand:
 
@@ -38,6 +47,8 @@ AFLOAT_REQUIRE_CONFORMANCE=1 go test -v ./...
 | `AFLOAT_KOTLIN_BASE_URL` | `http://localhost:5183/api` | Where the Kotlin backend is |
 | `AFLOAT_GO_LOCAL_DISABLED_BASE_URL` | `http://localhost:5186/api` | Go, `local-disabled` profile |
 | `AFLOAT_KOTLIN_LOCAL_DISABLED_BASE_URL` | `http://localhost:5187/api` | Kotlin, `local-disabled` profile |
+| `AFLOAT_GO_DATABASE_URL` | `postgres://afloat:afloat@localhost:5184/afloat_go` | The Go backend's database, which the runner resets, seeds and reads |
+| `AFLOAT_KOTLIN_DATABASE_URL` | `postgres://afloat:afloat@localhost:5184/afloat_kotlin` | The Kotlin backend's |
 | `AFLOAT_REQUIRE_CONFORMANCE` | unset | `1` turns "no backend answering" from a **skip** into a **failure** |
 
 The skip is deliberate and so is the way to remove it: same shape as
@@ -52,14 +63,17 @@ validated by the pre-push gate without the gate depending on two live backends.
 
 1. **A backend disagrees with the expected answer** — reported under
    `expected/go` or `expected/kotlin`. That backend is wrong, and the subtest
-   names which one.
+   names which one. A `given` step that does not land fails the case the same
+   way, naming the backend and the step.
 2. **The two agree with every assertion and still differ** — reported under
    `parity`. Neither is necessarily wrong: **the case file is incomplete**, and
    that is its own finding.
 
 Mode 2 is why this exists. It compares the *whole* answer — status, every
 header, the body bytes — not only what a case thought to assert, which is what
-would have caught every issue in this milestone.
+would have caught every issue in this milestone. And it compares the *whole*
+database: every row of every Afloat table each backend left behind (see
+[persisted state](#persisted-state)).
 
 ## The case format
 
@@ -69,6 +83,12 @@ the decisions in this milestone.
 ```yaml
 - name: health reports ok when the database is reachable
   issue: "26"            # optional: the decision this case pins
+  given:                 # optional: steps run first, in order (see below)
+    - request: {method: POST, path: /auth/local/login, headers: {...}, body: '...'}
+      status: 204        #   required: a setup step that silently failed
+                         #   would make the case about the wrong state
+    - sql: UPDATE sessions SET expires_at = now() + interval '1 hour'
+    - outage: true       #   the database goes away until the request is answered
   request:
     method: GET
     path: /health        # relative to the /api base, which the base URL carries
@@ -83,6 +103,18 @@ the decisions in this milestone.
     # same_as:           # or alongside: this answer must equal the backend's
     #   method: GET      #   own answer to a second request (see below)
     #   path: /no-such-route
+    cookies:             # optional: every Set-Cookie, attribute by attribute
+      afloat_session:    #   `cookies: {}` asserts that none is set
+        value_pattern: '[A-Za-z0-9_-]{43}'   # or value: "" for an exact value
+        path: /
+        max_age: 2592000
+        http_only: true
+        secure: false
+        same_site: Lax
+        expires: max-age # absent | past | max-age (Date + Max-Age)
+    rows:                # optional: queries against the backend's database,
+      - sql: SELECT count(*)::int AS n FROM sessions  # run after the request
+        rows: [{n: 1}]
   profile: default       # optional: which booted pair it runs against
   permit: []             # optional: case-scoped permitted differences, by name
 ```
@@ -90,7 +122,76 @@ the decisions in this milestone.
 `body_json`, `body_raw` and `body_empty` are mutually exclusive, a case with no
 `status` is rejected, and two cases may not share a name. A hand-written case
 file's likeliest defect is an empty `expect` that passes against any answer at
-all, so the loader refuses one.
+all, so the loader refuses one. It also refuses a cookie expectation that
+leaves any attribute but `domain` unpinned (an absent `domain` asserts a
+host-only cookie), a `rows` entry with no `rows:` list (write `rows: []` to
+assert none), a request step with no `status`, and an `outage` that is not the
+last `given` step.
+
+A header set to `""` is not sent. That is net/http's rule for `User-Agent`, and
+it means a case cannot send an empty-valued header; #32 item 4 is pinned in each
+backend's own suite for that reason. `Host` sets the request's host rather than
+a header, so a case that compares `Origin` with `Host` means the same thing on
+two backends on two ports.
+
+### Every case starts from the seed
+
+Before each case, on each backend, the runner truncates every Afloat table
+(discovered, not listed, so a new migration's table is covered the day it
+lands) and applies `fixtures/seed.sql`: one Household, a User who can sign in,
+one with no credential, and a soft-deleted one whose credential would verify.
+Each backend gets its own cookie jar per case. No case depends on another, and
+the order they run in means nothing.
+
+The seeded password's hash is one Argon2id PHC string at the §5.1 cost, used on
+both backends, which each verify it by the parameters inside it.
+
+### Given steps
+
+`given` is how a case reaches a state without asserting on the way there:
+signed in, throttled, a session near its expiry. A `request` step goes through
+the case's cookie jar, so a login's cookie is presented by everything after it.
+A `sql` step runs against that backend's own database, for what no request can
+do — moving a session's `expires_at` into the past rather than waiting for it.
+
+An `outage` step makes the database unreachable from the backend: the runner
+sets `ALLOW_CONNECTIONS false` on it and terminates every connection it holds,
+sparing only its own. The database comes back once the request is answered,
+and the runner waits for `/health` to say 200 before the next case — a pool
+rebuilds in its own time, and a case must not fail for the one before it.
+
+### Cookies
+
+`Set-Cookie` is the one header parity does not compare as bytes. Two parts of
+it differ by construction and are compared by meaning instead:
+
+- **the value**, when minted: parity compares its length and whether it is
+  empty; the case's `value_pattern` pins its shape on each backend.
+- **Expires**: parity compares whether it is sent, whether it is in the past,
+  and otherwise how far past `Date` it sits, to within two seconds. Spring
+  writes the day of the month unpadded and reads its own clock; neither is a
+  difference.
+
+Every other attribute — name, `Path`, `Domain`, `Max-Age`, `HttpOnly`,
+`Secure`, `SameSite`, and any attribute no one expected — must match exactly.
+
+### Persisted state
+
+After the request, and before any `same_as` request, the runner snapshots every
+Afloat table on each backend's database and compares the two. Timestamps are
+compared as their distance from the snapshot's own `now()`, to within two
+seconds: the two runs happen seconds apart, so what must match is how old a row
+is and how far ahead an expiry sits, not the instant. Every other column is
+compared by its text form, so `NULL` and `''` differ, as do `1` and `1.0000`.
+
+The migration runners' own tables (`goose_db_version`, `flyway_schema_history`)
+are skipped, since they differ by design. A column neither backend can
+reproduce from the other's is skipped by a `column:` entry in the
+permitted-difference list.
+
+`expect.rows` is the assertion half: a query and the rows it must return, on
+each backend. Cast every column to text, an integer or a boolean — anything else
+is refused rather than compared by how a driver renders it.
 
 ### Profiles
 
@@ -137,10 +238,11 @@ responses … plus a documented and tested list of permitted differences"; that
 file is the list, and the runner reads it, so prose and enforcement cannot drift
 apart.
 
-Two kinds of entry. A **global** one names a `header` and applies to every case.
-A **case-scoped** one has a `name`, lists `headers` and/or `body`, and applies
-only to cases that cite it under `permit:` — for a difference that is right on
-those answers and would be a bug anywhere else. A scoped entry is always a
+Three kinds of entry. A **global** one names a `header` and applies to every
+case. A **case-scoped** one has a `name`, lists `headers` and/or `body`, and
+applies only to cases that cite it under `permit:` — for a difference that is
+right on those answers and would be a bug anywhere else. A **column** one names
+a `table.column` the persisted-state comparison skips on every case. A scoped entry is always a
 ruling, so it always needs an `issue`. The loader and `go test -short` refuse a
 case that cites an undefined entry, a scoped entry no case cites, and a case
 that permits a body difference without pinning the body another way
@@ -162,7 +264,8 @@ case-scoped entry, `unmatched-path-404` (#24: each backend keeps its own
 unregistered-path 404, so the frontend must act on a non-envelope 404's status
 alone). #26 retired the provisional entries: the six security headers are
 identical on both backends and compared like any other, and neither backend
-sends `Strict-Transport-Security`.
+sends `Strict-Transport-Security`. One column entry, `sessions.id`: the hash of
+a random token, which two backends never share.
 
 ## Design decisions, and what they rejected
 
@@ -177,8 +280,8 @@ Settled on #28 before any of this was written.
   backend's suite, where it would silently become that backend's spec.
 - **One database per backend, compared explicitly.** A shared database makes
   case ordering significant, makes one backend's writes the other's fixtures,
-  and gives failures that mean two things at once. Row comparison arrives with
-  the cases that need it, in step 2.
+  and gives failures that mean two things at once. The runner connects to both
+  and compares every table after every case.
 - **Hand-written expected answers.** Recording Go's answers and diffing Kotlin
   against them would make Go canonical by construction — which it is — but would
   also silently bless Go's bugs, of which this milestone has several.

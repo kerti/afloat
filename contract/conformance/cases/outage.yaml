@@ -1,0 +1,98 @@
+# The database, not the caller, is the problem (#23, #27). An outage is never
+# a statement about an account: no cookie is cleared, no failure is counted
+# against an address. Login answers 500 INTERNAL (#23). A session that cannot
+# be resolved leaves the request unauthenticated - 401, cookie untouched, so
+# the same token works once the database is back (#27).
+#
+# `outage: true` terminates every connection the backend holds to its
+# database and refuses new ones, until the request has been answered; the
+# rows are read after the database is back.
+
+- name: outage - health is 503 degraded
+  given:
+    - outage: true
+  request:
+    method: GET
+    path: /health
+  expect:
+    status: 503
+    body_json:
+      status: degraded
+      version: dev
+    cookies: {}
+
+# Nothing in it touches the database.
+- name: outage - auth methods still answers
+  given:
+    - outage: true
+  request:
+    method: GET
+    path: /auth/methods
+  expect:
+    status: 200
+    body_json: {local: true, google: false}
+    cookies: {}
+
+- name: outage - login is 500 and burns no backoff
+  issue: "23"
+  given:
+    - outage: true
+  request:
+    method: POST
+    path: /auth/local/login
+    headers:
+      Content-Type: application/json
+    body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+  expect:
+    status: 500
+    body_json: {code: INTERNAL}
+    cookies: {}
+    rows:
+      - sql: SELECT (SELECT count(*) FROM sessions)::int AS sessions, (SELECT count(*) FROM login_attempts)::int AS attempts
+        rows: [{sessions: 0, attempts: 0}]
+
+# The session is unreadable, not invalid. A cleared cookie here would sign
+# every user out for the length of the outage; the 401 alone does not.
+- name: outage - me with a session is 401 and keeps the cookie
+  issue: "27"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+    - outage: true
+  request:
+    method: GET
+    path: /me
+  expect:
+    status: 401
+    body_json: {code: UNAUTHORIZED}
+    cookies: {}
+    rows:
+      - sql: SELECT count(*)::int AS n FROM sessions
+        rows: [{n: 1}]
+
+- name: outage - logout with a session is 500 and keeps the cookie
+  issue: "27"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+    - outage: true
+  request:
+    method: POST
+    path: /auth/logout
+  expect:
+    status: 500
+    body_json: {code: INTERNAL}
+    cookies: {}
+    rows:
+      - sql: SELECT count(*)::int AS n FROM sessions
+        rows: [{n: 1}]

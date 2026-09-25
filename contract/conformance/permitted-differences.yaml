@@ -52,3 +52,16 @@
     404s to match. Neither is the error envelope, so the frontend must treat a
     404 by its status alone and never read a non-envelope body - both then
     land on the same path. Revisit if a 404 ever needs to carry a code.
+
+# ---------------------------------------------------------------------------
+# Columns - left out of the persisted-state comparison on every case. For a
+# value neither backend can reproduce from the other's; every other column of
+# every Afloat table is compared.
+# ---------------------------------------------------------------------------
+
+- column: sessions.id
+  why: >
+    The SHA-256 of a session token each backend mints at random, so two
+    backends never write the same one. That it is a 64-character hex digest of
+    the cookie's value, never the value itself, is each backend's own suite's
+    to pin.

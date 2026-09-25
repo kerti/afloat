@@ -3,9 +3,10 @@
 # green here, and a surface wired into one is wired into the other in the same
 # commit. As backends land, they gain steps in `make check` — not jobs here.
 #
-# `migrations` is the exception, and deliberately so: both migration targets
+# `migrations` and `conformance` are the exceptions, and deliberately so: both
 # need docker and minutes, which is why `make check` leaves them out locally.
-# CI has both, so nothing merges on an unproven schema.
+# CI has both, so nothing merges on an unproven schema, or on two backends
+# that answer the same request differently.
 #
 # Every action is pinned to a commit SHA: a tag like `v5` is mutable, and a
 # compromised one runs with this workflow's token. The trailing `# vX.Y.Z`
@@ -154,6 +155,40 @@ jobs:
       # The SQL itself: defaults, CHECKs, soft-delete indexes, cascades, undo.
       # Throwaway container of its own, so it does not touch the one above.
       - run: make test-migrations
+
+      - name: Postgres logs
+        if: failure()
+        run: docker compose logs --tail=50 postgres
+
+  # The cross-backend conformance harness (#28): both backends built and booted
+  # from this commit, every case in contract/conformance/cases run against the
+  # pair, answers and persisted rows compared. scripts/conformance.sh owns the
+  # lifecycle and sets AFLOAT_REQUIRE_CONFORMANCE=1, so a backend that never
+  # came up is a failure here, not a skip.
+  conformance:
+    name: conformance (both backends, one suite)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: |
+            backend/go.sum
+            contract/conformance/go.sum
+
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
+        with:
+          cache-read-only: ${{ github.ref != 'refs/heads/main' }}
+
+      # The script tails every backend's log itself when it fails.
+      - run: make conformance
 
       - name: Postgres logs
         if: failure()

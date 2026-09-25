@@ -1,0 +1,104 @@
+# POST /auth/logout: revocation is the session row's deletion, and it is
+# idempotent - no session is a success too, so a client clearing a stale
+# cookie never special-cases the answer (contract: logout).
+
+- name: logout deletes the session and clears the cookie
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /auth/logout
+  expect:
+    status: 204
+    body_empty: true
+    cookies:
+      afloat_session: &cleared-cookie
+        value: ""
+        path: /
+        max_age: 0
+        http_only: true
+        secure: false
+        same_site: Lax
+        expires: past
+    rows:
+      - sql: SELECT count(*)::int AS n FROM sessions
+        rows: [{n: 0}]
+
+- name: logout with no session is still a success
+  request:
+    method: POST
+    path: /auth/logout
+  expect:
+    status: 204
+    body_empty: true
+    cookies:
+      afloat_session: *cleared-cookie
+
+- name: logout with an unknown token is still a success
+  request:
+    method: POST
+    path: /auth/logout
+    headers:
+      Cookie: afloat_session=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+  expect:
+    status: 204
+    body_empty: true
+    cookies:
+      afloat_session: *cleared-cookie
+
+# The second login's cookie replaces the first in the jar; the first session
+# lives on, as another device's would. Logout ends only the one presented.
+- name: logout ends only the presented session
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /auth/logout
+  expect:
+    status: 204
+    body_empty: true
+    cookies:
+      afloat_session: *cleared-cookie
+    rows:
+      - sql: SELECT count(*)::int AS n FROM sessions
+        rows: [{n: 1}]
+
+- name: me after logout is unauthorized
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+    - request:
+        method: POST
+        path: /auth/logout
+      status: 204
+  request:
+    method: GET
+    path: /me
+  expect:
+    status: 401
+    body_json: {code: UNAUTHORIZED}
+    cookies: {}

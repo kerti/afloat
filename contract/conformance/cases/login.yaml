@@ -1,0 +1,281 @@
+# POST /auth/local/login against the seeded Household (fixtures/seed.sql):
+# alice can sign in, bob has no credential, carol is soft-deleted. Every
+# refusal is the same INVALID_CREDENTIALS (contract: localLogin), and every
+# refusal of a well-formed body burns the backoff for both keys, email and ip
+# (BOOTSTRAP.md §5.1).
+#
+# The ip key is the harness's own loopback address, which is 127.0.0.1 or ::1
+# depending on how localhost resolves. The row queries fold it to `ip:*`: the
+# address is the machine's, not either backend's, and parity still compares the
+# real value in the snapshot.
+
+- name: login succeeds and issues a session cookie
+  request:
+    method: POST
+    path: /auth/local/login
+    headers:
+      Content-Type: application/json
+      User-Agent: conformance/1.0
+    body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+  expect:
+    status: 204
+    body_empty: true
+    cookies:
+      afloat_session: &session-cookie
+        value_pattern: '[A-Za-z0-9_-]{43}'
+        path: /
+        max_age: 2592000
+        http_only: true
+        secure: false   # COOKIE_SECURE=false in the harness, which speaks plain HTTP
+        same_site: Lax
+        expires: max-age
+    rows:
+      # SESSION_TTL=720h. last_seen_at starts at created_at.
+      - sql: |
+          SELECT user_id::text, user_agent,
+                 round(extract(epoch FROM expires_at - created_at))::int AS ttl_seconds,
+                 last_seen_at = created_at AS unseen
+          FROM sessions
+        rows:
+          - user_id: 0192f0a0-0000-7000-8000-0000000000a1
+            user_agent: conformance/1.0
+            ttl_seconds: 2592000
+            unseen: true
+      - sql: SELECT count(*)::int AS n FROM login_attempts
+        rows: [{n: 0}]
+
+# #18: trim, then validate. Case-insensitive, as the unique index is.
+- name: login trims and case-folds the email
+  issue: "18"
+  request:
+    method: POST
+    path: /auth/local/login
+    headers:
+      Content-Type: application/json
+    body: '{"email":"  Alice@Example.COM ","password":"conformance-correct-horse"}'
+  expect:
+    status: 204
+    body_empty: true
+    cookies:
+      afloat_session: *session-cookie
+    rows:
+      - sql: SELECT user_id::text FROM sessions
+        rows: [{user_id: 0192f0a0-0000-7000-8000-0000000000a1}]
+
+# No User-Agent is NULL. The runner sends no header at all when a case sets it
+# empty: net/http cannot send an empty User-Agent, so #32 item 4 - an empty
+# header stored as '' on Kotlin - is pinned in each backend's own suite.
+- name: login with no user agent stores NULL
+  request:
+    method: POST
+    path: /auth/local/login
+    headers:
+      Content-Type: application/json
+      User-Agent: ""
+    body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+  expect:
+    status: 204
+    body_empty: true
+    cookies:
+      afloat_session: *session-cookie
+    rows:
+      - sql: SELECT user_agent FROM sessions
+        rows: [{user_agent: null}]
+
+- name: login with the wrong password is refused and starts the backoff
+  request:
+    method: POST
+    path: /auth/local/login
+    headers:
+      Content-Type: application/json
+    body: '{"email":"alice@example.com","password":"not the password"}'
+  expect:
+    status: 401
+    body_json: {code: INVALID_CREDENTIALS}
+    cookies: {}
+    rows: &first-failure
+      # One failure: a 1s window (first_backoff, BOOTSTRAP.md §5.1).
+      - sql: |
+          SELECT regexp_replace(key, '^ip:.*', 'ip:*') AS key, failure_count,
+                 round(extract(epoch FROM backoff_until - updated_at))::int AS window_seconds
+          FROM login_attempts ORDER BY 1
+        rows:
+          - {key: "email:alice@example.com", failure_count: 1, window_seconds: 1}
+          - {key: "ip:*", failure_count: 1, window_seconds: 1}
+      - sql: SELECT count(*)::int AS n FROM sessions
+        rows: [{n: 0}]
+
+# The key is the normalised address, so a padded or upper-cased retry lands
+# on the same row rather than dodging the limiter.
+- name: login failure keys the backoff on the normalised email
+  issue: "18"
+  request:
+    method: POST
+    path: /auth/local/login
+    headers:
+      Content-Type: application/json
+    body: '{"email":" ALICE@example.com","password":"not the password"}'
+  expect:
+    status: 401
+    body_json: {code: INVALID_CREDENTIALS}
+    cookies: {}
+    rows: *first-failure
+
+- name: login with an unknown email is refused like a wrong password
+  request:
+    method: POST
+    path: /auth/local/login
+    headers:
+      Content-Type: application/json
+    body: '{"email":"nobody@example.com","password":"conformance-correct-horse"}'
+  expect:
+    status: 401
+    body_json: {code: INVALID_CREDENTIALS}
+    cookies: {}
+    rows:
+      - sql: SELECT regexp_replace(key, '^ip:.*', 'ip:*') AS key, failure_count FROM login_attempts ORDER BY 1
+        rows:
+          - {key: "email:nobody@example.com", failure_count: 1}
+          - {key: "ip:*", failure_count: 1}
+
+- name: login as a user with no credential is refused like a wrong password
+  request:
+    method: POST
+    path: /auth/local/login
+    headers:
+      Content-Type: application/json
+    body: '{"email":"bob@example.com","password":"conformance-correct-horse"}'
+  expect:
+    status: 401
+    body_json: {code: INVALID_CREDENTIALS}
+    cookies: {}
+    rows:
+      - sql: SELECT regexp_replace(key, '^ip:.*', 'ip:*') AS key, failure_count FROM login_attempts ORDER BY 1
+        rows:
+          - {key: "email:bob@example.com", failure_count: 1}
+          - {key: "ip:*", failure_count: 1}
+
+# carol's credential verifies; carol is deleted. A soft-deleted User is not a
+# User.
+- name: login as a soft-deleted user is refused like a wrong password
+  request:
+    method: POST
+    path: /auth/local/login
+    headers:
+      Content-Type: application/json
+    body: '{"email":"carol@example.com","password":"conformance-correct-horse"}'
+  expect:
+    status: 401
+    body_json: {code: INVALID_CREDENTIALS}
+    cookies: {}
+    rows:
+      - sql: SELECT count(*)::int AS n FROM sessions
+        rows: [{n: 0}]
+
+# Inside the window even the right password is refused, and Retry-After is
+# the remaining wait rounded up. The given failure opened a 1s window
+# milliseconds ago, so 1.
+- name: login inside the backoff window is 429 with Retry-After
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"not the password"}'
+      status: 401
+  request:
+    method: POST
+    path: /auth/local/login
+    headers:
+      Content-Type: application/json
+    body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+  expect:
+    status: 429
+    headers:
+      Retry-After: "1"
+    body_json: {code: TOO_MANY_ATTEMPTS}
+    cookies: {}
+    rows: *first-failure
+
+# The ip key throttles on its own: a fresh address from the same client is
+# still refused, which is what per-IP is for.
+- name: login from a throttled ip is 429 for any address
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"nobody@example.com","password":"not the password"}'
+      status: 401
+  request:
+    method: POST
+    path: /auth/local/login
+    headers:
+      Content-Type: application/json
+    body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+  expect:
+    status: 429
+    headers:
+      Retry-After: "1"
+    body_json: {code: TOO_MANY_ATTEMPTS}
+    cookies: {}
+
+# The window doubles per failure. The given SQL ends the first window rather
+# than the case sleeping through it.
+- name: login backoff doubles on the second failure
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"not the password"}'
+      status: 401
+    - sql: UPDATE login_attempts SET backoff_until = now() - interval '1 second'
+  request:
+    method: POST
+    path: /auth/local/login
+    headers:
+      Content-Type: application/json
+    body: '{"email":"alice@example.com","password":"not the password"}'
+  expect:
+    status: 401
+    body_json: {code: INVALID_CREDENTIALS}
+    cookies: {}
+    rows:
+      - sql: |
+          SELECT regexp_replace(key, '^ip:.*', 'ip:*') AS key, failure_count,
+                 round(extract(epoch FROM backoff_until - updated_at))::int AS window_seconds
+          FROM login_attempts ORDER BY 1
+        rows:
+          - {key: "email:alice@example.com", failure_count: 2, window_seconds: 2}
+          - {key: "ip:*", failure_count: 2, window_seconds: 2}
+
+# A success clears both keys, so a bad evening does not throttle the
+# household for the rest of it.
+- name: login success after the window clears the backoff
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"not the password"}'
+      status: 401
+    - sql: UPDATE login_attempts SET backoff_until = now() - interval '1 second'
+  request:
+    method: POST
+    path: /auth/local/login
+    headers:
+      Content-Type: application/json
+    body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+  expect:
+    status: 204
+    body_empty: true
+    cookies:
+      afloat_session: *session-cookie
+    rows:
+      - sql: SELECT count(*)::int AS n FROM login_attempts
+        rows: [{n: 0}]

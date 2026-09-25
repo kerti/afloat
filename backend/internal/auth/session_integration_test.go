@@ -168,7 +168,8 @@ func TestSessionCookieMaxAgeIsTheFullTTL(t *testing.T) {
 // The cleared cookie is the one both backends must agree on most literally: a
 // browser that does not delete its copy keeps presenting a token the server
 // can never honour. Go renders MaxAge < 0 as `Max-Age=0`, which is what
-// Spring's ResponseCookie.maxAge(0) emits (LogoutSpec asserts the same value).
+// Spring's ResponseCookie.maxAge(0) emits (LogoutSpec asserts the same value),
+// and Spring adds the epoch as Expires beside it (#32 item 2).
 func TestClearedSessionCookieDeletesTheClientsCopy(t *testing.T) {
 	h := newHarness(t, time.Now)
 
@@ -182,6 +183,9 @@ func TestClearedSessionCookieDeletesTheClientsCopy(t *testing.T) {
 	}
 	if got := cookie.String(); !strings.Contains(got, "Max-Age=0") {
 		t.Errorf("Set-Cookie = %q, want it to carry Max-Age=0", got)
+	}
+	if got := cookie.String(); !strings.Contains(got, "; Expires=Thu, 01 Jan 1970 00:00:00 GMT;") {
+		t.Errorf("Set-Cookie = %q, want it to carry the epoch as Expires, as Spring's does", got)
 	}
 }
 

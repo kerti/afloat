@@ -2,12 +2,14 @@ package httpserver
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -147,8 +149,9 @@ func TestLoginRequestValidationUndecodableBodyIsInvalidJSONBody(t *testing.T) {
 	srv := newTestServer()
 
 	for _, tc := range []struct {
-		name string
-		body string
+		name        string
+		body        string
+		contentType string
 	}{
 		{name: "root is not an object", body: `["not","an","object"]`},
 		{name: "field of the wrong type", body: `{"email":5,"password":"a valid password"}`},
@@ -159,10 +162,14 @@ func TestLoginRequestValidationUndecodableBodyIsInvalidJSONBody(t *testing.T) {
 		{name: "null beside an absent field", body: `{"password":null}`},
 		{name: "boolean where a string belongs", body: `{"email":"a@example.com","password":true}`},
 		{name: "malformed JSON", body: `{"email": `},
+		{name: "data after the JSON value", body: `{"email":"a@example.com","password":"a valid password"} x`},
+		{name: "a second JSON value", body: `{"email":"a@example.com","password":"a valid password"}{}`},
+		{name: "not UTF-8", body: `{"email":"a@example.com","password":"a valid ` + "\xff" + `password"}`},
+		{name: "not declared as JSON", body: `{"email":"a@example.com","password":"a valid password"}`, contentType: "text/plain"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			req := httptest.NewRequest(http.MethodPost, "/api/auth/local/login", strings.NewReader(tc.body))
-			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Content-Type", cmp.Or(tc.contentType, "application/json"))
 
 			rec := httptest.NewRecorder()
 			srv.ServeHTTP(rec, req)
@@ -231,6 +238,31 @@ func TestWriteOpenAPIValidationErrorUnreachedPaths(t *testing.T) {
 			wantRule:   "max",
 		},
 		{
+			name: "parameter breaking two rules",
+			err: &openapi3filter.RequestError{Parameter: &openapi3.Parameter{Name: "cursor"}, Err: openapi3.MultiError{
+				&openapi3.SchemaError{SchemaField: "pattern"},
+				&openapi3.SchemaError{SchemaField: "maxLength"},
+			}},
+			wantStatus: http.StatusBadRequest,
+			wantCode:   "VALIDATION",
+			wantField:  "cursor",
+			wantRule:   "max",
+		},
+		{
+			// Kotlin's field for a date-time is an OffsetDateTime, which a bad
+			// value fails to decode into.
+			name:       "format other than email",
+			err:        &openapi3filter.RequestError{RequestBody: &openapi3.RequestBody{}, Err: dateTimeFormatError(t)},
+			wantStatus: http.StatusBadRequest,
+			wantCode:   "INVALID_JSON_BODY",
+		},
+		{
+			name:       "error carrying no failure",
+			err:        openapi3.MultiError{},
+			wantStatus: http.StatusInternalServerError,
+			wantCode:   "INTERNAL",
+		},
+		{
 			name:       "route the contract's router could not find",
 			err:        errors.New("no matching operation was found"),
 			wantStatus: http.StatusInternalServerError,
@@ -257,6 +289,48 @@ func TestWriteOpenAPIValidationErrorUnreachedPaths(t *testing.T) {
 			}
 			assertEnvelope(t, rec, tc.wantCode)
 		})
+	}
+}
+
+// dateTimeFormatError is kin-openapi's own error for a body field breaking
+// `format: date-time`: a SchemaError's JSON pointer can only be set by the
+// visit itself.
+func dateTimeFormatError(t *testing.T) error {
+	t.Helper()
+	schema := openapi3.NewObjectSchema().WithProperty("at", openapi3.NewDateTimeSchema())
+	err := schema.VisitJSON(map[string]any{"at": "yesterday"}, openapi3.MultiErrors())
+	if err == nil {
+		t.Fatal("kin-openapi accepted a bad date-time")
+	}
+	return err
+}
+
+// `format: email` answers every address in the shared fixture exactly as
+// Kotlin's TrimmedEmailValidator does (TrimmedEmailValidatorSpec).
+func TestEmailFormatMatchesTheSharedFixture(t *testing.T) {
+	raw, err := os.ReadFile("../../../contract/testdata/email.json")
+	if err != nil {
+		t.Fatalf("read fixture: %v", err)
+	}
+	var fixture struct {
+		Valid   []string `json:"valid"`
+		Invalid []string `json:"invalid"`
+	}
+	if err := json.Unmarshal(raw, &fixture); err != nil {
+		t.Fatalf("decode fixture: %v", err)
+	}
+	if len(fixture.Valid) == 0 || len(fixture.Invalid) == 0 {
+		t.Fatal("fixture has an empty list")
+	}
+	for _, address := range fixture.Valid {
+		if !isEmailAddress(address) {
+			t.Errorf("%q rejected, fixture says valid", address)
+		}
+	}
+	for _, address := range fixture.Invalid {
+		if isEmailAddress(address) {
+			t.Errorf("%q accepted, fixture says invalid", address)
+		}
 	}
 }
 
@@ -350,7 +424,9 @@ func TestLoginOverHTTPTrimsAPaddedEmailAndSucceeds(t *testing.T) {
 		HandlerTimeout: testHandlerTimeout,
 	})
 
-	body := `{"email":"  A@Example.COM  ","password":"` + password + `"}`
+	// A newline is padding net/mail refuses, which the generated
+	// openapi_types.Email once rejected after this format check had passed.
+	body := `{"email":"\n  A@Example.COM\t","password":"` + password + `"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/auth/local/login", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 

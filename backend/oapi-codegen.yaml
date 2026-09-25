@@ -14,3 +14,12 @@ generate:
   embedded-spec: true
 output-options:
   skip-prune: true
+  # format: email is checked once, by the spec-validating middleware
+  # (httpserver/openapi_validate.go). The default openapi_types.Email runs a
+  # second, different check in decode (net/mail on the untrimmed value) that
+  # rejects a padded address the first one accepts, and Kotlin has no such type.
+  type-mapping:
+    string:
+      formats:
+        email:
+          type: string

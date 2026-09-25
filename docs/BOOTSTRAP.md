@@ -411,19 +411,23 @@ the first failing field only.
 the same, and each one's login tests drive the same table:
 
 - A body that is not an instance of the declared shape is `INVALID_JSON_BODY` with no `args`, whatever
-  else is wrong with it. That covers malformed JSON, a non-object root, a wrong type (no scalar
+  else is wrong with it. That covers malformed JSON (anything after the value and bytes that are not
+  UTF-8 included), a body not sent as `application/json`, a non-object root, a wrong type (no scalar
   coercion: `5` is not a string), a `null`, and a property the schema does not declare.
 - Otherwise every failing field competes, an absent required one (`rule: required`) included. The
   reported one is the least by wire field name, then by rule.
 - `rule` uses go-playground/validator's tag names: `required`, `min`, `max`, `email`, `pattern`.
 - `format: email` trims, then validates: a padded address is accepted and trimmed again for the
   lookup, and an empty or all-space one is not an address. The trim is inside the format check only,
-  so `maxLength` counts the padding.
+  so `maxLength` counts the padding. "Trim" is Go's `strings.TrimSpace` in both backends, and the
+  address rule is the WHATWG one for `<input type=email>`, so the server accepts what a browser's
+  email field does. `contract/testdata/email.json` lists the answers both must give.
 
-Go gets this from the spec-validating middleware (`httpserver/openapi_validate.go`). Kotlin gets it from
-Bean Validation plus three pieces in `httperr/`: `AbsentFieldAdvice`, which stops Jackson failing on the
-first absent field before the others are validated; `TrimmedEmailValidator`; and a Jackson coercion
-guard.
+Go gets this from the spec-validating middleware (`httpserver/openapi_validate.go`). Its generated
+models carry `format: email` as a plain `string` (`oapi-codegen.yaml`), so the decode does not check
+the address a second time. Kotlin gets it from Bean Validation plus three pieces in `httperr/`:
+`AbsentFieldAdvice`, which stops Jackson failing on the first absent field before the others are
+validated; `TrimmedEmailValidator`; and a Jackson coercion guard.
 
 ### Response headers
 

@@ -159,8 +159,8 @@ type HealthStatus string
 
 // LocalLoginRequest defines model for LocalLoginRequest.
 type LocalLoginRequest struct {
-	Email    openapi_types.Email `json:"email"`
-	Password string              `json:"password"`
+	Email    string `json:"email"`
+	Password string `json:"password"`
 }
 
 // Locale Both locales are real from day one (PRD N12a); the frontend owns every
@@ -180,9 +180,9 @@ type Me struct {
 	//
 	//
 	// Example: 04:00
-	DayStartsAt string              `json:"day_starts_at"`
-	DisplayName string              `json:"display_name"`
-	Email       openapi_types.Email `json:"email"`
+	DayStartsAt string `json:"day_starts_at"`
+	DisplayName string `json:"display_name"`
+	Email       string `json:"email"`
 
 	// ExpectedMonthlyIncome Decimal serialised as a string (PRD N2). Nullable — the Household
 	// may never supply one.

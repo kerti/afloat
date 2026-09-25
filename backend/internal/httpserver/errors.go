@@ -19,9 +19,11 @@ import (
 // is wrong is invisible: nothing in the contract describes these paths, so no
 // conformance test reaches them.
 
-// requestErrorHandler covers a body the generated code could not decode —
-// malformed JSON, or a body cut short by the 1 MiB cap in maxBodyBytes, which
-// surfaces as a read error mid-decode.
+// requestErrorHandler covers a body the generated code could not decode. The
+// spec-validating middleware (openapi_validate.go) reads and checks every
+// declared body first, so malformed JSON and a body cut short by maxBodyBytes'
+// 1 MiB cap are answered there; this stays wired for a body that passes the
+// contract and still fails the generated decode, which should not happen.
 func requestErrorHandler(w http.ResponseWriter, r *http.Request, err error) {
 	slog.Warn("request body rejected", "path", r.URL.Path, "err", err)
 	httperr.Write(w, http.StatusBadRequest, httperr.CodeInvalidJSONBody, nil)

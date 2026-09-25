@@ -1,15 +1,20 @@
 package httpserver
 
 import (
+	"bytes"
 	"cmp"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
+	"unicode/utf8"
 
 	"github.com/getkin/kin-openapi/openapi3"
 	"github.com/getkin/kin-openapi/openapi3filter"
@@ -32,10 +37,7 @@ import (
 // registerEmailFormat teaches kin-openapi what `format: email` means.
 // kin-openapi ships no built-in "email" format validator (schema_formats.go
 // registers byte, date, date-time, ipv4, ipv6 by default; email is not among
-// them), so an unregistered `format: email` silently accepts anything. This
-// defers to httperr.Validator()'s own "email" tag rather than a second regex,
-// so the contract's notion of a valid address and the struct-tag vocabulary
-// the rest of the envelope uses agree by construction.
+// them), so an unregistered `format: email` silently accepts anything.
 //
 // It trims before validating: the ruling on #18 is "trim, then validate" for
 // a padded address (#14 test 17, emailIsMatchedCaseInsensitivelyAndTrimmed) —
@@ -51,12 +53,53 @@ import (
 // runs once via sync.OnceFunc rather than on every middleware build.
 var registerEmailFormat = sync.OnceFunc(func() {
 	openapi3.DefineStringFormatValidator("email", openapi3.NewCallbackValidator(func(v string) error {
-		if err := httperr.Validator().Var(strings.TrimSpace(v), "email"); err != nil {
+		if !isEmailAddress(v) {
 			return errors.New("not a valid email address")
 		}
 		return nil
 	}))
 })
+
+// emailAddress is the WHATWG rule for <input type=email>, so the server
+// accepts what a browser's email field does. Kotlin's TrimmedEmailValidator
+// holds a copy, and contract/testdata/email.json pins both to the same
+// answers. No part of it can match the same text two ways, so it stays linear
+// on Java's backtracking engine too.
+var emailAddress = regexp.MustCompile("^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+" +
+	`@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$`)
+
+func isEmailAddress(v string) bool {
+	return emailAddress.MatchString(strings.TrimSpace(v))
+}
+
+// registerStrictJSONDecoder replaces kin-openapi's application/json decoder,
+// which stops after the first JSON value and lets encoding/json swap invalid
+// UTF-8 for U+FFFD. Kotlin's Jackson rejects a body with anything after the
+// value, or with bytes that are not UTF-8, so both are INVALID_JSON_BODY here
+// too. Like the email format, the registry is process-global.
+var registerStrictJSONDecoder = sync.OnceFunc(func() {
+	openapi3filter.RegisterBodyDecoder("application/json", strictJSONBodyDecoder)
+})
+
+func strictJSONBodyDecoder(body io.Reader, _ http.Header, _ *openapi3.SchemaRef, _ openapi3filter.EncodingFn) (any, error) {
+	data, err := io.ReadAll(body)
+	if err != nil {
+		return nil, &openapi3filter.ParseError{Kind: openapi3filter.KindInvalidFormat, Cause: err}
+	}
+	if !utf8.Valid(data) {
+		return nil, &openapi3filter.ParseError{Kind: openapi3filter.KindInvalidFormat, Reason: "body is not valid UTF-8"}
+	}
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.UseNumber()
+	var value any
+	if err := dec.Decode(&value); err != nil {
+		return nil, &openapi3filter.ParseError{Kind: openapi3filter.KindInvalidFormat, Cause: err}
+	}
+	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
+		return nil, &openapi3filter.ParseError{Kind: openapi3filter.KindInvalidFormat, Reason: "data after the JSON value"}
+	}
+	return value, nil
+}
 
 // openapiRequestValidator builds the middleware from the embedded spec
 // (api.GetSpec, generated via oapi-codegen.yaml's embedded-spec: true —
@@ -77,6 +120,7 @@ var registerEmailFormat = sync.OnceFunc(func() {
 // whichever check kin-openapi happens to run first.
 func openapiRequestValidator() func(http.Handler) http.Handler {
 	registerEmailFormat()
+	registerStrictJSONDecoder()
 
 	spec, err := api.GetSpec()
 	if err != nil {
@@ -136,6 +180,9 @@ func writeOpenAPIValidationError(_ context.Context, err error, w http.ResponseWr
 		// Not a verdict on the request: kin-openapi's router could not find the
 		// operation chi had already matched, or validation itself broke. Either
 		// way the fault is ours, and blaming the client's body would hide it.
+		if fault == nil {
+			fault = fmt.Errorf("no failure found in %T", err)
+		}
 		slog.Error("openapi validator: request not validated", "path", r.URL.Path, "err", fault)
 		httperr.Write(w, http.StatusInternalServerError, httperr.CodeInternal, nil)
 		return
@@ -179,7 +226,7 @@ func collectFailures(err error, found *[]failure) (fault error) {
 		return nil
 	case *openapi3filter.RequestError:
 		if e.Parameter != nil {
-			*found = append(*found, failure{field: e.Parameter.Name, rule: parameterRule(e.Err)})
+			collectParameterFailures(e.Parameter.Name, e.Err, found)
 			return nil
 		}
 		if e.RequestBody != nil && e.Err != nil {
@@ -218,6 +265,19 @@ func collectBodyFailures(err error, found *[]failure) {
 	}
 }
 
+// collectParameterFailures records one failure per rule a parameter breaks,
+// so that two rules failing on one parameter are sorted like two on a body
+// field rather than reported in kin-openapi's order.
+func collectParameterFailures(name string, err error, found *[]failure) {
+	if me, ok := err.(openapi3.MultiError); ok {
+		for _, inner := range me {
+			collectParameterFailures(name, inner, found)
+		}
+		return
+	}
+	*found = append(*found, failure{field: name, rule: parameterRule(err)})
+}
+
 // parameterRule mirrors paramFieldAndRule (errors.go): a parameter that binds
 // but breaks the contract gets the same vocabulary as one that fails binding.
 func parameterRule(err error) string {
@@ -237,7 +297,9 @@ func parameterRule(err error) string {
 // httperr.WriteValidation and Kotlin's ruleOf already share —
 // go-playground/validator's tag names — or "" for a keyword Kotlin enforces
 // by failing the decode instead (type, nullable, additionalProperties, enum,
-// ...), which is INVALID_JSON_BODY, not VALIDATION.
+// ...), which is INVALID_JSON_BODY, not VALIDATION. The same goes for every
+// format but email: Kotlin's generated field for date, date-time or uuid is a
+// typed one, and a bad value fails Jackson, not Bean Validation.
 func constraintRule(err *openapi3.SchemaError) string {
 	switch err.SchemaField {
 	case "required":
@@ -249,8 +311,8 @@ func constraintRule(err *openapi3.SchemaError) string {
 	case "pattern":
 		return "pattern"
 	case "format":
-		if err.Schema != nil {
-			return err.Schema.Format
+		if err.Schema != nil && err.Schema.Format == "email" {
+			return "email"
 		}
 	}
 	return ""

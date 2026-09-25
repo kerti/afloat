@@ -62,7 +62,7 @@ func meResponse(user db.User, household db.Household) api.Me {
 	me := api.Me{
 		Id:                   openapi_types.UUID(user.ID.Bytes),
 		HouseholdId:          openapi_types.UUID(user.HouseholdID.Bytes),
-		Email:                openapi_types.Email(user.Email),
+		Email:                user.Email,
 		DisplayName:          user.DisplayName,
 		Locale:               api.Locale(user.Locale),
 		TimeZone:             user.TimeZone,

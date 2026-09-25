@@ -115,14 +115,19 @@ func TestLoginRequestValidationRootTypeMismatchIsInvalidJSONBody(t *testing.T) {
 }
 
 // emailLookupSpy records whether GetUserByEmail was reached, standing in for
-// "did the handler start doing Argon2 work". verify() (login.go) calls
-// VerifyPassword unconditionally once it gets past the lookup — for both a
-// found and an unknown address, by design (enumeration resistance) — so a
-// GetUserByEmail that was never called is proof the handler, and therefore
-// Argon2, never ran at all.
+// "did the handler start doing Argon2 work". LocalLogin (login.go) reads the
+// backoff, then looks the address up, then hashes — for both a found and an
+// unknown address, by design (enumeration resistance) — so a GetUserByEmail
+// that was never called is proof the handler, and therefore Argon2, never ran
+// at all. GetLoginBackoff answers "no backoff" so a handler that did run gets
+// as far as the lookup; unstubbed, it panicked first and the spy never fired.
 type emailLookupSpy struct {
 	db.Querier
 	called *bool
+}
+
+func (emailLookupSpy) GetLoginBackoff(context.Context, []string) (float64, error) {
+	return 0, pgx.ErrNoRows
 }
 
 func (s emailLookupSpy) GetUserByEmail(context.Context, string) (db.User, error) {
@@ -154,14 +159,16 @@ func TestLoginDoesNotHashAnOversizePassword(t *testing.T) {
 	rec := httptest.NewRecorder()
 	srv.ServeHTTP(rec, req)
 
+	// Ahead of the status check: a handler that ran goes on to fail at an
+	// unstubbed query, and that 500's Fatalf would otherwise hide this.
+	if called {
+		t.Error("GetUserByEmail was called for an oversize password; the handler ran before validation rejected it, so Argon2 hashed the whole thing")
+	}
+
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400 (body %s)", rec.Code, rec.Body.String())
 	}
 	assertValidationArgs(t, rec, "password", "max")
-
-	if called {
-		t.Error("GetUserByEmail was called for an oversize password; the handler ran before validation rejected it, so Argon2 hashed the whole thing")
-	}
 }
 
 // The other half of ruling #1 on #18: a padded address does not merely pass

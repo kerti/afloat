@@ -72,9 +72,7 @@ class AbsentFieldAdvice(
             return null
         }
         if (body !is ObjectNode) return null
-        val required = type.primaryConstructor?.parameters
-            ?.filter { !it.isOptional && !it.type.isMarkedNullable }
-            ?: return null
+        val required = type.primaryConstructor?.parameters?.filter { it.isRequired() } ?: return null
         val absent = required.filter { !body.has(it.wireName()) }
         if (absent.isEmpty()) return null
 
@@ -95,12 +93,22 @@ class AbsentFieldAdvice(
 
     // A type with no placeholder here falls back to Jackson's own failure,
     // INVALID_JSON_BODY: the answer before #18. Extend it when a model needs it.
-    private fun placeholder(parameter: KParameter): JsonNode? = when (parameter.type.classifier) {
-        String::class -> mapper.nodeFactory.stringNode("")
-        Boolean::class -> mapper.nodeFactory.booleanNode(false)
-        Int::class, Long::class -> mapper.nodeFactory.numberNode(0)
-        else -> null
+    // A nullable field takes null, which no generated constraint rejects.
+    private fun placeholder(parameter: KParameter): JsonNode? {
+        if (parameter.type.isMarkedNullable) return mapper.nodeFactory.nullNode()
+        return when (parameter.type.classifier) {
+            String::class -> mapper.nodeFactory.stringNode("")
+            Boolean::class -> mapper.nodeFactory.booleanNode(false)
+            Int::class, Long::class -> mapper.nodeFactory.numberNode(0)
+            else -> null
+        }
     }
+
+    // Required as Jackson reads it: @JsonProperty(required = true) fails the
+    // decode for an absent field even when its type is nullable, as kin-openapi
+    // reports `required` for one.
+    private fun KParameter.isRequired(): Boolean =
+        findAnnotation<JsonProperty>()?.required == true || (!isOptional && !type.isMarkedNullable)
 
     private fun KParameter.wireName(): String = findAnnotation<JsonProperty>()?.value ?: name.orEmpty()
 

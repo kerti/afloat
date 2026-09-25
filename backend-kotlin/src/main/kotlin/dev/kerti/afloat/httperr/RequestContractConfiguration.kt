@@ -4,7 +4,6 @@ import jakarta.validation.ConstraintValidator
 import jakarta.validation.ConstraintValidatorContext
 import jakarta.validation.constraints.Email
 import org.hibernate.validator.HibernateValidatorConfiguration
-import org.hibernate.validator.internal.constraintvalidators.bv.EmailValidator
 import org.springframework.boot.jackson.autoconfigure.JsonMapperBuilderCustomizer
 import org.springframework.boot.validation.autoconfigure.ValidationConfigurationCustomizer
 import org.springframework.context.annotation.Bean
@@ -21,7 +20,8 @@ class RequestContractConfiguration {
 
     // `format: email` trims, then validates (the ruling on #18): a padded
     // address logs in. The trim lives inside the check rather than in front of
-    // it, exactly as Go's does, so @Size still counts the padding.
+    // it, exactly as Go's does, so @Size still counts the padding. The address
+    // rule itself is Go's too (TrimmedEmailValidator).
     @Bean
     fun trimmedEmailValidation(): ValidationConfigurationCustomizer = ValidationConfigurationCustomizer { configuration ->
         val hibernate = configuration as HibernateValidatorConfiguration
@@ -45,18 +45,34 @@ class RequestContractConfiguration {
     }
 }
 
-// Hibernate's own address rules, applied to the trimmed value. Two departures,
-// both Go's: surrounding whitespace is not part of the address, and an empty
-// one is not an address at all — Hibernate calls "" valid and leaves it to
-// @NotBlank, which the generator never emits.
+// The contract's `format: email`, as Go's spec-validating middleware reads it:
+// trimmed as Go's strings.TrimSpace trims, then matched against the WHATWG
+// <input type=email> rule. contract/testdata/email.json pins the two backends
+// to the same answers (TrimmedEmailValidatorSpec). Hibernate's own @Email
+// accepts addresses this rule does not (a@b_c.com, a@[127.0.0.1],
+// üser@example.com) and calls "" valid, so it is replaced, not wrapped.
 class TrimmedEmailValidator : ConstraintValidator<Email, CharSequence> {
-    private val delegate = EmailValidator()
+    override fun isValid(value: CharSequence?, context: ConstraintValidatorContext?): Boolean =
+        value == null || EMAIL_ADDRESS.matches(value.trimSpace())
 
-    override fun initialize(annotation: Email) = delegate.initialize(annotation)
-
-    override fun isValid(value: CharSequence?, context: ConstraintValidatorContext): Boolean {
-        if (value == null) return true
-        val trimmed = value.trim()
-        return trimmed.isNotEmpty() && delegate.isValid(trimmed, context)
+    private companion object {
+        // Go's copy is emailAddress in openapi_validate.go.
+        val EMAIL_ADDRESS = Regex(
+            "[a-zA-Z0-9.!#\$%&'*+/=?^_`{|}~-]+" +
+                """@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*""",
+        )
     }
+}
+
+// Go's strings.TrimSpace, not Kotlin's trim(): the two disagree on U+0085,
+// which Go trims, and U+001C..U+001F, which Kotlin does. An address both
+// backends must read the same way is trimmed with this.
+fun CharSequence.trimSpace(): String = trim(::isGoSpace).toString()
+
+// unicode.IsSpace: Latin-1's six ASCII spaces plus NEL and NBSP, and the
+// Unicode White_Space characters above Latin-1.
+private fun isGoSpace(c: Char): Boolean = when (c) {
+    '\t', '\n', '\u000B', '\u000C', '\r', ' ', '\u0085', '\u00A0' -> true
+    '\u1680', in '\u2000'..'\u200A', '\u2028', '\u2029', '\u202F', '\u205F', '\u3000' -> true
+    else -> false
 }

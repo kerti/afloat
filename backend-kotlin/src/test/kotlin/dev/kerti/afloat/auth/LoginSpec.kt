@@ -157,6 +157,13 @@ class LoginSpec : WebDatabaseSpec() {
             AuthFixtures.account(dataSource, email = "user@example.com")
 
             login("  User@Example.COM  ", AuthFixtures.PASSWORD).response.status shouldBe 204
+            // Control-character padding too, which Go's net/mail-backed decode
+            // once refused after the format check had accepted it.
+            mockMvc.perform(
+                post(loginPath).contentType(MediaType.APPLICATION_JSON)
+                    .content("""{"email":"\n  User@Example.COM\t","password":"${AuthFixtures.PASSWORD}"}""")
+                    .with { it.remoteAddr = "198.51.100.${nextAddress++}"; it }
+            ).andReturn().response.status shouldBe 204
         }
 
         // loginIgnoresASoftDeletedUser
@@ -251,6 +258,8 @@ class LoginSpec : WebDatabaseSpec() {
                 """{"password":null}""" to invalidJson,
                 """{"password":"","admin":true}""" to invalidJson,
                 """["user@example.com"]""" to invalidJson,
+                """{"email":"user@example.com","password":"x"} x""" to invalidJson,
+                """{"email":"user@example.com","password":"x"}{}""" to invalidJson,
             ).forEach { (body, expected) ->
                 withClue(body) {
                     val result = mockMvc.perform(
@@ -262,6 +271,27 @@ class LoginSpec : WebDatabaseSpec() {
                 }
             }
             // None of them got as far as the handler.
+            JdbcClient.create(dataSource).sql("SELECT count(*) FROM login_attempts")
+                .query(Long::class.java).single() shouldBe 0L
+        }
+
+        // Go's rows that no String body can carry: bytes that are not UTF-8, and
+        // a JSON body not declared as JSON.
+        "answers a body that is not UTF-8 JSON exactly as Go does" {
+            AuthFixtures.account(dataSource)
+            val notUtf8 = """{"email":"user@example.com","password":"x""".toByteArray() +
+                0xff.toByte() + """"}""".toByteArray()
+            listOf(
+                MediaType.APPLICATION_JSON to notUtf8,
+                MediaType.TEXT_PLAIN to loginBody("user@example.com", AuthFixtures.PASSWORD).toByteArray(),
+            ).forEach { (type, body) ->
+                withClue(type) {
+                    val result = mockMvc.perform(post(loginPath).contentType(type).content(body)).andReturn()
+
+                    result.response.status shouldBe 400
+                    result.response.contentAsString shouldBe """{"code":"INVALID_JSON_BODY"}"""
+                }
+            }
             JdbcClient.create(dataSource).sql("SELECT count(*) FROM login_attempts")
                 .query(Long::class.java).single() shouldBe 0L
         }

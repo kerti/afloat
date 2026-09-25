@@ -12,6 +12,7 @@ import dev.kerti.afloat.auth.data.User
 import dev.kerti.afloat.auth.data.UserRepository
 import dev.kerti.afloat.config.AppConfig
 import dev.kerti.afloat.httperr.ApiException
+import dev.kerti.afloat.httperr.trimSpace
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
@@ -221,7 +222,9 @@ class AuthService(
     private fun formatDayStartsAt(time: LocalTime): String =
         time.format(TIME_FORMATTER)
 
-    private fun normalizeEmail(email: String): String = email.trim().lowercase()
+    // Go's trim set (login.go's normalizeEmail), so a padded address finds the
+    // same row in both backends.
+    private fun normalizeEmail(email: String): String = email.trimSpace().lowercase()
 
     private fun backoffKeys(email: String): List<String> {
         val keys = mutableListOf("email:$email")

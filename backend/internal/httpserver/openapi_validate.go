@@ -74,9 +74,12 @@ func isEmailAddress(v string) bool {
 
 // registerStrictJSONDecoder replaces kin-openapi's application/json decoder,
 // which stops after the first JSON value and lets encoding/json swap invalid
-// UTF-8 for U+FFFD. Kotlin's Jackson rejects a body with anything after the
-// value, or with bytes that are not UTF-8, so both are INVALID_JSON_BODY here
-// too. Like the email format, the registry is process-global.
+// UTF-8 for U+FFFD. Kotlin rejects a body with anything after the value
+// (Jackson) or one that is not UTF-8 JSON text (JsonTextAdvice), so both are
+// INVALID_JSON_BODY here too. A byte order mark, and the NULs of a UTF-16 or
+// UTF-32 body, fail encoding/json as stray characters, and the charset a
+// Content-Type claims is never consulted. Like the email format, the registry
+// is process-global.
 var registerStrictJSONDecoder = sync.OnceFunc(func() {
 	openapi3filter.RegisterBodyDecoder("application/json", strictJSONBodyDecoder)
 })

@@ -123,6 +123,14 @@ func TestLoginRequestValidation(t *testing.T) {
 			wantField: "email",
 			wantRule:  "email",
 		},
+		{
+			// The padding is trimmed for the format check on this path too, so
+			// the absent field is the only failure.
+			name:      "email padded and password absent",
+			body:      `{"email":"  a@example.com  "}`,
+			wantField: "password",
+			wantRule:  "required",
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			req := httptest.NewRequest(http.MethodPost, "/api/auth/local/login", strings.NewReader(tc.body))
@@ -164,7 +172,15 @@ func TestLoginRequestValidationUndecodableBodyIsInvalidJSONBody(t *testing.T) {
 		{name: "malformed JSON", body: `{"email": `},
 		{name: "data after the JSON value", body: `{"email":"a@example.com","password":"a valid password"} x`},
 		{name: "a second JSON value", body: `{"email":"a@example.com","password":"a valid password"}{}`},
+		{name: "data after the JSON value beside an absent field", body: `{"password":"a valid password"} x`},
 		{name: "not UTF-8", body: `{"email":"a@example.com","password":"a valid ` + "\xff" + `password"}`},
+		{name: "overlong UTF-8", body: `{"email":"a@example.com","password":"a valid` + "\xc0\xa0" + `password"}`},
+		{name: "overlong UTF-8 beside an absent field", body: `{"password":"a valid` + "\xc0\xa0" + `password"}`},
+		{name: "byte order mark", body: "\xef\xbb\xbf" + `{"email":"a@example.com","password":"a valid password"}`},
+		{name: "UTF-16", body: utf16LE(`{"email":"a@example.com","password":"a valid password"}`)},
+		// application/json has no charset parameter (RFC 8259 §11): a body is
+		// UTF-8 whatever the header claims.
+		{name: "not UTF-8, declared as Latin-1", body: `{"email":"a@example.com","password":"a valid ` + "\xff" + `password"}`, contentType: "application/json; charset=ISO-8859-1"},
 		{name: "not declared as JSON", body: `{"email":"a@example.com","password":"a valid password"}`, contentType: "text/plain"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -183,6 +199,17 @@ func TestLoginRequestValidationUndecodableBodyIsInvalidJSONBody(t *testing.T) {
 			}
 		})
 	}
+}
+
+// utf16LE encodes an ASCII string as UTF-16LE, which Jackson would detect
+// and decode if Kotlin let it.
+func utf16LE(ascii string) string {
+	var b strings.Builder
+	for i := range len(ascii) {
+		b.WriteByte(ascii[i])
+		b.WriteByte(0)
+	}
+	return b.String()
 }
 
 // kin-openapi's SchemaError.Error() prints the offending value, and on this
@@ -355,12 +382,10 @@ func (s emailLookupSpy) GetUserByEmail(context.Context, string) (db.User, error)
 	return db.User{}, pgx.ErrNoRows
 }
 
-// The oversize cases must be rejected before any Argon2 work happens — an
-// unauthenticated caller must not get to choose how much data is hashed
-// (#18's acceptance criteria, BOOTSTRAP.md §5.1's length cap).
-func TestLoginDoesNotHashAnOversizePassword(t *testing.T) {
-	called := false
-	q := emailLookupSpy{called: &called}
+// postLoginToSpy sends body to a server whose Querier is an emailLookupSpy,
+// reporting whether the handler got as far as the user lookup.
+func postLoginToSpy(body string) (rec *httptest.ResponseRecorder, reachedLookup bool) {
+	q := emailLookupSpy{called: &reachedLookup}
 	srv := New(Deps{
 		System: system.New(system.Deps{Querier: q, Version: "test", LocalEnabled: true}),
 		Auth: auth.New(auth.Deps{
@@ -372,12 +397,18 @@ func TestLoginDoesNotHashAnOversizePassword(t *testing.T) {
 		HandlerTimeout: testHandlerTimeout,
 	})
 
-	body := `{"email":"a@example.com","password":"` + strings.Repeat("a", 4097) + `"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/auth/local/login", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-
-	rec := httptest.NewRecorder()
+	rec = httptest.NewRecorder()
 	srv.ServeHTTP(rec, req)
+	return rec, reachedLookup
+}
+
+// The oversize cases must be rejected before any Argon2 work happens — an
+// unauthenticated caller must not get to choose how much data is hashed
+// (#18's acceptance criteria, BOOTSTRAP.md §5.1's length cap).
+func TestLoginDoesNotHashAnOversizePassword(t *testing.T) {
+	rec, called := postLoginToSpy(`{"email":"a@example.com","password":"` + strings.Repeat("a", 4097) + `"}`)
 
 	// Ahead of the status check: a handler that ran goes on to fail at an
 	// unstubbed query, and that 500's Fatalf would otherwise hide this.
@@ -385,6 +416,29 @@ func TestLoginDoesNotHashAnOversizePassword(t *testing.T) {
 		t.Error("GetUserByEmail was called for an oversize password; the handler ran before validation rejected it, so Argon2 hashed the whole thing")
 	}
 
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (body %s)", rec.Code, rec.Body.String())
+	}
+	assertValidationArgs(t, rec, "password", "max")
+}
+
+// maxLength counts characters as JSON Schema does, one per code point, not one
+// per UTF-16 unit: kin-openapi's loop counts runes, whatever its comment says,
+// and Kotlin's @Size is re-bound to count the same way (LoginSpec "rejects an
+// over-long email or password"). An upgrade that starts counting UTF-16 units
+// fails the first case.
+func TestLoginCountsPasswordLengthInCodePoints(t *testing.T) {
+	const emoji = "\U0001F600" // two UTF-16 units, four UTF-8 bytes
+
+	rec, called := postLoginToSpy(`{"email":"a@example.com","password":"` + strings.Repeat(emoji, 4096) + `"}`)
+	if !called {
+		t.Errorf("4096 code points did not reach the handler: status %d (body %s)", rec.Code, rec.Body.String())
+	}
+
+	rec, called = postLoginToSpy(`{"email":"a@example.com","password":"` + strings.Repeat(emoji, 4097) + `"}`)
+	if called {
+		t.Error("4097 code points reached the handler")
+	}
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400 (body %s)", rec.Code, rec.Body.String())
 	}

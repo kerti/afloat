@@ -109,6 +109,9 @@ open class PostgresUrlTranslatorSpec : StringSpec({
             "postgresql://:5184/",
             "mysql://host:5184/afloat_kotlin",
             "postgres://host:99999/afloat_kotlin",
+            // libpq's Unix-socket spelling, which pgx takes. Refused by
+            // decision, not by accident (#32 item 7, BOOTSTRAP.md §12).
+            "postgres:///afloat_kotlin?host=/var/run/postgresql",
         )
     ) { input ->
         shouldThrow<IllegalArgumentException> { PostgresUrlTranslator.translate(input) }

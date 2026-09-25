@@ -244,6 +244,7 @@ class LoginSpec : WebDatabaseSpec() {
             }
             val invalidJson = """{"code":"INVALID_JSON_BODY"}"""
             listOf(
+                "" to invalidJson,
                 """{}""" to validation("email", "required"),
                 """{"password":"x"}""" to validation("email", "required"),
                 // kin-openapi and Jackson would both reach password first; the
@@ -259,6 +260,7 @@ class LoginSpec : WebDatabaseSpec() {
                 """{"email":null,"password":"x"}""" to invalidJson,
                 """{"password":null}""" to invalidJson,
                 """{"password":"","admin":true}""" to invalidJson,
+                """{"email":"not-an-email","password":"x","zzz":1}""" to invalidJson,
                 """["user@example.com"]""" to invalidJson,
                 """{"email":"user@example.com","password":"x"} x""" to invalidJson,
                 """{"password":"x"} x""" to invalidJson,
@@ -280,7 +282,7 @@ class LoginSpec : WebDatabaseSpec() {
 
         // Go's rows that no String body can carry: bytes that are not UTF-8 JSON
         // text, which Jackson alone would read (JsonTextAdvice), and a JSON body
-        // not declared as JSON.
+        // not declared as JSON (a null type sends no Content-Type at all).
         "answers a body that is not UTF-8 JSON exactly as Go does" {
             AuthFixtures.account(dataSource)
             fun bytes(vararg parts: Any): ByteArray = parts.fold(ByteArray(0)) { acc, part ->
@@ -292,22 +294,27 @@ class LoginSpec : WebDatabaseSpec() {
             }
             val valid = loginBody("user@example.com", AuthFixtures.PASSWORD)
             val notUtf8 = bytes("""{"email":"user@example.com","password":"x""", 0xff, """"}""")
-            val latin1 = MediaType(MediaType.APPLICATION_JSON, Charsets.ISO_8859_1)
+            val json = MediaType.APPLICATION_JSON_VALUE
             listOf(
-                Triple("not UTF-8", MediaType.APPLICATION_JSON, notUtf8),
-                Triple("overlong UTF-8", MediaType.APPLICATION_JSON, bytes("""{"email":"user@example.com","password":"x""", 0xc0, 0xa0, """"}""")),
-                Triple("overlong UTF-8 beside an absent field", MediaType.APPLICATION_JSON, bytes("""{"password":"x""", 0xc0, 0xa0, """"}""")),
-                Triple("byte order mark", MediaType.APPLICATION_JSON, bytes(0xef, 0xbb, 0xbf, valid)),
-                Triple("UTF-16", MediaType.APPLICATION_JSON, valid.toByteArray(Charsets.UTF_16LE)),
+                Triple("not UTF-8", json, notUtf8),
+                Triple("overlong UTF-8", json, bytes("""{"email":"user@example.com","password":"x""", 0xc0, 0xa0, """"}""")),
+                Triple("overlong UTF-8 beside an absent field", json, bytes("""{"password":"x""", 0xc0, 0xa0, """"}""")),
+                Triple("byte order mark", json, bytes(0xef, 0xbb, 0xbf, valid)),
+                Triple("UTF-16", json, valid.toByteArray(Charsets.UTF_16LE)),
                 // application/json has no charset parameter (RFC 8259 §11).
-                Triple("not UTF-8, declared as Latin-1", latin1, notUtf8),
-                Triple("not declared as JSON", MediaType.TEXT_PLAIN, valid.toByteArray()),
+                Triple("not UTF-8, declared as Latin-1", "application/json; charset=ISO-8859-1", notUtf8),
+                Triple("not declared as JSON", MediaType.TEXT_PLAIN_VALUE, valid.toByteArray()),
+                Triple("not declared at all", null, valid.toByteArray()),
+                // Only ASCII letters fold: U+0130 lowercases to "i" in Unicode.
+                Triple("declared with a non-ASCII letter", "appl\u0130cation/json", valid.toByteArray()),
                 // Spring's JSON converter reads any +json type; the contract
                 // declares application/json alone.
-                Triple("declared as another JSON type", MediaType("application", "vnd.api+json"), valid.toByteArray()),
+                Triple("declared as another JSON type", "application/vnd.api+json", valid.toByteArray()),
             ).forEach { (name, type, body) ->
                 withClue(name) {
-                    val result = mockMvc.perform(post(loginPath).contentType(type).content(body)).andReturn()
+                    val request = post(loginPath).content(body)
+                    type?.let { request.header(HttpHeaders.CONTENT_TYPE, it) }
+                    val result = mockMvc.perform(request).andReturn()
 
                     result.response.status shouldBe 400
                     result.response.contentAsString shouldBe """{"code":"INVALID_JSON_BODY"}"""
@@ -319,7 +326,8 @@ class LoginSpec : WebDatabaseSpec() {
 
         // A media type is case-insensitive and may have whitespace around it
         // (RFC 9110 §8.3.1), and a body is UTF-8 whatever charset is claimed,
-        // even one the JDK does not know (Utf8CharsetFilter). Go's
+        // even one the JDK does not know. Every other parameter is ignored, even
+        // one Spring could not parse (Utf8CharsetFilter). Go's
         // TestLoginReadsEverySpellingOfTheJSONMediaType sends the same headers.
         "reads every spelling of the JSON media type as Go does" {
             listOf(
@@ -329,6 +337,9 @@ class LoginSpec : WebDatabaseSpec() {
                 "\tapplication/json\t;charset=utf-8",
                 "application/json; charset=utf-16",
                 "application/json; charset=bogus",
+                "application/json; foo=a b",
+                "application/json; foo=",
+                "application/json; foo=\"bar",
             ).forEach { contentType ->
                 withClue(contentType) {
                     val result = mockMvc.perform(

@@ -16,6 +16,10 @@ import java.util.Enumeration
 // the body through that charset, and a name the JDK does not know
 // (charset=bogus) fails Spring's media type parsing, so the request matches no
 // `consumes` and answers INVALID_JSON_BODY where Go validates the body.
+//
+// A JSON body keeps no parameter at all. Go ignores every one, where Spring
+// refuses one it cannot parse (foo=a b, foo=, an unclosed quote) as it
+// refused charset=bogus.
 class Utf8CharsetFilter : OncePerRequestFilter() {
     override fun doFilterInternal(
         request: HttpServletRequest,
@@ -35,6 +39,7 @@ class Utf8CharsetFilter : OncePerRequestFilter() {
 // to judge.
 internal fun withUtf8Charset(contentType: String): String {
     val parts = contentType.split(';')
+    if (parts.first().trim(' ', '\t').equals("application/json", ignoreCase = true)) return parts.first()
     val params = parts.drop(1).map { param ->
         if (param.substringBefore('=').trim().equals("charset", ignoreCase = true)) "charset=UTF-8" else param
     }

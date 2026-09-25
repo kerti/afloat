@@ -14,12 +14,14 @@ import dev.kerti.afloat.auth.data.SessionRepository
 import dev.kerti.afloat.auth.data.UserRepository
 import dev.kerti.afloat.config.AppConfig
 import jakarta.servlet.DispatcherType
+import jakarta.servlet.http.HttpServletResponse
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
 import org.springframework.security.config.annotation.web.builders.HttpSecurity
 import org.springframework.security.config.http.SessionCreationPolicy
 import org.springframework.security.web.SecurityFilterChain
+import org.springframework.security.web.firewall.RequestRejectedHandler
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter
 import org.springframework.security.web.util.matcher.RequestMatcher
 import org.springframework.web.servlet.HandlerMapping
@@ -49,7 +51,12 @@ class SecurityConfiguration {
             .formLogin { it.disable() }
             .httpBasic { it.disable() }
             .logout { it.disable() }
-            .headers { header -> header.httpStrictTransportSecurity { it.disable() } }
+            // SecurityHeaders' list, not Spring's defaults: the same list is
+            // written where this chain's HeaderWriterFilter does not reach.
+            .headers { header ->
+                header.defaultsDisabled()
+                SecurityHeaders.writers.forEach { header.addHeaderWriter(it) }
+            }
             .sessionManagement { it.sessionCreationPolicy(SessionCreationPolicy.STATELESS) }
             .authorizeHttpRequests {
                 // An ERROR dispatch is authorized like any other since Spring
@@ -97,6 +104,19 @@ class SecurityConfiguration {
             .addFilterAfter(requestFacts, CrossSiteGuardFilter::class.java)
             .addFilterAfter(sessionFilter, RequestFactsFilter::class.java)
             .build()
+    }
+
+    // A path StrictHttpFirewall refuses - `;`, `//`, `/./`, an encoded slash or
+    // percent - is a path that does not exist (#56): a bare 404, as Go's router
+    // gives it, not the firewall's 400 with Boot's error body. Written here
+    // rather than through sendError: the refusal comes before the chain's
+    // HeaderWriterFilter, and the /error dispatch sendError leads to skips it,
+    // so the header set is written directly to answer exactly as an
+    // unregistered path does. Found and used by WebSecurity as a bean.
+    @Bean
+    fun requestRejectedHandler() = RequestRejectedHandler { request, response, _ ->
+        SecurityHeaders.write(request, response)
+        response.status = HttpServletResponse.SC_NOT_FOUND
     }
 
     // True when no controller method maps the request. Only handler-method

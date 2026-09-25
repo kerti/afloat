@@ -64,6 +64,24 @@ type Request struct {
 	// Body is sent verbatim. A string rather than a map, because some cases
 	// exist precisely to send bytes that are not valid JSON.
 	Body string `yaml:"body"`
+	// Pad expands the one `{pad}` in Body, for a body too large to write
+	// out: the 1 MiB cap's cases send one and a half.
+	Pad *Pad `yaml:"pad"`
+}
+
+type Pad struct {
+	With  string `yaml:"with"`
+	Count int    `yaml:"count"`
+}
+
+const padToken = "{pad}"
+
+// SentBody is the body as it goes on the wire.
+func (r Request) SentBody() string {
+	if r.Pad == nil {
+		return r.Body
+	}
+	return strings.Replace(r.Body, padToken, strings.Repeat(r.Pad.With, r.Pad.Count), 1)
 }
 
 // Step is one thing Given does: a request whose status must match, or SQL run
@@ -299,6 +317,14 @@ func (r *Request) validate(caseName, at string) error {
 	}
 	if !strings.HasPrefix(r.Path, "/") {
 		return fmt.Errorf("%s: %s.path must start with / and exclude the /api base", caseName, at)
+	}
+	if r.Pad != nil {
+		if r.Pad.With == "" || r.Pad.Count <= 0 {
+			return fmt.Errorf("%s: %s.pad needs a non-empty `with` and a positive `count`", caseName, at)
+		}
+		if strings.Count(r.Body, padToken) != 1 {
+			return fmt.Errorf("%s: %s.pad needs exactly one %s in the body", caseName, at, padToken)
+		}
 	}
 	return nil
 }

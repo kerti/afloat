@@ -333,8 +333,8 @@ func waitHealthy(b backend, limit time.Duration) error {
 
 func do(client *http.Client, b backend, r conformance.Request) (response, error) {
 	var body io.Reader
-	if r.Body != "" {
-		body = strings.NewReader(r.Body)
+	if sent := r.SentBody(); sent != "" {
+		body = strings.NewReader(sent)
 	}
 	req, err := http.NewRequest(r.Method, b.baseURL+r.Path, body)
 	if err != nil {

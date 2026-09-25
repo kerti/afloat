@@ -432,3 +432,45 @@ func TestLocalLoginEnabledIsUnaffected(t *testing.T) {
 		t.Errorf("status = %d, want 400 (no body), not a gate-related change", rec.Code)
 	}
 }
+
+// The body cap applies to the bytes a handler reads (#56). Logout reads none,
+// so an oversize body on it is never met. It was: kin-openapi's security check
+// read the whole body before calling even a no-op AuthenticationFunc, the read
+// hit maxBodyBytes, and the failure came back as a 401.
+func TestAnOversizeBodyOnARouteThatReadsNoneIsIgnored(t *testing.T) {
+	srv := newTestServer()
+	body := strings.Repeat("a", 3<<19) // 1.5 MiB, past the 1 MiB cap
+
+	req := httptest.NewRequest(http.MethodPost, "/api/auth/logout", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204 (body %s)", rec.Code, rec.Body.String())
+	}
+}
+
+// A percent-encoded path is its decoded route; an encoded slash is not a
+// separator (#56).
+func TestRoutesOnTheDecodedPath(t *testing.T) {
+	srv := newTestServer()
+	for _, tc := range []struct {
+		path string
+		want int
+	}{
+		{"/api/h%65alth", http.StatusOK},
+		{"/api/%68ealth", http.StatusOK},
+		{"/api/auth/%6Dethods", http.StatusOK},
+		{"/api/auth%2Fmethods", http.StatusNotFound},
+		{"/api/auth%2fmethods", http.StatusNotFound},
+		{"/api/h%25ealth", http.StatusNotFound},
+	} {
+		t.Run(tc.path, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			srv.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, tc.path, nil))
+			if rec.Code != tc.want {
+				t.Errorf("status = %d, want %d (body %s)", rec.Code, tc.want, rec.Body.String())
+			}
+		})
+	}
+}

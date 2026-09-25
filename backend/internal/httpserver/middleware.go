@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"runtime/debug"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5/middleware"
@@ -81,6 +82,28 @@ func disabledLocalLogin404(enabled bool) func(http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+// routeOnDecodedPath makes chi route on the decoded path. chi prefers
+// r.URL.RawPath whenever the URL parser kept one, which it does for any
+// percent-encoding other than its own - so /api/auth/local/%6Cogin was a 404
+// here and the login route on Kotlin, though RFC 3986 §6.2.2.2 makes %6C and l
+// the same resource (#56). Clearing RawPath on a copy of the request leaves
+// chi only the decoded Path.
+//
+// Except for an encoded slash: decoded, %2F would become a separator and
+// /api/auth%2Flocal/login would reach login. Spring's firewall refuses that
+// path, and so does chi, which routes it raw and finds nothing.
+func routeOnDecodedPath(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.RawPath == "" || strings.Contains(strings.ToLower(r.URL.RawPath), "%2f") {
+			next.ServeHTTP(w, r)
+			return
+		}
+		decoded := r.Clone(r.Context())
+		decoded.URL.RawPath = ""
+		next.ServeHTTP(w, decoded)
+	})
 }
 
 // maxBodyBytes caps the request body before any handler decodes it, so an

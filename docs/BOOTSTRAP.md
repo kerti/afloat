@@ -441,6 +441,23 @@ sees it; `AbsentFieldAdvice`, which stops Jackson failing on the first absent fi
 others are validated; `TrimmedEmailValidator`; `CodePointSizeValidator`; and a Jackson coercion
 guard.
 
+**Paths and the body cap (#56).** Three rules, each a case in `contract/conformance/cases/routing.yaml`:
+
+- **A percent-encoded path is its decoded route** (RFC 3986 §6.2.2.2): `/api/auth/local/%6Cogin` is
+  login on both. Go's `routeOnDecodedPath` clears `RawPath` so chi routes on the decoded path;
+  Spring always has. **An encoded slash never becomes a separator:** Go keeps the raw path for chi
+  when it holds `%2F`, and Kotlin passes `%2F` through Tomcat (`TomcatConfiguration`) to Spring
+  Security's firewall rather than decoding it.
+- **A path the firewall refuses is a path that does not exist.** `;`, `//`, a dot segment, an encoded
+  slash or percent: Kotlin's `RequestRejectedHandler` answers the bare 404 an unregistered path gets,
+  headers included, never the firewall's 400 with Boot's error body. Go's router finds no such route.
+  No `ErrorCode` for it.
+- **The 1 MiB cap meets only the bytes a handler reads**, as Go's `MaxBytesReader` does: a declared
+  `Content-Length` is not refused up front, and `/health` or logout answers normally with any body.
+  Go's spec validator runs with its copy of the spec stripped of security requirements, because
+  kin-openapi reads the whole body into memory before calling even a no-op `AuthenticationFunc`,
+  and under the cap that read made an oversize body on logout or `/me` a 401.
+
 ### Response headers
 
 Both backends send this fixed set on every response, as explicit middleware on Go and Spring

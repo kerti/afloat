@@ -1,14 +1,11 @@
 package dev.kerti.afloat.auth
 
-import dev.kerti.afloat.api.model.ErrorCode
-import dev.kerti.afloat.httperr.ApiErrorWriter
 import jakarta.servlet.FilterChain
 import jakarta.servlet.ReadListener
 import jakarta.servlet.ServletInputStream
 import jakarta.servlet.http.HttpServletRequest
 import jakarta.servlet.http.HttpServletRequestWrapper
 import jakarta.servlet.http.HttpServletResponse
-import org.springframework.http.HttpHeaders
 import org.springframework.web.filter.OncePerRequestFilter
 import java.io.BufferedReader
 import java.io.IOException
@@ -20,13 +17,11 @@ class MaxBodyFilter : OncePerRequestFilter() {
         response: HttpServletResponse,
         filterChain: FilterChain,
     ) {
-        val declared = request.getHeader(HttpHeaders.CONTENT_LENGTH)?.toLongOrNull()
-        if (declared != null && declared > MAX_BODY_BYTES) {
-            ApiErrorWriter.write(response, 400, ErrorCode.INVALID_JSON_BODY)
-            return
-        }
-        // Content-Length is absent on a chunked body, so the stream itself is
-        // capped too: Go's MaxBytesReader counts bytes, not headers.
+        // The stream is capped, not the declared Content-Length, as Go's
+        // MaxBytesReader caps it: the limit meets only the bytes a handler
+        // reads. Refusing a declared length up front answered 400 on routes
+        // that read no body at all - /health, logout - where Go answers
+        // normally (#56). A chunked body declares no length anyway.
         filterChain.doFilter(LimitedBodyRequest(request, MAX_BODY_BYTES), response)
     }
 

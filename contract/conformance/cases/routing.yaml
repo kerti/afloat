@@ -1,0 +1,155 @@
+# Path shapes and the body cap (#56). Found by a raw-socket probe of both
+# backends in #51's sixth review; ruled 25 Sep:
+#
+# 1. A percent-encoded path names the same resource as its decoded form
+#    (RFC 3986 §6.2.2.2), so both backends route on the decoded path. An
+#    encoded slash is the exception: it never becomes a separator.
+# 2. A path the Spring firewall refuses - `;`, `//`, `/./`, an encoded slash
+#    or percent - is a path that does not exist: each backend's own
+#    unregistered-path 404, no envelope, no new ErrorCode.
+# 3. The 1 MiB body cap applies to the bytes a handler reads, not to a
+#    declared Content-Length, so a route that reads no body ignores one.
+
+- name: routing - a percent-encoded path is the decoded route
+  issue: "56"
+  request:
+    method: POST
+    path: /auth/local/%6Cogin
+    headers:
+      Content-Type: application/json
+    body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+  expect:
+    status: 204
+    body_empty: true
+    cookies:
+      afloat_session:
+        value_pattern: '[A-Za-z0-9_-]{43}'
+        path: /
+        max_age: 2592000
+        http_only: true
+        secure: false
+        same_site: Lax
+        expires: max-age
+
+- name: routing - a percent-encoded path on a GET
+  issue: "56"
+  request:
+    method: GET
+    path: /h%65alth
+  expect:
+    status: 200
+    body_json: {status: ok, version: dev}
+
+- name: routing - an encoded slash is not a separator
+  issue: "56"
+  permit: [unmatched-path-404]
+  request:
+    method: POST
+    path: /auth%2Flocal/login
+    headers:
+      Content-Type: application/json
+    body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+  expect:
+    status: 404
+    same_as: &no-such-post
+      method: POST
+      path: /no-such-route
+      headers:
+        Content-Type: application/json
+      body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+    rows:
+      - sql: SELECT count(*)::int AS n FROM sessions
+        rows: [{n: 0}]
+
+- name: routing - a path parameter is a path that does not exist
+  issue: "56"
+  permit: [unmatched-path-404]
+  request:
+    method: GET
+    path: /health;x=1
+  expect:
+    status: 404
+    same_as: &no-such-get
+      method: GET
+      path: /no-such-route
+
+- name: routing - a double slash is a path that does not exist
+  issue: "56"
+  permit: [unmatched-path-404]
+  request:
+    method: GET
+    path: //health
+  expect:
+    status: 404
+    same_as: *no-such-get
+
+- name: routing - a dot segment is a path that does not exist
+  issue: "56"
+  permit: [unmatched-path-404]
+  request:
+    method: GET
+    path: /./health
+  expect:
+    status: 404
+    same_as: *no-such-get
+
+- name: routing - an encoded percent is a path that does not exist
+  issue: "56"
+  permit: [unmatched-path-404]
+  request:
+    method: GET
+    path: /h%25ealth
+  expect:
+    status: 404
+    same_as: *no-such-get
+
+# A body on a route that reads none is never read, so the cap never meets it.
+- name: routing - an oversize body on a route that reads none is ignored
+  issue: "56"
+  request:
+    method: GET
+    path: /health
+    body: '{pad}'
+    pad: {with: a, count: 1572864}
+  expect:
+    status: 200
+    body_json: {status: ok, version: dev}
+
+- name: routing - an oversize body on logout is ignored
+  issue: "56"
+  request:
+    method: POST
+    path: /auth/logout
+    body: '{pad}'
+    pad: {with: a, count: 1572864}
+  expect:
+    status: 204
+    body_empty: true
+    cookies:
+      afloat_session:
+        value: ""
+        path: /
+        max_age: 0
+        http_only: true
+        secure: false
+        same_site: Lax
+        expires: past
+
+# Read, the same body meets the cap: the decode stops at 1 MiB and never sees
+# the end of the object, so this is the undecodable body, not a password over
+# its 4096-character maxLength.
+- name: routing - an oversize body on login meets the cap
+  issue: "56"
+  request:
+    method: POST
+    path: /auth/local/login
+    headers:
+      Content-Type: application/json
+    body: '{"email":"alice@example.com","password":"{pad}"}'
+    pad: {with: a, count: 1572864}
+  expect:
+    status: 400
+    body_json: {code: INVALID_JSON_BODY}
+    rows:
+      - sql: SELECT count(*)::int AS n FROM login_attempts
+        rows: [{n: 0}]

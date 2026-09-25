@@ -132,6 +132,16 @@ func TestLoadRejectsUnusableCases(t *testing.T) {
 			want: "value_pattern",
 		},
 		{
+			name: "pad with no token in the body",
+			yaml: "- name: x\n  request: {method: POST, path: /auth/logout, body: abc, pad: {with: a, count: 3}}\n  expect: {status: 204}\n",
+			want: "exactly one {pad}",
+		},
+		{
+			name: "pad with no count",
+			yaml: "- name: x\n  request: {method: POST, path: /auth/logout, body: \"{pad}\", pad: {with: a}}\n  expect: {status: 204}\n",
+			want: "positive `count`",
+		},
+		{
 			name: "rows with no sql",
 			yaml: "- name: x\n  request: {method: GET, path: /me}\n  expect: {status: 200, rows: [{rows: []}]}\n",
 			want: "expect.rows[0].sql is required",
@@ -188,5 +198,15 @@ func TestCommittedFilesLoad(t *testing.T) {
 	}
 	if err := conformance.CheckPermits(cases, permitted); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestSentBodyExpandsThePad(t *testing.T) {
+	r := conformance.Request{Body: `{"p":"{pad}"}`, Pad: &conformance.Pad{With: "ab", Count: 3}}
+	if got := r.SentBody(); got != `{"p":"ababab"}` {
+		t.Fatalf("SentBody() = %q", got)
+	}
+	if got := (conformance.Request{Body: "{pad}"}).SentBody(); got != "{pad}" {
+		t.Fatalf("with no pad, SentBody() = %q, want the body verbatim", got)
 	}
 }

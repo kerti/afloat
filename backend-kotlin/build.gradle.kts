@@ -1,9 +1,9 @@
 plugins {
-    kotlin("jvm") version "2.3.21"
-    kotlin("plugin.spring") version "2.3.21"
+    kotlin("jvm") version "2.4.20"
+    kotlin("plugin.spring") version "2.4.20"
     id("org.springframework.boot") version "4.1.1"
     id("io.spring.dependency-management") version "1.1.7"
-    kotlin("plugin.jpa") version "2.3.21"
+    kotlin("plugin.jpa") version "2.4.20"
     id("org.openapi.generator") version "7.25.0"
     jacoco
 }
@@ -32,7 +32,7 @@ dependencies {
     // Spring Security's Argon2PasswordEncoder delegates to Bouncy Castle and is
     // not usable without it: the starter does not pull it in, so every hash and
     // verify throws NoClassDefFoundError at runtime without this line.
-    implementation("org.bouncycastle:bcprov-jdk18on:1.83")
+    implementation("org.bouncycastle:bcprov-jdk18on:1.86")
     implementation("org.jetbrains.kotlin:kotlin-reflect")
     implementation("tools.jackson.module:jackson-module-kotlin")
     runtimeOnly("org.postgresql:postgresql")

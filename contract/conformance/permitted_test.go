@@ -77,28 +77,66 @@ func TestScopedPermitAppliesOnlyToCitingCases(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	header, body := set.ForCase(conformance.Case{Permit: []string{"unmatched-404"}})
-	if !header("content-type") || !body {
-		t.Errorf("citing case: header=%v body=%v, want both true", header("content-type"), body)
+	header, body, status := set.ForCase(conformance.Case{Permit: []string{"unmatched-404"}})
+	if !header("content-type") || !body || status {
+		t.Errorf("citing case: header=%v body=%v status=%v, want header and body true, status false", header("content-type"), body, status)
 	}
 
-	header, body = set.ForCase(conformance.Case{})
-	if header("Content-Type") || body {
-		t.Errorf("non-citing case: header=%v body=%v, want both false", header("Content-Type"), body)
+	header, body, status = set.ForCase(conformance.Case{})
+	if header("Content-Type") || body || status {
+		t.Errorf("non-citing case: header=%v body=%v status=%v, want all false", header("Content-Type"), body, status)
 	}
 	if set.Allows("Content-Type") {
 		t.Error("a scoped header leaked into the global Allows")
 	}
 }
 
+// #64: a status-only case-scoped entry is the same shape, so it gets the
+// same isolation guarantee headers and body already have.
+func TestScopedPermitStatusAppliesOnlyToCitingCases(t *testing.T) {
+	const entry = "- name: malformed-path-connector-400\n  issue: \"64\"\n  status: true\n  why: a\n"
+	set, err := conformance.LoadPermitted(writePermitted(t, entry))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, _, status := set.ForCase(conformance.Case{Permit: []string{"malformed-path-connector-400"}})
+	if !status {
+		t.Error("citing case: status = false, want true")
+	}
+	_, _, status = set.ForCase(conformance.Case{})
+	if status {
+		t.Error("non-citing case: status = true, want false")
+	}
+}
+
 func TestCheckPermits(t *testing.T) {
-	set, err := conformance.LoadPermitted(writePermitted(t, scopedEntry))
+	set, err := conformance.LoadPermitted(writePermitted(t, scopedEntry+
+		"- name: status-diff\n  issue: \"64\"\n  status: true\n  why: a\n"+
+		"- name: status-and-body-diff\n  issue: \"64\"\n  status: true\n  body: true\n  why: a\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	sameAs := &conformance.Request{Method: "GET", Path: "/nowhere"}
 	withSameAs := conformance.Case{Name: "a", Permit: []string{"unmatched-404"}}
 	withSameAs.Expect.SameAs = sameAs
+
+	withStatusByBackend := conformance.Case{Name: "s", Permit: []string{"status-diff"}}
+	withStatusByBackend.Expect.StatusByBackend = map[string]int{"go": 404, "kotlin": 400}
+
+	statusPermittedButUnpinned := conformance.Case{Name: "s2", Permit: []string{"status-diff"}}
+	statusPermittedButUnpinned.Expect.Status = 404
+
+	statusPinnedButUnpermitted := conformance.Case{Name: "s3", Permit: []string{"unmatched-404"}}
+	statusPinnedButUnpermitted.Expect.SameAs = sameAs
+	statusPinnedButUnpermitted.Expect.StatusByBackend = map[string]int{"go": 404, "kotlin": 400}
+
+	// #64's own shape: a body difference is permitted alongside the status
+	// one, and status_by_backend alone is enough pinning - no body assertion
+	// demanded on top of it (a framework-rendered HTML page, pinning it would
+	// be the maintenance burden the ruling rejected a Tomcat valve for).
+	statusAndBodyPinnedByStatusAlone := conformance.Case{Name: "s4", Permit: []string{"status-and-body-diff"}}
+	statusAndBodyPinnedByStatusAlone.Expect.StatusByBackend = map[string]int{"go": 404, "kotlin": 400}
 
 	for _, tc := range []struct {
 		name  string
@@ -108,7 +146,13 @@ func TestCheckPermits(t *testing.T) {
 		{"cites an undefined entry", []conformance.Case{withSameAs, {Name: "b", Permit: []string{"nope"}}}, "does not define"},
 		{"body permitted, body unpinned", []conformance.Case{{Name: "a", Permit: []string{"unmatched-404"}}}, "asserts nothing about the body"},
 		{"entry cited by nothing", []conformance.Case{{Name: "a"}}, "cited by no case"},
-		{"valid", []conformance.Case{withSameAs}, ""},
+		{"status permitted, status unpinned", []conformance.Case{withStatusByBackend, statusPermittedButUnpinned}, "expect.status pins one value"},
+		{"status pinned, status unpermitted", []conformance.Case{withStatusByBackend, statusPinnedButUnpermitted}, "permits no case-scoped entry with `status: true`"},
+		{
+			"status_by_backend alone excuses a permitted body difference and every entry is cited",
+			[]conformance.Case{withSameAs, withStatusByBackend, statusAndBodyPinnedByStatusAlone},
+			"",
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			err := conformance.CheckPermits(tc.cases, set)

@@ -5,8 +5,9 @@
     "directions and is shown to read the cost from the string rather than from the current constants.",
     "`rejects`: each must answer 'does not verify' in both backends - never an error, a panic or a 500.",
     "The accepted shape is exactly $argon2id$v=19$m=<n>,t=<n>,p=<n>$<salt>$<hash>: unpadded standard base64,",
-    "8*p <= m <= 2^24 (KiB), 1 <= t <= 2^31-1, 1 <= p <= 255, a hash of at least 4 bytes, and neither base64",
-    "segment of a length that cannot decode (1 mod 4).",
+    "8*p <= m <= 65536 (KiB), 1 <= t <= 10, 1 <= p <= 255, a hash of at least 4 bytes, and neither base64",
+    "segment of a length that cannot decode (1 mod 4). The m and t ceilings are #68's, headroom over the",
+    "operating cost (m=19456, t=2) rather than BouncyCastle's own 2^24 KiB / Go's absent ceiling.",
     "A reject row that tests a shape rule carries the tag a lenient parser would compute for the parameters",
     "it reads, so only the rule refuses it, not a tag mismatch. `minted_by` names what computed the tag:",
     "go (x/crypto/argon2), bouncycastle (Argon2BytesGenerator, for what x/crypto cannot express), or absent",
@@ -49,6 +50,18 @@
       "cost": "m=8192,t=3,p=2",
       "password": "a password minted at another cost",
       "phc": "$argon2id$v=19$m=8192,t=3,p=2$SUVjp6O3W4SpiAl/98s2vw$EaQ0zcogYlb5tDAFdstTqg3yX/7eWt/d4I45pnL9ekY"
+    },
+    {
+      "minted_by": "go",
+      "cost": "m=65536,t=2,p=1 (#68 memory ceiling, accepted at the bound)",
+      "password": "correct horse battery staple",
+      "phc": "$argon2id$v=19$m=65536,t=2,p=1$cDEW6h0LM+oYWnRWwzy5cA$pfHM/HBpiKsJZdQUDpa8WND/0b4nlBW2auWdlVecLgo"
+    },
+    {
+      "minted_by": "go",
+      "cost": "m=19456,t=10,p=1 (#68 time ceiling, accepted at the bound)",
+      "password": "correct horse battery staple",
+      "phc": "$argon2id$v=19$m=19456,t=10,p=1$FGRAcix5WN1zUQKgJJjF+A$6zX2IdtJ2I6icRb6b9LL2f5zAYZy1L/gTgI0D0hqfno"
     }
   ],
   "rejects": [
@@ -144,14 +157,26 @@
       "phc": "$argon2id$v=19$m=15,t=2,p=2$M6bmkF0B1tq3WPmzGs3mpQ$MV/cGp/gTU3mksDsg7U7JY3lcaMbkwTvl4YaXX/iDAg"
     },
     {
-      "why": "memory beyond 2^24 KiB: BouncyCastle's ceiling, and x/crypto has none",
+      "why": "memory beyond 2^24 KiB: BouncyCastle's own ceiling, well past #68's 65536",
       "password": "correct horse battery staple",
       "phc": "$argon2id$v=19$m=16777217,t=1,p=1$M6bmkF0B1tq3WPmzGs3mpQ$ipot4Ss0cTnDO3H3/I1pGxs1OItkMQsR1zeehdSA800"
     },
     {
-      "why": "iterations beyond 2^31-1: fits Go's uint32, not Spring's int",
+      "why": "iterations beyond 2^31-1: fits Go's uint32, not Spring's int, and well past #68's 10",
       "password": "correct horse battery staple",
       "phc": "$argon2id$v=19$m=19456,t=2147483648,p=1$M6bmkF0B1tq3WPmzGs3mpQ$ipot4Ss0cTnDO3H3/I1pGxs1OItkMQsR1zeehdSA800"
+    },
+    {
+      "why": "memory beyond #68's 65536 KiB ceiling, by one",
+      "minted_by": "go",
+      "password": "correct horse battery staple",
+      "phc": "$argon2id$v=19$m=65537,t=2,p=1$MyMcW5mlhdH/N7KYuce+hg$RtOR71L8hoZQp2otl9+/GAq1CTR0vnoVRCNh9Kwvoek"
+    },
+    {
+      "why": "iterations beyond #68's 10 ceiling, by one",
+      "minted_by": "go",
+      "password": "correct horse battery staple",
+      "phc": "$argon2id$v=19$m=19456,t=11,p=1$9qgvOHaa0xqAbTRh4gOAqQ$0Wr6bfWyFzt1cpR3Ahe2PD51kyCJ/V0nYgD/TQdhoGU"
     },
     {
       "why": "salt not base64",

@@ -9,6 +9,10 @@
 #    unregistered-path 404, no envelope, no new ErrorCode.
 # 3. The 1 MiB body cap applies to the bytes a handler reads, not to a
 #    declared Content-Length, so a route that reads no body ignores one.
+# 4. A literal backslash, an encoded NUL, or invalid UTF-8 in the path is a
+#    permitted difference (#64): Tomcat's connector refuses each with its own
+#    HTML 400 before Kotlin's own routing runs, where Go's router simply finds
+#    no route and answers its bare 404.
 
 - name: routing - a percent-encoded path is the decoded route
   issue: "56"
@@ -112,6 +116,37 @@
   expect:
     status: 404
     same_as: *no-such-get
+
+# raw_target, not path: a Path-based request necessarily goes through Go's
+# own url.Parse/http.NewRequest, which silently percent-encodes an unescaped
+# backslash to %5C before it ever reaches either server - the ALREADY-handled
+# #56 case above, not this one. raw_target sends the byte itself.
+- name: routing - a literal backslash is a permitted connector-vs-router difference
+  issue: "64"
+  permit: [malformed-path-connector-400]
+  request:
+    method: GET
+    raw_target: /health\
+  expect:
+    status_by_backend: {go: 404, kotlin: 400}
+
+- name: routing - a literal NUL is a permitted connector-vs-router difference
+  issue: "64"
+  permit: [malformed-path-connector-400]
+  request:
+    method: GET
+    path: /health%00
+  expect:
+    status_by_backend: {go: 404, kotlin: 400}
+
+- name: routing - invalid UTF-8 is a permitted connector-vs-router difference
+  issue: "64"
+  permit: [malformed-path-connector-400]
+  request:
+    method: GET
+    path: /health%FF
+  expect:
+    status_by_backend: {go: 404, kotlin: 400}
 
 # A body on a route that reads none is never read, so the cap never meets it.
 - name: routing - an oversize body on a route that reads none is ignored

@@ -59,8 +59,17 @@ type Case struct {
 type Request struct {
 	Method string `yaml:"method"`
 	// Path is relative to each backend's base URL, so it excludes /api.
-	Path    string            `yaml:"path"`
-	Headers map[string]string `yaml:"headers"`
+	Path string `yaml:"path"`
+	// RawTarget is Path's alternative for a case that needs bytes on the wire
+	// url.Parse would otherwise normalise out of existence - a literal
+	// backslash, say, which Go's own http.Client silently percent-encodes to
+	// %5C before RawTarget existed, so a case naming one never actually
+	// reached either backend's router (#64). Sent verbatim as the request
+	// line's target, via URL.Opaque, after the base path: never escaped,
+	// never re-parsed. Relative to each backend's base URL, so it excludes
+	// /api, same as Path, and takes its leading slash the same way.
+	RawTarget string            `yaml:"raw_target"`
+	Headers   map[string]string `yaml:"headers"`
 	// Body is sent verbatim. A string rather than a map, because some cases
 	// exist precisely to send bytes that are not valid JSON.
 	Body string `yaml:"body"`
@@ -110,6 +119,18 @@ type Step struct {
 type Expect struct {
 	Status int `yaml:"status"`
 
+	// StatusByBackend overrides Status per backend ("go"/"kotlin"), for a case
+	// whose two backends are permitted to answer different statuses outright
+	// (#64: Tomcat's connector-level 400 on a malformed path Go's router
+	// simply has no route for). Never to paper over a bug: a case that sets
+	// this must also cite, under `permit`, a case-scoped entry with
+	// `status: true` - CheckPermits enforces the pairing, the same way a
+	// body-permitting entry requires a body assertion. Exactly one of Status
+	// or StatusByBackend is set, and the map must name every backend the
+	// case's profile runs, or one backend's expectation goes unstated by
+	// omission.
+	StatusByBackend map[string]int `yaml:"status_by_backend"`
+
 	// Headers are compared exactly, by value, case-insensitively on the name.
 	Headers map[string]string `yaml:"headers"`
 
@@ -138,6 +159,15 @@ type Expect struct {
 	// of the milestone: a response can be right while the row behind it is
 	// not.
 	Rows []RowsExpect `yaml:"rows"`
+}
+
+// StatusFor is the status one backend's answer must have: StatusByBackend's
+// entry when the case sets one, else the shared Status.
+func (e Expect) StatusFor(backend string) int {
+	if e.StatusByBackend != nil {
+		return e.StatusByBackend[backend]
+	}
+	return e.Status
 }
 
 // CookieExpect is one Set-Cookie, attribute by attribute. Every field but
@@ -244,8 +274,20 @@ func (c *Case) validate() error {
 	if err := c.Request.validate(c.Name, "request"); err != nil {
 		return err
 	}
-	if c.Expect.Status == 0 {
-		return fmt.Errorf("%s: expect.status is required", c.Name)
+	switch {
+	case c.Expect.Status != 0 && c.Expect.StatusByBackend != nil:
+		return fmt.Errorf("%s: expect.status and expect.status_by_backend are mutually exclusive", c.Name)
+	case c.Expect.Status == 0 && c.Expect.StatusByBackend == nil:
+		return fmt.Errorf("%s: expect.status is required (or expect.status_by_backend, for a case whose backends differ by ruling)", c.Name)
+	case c.Expect.StatusByBackend != nil:
+		for _, backend := range []string{"go", "kotlin"} {
+			if c.Expect.StatusByBackend[backend] == 0 {
+				return fmt.Errorf("%s: expect.status_by_backend is missing %q", c.Name, backend)
+			}
+		}
+		if len(c.Permit) == 0 {
+			return fmt.Errorf("%s: expect.status_by_backend needs a case-scoped permit entry with `status: true`", c.Name)
+		}
 	}
 	if c.Expect.BodyJSON != nil && c.Expect.BodyRaw != "" {
 		return fmt.Errorf("%s: expect.body_json and expect.body_raw are mutually exclusive", c.Name)
@@ -315,7 +357,14 @@ func (r *Request) validate(caseName, at string) error {
 	if r.Method == "" {
 		return fmt.Errorf("%s: %s.method is required", caseName, at)
 	}
-	if !strings.HasPrefix(r.Path, "/") {
+	switch {
+	case r.Path != "" && r.RawTarget != "":
+		return fmt.Errorf("%s: %s.path and %s.raw_target are mutually exclusive", caseName, at, at)
+	case r.RawTarget != "":
+		if !strings.HasPrefix(r.RawTarget, "/") {
+			return fmt.Errorf("%s: %s.raw_target must start with / and exclude the /api base", caseName, at)
+		}
+	case !strings.HasPrefix(r.Path, "/"):
 		return fmt.Errorf("%s: %s.path must start with / and exclude the /api base", caseName, at)
 	}
 	if r.Pad != nil {

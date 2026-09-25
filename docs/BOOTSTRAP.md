@@ -261,13 +261,27 @@ all return one `INVALID_CREDENTIALS`; the comparison is constant-time; and a req
 address with no account still pays the full hashing cost, so timing cannot distinguish present from
 absent either. All three, not two of three.
 
+**A stored hash's cost is capped too: `m ≤ 65536` KiB and `t ≤ 10` (#68).** The PHC string carries its
+own cost (above), which is what lets the current constants be retuned with no migration — but read
+back unbounded, that same freedom lets a stored string alone dictate how much memory and time one
+verify spends, worse once the concurrency cap below admits several such verifies at once. `65536` KiB
+(64 MiB) and `10` iterations are headroom over the operating cost (`m=19456`, `t=2`) — about 3.4× the
+memory and 5× the iterations — not BouncyCastle's own `2^24` KiB `argon2.max_memory_exp` ceiling or
+x/crypto's absence of one. Go's `parsePHC` and Kotlin's `hasPhcShape` both refuse a stored hash above
+either bound, through the same silent-log reject path as every other malformed PHC string (below). A
+cost increase past either ceiling means raising the ceiling first, deliberately, rather than a stored
+string quietly being allowed to cost more than the code that reads it expects.
+`contract/testdata/argon2.json` carries accept rows at exactly `m=65536` and `t=10` and reject rows one
+past each; both suites read them.
+
 **Concurrent Argon2id hashing is capped at 4, process-wide, in both backends — a departure surfaced by
 #33.** `m=19456` KiB is allocated *per hash in flight*, not once, so with no bound an unauthenticated
 caller chooses the process's peak memory: 30 concurrent logins want `30 × 19 MiB ≈ 570 MiB`, and a Go
 process that exceeds available memory is killed outright rather than degrading — worse than a JVM
 `OutOfMemoryError` a handler can at least catch. Afloat's deployment target is a self-hosted box
 (`VISION.md`), where that is the whole machine. At the cap, `4 × 19 MiB ≈ 76 MiB` of Argon2 memory
-live at once. That is live memory, not the process's footprint: a finished hash's memory is reclaimed
+live at once — worst case `4 × 64 MiB = 256 MiB` if every hash in flight happened to be a stored hash
+at the #68 ceiling. That is live memory, not the process's footprint: a finished hash's memory is reclaimed
 only when the garbage collector runs, and Go's default `GOGC=100` lets the heap reach about twice its
 live size first, so the peak can run to roughly double. Still bounded, which is the point. Retuning
 Argon2id's cost parameter later must be checked against this arithmetic before it ships, or the memory
@@ -361,7 +375,8 @@ failure writes, is `contract/testdata/login_backoff.json`; both suites read it, 
 own defaults to it (#16). The same goes for Argon2id: `contract/testdata/argon2.json` carries hashes
 minted by each backend, which must verify in both, and strings neither may accept. The accepted
 spelling is exactly `$argon2id$v=19$m=…,t=…,p=…$salt$hash`, unpadded standard base64,
-`8p ≤ m ≤ 2²⁴` KiB (BouncyCastle's ceiling), `1 ≤ t ≤ 2³¹−1`, `1 ≤ p ≤ 255`, a hash of at least 4 bytes,
+`8p ≤ m ≤ 65536` KiB, `1 ≤ t ≤ 10` (#68's ceiling, above — tighter than BouncyCastle's own `2²⁴` KiB
+`argon2.max_memory_exp` or Spring's `2³¹−1` on iterations), `1 ≤ p ≤ 255`, a hash of at least 4 bytes,
 and no base64 segment of a length that cannot decode: Spring's decoder is looser than that and Go's
 parser was, and a malformed stored
 string answers "does not verify" in both, never an exception or a panic.
@@ -478,11 +493,31 @@ guard.
   UTF-8 are still refused by Tomcat, with its own 400 page, before Spring sees them — a known gap, #64.
   The firewall's other refusals — a header value with a control character, a
   method it does not know — are a malformed request on a route that exists, not a missing route, and get
-  a bare 400 with the same headers, whether a filter or MVC read the header first. Go refuses neither,
-  and whether Kotlin should is open: #67 (header values, which include ordinary UTF-8 such as an em
-  dash), #66 (methods). And `/error`, Boot's error page, is not an API path when asked for directly: a
-  bare 404, as on Go, for every method but OPTIONS (#66). The disabled-login gate compares the decoded path in
-  both backends, so no spelling of the login path escapes it.
+  a bare 400 with the same headers, whether a filter or MVC read the header first. Go refuses neither.
+  Kotlin's firewall accepts any header value (#67 — a UTF-8 User-Agent or an em dash is not a control
+  character just because Tomcat's connector reads it byte-for-byte as ISO-8859-1); header *names* stay
+  strict. `/error`, Boot's error page, is not an API path when asked for directly: a bare 404, as on Go,
+  for every method (#66 closed the OPTIONS carve-out along with the rest of the method rules below).
+  The disabled-login gate compares the decoded path in both backends, so no spelling of the login path
+  escapes it.
+- **A literal backslash, `%00` and invalid UTF-8 in the path are a permitted difference (#64).** Tomcat
+  refuses each with its own connector-level HTML 400 before Spring Security's firewall, or any filter,
+  ever sees the request; Go's router simply finds no route and answers its bare 404. Neither is wrong —
+  no client sends these shapes, nothing reaches a handler either way, and a custom Tomcat
+  `ErrorReportValve` to make the two bytes match would need maintaining across every Tomcat upgrade for
+  a difference no caller can trigger by accident. `contract/conformance/permitted-differences.yaml`
+  carries the entry (`malformed-path-connector-400`), cited by a case per shape in `routing.yaml`.
+- **HEAD, OPTIONS and the actuator (#66).** HEAD answers like GET in both backends — RFC 9110 §9.1
+  requires it of a general-purpose server, Spring already did it, and Go gained it via a `headAsGet`
+  middleware ahead of the contract's own router (chi's `middleware.GetHead` rewrites only its routing
+  lookup, not `r.Method`, which the spec-validating middleware still reads). OPTIONS is a flat,
+  content-free 405 everywhere in both backends — no `Allow` header, on a registered route, an
+  unregistered path, or the disabled-login route alike — because Afloat is same-origin with no CORS, so
+  no client sends it, and an `Allow` header would otherwise tell a prober which routes exist; answering
+  it identically everywhere is also what keeps the disabled-login route indistinguishable from an
+  unregistered path on this method, with no second gate to keep in sync with the first. Actuator is kept
+  as a dependency (§3) but exposed over HTTP nowhere: Kotlin sets `management.server.port: -1`, so
+  `/api/actuator/**` answers exactly like any other unregistered path, session or none; Go never had it.
 - **The 1 MiB cap meets only the bytes a handler reads**, as Go's `MaxBytesReader` does: a declared
   `Content-Length` is not refused up front, and `/health` or logout answers normally with any body.
   Go's spec validator runs with its copy of the spec stripped of security requirements, because
@@ -724,7 +759,7 @@ truth and fails if either backend's configuration drifts from it.
 | `AUTH_GOOGLE_ENABLED` | `false` | Planned, not built (PRD §4.1). |
 | `SESSION_TTL` | `720h` | The sliding window (§5.1). |
 | `SESSION_MAX_LIFETIME` | `2160h` | The absolute cap from `created_at` (§5.1). |
-| `LOGIN_FIRST_BACKOFF` | `1s` | The login backoff after the first failure; doubles per failure (§5.1). Must be positive. |
+| `LOGIN_FIRST_BACKOFF` | `1s` | The login backoff after the first failure; doubles per failure (§5.1). Must be at least 1ms (#69) — a boundary both `validate()` functions name in their startup error. |
 | `LOGIN_MAX_BACKOFF` | `5m` | The backoff's cap. Not shorter than `LOGIN_FIRST_BACKOFF`. Both backends refuse to boot on either violation. |
 | `COOKIE_SECURE` | `true` | Off only for local development over plain HTTP. |
 | `VERSION` | `dev` | Stamped at build time; reported by `GET /api/health`. |
@@ -746,6 +781,17 @@ host and refuses it at boot. The PostgreSQL JDBC driver reaches a Unix socket on
 factory from a further dependency (junixsocket), and a deployment with no TCP listener in front of
 its database is a shape nobody has asked for. So a Kotlin deployment names a host. Revisit if one
 does ask.
+
+**A set-but-empty duration variable is treated as unset, in both backends, for every duration
+variable (#69).** `FOO=` in a `.env` file boots with `FOO`'s documented default, not a parse failure.
+Go's `caarlos0/env` already does this for any field carrying an `envDefault` tag, duration or not
+(`getOr`'s `exists && value == "" && defExists` case); Kotlin's `AppConfig.parse` matches it for
+duration variables specifically, because Spring's own `${NAME:default}` placeholder only falls back
+when a property is *absent*, never when it resolves to the empty string, so a blank env var reached
+`DurationParser.parse("")` and failed to boot. The same rule applies a second time in Kotlin, to the
+three durations `NormalizedServerTimeoutPropertySource` relays into Boot's own binder
+(`server.tomcat.*`, `spring.lifecycle.*`) — both paths re-default from the same literals
+(`AppConfig`'s `DEFAULT_*` constants), so they cannot drift into disagreeing about what "unset" means.
 
 **Durations use the suffixes both runtimes accept, and never `d`.** Go's `time.ParseDuration`
 understands `ns us ms s m h` and rejects `d`; Spring's simple duration style accepts `d` as well. So

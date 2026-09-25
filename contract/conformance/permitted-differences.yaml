@@ -39,6 +39,35 @@
 # Always a ruling, so always an issue.
 # ---------------------------------------------------------------------------
 
+- name: malformed-path-connector-400
+  issue: "64"
+  status: true
+  headers:
+    [
+      Content-Type,
+      Cache-Control,
+      Content-Language,
+      Expires,
+      Pragma,
+      X-Content-Type-Options,
+      X-Frame-Options,
+      X-Xss-Protection,
+    ]
+  body: true
+  why: >
+    A literal backslash, `%00` or invalid UTF-8 in the path: Tomcat's connector
+    refuses each with its own HTML 400 before Spring Security's firewall, or
+    any filter - including HeaderWriterFilter, which is why none of Kotlin's
+    usual security headers or securityHeaders' Go equivalent reach this answer
+    at all - ever sees the request (TomcatConfiguration has no pass-through
+    for these three, unlike the `%2F`/`%5C` it does relay - #56); Go's chi
+    router simply finds no route and answers its bare 404, WITH its usual
+    header set, since that comes from middleware ahead of routing. Ruled a
+    permitted difference rather than a custom `ErrorReportValve`: no client
+    sends these shapes, nothing reaches a handler on either backend, and a
+    valve would need maintaining across every Tomcat upgrade for a difference
+    no caller can trigger by accident.
+
 - name: unmatched-path-404
   issue: "24"
   headers: [Content-Type]

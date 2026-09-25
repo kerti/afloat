@@ -114,6 +114,37 @@ open class AppConfigSpec : StringSpec({
                     cookieSecure = true, version = "dev",
                 )
             ),
+            // #69: a duration variable set to the empty string is unset, not a
+            // parse failure - "FOO=" in a .env boots with FOO's documented
+            // default, matching Go's caarlos0/env. Every duration variable, not
+            // only the login backoffs this issue started from.
+            AppConfigCase(
+                name = "every duration variable, blank, falls back to its default",
+                input = TestConfigDefaults.testConfigBase(
+                    "HTTP_READ_TIMEOUT" to "",
+                    "HTTP_WRITE_TIMEOUT" to "",
+                    "HTTP_IDLE_TIMEOUT" to "",
+                    "SHUTDOWN_TIMEOUT" to "",
+                    "SESSION_TTL" to "",
+                    "SESSION_MAX_LIFETIME" to "",
+                    "LOGIN_FIRST_BACKOFF" to "",
+                    "LOGIN_MAX_BACKOFF" to "",
+                ),
+                expectedConfig = AppConfig(
+                    databaseUrl = "postgres://host/afloat_kotlin",
+                    port = 5183, logFormat = "text", logLevel = "info", autoMigrate = true,
+                    readTimeout = Duration.ofSeconds(30),
+                    writeTimeout = Duration.ofSeconds(60),
+                    idleTimeout = Duration.ofSeconds(120),
+                    shutdownTimeout = Duration.ofSeconds(10),
+                    authLocalEnabled = true, authGoogleEnabled = false,
+                    sessionTtl = Duration.ofHours(720),
+                    sessionMaxLifetime = Duration.ofHours(2160),
+                    loginFirstBackoff = Duration.ofSeconds(1),
+                    loginMaxBackoff = Duration.ofMinutes(5),
+                    cookieSecure = true, version = "dev",
+                )
+            ),
             AppConfigCase(
                 name = "SESSION_TTL: '36h30m' — compound, Go-valid",
                 input = TestConfigDefaults.testConfigBase(
@@ -255,12 +286,19 @@ open class AppConfigSpec : StringSpec({
             AppConfigCase(
                 name = "LOGIN_FIRST_BACKOFF: '0s'",
                 input = TestConfigDefaults.testConfigBase("LOGIN_FIRST_BACKOFF" to "0s"),
-                expectedMessage = "LOGIN_FIRST_BACKOFF 'PT0S': must be positive",
+                expectedMessage = "LOGIN_FIRST_BACKOFF 'PT0S': must be at least 1ms",
             ),
             AppConfigCase(
                 name = "LOGIN_FIRST_BACKOFF: '-1s'",
                 input = TestConfigDefaults.testConfigBase("LOGIN_FIRST_BACKOFF" to "-1s"),
-                expectedMessage = "LOGIN_FIRST_BACKOFF 'PT-1S': must be positive",
+                expectedMessage = "LOGIN_FIRST_BACKOFF 'PT-1S': must be at least 1ms",
+            ),
+            // #69: the floor is 1ms, not "positive" - a value Go's time.Duration
+            // can express but neither backend's login path resolves to.
+            AppConfigCase(
+                name = "LOGIN_FIRST_BACKOFF: '999us'",
+                input = TestConfigDefaults.testConfigBase("LOGIN_FIRST_BACKOFF" to "999us"),
+                expectedMessage = "LOGIN_FIRST_BACKOFF 'PT0.000999S': must be at least 1ms",
             ),
             AppConfigCase(
                 name = "LOGIN_MAX_BACKOFF: '500ms'",

@@ -1,0 +1,119 @@
+# The method rules #66 ruled: HEAD answers like GET (RFC 9110 §9.1); OPTIONS
+# is a flat, content-free 405 everywhere - a registered route, an unregistered
+# path, and the disabled-login route alike, so none of the three can be told
+# apart by the one header (Allow) that would otherwise vary; and the actuator
+# is not exposed over HTTP at all.
+
+- name: http methods - HEAD answers like GET
+  issue: "66"
+  request:
+    method: HEAD
+    path: /health
+  expect:
+    status: 200
+    body_empty: true
+    headers:
+      Content-Type: application/json
+
+- name: http methods - HEAD on a POST-only route is method not allowed
+  issue: "66"
+  request:
+    method: HEAD
+    path: /auth/logout
+  expect:
+    status: 405
+    body_empty: true
+
+- name: http methods - OPTIONS on a registered route is method not allowed, no Allow
+  issue: "66"
+  request:
+    method: OPTIONS
+    path: /health
+  expect:
+    status: 405
+    body_empty: true
+    headers:
+      Allow: ""
+
+- name: http methods - OPTIONS on an unregistered path is method not allowed, no Allow
+  issue: "66"
+  request:
+    method: OPTIONS
+    path: /no-such-route
+  expect:
+    status: 405
+    body_empty: true
+    headers:
+      Allow: ""
+
+- name: http methods - OPTIONS on local login (enabled) is method not allowed, no Allow
+  issue: "66"
+  request:
+    method: OPTIONS
+    path: /auth/local/login
+  expect:
+    status: 405
+    body_empty: true
+    headers:
+      Allow: ""
+
+# The second-review finding this ruling settles: OPTIONS on the disabled-login
+# route must be indistinguishable from OPTIONS on a path that was never
+# registered - same_as makes that a relation, not a repeated byte assertion.
+- name: http methods - OPTIONS on local login (disabled) matches an unregistered path
+  issue: "66"
+  profile: local-disabled
+  request:
+    method: OPTIONS
+    path: /auth/local/login
+  expect:
+    status: 405
+    same_as:
+      method: OPTIONS
+      path: /no-such-route
+
+# The first 405 case in the harness (#66's acceptance criterion): a wrong
+# method on a route that exists, Go's chi default answered before this ruling
+# and after it alike, pinned as the reference both backends must give.
+- name: http methods - PUT on GET-only /health is method not allowed
+  issue: "66"
+  request:
+    method: PUT
+    path: /health
+  expect:
+    status: 405
+    body_empty: true
+
+# #66 item 4: actuator is a ratified dependency (BOOTSTRAP.md §3) that answers
+# nothing over HTTP. Kotlin's management.server.port: -1 leaves no controller
+# mapping it, so it falls through to the same "no handler mapped this path"
+# 404 any unregistered path gets; Go never had it to begin with.
+- name: http methods - actuator is an unregistered path, unauthenticated
+  issue: "66"
+  permit: [unmatched-path-404]
+  request:
+    method: GET
+    path: /actuator/health
+  expect:
+    status: 404
+    same_as: &no-such-get
+      method: GET
+      path: /no-such-route
+
+- name: http methods - actuator is an unregistered path, signed in
+  issue: "66"
+  permit: [unmatched-path-404]
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: GET
+    path: /actuator/health
+  expect:
+    status: 404
+    same_as: *no-such-get

@@ -71,6 +71,17 @@ data class AppConfig(
             fun required(name: String): String = values[name]
                 ?: throw ConfigException("$name is not set in application.yaml")
 
+            // A duration variable that is SET BUT EMPTY ("FOO=" in a .env) falls
+            // back to its default, matching Go's caarlos0/env (#69): getOr()
+            // there treats exists-and-empty the same as absent whenever the
+            // field carries an envDefault, which every duration field does.
+            // Spring's own ${NAME:default} placeholder does not do this - it
+            // only falls back when the property is absent, not when it resolves
+            // to "" - so application.yaml's defaults cannot be trusted to catch
+            // this case, and each duration is re-defaulted here instead.
+            fun requiredDuration(name: String, default: String): String =
+                required(name).ifBlank { default }
+
             val cfg = AppConfig(
                 databaseUrl = values["DATABASE_URL"] ?: "",
                 port = required("PORT").let {
@@ -79,16 +90,16 @@ data class AppConfig(
                 logFormat = required("LOG_FORMAT"),
                 logLevel = required("LOG_LEVEL"),
                 autoMigrate = parseBool("AUTO_MIGRATE", required("AUTO_MIGRATE")),
-                readTimeout = parseDuration("HTTP_READ_TIMEOUT", required("HTTP_READ_TIMEOUT")),
-                writeTimeout = parseDuration("HTTP_WRITE_TIMEOUT", required("HTTP_WRITE_TIMEOUT")),
-                idleTimeout = parseDuration("HTTP_IDLE_TIMEOUT", required("HTTP_IDLE_TIMEOUT")),
-                shutdownTimeout = parseDuration("SHUTDOWN_TIMEOUT", required("SHUTDOWN_TIMEOUT")),
+                readTimeout = parseDuration("HTTP_READ_TIMEOUT", requiredDuration("HTTP_READ_TIMEOUT", DEFAULT_HTTP_READ_TIMEOUT)),
+                writeTimeout = parseDuration("HTTP_WRITE_TIMEOUT", requiredDuration("HTTP_WRITE_TIMEOUT", DEFAULT_HTTP_WRITE_TIMEOUT)),
+                idleTimeout = parseDuration("HTTP_IDLE_TIMEOUT", requiredDuration("HTTP_IDLE_TIMEOUT", DEFAULT_HTTP_IDLE_TIMEOUT)),
+                shutdownTimeout = parseDuration("SHUTDOWN_TIMEOUT", requiredDuration("SHUTDOWN_TIMEOUT", DEFAULT_SHUTDOWN_TIMEOUT)),
                 authLocalEnabled = parseBool("AUTH_LOCAL_ENABLED", required("AUTH_LOCAL_ENABLED")),
                 authGoogleEnabled = parseBool("AUTH_GOOGLE_ENABLED", required("AUTH_GOOGLE_ENABLED")),
-                sessionTtl = parseDuration("SESSION_TTL", required("SESSION_TTL")),
-                sessionMaxLifetime = parseDuration("SESSION_MAX_LIFETIME", required("SESSION_MAX_LIFETIME")),
-                loginFirstBackoff = parseDuration("LOGIN_FIRST_BACKOFF", required("LOGIN_FIRST_BACKOFF")),
-                loginMaxBackoff = parseDuration("LOGIN_MAX_BACKOFF", required("LOGIN_MAX_BACKOFF")),
+                sessionTtl = parseDuration("SESSION_TTL", requiredDuration("SESSION_TTL", DEFAULT_SESSION_TTL)),
+                sessionMaxLifetime = parseDuration("SESSION_MAX_LIFETIME", requiredDuration("SESSION_MAX_LIFETIME", DEFAULT_SESSION_MAX_LIFETIME)),
+                loginFirstBackoff = parseDuration("LOGIN_FIRST_BACKOFF", requiredDuration("LOGIN_FIRST_BACKOFF", DEFAULT_LOGIN_FIRST_BACKOFF)),
+                loginMaxBackoff = parseDuration("LOGIN_MAX_BACKOFF", requiredDuration("LOGIN_MAX_BACKOFF", DEFAULT_LOGIN_MAX_BACKOFF)),
                 cookieSecure = parseBool("COOKIE_SECURE", required("COOKIE_SECURE")),
                 version = required("VERSION").takeIf { it.isNotBlank() } ?: DEFAULT_VERSION,
             )
@@ -121,10 +132,12 @@ data class AppConfig(
                 throw ConfigException("LOG_LEVEL '${cfg.logLevel}': want debug, info, warn or error")
             }
 
-            // A zero first window is no backoff at all, and a cap below it
-            // would make the second failure's window shorter than the first's.
-            if (cfg.loginFirstBackoff.isZero || cfg.loginFirstBackoff.isNegative) {
-                throw ConfigException("LOGIN_FIRST_BACKOFF '${cfg.loginFirstBackoff}': must be positive")
+            // A zero or sub-millisecond first window is not a backoff a caller
+            // could ever observe (#69), matching Go's config.validate(). A cap
+            // below the floor would also make the second failure's window
+            // shorter than the first's.
+            if (cfg.loginFirstBackoff < Duration.ofMillis(1)) {
+                throw ConfigException("LOGIN_FIRST_BACKOFF '${cfg.loginFirstBackoff}': must be at least 1ms")
             }
 
             if (cfg.loginMaxBackoff < cfg.loginFirstBackoff) {
@@ -150,6 +163,24 @@ data class AppConfig(
         // var. Mirror the afloat.version leaf and the §12 VERSION row; the parity
         // gate pins the two documents against each other.
         private const val DEFAULT_VERSION = "dev"
+
+        // The §12 default for every duration variable, spelled exactly as
+        // application.yaml's own ${NAME:default} placeholder does. Read here
+        // too (requiredDuration, above) because Spring's placeholder only
+        // falls back when a property is ABSENT, never when it resolves to ""
+        // (#69) - unlike Go's caarlos0/env, which treats exists-and-empty the
+        // same as absent for any field with an envDefault. `internal`, not
+        // private: NormalizedServerTimeoutPropertySource re-defaults the three
+        // it relays into Boot's own binder from these same literals, so the
+        // two paths a blank duration can take cannot drift apart.
+        internal const val DEFAULT_HTTP_READ_TIMEOUT = "30s"
+        internal const val DEFAULT_HTTP_WRITE_TIMEOUT = "60s"
+        internal const val DEFAULT_HTTP_IDLE_TIMEOUT = "120s"
+        internal const val DEFAULT_SHUTDOWN_TIMEOUT = "10s"
+        internal const val DEFAULT_SESSION_TTL = "720h"
+        internal const val DEFAULT_SESSION_MAX_LIFETIME = "2160h"
+        internal const val DEFAULT_LOGIN_FIRST_BACKOFF = "1s"
+        internal const val DEFAULT_LOGIN_MAX_BACKOFF = "5m"
 
         // DurationParser owns the whole §12 duration surface: whatever Go's
         // time.ParseDuration accepts (compound 1m30s, fractional 1.5h) parses

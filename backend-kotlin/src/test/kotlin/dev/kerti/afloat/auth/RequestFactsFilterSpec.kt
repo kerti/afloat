@@ -4,6 +4,7 @@ import io.kotest.assertions.withClue
 import io.kotest.core.spec.style.StringSpec
 import io.kotest.matchers.nulls.shouldBeNull
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.shouldNotBe
 import jakarta.servlet.http.Cookie
 import jakarta.servlet.http.HttpServlet
 import jakarta.servlet.http.HttpServletRequest
@@ -104,6 +105,38 @@ class RequestFactsFilterSpec : StringSpec({
         ).forEach { (raw, expected) ->
             withClue(raw) { normalizeIp(raw) shouldBe expected }
         }
+    }
+
+    // #67: Tomcat decodes header bytes as ISO-8859-1, so a real connector
+    // hands the filter the mis-decoded String this constructs by hand - the
+    // same three chars "Afloat — test"'s UTF-8 bytes (E2 80 94, the em dash)
+    // become when each is read back as its own Latin-1 codepoint. Without
+    // reinterpretHeaderAsUtf8, sessions.user_agent would hold different bytes
+    // for the same wire bytes than Go's r.UserAgent(), which carries them
+    // through untouched.
+    "recovers a UTF-8 User-Agent Tomcat mis-decoded as ISO-8859-1" {
+        val wireBytes = "Afloat — test".toByteArray(Charsets.UTF_8)
+        val asTomcatDeliversIt = String(wireBytes, Charsets.ISO_8859_1)
+        asTomcatDeliversIt shouldNotBe "Afloat — test" // the fixture is genuinely mis-decoded, or this proves nothing
+
+        val request = MockHttpServletRequest().apply {
+            remoteAddr = "203.0.113.7"
+            addHeader("User-Agent", asTomcatDeliversIt)
+        }
+        var seen: RequestFacts? = null
+        val chain = MockFilterChain(object : HttpServlet() {
+            override fun service(req: HttpServletRequest, res: HttpServletResponse) {
+                seen = RequestContext.current()
+            }
+        })
+
+        RequestFactsFilter().doFilter(request, MockHttpServletResponse(), chain)
+
+        seen?.userAgent shouldBe "Afloat — test"
+    }
+
+    "reinterpretHeaderAsUtf8 leaves a plain ASCII value untouched" {
+        reinterpretHeaderAsUtf8("conformance/1.0") shouldBe "conformance/1.0"
     }
 
     "carries the normalised address into the context" {

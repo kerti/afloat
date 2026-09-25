@@ -85,6 +85,10 @@ func New(d Deps) http.Handler {
 	// and no Content-Type (#29).
 	r.Use(recoverer)
 	r.Use(requestLogger)
+	// Every OPTIONS request is answered before it reaches routing at all,
+	// including the disabled-login gate below and chi's own method-not-allowed
+	// handling — see optionsRefused (#66).
+	r.Use(optionsRefused)
 	// oapi-codegen's generated HandlerWithOptions (api.gen.go) mounts every
 	// operation unconditionally — one r.Post/r.Get call per route, inlined
 	// in a function we don't own — with no per-operation option to skip
@@ -128,8 +132,16 @@ func New(d Deps) http.Handler {
 		RequestErrorHandlerFunc:  requestErrorHandler,
 		ResponseErrorHandlerFunc: responseErrorHandler,
 	})
+	// A base router of our own, not the bare chi.NewRouter() HandlerWithOptions
+	// would otherwise default to, so headAsGet can sit in ITS middleware stack
+	// and route HEAD against this router's own tree of the contract's actual
+	// operations, not the outer r's (whose tree holds only the /api mount
+	// point). RFC 9110 §9.1 requires HEAD of a general-purpose server; Spring
+	// already answers it (#66).
+	apiRouter := chi.NewRouter()
+	apiRouter.Use(headAsGet)
 	r.Mount(basePath, api.HandlerWithOptions(strict, api.ChiServerOptions{
-		BaseRouter:       chi.NewRouter(),
+		BaseRouter:       apiRouter,
 		ErrorHandlerFunc: paramErrorHandler,
 		// Per-operation, not r.Use above: this only ever runs once chi has
 		// matched a request to a route the contract declares (openapi_validate.go).

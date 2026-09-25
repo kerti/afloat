@@ -103,12 +103,9 @@ class ErrorDispatchSpec : DatabaseSpec() {
             }
         }
 
-        // The firewall refuses more than paths. A malformed request on a route
-        // that exists is a 400, never the "no such path" 404: an unknown method,
-        // and a header value holding a control character (Tomcat reads header
-        // bytes as Latin-1, so 0x85 arrives as U+0085). Raw socket for the
-        // header, since java.net.http will not send the byte.
-        "answers a request the firewall refuses for its method or a header with a bare 400" {
+        // The firewall still refuses an unknown method with a bare 400, never
+        // the "no such path" 404 - #67 only relaxed header VALUES, not methods.
+        "answers a request the firewall refuses for its method with a bare 400" {
             val unregistered = get("/api/no-such-route")
             val method = HttpClient.newHttpClient().send(
                 HttpRequest.newBuilder(URI("http://localhost:$port/api/health"))
@@ -122,7 +119,15 @@ class ErrorDispatchSpec : DatabaseSpec() {
                 // is the connector's framing, not a header this app writes.
                 headersWithoutPerResponse(method) - "connection" shouldBe headersWithoutPerResponse(unregistered)
             }
+        }
 
+        // #67: a header value holding a control character - Tomcat reads
+        // header bytes as Latin-1, so 0x85 arrives as U+0085 - no longer trips
+        // the firewall. This used to be a bare 400 (SecurityConfiguration's
+        // StrictHttpFirewall default); now the request reaches the handler
+        // like any other. Raw socket for the header, since java.net.http will
+        // not send the byte.
+        "accepts a header value holding a control character rather than refusing it" {
             val raw = Socket("localhost", port).use { socket ->
                 socket.getOutputStream().write(
                     "GET /api/health HTTP/1.1\r\nHost: localhost\r\nUser-Agent: x".toByteArray() +
@@ -131,14 +136,16 @@ class ErrorDispatchSpec : DatabaseSpec() {
                 socket.getInputStream().readAllBytes().toString(Charsets.ISO_8859_1)
             }
             withClue(raw) {
-                raw.lineSequence().first().trim() shouldBe "HTTP/1.1 400"
-                raw.lowercase() shouldContain "x-content-type-options: nosniff"
-                raw.substringAfter("\r\n\r\n") shouldBe ""
+                raw.lineSequence().first().trim() shouldBe "HTTP/1.1 200"
+                raw.substringAfter("\r\n\r\n") shouldContain """{"status":"ok""""
             }
 
-            // The same refusal for a header first read inside MVC rather than
-            // by a filter: Accept, read by content negotiation. It used to fall
-            // into ApiExceptionHandler's catch-all as a 500.
+            // The same acceptance for a header first read inside MVC rather
+            // than by a filter: Accept, read by content negotiation. Before
+            // the firewall refused header values at all, this fell into
+            // ApiExceptionHandler's catch-all as a 500; #67 leaves that risk
+            // real again, so this pins that content negotiation itself
+            // tolerates the byte rather than the firewall shielding it.
             val accept = Socket("localhost", port).use { socket ->
                 socket.getOutputStream().write(
                     "GET /api/health HTTP/1.1\r\nHost: localhost\r\nAccept: application/json, x/".toByteArray() +
@@ -147,8 +154,8 @@ class ErrorDispatchSpec : DatabaseSpec() {
                 socket.getInputStream().readAllBytes().toString(Charsets.ISO_8859_1)
             }
             withClue(accept) {
-                accept.lineSequence().first().trim() shouldBe "HTTP/1.1 400"
-                accept.substringAfter("\r\n\r\n") shouldBe ""
+                accept.lineSequence().first().trim() shouldBe "HTTP/1.1 200"
+                accept.substringAfter("\r\n\r\n") shouldContain """{"status":"ok""""
             }
         }
 

@@ -13,6 +13,7 @@ import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.http.MediaType
 import org.springframework.test.context.TestPropertySource
 import org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get
+import org.springframework.test.web.servlet.request.MockMvcRequestBuilders.options
 import org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post
 import java.net.URI
 
@@ -101,6 +102,21 @@ class LoginProviderDisabledSpec : WebDatabaseSpec() {
                     sessionRepository.count() shouldBe 0
                 }
             }
+        }
+
+        // #66's second-review finding: with a method-scoped gate, OPTIONS
+        // would answer with an Allow header naming the route's methods,
+        // disclosing it exists even though every other method is a bare 404.
+        // OptionsRefusedFilter runs ahead of DisabledLocalLogin404Filter, so
+        // this is one answer, not two gates that could disagree.
+        "...and OPTIONS is the same flat 405, no Allow, as any other path" {
+            val rec = mockMvc.perform(options(loginPath)).andReturn()
+            val unregistered = mockMvc.perform(options("/some-random-path-that-we-dont-have")).andReturn()
+
+            rec.response.status shouldBe 405
+            rec.response.getHeader("Allow") shouldBe null
+            rec.response.status shouldBe unregistered.response.status
+            rec.response.getHeader("Allow") shouldBe unregistered.response.getHeader("Allow")
         }
 
         "...and /auth/methods still reports the gate's flag (local: false)" {

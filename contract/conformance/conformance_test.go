@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/cookiejar"
+	"net/url"
 	"os"
 	"reflect"
 	"slices"
@@ -184,7 +185,7 @@ func TestConformance(t *testing.T) {
 				}
 				runs[b.name] = r
 				t.Run("expected/"+b.name, func(t *testing.T) {
-					assertExpected(t, c, r.resp)
+					assertExpected(t, c, r.resp, b.name)
 					if r.ref != nil {
 						assertSameAs(t, c, r.resp, *r.ref)
 					}
@@ -336,9 +337,26 @@ func do(client *http.Client, b backend, r conformance.Request) (response, error)
 	if sent := r.SentBody(); sent != "" {
 		body = strings.NewReader(sent)
 	}
-	req, err := http.NewRequest(r.Method, b.baseURL+r.Path, body)
-	if err != nil {
-		return response{}, err
+	var req *http.Request
+	var err error
+	if r.RawTarget != "" {
+		// URL.Opaque is sent as the request line's target verbatim, with no
+		// escaping and no re-parse: what RawTarget exists for (#64) - a byte
+		// url.Parse would otherwise normalise, such as %5C's un-encoded form,
+		// which a Path-based request can never express because
+		// http.NewRequest necessarily builds and re-serialises a full URL.
+		base, perr := url.Parse(b.baseURL)
+		if perr != nil {
+			return response{}, perr
+		}
+		if req, err = http.NewRequest(r.Method, b.baseURL, body); err != nil {
+			return response{}, err
+		}
+		req.URL.Opaque = base.Path + r.RawTarget
+	} else {
+		if req, err = http.NewRequest(r.Method, b.baseURL+r.Path, body); err != nil {
+			return response{}, err
+		}
 	}
 	for k, v := range r.Headers {
 		// Host is the request's, not a header's, in net/http. Setting it
@@ -364,11 +382,11 @@ func do(client *http.Client, b backend, r conformance.Request) (response, error)
 	return response{status: resp.StatusCode, headers: resp.Header, body: raw}, nil
 }
 
-func assertExpected(t *testing.T, c conformance.Case, got response) {
+func assertExpected(t *testing.T, c conformance.Case, got response, backend string) {
 	t.Helper()
 
-	if got.status != c.Expect.Status {
-		t.Errorf("status: want %d, got %d\nbody: %s", c.Expect.Status, got.status, truncate(got.body))
+	if want := c.Expect.StatusFor(backend); got.status != want {
+		t.Errorf("status: want %d, got %d\nbody: %s", want, got.status, truncate(got.body))
 	}
 
 	for name, want := range c.Expect.Headers {
@@ -487,7 +505,9 @@ func assertSameAs(t *testing.T, c conformance.Case, got, ref response) {
 func assertParity(t *testing.T, c conformance.Case, permitted *conformance.PermittedSet, goResp, ktResp response) {
 	t.Helper()
 
-	if goResp.status != ktResp.status {
+	allowsHeader, allowsBody, allowsStatus := permitted.ForCase(c)
+
+	if !allowsStatus && goResp.status != ktResp.status {
 		t.Errorf("status differs between backends: go %d, kotlin %d", goResp.status, ktResp.status)
 	}
 
@@ -503,8 +523,6 @@ func assertParity(t *testing.T, c conformance.Case, permitted *conformance.Permi
 		sorted = append(sorted, n)
 	}
 	sort.Strings(sorted)
-
-	allowsHeader, allowsBody := permitted.ForCase(c)
 	for _, n := range sorted {
 		if allowsHeader(n) {
 			continue

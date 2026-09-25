@@ -44,9 +44,34 @@ func TestLoadRejectsUnusableCases(t *testing.T) {
 			want: "must start with /",
 		},
 		{
+			name: "path and raw_target at once",
+			yaml: "- name: x\n  request: {method: GET, path: /health, raw_target: /health}\n  expect: {status: 200}\n",
+			want: "mutually exclusive",
+		},
+		{
+			name: "raw_target without a leading slash",
+			yaml: "- name: x\n  request: {method: GET, raw_target: health}\n  expect: {status: 200}\n",
+			want: "raw_target must start with /",
+		},
+		{
 			name: "no status",
 			yaml: "- name: x\n  request: {method: GET, path: /health}\n  expect: {}\n",
 			want: "expect.status is required",
+		},
+		{
+			name: "status and status_by_backend at once",
+			yaml: "- name: x\n  permit: [p]\n  request: {method: GET, path: /health}\n  expect: {status: 200, status_by_backend: {go: 404, kotlin: 400}}\n",
+			want: "mutually exclusive",
+		},
+		{
+			name: "status_by_backend missing a backend",
+			yaml: "- name: x\n  permit: [p]\n  request: {method: GET, path: /health}\n  expect: {status_by_backend: {go: 404}}\n",
+			want: "missing \"kotlin\"",
+		},
+		{
+			name: "status_by_backend with no permit",
+			yaml: "- name: x\n  request: {method: GET, path: /health}\n  expect: {status_by_backend: {go: 404, kotlin: 400}}\n",
+			want: "needs a case-scoped permit entry",
 		},
 		{
 			name: "two body assertions",

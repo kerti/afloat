@@ -93,26 +93,32 @@ class PasswordService internal constructor(private val permitWait: Duration) {
         // The one PHC spelling both backends accept, Go's phcShape: argon2id,
         // version 19, the three parameters in that order, unpadded standard
         // base64, a hash of at least 4 bytes, 1..255 lanes (Go reads the lane
-        // count into a byte), at least one iteration, and 8 KiB per lane to
-        // 2^24 KiB of memory. Below that floor both libraries quietly raise
-        // memory to it, so the string no longer states the work done, and at
-        // m=0 only this decoder refuses. Above 2^24 KiB BouncyCastle refuses
-        // (its default argon2.max_memory_exp) and Go's x/crypto would try to
-        // allocate it. Iterations are read as an Int where Go reads a uint32.
-        // Each bound is held here, and so is a base64 length that cannot
-        // decode, so that nothing this refuses reaches the decoder, which
-        // throws and logs where Go refuses quietly.
+        // count into a byte), 8 KiB per lane to MAX_MEMORY_KIB, and 1 to
+        // MAX_TIME iterations. Below the memory floor both libraries quietly
+        // raise memory to it, so the string no longer states the work done,
+        // and at m=0 only this decoder refuses. Iterations are read as an Int
+        // where Go reads a uint32, well within MAX_TIME. Each bound is held
+        // here, and so is a base64 length that cannot decode, so that nothing
+        // this refuses reaches the decoder, which throws and logs where Go
+        // refuses quietly.
         private val PHC_SHAPE =
             Regex("""^[$]argon2id[$]v=19[$]m=(\d+),t=(\d+),p=(\d+)[$]([A-Za-z0-9+/]+)[$]([A-Za-z0-9+/]{6,})$""")
 
-        private const val MAX_MEMORY_KIB = 1 shl 24
+        // MAX_MEMORY_KIB and MAX_TIME are the accepted ceiling for a STORED
+        // hash's m and t (#68, BOOTSTRAP.md §5.1) - headroom over the
+        // operating cost (m=19456 KiB, t=2), not BouncyCastle's own 2^24 KiB
+        // argon2.max_memory_exp ceiling. A cost increase past either ceiling
+        // means raising the ceiling first, deliberately, rather than silently
+        // accepting whatever a stored string names.
+        private const val MAX_MEMORY_KIB = 65536 // 64 MiB, matching Go's argonMaxMemory.
+        private const val MAX_TIME = 10
 
         internal fun hasPhcShape(phc: String): Boolean {
             val (m, t, p, salt, hash) = PHC_SHAPE.matchEntire(phc)?.destructured ?: return false
             val memory = m.toIntOrNull() ?: return false
             val iterations = t.toIntOrNull() ?: return false
             val lanes = p.toIntOrNull() ?: return false
-            return iterations >= 1 && lanes in 1..255 && memory in 8 * lanes..MAX_MEMORY_KIB &&
+            return iterations in 1..MAX_TIME && lanes in 1..255 && memory in 8 * lanes..MAX_MEMORY_KIB &&
                 salt.length % 4 != 1 && hash.length % 4 != 1
         }
 

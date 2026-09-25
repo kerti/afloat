@@ -22,11 +22,17 @@ import org.springframework.core.env.PropertySource
 class NormalizedServerTimeoutPropertySource(private val environment: Environment) :
     PropertySource<String>("afloatNormalizedServerTimeouts", "durations") {
 
-    data class Relay(val leaf: String, val envName: String)
+    data class Relay(val leaf: String, val envName: String, val default: String)
 
     override fun getProperty(name: String): Any? {
         val relay = RELAYS[name] ?: return null
-        val raw = environment.getProperty(relay.leaf) ?: return null
+        val raw = (environment.getProperty(relay.leaf) ?: return null)
+            // Set-but-empty is unset (#69), the same rule AppConfig.requiredDuration
+            // applies to every duration variable: Spring's ${NAME:default} only
+            // falls back when the property is ABSENT, never when it resolves to
+            // "", so a blank HTTP_READ_TIMEOUT would otherwise reach DurationParser
+            // and fail Boot to start rather than take its documented default.
+            .ifBlank { relay.default }
         return try {
             DurationParser.parse(raw).toString()
         } catch (e: IllegalArgumentException) {
@@ -36,9 +42,12 @@ class NormalizedServerTimeoutPropertySource(private val environment: Environment
 
     companion object {
         val RELAYS: Map<String, Relay> = mapOf(
-            "server.tomcat.connection-timeout" to Relay("afloat.http-read-timeout", "HTTP_READ_TIMEOUT"),
-            "server.tomcat.keep-alive-timeout" to Relay("afloat.http-idle-timeout", "HTTP_IDLE_TIMEOUT"),
-            "spring.lifecycle.timeout-per-shutdown-phase" to Relay("afloat.shutdown-timeout", "SHUTDOWN_TIMEOUT"),
+            "server.tomcat.connection-timeout" to
+                Relay("afloat.http-read-timeout", "HTTP_READ_TIMEOUT", AppConfig.DEFAULT_HTTP_READ_TIMEOUT),
+            "server.tomcat.keep-alive-timeout" to
+                Relay("afloat.http-idle-timeout", "HTTP_IDLE_TIMEOUT", AppConfig.DEFAULT_HTTP_IDLE_TIMEOUT),
+            "spring.lifecycle.timeout-per-shutdown-phase" to
+                Relay("afloat.shutdown-timeout", "SHUTDOWN_TIMEOUT", AppConfig.DEFAULT_SHUTDOWN_TIMEOUT),
         )
 
         // The property keys this source answers, and therefore the ones whose

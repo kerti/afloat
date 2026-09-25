@@ -78,8 +78,8 @@ func isEmailAddress(v string) bool {
 // (Jackson) or one that is not UTF-8 JSON text (JsonTextAdvice), so both are
 // INVALID_JSON_BODY here too. A byte order mark, and the NULs of a UTF-16 or
 // UTF-32 body, fail encoding/json as stray characters, and the charset a
-// Content-Type claims is never consulted. Like the email format, the registry
-// is process-global.
+// Content-Type claims is never consulted, however unknown its name (Kotlin's
+// Utf8CharsetFilter). Like the email format, the registry is process-global.
 var registerStrictJSONDecoder = sync.OnceFunc(func() {
 	openapi3filter.RegisterBodyDecoder("application/json", strictJSONBodyDecoder)
 })
@@ -133,7 +133,7 @@ func openapiRequestValidator() func(http.Handler) http.Handler {
 		panic("httpserver: load embedded openapi spec: " + err.Error())
 	}
 
-	return nethttpmiddleware.OapiRequestValidatorWithOptions(spec, &nethttpmiddleware.Options{
+	validate := nethttpmiddleware.OapiRequestValidatorWithOptions(spec, &nethttpmiddleware.Options{
 		Options: openapi3filter.Options{
 			AuthenticationFunc: openapi3filter.NoopAuthenticationFunc,
 			MultiError:         true,
@@ -144,6 +144,33 @@ func openapiRequestValidator() func(http.Handler) http.Handler {
 		SilenceServersWarning: true,
 		ErrorHandlerWithOpts:  writeOpenAPIValidationError,
 	})
+	return func(next http.Handler) http.Handler {
+		validated := validate(next)
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			canonicalMediaType(r.Header)
+			validated.ServeHTTP(w, r)
+		})
+	}
+}
+
+// canonicalMediaType lowercases a Content-Type's type and subtype and drops
+// the whitespace around them. kin-openapi finds both the operation's content
+// entry and its body decoder by comparing that part byte for byte, so
+// "Application/JSON" or "application/json ; charset=utf-8" was refused as
+// INVALID_JSON_BODY. HTTP calls those the same media type (RFC 9110 §8.3.1),
+// and Spring reads them as JSON. The parameters are left for the decoder,
+// which ignores them.
+func canonicalMediaType(h http.Header) {
+	contentType := h.Get("Content-Type")
+	if contentType == "" {
+		return
+	}
+	mediaType, params, hasParams := strings.Cut(contentType, ";")
+	canonical := strings.ToLower(strings.Trim(mediaType, " \t"))
+	if hasParams {
+		canonical += ";" + params
+	}
+	h.Set("Content-Type", canonical)
 }
 
 // writeOpenAPIValidationError translates the middleware's error into the
@@ -298,9 +325,9 @@ func parameterRule(err error) string {
 
 // constraintRule maps a kin-openapi schema keyword onto the {rule} vocabulary
 // httperr.WriteValidation and Kotlin's ruleOf already share —
-// go-playground/validator's tag names — or "" for a keyword Kotlin enforces
-// by failing the decode instead (type, nullable, additionalProperties, enum,
-// ...), which is INVALID_JSON_BODY, not VALIDATION. The same goes for every
+// go-playground/validator's tag names, plus pattern — or "" for a keyword
+// Kotlin enforces by failing the decode instead (type, nullable,
+// additionalProperties, enum, ...), which is INVALID_JSON_BODY, not VALIDATION. The same goes for every
 // format but email: Kotlin's generated field for date, date-time or uuid is a
 // typed one, and a bad value fails Jackson, not Bean Validation.
 func constraintRule(err *openapi3.SchemaError) string {

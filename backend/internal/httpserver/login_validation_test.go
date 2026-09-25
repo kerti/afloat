@@ -182,6 +182,9 @@ func TestLoginRequestValidationUndecodableBodyIsInvalidJSONBody(t *testing.T) {
 		// UTF-8 whatever the header claims.
 		{name: "not UTF-8, declared as Latin-1", body: `{"email":"a@example.com","password":"a valid ` + "\xff" + `password"}`, contentType: "application/json; charset=ISO-8859-1"},
 		{name: "not declared as JSON", body: `{"email":"a@example.com","password":"a valid password"}`, contentType: "text/plain"},
+		// Spring's JSON converter reads any +json type; the contract declares
+		// application/json alone.
+		{name: "declared as another JSON type", body: `{"email":"a@example.com","password":"a valid password"}`, contentType: "application/vnd.api+json"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			req := httptest.NewRequest(http.MethodPost, "/api/auth/local/login", strings.NewReader(tc.body))
@@ -197,6 +200,36 @@ func TestLoginRequestValidationUndecodableBodyIsInvalidJSONBody(t *testing.T) {
 			if strings.Contains(rec.Body.String(), "args") {
 				t.Errorf("body = %s, want no args", rec.Body.String())
 			}
+		})
+	}
+}
+
+// A media type is case-insensitive and may have whitespace around it (RFC 9110
+// §8.3.1), and a body is UTF-8 whatever charset is claimed, even one no
+// decoder knows: each of these is JSON, read and validated, as Kotlin reads it
+// (LoginSpec "reads every spelling of the JSON media type as Go does").
+func TestLoginReadsEverySpellingOfTheJSONMediaType(t *testing.T) {
+	srv := newTestServer()
+
+	for _, contentType := range []string{
+		"Application/JSON",
+		"APPLICATION/JSON; CHARSET=UTF-8",
+		"application/json ; charset=utf-8",
+		"\tapplication/json\t;charset=utf-8",
+		"application/json; charset=utf-16",
+		"application/json; charset=bogus",
+	} {
+		t.Run(contentType, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/api/auth/local/login", strings.NewReader(`{"email":"not-an-email","password":"a valid password"}`))
+			req.Header.Set("Content-Type", contentType)
+
+			rec := httptest.NewRecorder()
+			srv.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400 (body %s)", rec.Code, rec.Body.String())
+			}
+			assertValidationArgs(t, rec, "email", "email")
 		})
 	}
 }
@@ -385,6 +418,10 @@ func (s emailLookupSpy) GetUserByEmail(context.Context, string) (db.User, error)
 // postLoginToSpy sends body to a server whose Querier is an emailLookupSpy,
 // reporting whether the handler got as far as the user lookup.
 func postLoginToSpy(body string) (rec *httptest.ResponseRecorder, reachedLookup bool) {
+	return postLoginToSpyAs("application/json", body)
+}
+
+func postLoginToSpyAs(contentType, body string) (rec *httptest.ResponseRecorder, reachedLookup bool) {
 	q := emailLookupSpy{called: &reachedLookup}
 	srv := New(Deps{
 		System: system.New(system.Deps{Querier: q, Version: "test", LocalEnabled: true}),
@@ -398,7 +435,7 @@ func postLoginToSpy(body string) (rec *httptest.ResponseRecorder, reachedLookup 
 	})
 
 	req := httptest.NewRequest(http.MethodPost, "/api/auth/local/login", strings.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Content-Type", contentType)
 	rec = httptest.NewRecorder()
 	srv.ServeHTTP(rec, req)
 	return rec, reachedLookup
@@ -443,6 +480,17 @@ func TestLoginCountsPasswordLengthInCodePoints(t *testing.T) {
 		t.Fatalf("status = %d, want 400 (body %s)", rec.Code, rec.Body.String())
 	}
 	assertValidationArgs(t, rec, "password", "max")
+}
+
+// A body declared as Latin-1 is still read as UTF-8, so 4096 "é" are 4096
+// characters, not the 8192 a Latin-1 reading makes of their bytes (Kotlin's
+// Utf8CharsetFilter; LoginSpec "rejects an over-long email or password").
+func TestLoginReadsABodyDeclaredLatin1AsUTF8(t *testing.T) {
+	rec, called := postLoginToSpyAs("application/json; charset=ISO-8859-1",
+		`{"email":"a@example.com","password":"`+strings.Repeat("é", 4096)+`"}`)
+	if !called {
+		t.Errorf("4096 characters declared as Latin-1 did not reach the handler: status %d (body %s)", rec.Code, rec.Body.String())
+	}
 }
 
 // The other half of ruling #1 on #18: a padded address does not merely pass

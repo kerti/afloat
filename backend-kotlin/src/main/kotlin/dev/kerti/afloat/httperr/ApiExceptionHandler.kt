@@ -9,6 +9,7 @@ import org.springframework.http.HttpStatus
 import org.springframework.http.ResponseEntity
 import org.springframework.http.converter.HttpMessageNotReadableException
 import org.springframework.security.access.AccessDeniedException
+import org.springframework.security.web.firewall.RequestRejectedException
 import org.springframework.validation.FieldError
 import org.springframework.web.HttpMediaTypeNotSupportedException
 import org.springframework.web.HttpRequestMethodNotSupportedException
@@ -118,6 +119,15 @@ class ApiExceptionHandler {
     // the chain, without logging it as an accident.
     @ExceptionHandler(AccessDeniedException::class)
     fun rethrowAccessDenied(e: AccessDeniedException): Nothing = throw e
+
+    // Rethrown for the same reason. The firewall checks a header only when it
+    // is read, and one first read inside MVC - Accept, by content negotiation -
+    // raises RequestRejectedException here, where the catch-all made it a 500
+    // with a stack trace. Rethrown, it reaches FilterChainProxy, which finds it
+    // in the cause chain and hands it to SecurityConfiguration's
+    // requestRejectedHandler: the same answer as a header refused in a filter.
+    @ExceptionHandler(RequestRejectedException::class)
+    fun rethrowRequestRejected(e: RequestRejectedException): Nothing = throw e
 
     @ExceptionHandler(Exception::class)
     fun handleUnexpected(e: Exception): ResponseEntity<Error> {

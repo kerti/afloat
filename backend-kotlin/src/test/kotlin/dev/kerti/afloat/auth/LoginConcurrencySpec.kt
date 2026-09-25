@@ -129,14 +129,26 @@ class LoginConcurrencySpec : WebDatabaseSpec() {
         // The permit wait can run to HTTP_WRITE_TIMEOUT. A session timed from
         // before it would expire that much early, and say it was created and
         // last seen before the login had finished queueing.
+        //
+        // Each timestamp is held to the clock that wrote it. created_at and
+        // last_seen_at are the database's DEFAULT now() (#25), so they are
+        // compared with the database's clock read at the permit; expires_at is
+        // the app clock plus SESSION_TTL, so with the app's. Mixed, the check
+        // failed whenever the database's clock ran a few milliseconds behind
+        // the JVM's - which on macOS, with Postgres inside Docker's VM, it can.
         "times the session from after the permit wait, not from before it" {
             AuthFixtures.account(dataSource)
-            val permitTaken = AtomicReference<Instant>()
+            val permitTakenApp = AtomicReference<Instant>()
+            val permitTakenDb = AtomicReference<Instant>()
             doAnswer { invocation ->
                 // Stands in for a queue: long enough that no clock resolution
                 // hides the difference.
                 Thread.sleep(100)
-                permitTaken.set(Instant.now())
+                permitTakenApp.set(Instant.now())
+                permitTakenDb.set(
+                    JdbcClient.create(dataSource).sql("SELECT clock_timestamp()")
+                        .query(OffsetDateTime::class.java).single().toInstant()
+                )
                 invocation.callRealMethod()
             }.`when`(passwordService).withPermit(anyBlock<Boolean>())
 
@@ -147,10 +159,13 @@ class LoginConcurrencySpec : WebDatabaseSpec() {
                 .query { rs, _ ->
                     (1..3).map { rs.getObject(it, OffsetDateTime::class.java).toInstant() }
                 }.single()
-            withClue("permit taken ${permitTaken.get()}; created $createdAt, last seen $lastSeenAt, expires $expiresAt") {
-                createdAt shouldBeGreaterThanOrEqualTo permitTaken.get()
-                lastSeenAt shouldBeGreaterThanOrEqualTo permitTaken.get()
-                expiresAt shouldBeGreaterThanOrEqualTo permitTaken.get().plus(appConfig.sessionTtl)
+            withClue(
+                "permit taken ${permitTakenDb.get()} (database) / ${permitTakenApp.get()} (app); " +
+                    "created $createdAt, last seen $lastSeenAt, expires $expiresAt"
+            ) {
+                createdAt shouldBeGreaterThanOrEqualTo permitTakenDb.get()
+                lastSeenAt shouldBeGreaterThanOrEqualTo permitTakenDb.get()
+                expiresAt shouldBeGreaterThanOrEqualTo permitTakenApp.get().plus(appConfig.sessionTtl)
             }
         }
 

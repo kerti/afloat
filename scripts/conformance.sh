@@ -140,6 +140,9 @@ echo '==> building the kotlin backend'
 # `-plain.jar`, which is the library jar and has no Main-Class. Picking by
 # `head -1` gets the wrong one, and the error it produces - "no main manifest
 # attribute" - says nothing about which jar it read.
+# BOOTSTRAP.md §3 (#53): an OutOfMemoryError ends the process, as it ends a
+# Go one, rather than leaving a JVM with a suspect heap answering 500s.
+KOTLIN_JAVA_OPTS="-XX:+ExitOnOutOfMemoryError"
 KOTLIN_JAR=$(ls "$ROOT"/backend-kotlin/build/libs/*.jar | grep -v -- '-plain\.jar$' | head -1)
 if [ -z "$KOTLIN_JAR" ]; then
   echo "FAIL no executable jar in backend-kotlin/build/libs" >&2
@@ -155,7 +158,7 @@ pid_of() {
 
 echo '==> starting the default pair'
 start go "$GO_PORT" "$GO_DATABASE_URL" default_env "$LOG_DIR/afloat-go"
-start kotlin "$KOTLIN_PORT" "$KOTLIN_DATABASE_URL" default_env java -jar "$KOTLIN_JAR"
+start kotlin "$KOTLIN_PORT" "$KOTLIN_DATABASE_URL" default_env java $KOTLIN_JAVA_OPTS -jar "$KOTLIN_JAR"
 wait_ready go "$GO_PORT" "$(pid_of go)"
 wait_ready kotlin "$KOTLIN_PORT" "$(pid_of kotlin)"
 
@@ -163,7 +166,7 @@ wait_ready kotlin "$KOTLIN_PORT" "$(pid_of kotlin)"
 # start on them with AUTO_MIGRATE=false.
 echo '==> starting the local-disabled pair'
 start go-local-disabled "$GO_LOCAL_DISABLED_PORT" "$GO_DATABASE_URL" local_disabled_env "$LOG_DIR/afloat-go"
-start kotlin-local-disabled "$KOTLIN_LOCAL_DISABLED_PORT" "$KOTLIN_DATABASE_URL" local_disabled_env java -jar "$KOTLIN_JAR"
+start kotlin-local-disabled "$KOTLIN_LOCAL_DISABLED_PORT" "$KOTLIN_DATABASE_URL" local_disabled_env java $KOTLIN_JAVA_OPTS -jar "$KOTLIN_JAR"
 wait_ready go-local-disabled "$GO_LOCAL_DISABLED_PORT" "$(pid_of go-local-disabled)"
 wait_ready kotlin-local-disabled "$KOTLIN_LOCAL_DISABLED_PORT" "$(pid_of kotlin-local-disabled)"
 

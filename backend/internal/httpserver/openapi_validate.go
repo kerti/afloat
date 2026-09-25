@@ -138,6 +138,7 @@ func openapiRequestValidator() func(http.Handler) http.Handler {
 		// type would be suspect too. Nothing about this process is trustworthy.
 		panic("httpserver: load embedded openapi spec: " + err.Error())
 	}
+	withoutSecurityRequirements(spec)
 
 	validate := nethttpmiddleware.OapiRequestValidatorWithOptions(spec, &nethttpmiddleware.Options{
 		Options: openapi3filter.Options{
@@ -156,6 +157,25 @@ func openapiRequestValidator() func(http.Handler) http.Handler {
 			canonicalMediaType(r.Header)
 			validated.ServeHTTP(w, r)
 		})
+	}
+}
+
+// withoutSecurityRequirements removes every security requirement from the
+// validator's copy of the spec (api.GetSpec decodes a fresh one per call).
+// Enforcing a session is the handlers' job, as AuthenticationFunc's comment
+// above says, so the requirements check nothing here - and kin-openapi pays
+// for them anyway: before it calls even a no-op AuthenticationFunc it reads the
+// whole request body into memory, on every operation that declares one. Under
+// maxBodyBytes a body over 1 MiB fails that read, the failure comes back as a
+// SecurityRequirementsError, and a logout or a signed-in /me answered 401 for a
+// body neither handler reads (#56). With no requirement left, kin-openapi
+// returns before the read.
+func withoutSecurityRequirements(spec *openapi3.T) {
+	spec.Security = nil
+	for _, item := range spec.Paths.Map() {
+		for _, op := range item.Operations() {
+			op.Security = nil
+		}
 	}
 }
 
@@ -212,9 +232,10 @@ func canonicalMediaType(h http.Header) {
 func writeOpenAPIValidationError(_ context.Context, err error, w http.ResponseWriter, r *http.Request, _ nethttpmiddleware.ErrorHandlerOpts) {
 	var secErr *openapi3filter.SecurityRequirementsError
 	if errors.As(err, &secErr) {
-		// Unreachable while AuthenticationFunc above is the no-op: it never
-		// fails a security requirement. Kept so a future change to that
-		// function degrades to the right code instead of a 500 below.
+		// Unreachable: withoutSecurityRequirements leaves nothing to fail.
+		// Kept so a change that restores the requirements degrades to the
+		// right code instead of a 500 below. Before #56 this was reached, by
+		// a body read failing inside the security check, not by a session.
 		slog.Warn("openapi validator: unexpected security failure", "path", r.URL.Path)
 		httperr.Write(w, http.StatusUnauthorized, httperr.CodeUnauthorized, nil)
 		return

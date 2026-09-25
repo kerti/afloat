@@ -8,15 +8,15 @@ the *same* — every divergence found so far (#18 through #33) was found by a
 person reading two codebases, because no test runs against both. That does not
 survive the domain, where the divergences become arithmetic.
 
-Steps 1 and 2 of three are done: the runner, the case format and the boot
-script, then a case for every endpoint, every reachable `ErrorCode`, the
-session cookie attribute by attribute, and the rows each call leaves behind.
-Step 3 is the `conformance` job in `.github/workflows/ci.yml`; adding it to
-branch protection is the last piece.
+All three steps are done: the runner, the case format and the boot script;
+a case for every endpoint, every reachable `ErrorCode`, the session cookie
+attribute by attribute, the rows each call leaves behind, and the path shapes
+and body cap ruled in #56; and the `conformance` job in
+`.github/workflows/ci.yml`, a required check on `main`.
 
 Not covered, on purpose: the Argon2 concurrency cap (#33) has no observable
 answer to assert without a load test, and #30's handler timeout is internal and
-differs by design (§12). Routing shapes wait on their ruling in #56.
+differs by design (§12).
 
 ## Running it
 

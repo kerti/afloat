@@ -1,6 +1,7 @@
 package dev.kerti.afloat.auth
 
 import dev.kerti.afloat.api.AuthApi
+import dev.kerti.afloat.api.SystemApi
 import dev.kerti.afloat.testsupport.AuthFixtures
 import dev.kerti.afloat.testsupport.WebDatabaseSpec
 import dev.kerti.afloat.testsupport.loginBody
@@ -14,6 +15,7 @@ import org.springframework.http.MediaType
 import org.springframework.mock.web.MockFilterChain
 import org.springframework.mock.web.MockHttpServletRequest
 import org.springframework.mock.web.MockHttpServletResponse
+import org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get
 import org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post
 import java.io.IOException
 
@@ -48,13 +50,25 @@ class MaxBodySpec : WebDatabaseSpec() {
             ).andReturn().response.status shouldBe 204
         }
 
-        // Content-Length is absent on a chunked body, so the header check is
-        // only half the cap — the stream itself has to count. Driven through
-        // the filter directly because MockMvc always sets a content length.
+        // The cap is on the bytes read, as Go's MaxBytesReader is, never on a
+        // declared Content-Length (#56): a route that reads no body answers
+        // normally whatever arrives with it.
+        "ignores an oversize body on a route that reads none" {
+            val huge = "a".repeat(3 shl 19)
+
+            mockMvc.perform(get(SystemApi.BASE_PATH + SystemApi.PATH_GET_HEALTH).content(huge))
+                .andReturn().response.status shouldBe 200
+            mockMvc.perform(post(AuthApi.BASE_PATH + AuthApi.PATH_LOGOUT).content(huge))
+                .andReturn().response.status shouldBe 204
+        }
+
+        // Content-Length is absent on a chunked body, so the stream is the
+        // whole cap. Driven through the filter directly because MockMvc always
+        // sets a content length.
         "counts the stream when no Content-Length is declared" {
             val request = object : MockHttpServletRequest("POST", "/api/auth/local/login") {
-                // The whole point of the case: the filter must not be able to
-                // short-circuit on a declared length.
+                // No declared length to read, so only the counted stream can
+                // stop it.
                 override fun getHeader(name: String): String? =
                     if (name.equals("Content-Length", ignoreCase = true)) null else super.getHeader(name)
             }

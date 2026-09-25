@@ -42,7 +42,9 @@ class RequestFactsFilter : OncePerRequestFilter() {
             RequestContext.set(
                 RequestFacts(
                     clientIp = normalizeIp(request.remoteAddr),
-                    userAgent = request.getHeader(HttpHeaders.USER_AGENT),
+                    // An empty header is no user agent: NULL in sessions.user_agent,
+                    // as Go's nullString writes it, never '' (#32 item 4).
+                    userAgent = request.getHeader(HttpHeaders.USER_AGENT)?.ifEmpty { null },
                     sessionToken = token,
                 )
             )

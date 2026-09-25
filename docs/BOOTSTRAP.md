@@ -142,6 +142,15 @@ Actuator, **Spring Security**, **Flyway**.
 > Both must be present from the first build — Spring Security in particular is the single most
 > invasive thing to retrofit into an existing Spring application.
 
+**The Kotlin backend runs with `-XX:+ExitOnOutOfMemoryError`** (#53). Everywhere the jar is launched —
+`scripts/conformance.sh` today, the runtime image at §11 step 10 — passes it, and a deployment that
+launches it some other way must too. Without it, Spring wraps an `OutOfMemoryError` thrown in a
+handler in a `ServletException`, the catch-all in `ApiExceptionHandler` answers `500 INTERNAL`, and
+the JVM keeps serving from a heap that any thread may have left half-written. With it, the process
+exits and the supervisor restarts it, which is what happens to a Go process that runs out of memory:
+the two backends fail the same way. A JVM runtime setting, not a §12 variable, since no operator should
+turn it off.
+
 **Database** — PostgreSQL, one instance, two databases (`afloat_go`, `afloat_kotlin`). Never one
 shared schema: two migration ledgers over one schema is a corruption path, and parity is proven by
 contract conformance rather than by sharing rows.
@@ -700,11 +709,12 @@ accept the libpq form. Translating at boot is required rather than optional: `DA
 most operator-visible setting there is, and a deployment where it alone differs by backend makes the
 rest of this section a half-truth.
 
-**Open: the libpq Unix-socket form is unresolved.** `pgx` accepts the hostless socket spelling,
-`postgres:///afloat?host=/var/run/postgresql`; Kotlin's `PostgresUrlTranslator` requires a host and
-rejects it. That may be the right answer — a deployment without a proxying host in front is already
-an unusual shape — but it is currently an accident of `urlPattern`, not a decision anyone made. Needs
-a ruling either way before this parity contract can claim it (#32 item 7).
+**The libpq Unix-socket form is Go-only, by decision** (#32 item 7). `pgx` accepts the hostless socket
+spelling, `postgres:///afloat?host=/var/run/postgresql`; Kotlin's `PostgresUrlTranslator` requires a
+host and refuses it at boot. The PostgreSQL JDBC driver reaches a Unix socket only through a socket
+factory from a further dependency (junixsocket), and a deployment with no TCP listener in front of
+its database is a shape nobody has asked for. So a Kotlin deployment names a host. Revisit if one
+does ask.
 
 **Durations use the suffixes both runtimes accept, and never `d`.** Go's `time.ParseDuration`
 understands `ns us ms s m h` and rejects `d`; Spring's simple duration style accepts `d` as well. So

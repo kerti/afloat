@@ -56,6 +56,15 @@ open class DurationParserSpec : StringSpec({
             DurationParsingCase("1500µs", Duration.ofNanos(1500 * 1000)),
             DurationParsingCase("1500μs", Duration.ofNanos(1500 * 1000)),
             DurationParsingCase("1h30m0µs", Duration.ofMinutes(90)),
+
+            // Exact past 2^53 ns (about 104 days), where a Double sum drops the
+            // last nanosecond and Go's uint64 does not (#32 item 5).
+            DurationParsingCase("2503h1ns", Duration.ofHours(2503).plusNanos(1)),
+            // Go's bounds, to the nanosecond: 2^63-1 either way, and 2^63
+            // itself only when negative.
+            DurationParsingCase("2562047h47m16.854775807s", Duration.ofNanos(Long.MAX_VALUE)),
+            DurationParsingCase("-2562047h47m16.854775807s", Duration.ofNanos(-Long.MAX_VALUE)),
+            DurationParsingCase("-2562047h47m16.854775808s", Duration.ofNanos(Long.MIN_VALUE)),
         ),
     ) { (input, expectedDuration) ->
         val parsed = DurationParser.parse(input)
@@ -75,6 +84,13 @@ open class DurationParserSpec : StringSpec({
             "abc",
             "10000000000000000000us",
             "2562047h48m",
+            // The overflow bound holds for a negative value too (#32 item 6).
+            "-2562047h48m",
+            // 2^63 is a magnitude only a negative duration may have.
+            "2562047h47m16.854775808s",
+            // One sign, at the front.
+            "--1s",
+            "+-1s",
             "1h-30m",
             "1h+30m",
             // Still rejected after the mantissa was widened to Go's: a unit

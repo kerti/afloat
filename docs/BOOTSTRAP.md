@@ -377,7 +377,8 @@ computed the remaining wait by subtracting `h.now()` from a timestamp the databa
 filtered on its own `now()` (fixed in #25 by having the query return the remaining interval, computed
 in SQL, instead of a raw timestamp); Kotlin's session `INSERT` supplied `created_at`/`last_seen_at`
 from the app clock while the absolute-lifetime check compares them against the database's `now()`
-(#25). Neither error was visible on the wire — the second was a persisted-state divergence only, with
+(fixed in #25 by leaving both columns to the schema's `DEFAULT now()`, as Go's `CreateSession` does).
+Neither error was visible on the wire — the second was a persisted-state divergence only, with
 nothing in a response to show which clock wrote the row. When a boundary is checked in SQL, compute
 anything derived from that boundary in the same SQL, and never re-derive it in application code
 against a different clock.

@@ -83,9 +83,7 @@ class AuthService(
                 Session(
                     sessionId = hash,
                     userId = user.id,
-                    createdAt = now,
                     expiresAt = expiresAt,
-                    lastSeenAt = now,
                     userAgent = RequestContext.current()?.userAgent
                 )
             )

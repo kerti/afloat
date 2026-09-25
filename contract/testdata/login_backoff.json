@@ -1,0 +1,124 @@
+{
+  "_comment": [
+    "The login backoff both backends must implement alike (BOOTSTRAP.md §5.1, issue #16).",
+    "`parameters` are the §12 defaults, LOGIN_FIRST_BACKOFF and LOGIN_MAX_BACKOFF; each backend's config",
+    "test holds its own defaults to them, so a default that drifts fails there.",
+    "`curve`: the window after the nth consecutive failure on one key, in seconds.",
+    "`keys`: the keys one failed login writes. `ip` is the client address as its connection carries it, in",
+    "canonical form; each suite presents it the way its own server would (Go's RemoteAddr host:port, Tomcat's",
+    "expanded IPv6) and expects this spelling back.",
+    "Both suites read this file; neither keeps a copy of the numbers."
+  ],
+  "parameters": {
+    "first_backoff": "1s",
+    "max_backoff": "5m"
+  },
+  "curve": [
+    {
+      "failures": 1,
+      "backoff_seconds": 1
+    },
+    {
+      "failures": 2,
+      "backoff_seconds": 2
+    },
+    {
+      "failures": 3,
+      "backoff_seconds": 4
+    },
+    {
+      "failures": 4,
+      "backoff_seconds": 8
+    },
+    {
+      "failures": 5,
+      "backoff_seconds": 16
+    },
+    {
+      "failures": 6,
+      "backoff_seconds": 32
+    },
+    {
+      "failures": 7,
+      "backoff_seconds": 64
+    },
+    {
+      "failures": 8,
+      "backoff_seconds": 128
+    },
+    {
+      "failures": 9,
+      "backoff_seconds": 256
+    },
+    {
+      "failures": 10,
+      "backoff_seconds": 300
+    },
+    {
+      "failures": 11,
+      "backoff_seconds": 300
+    },
+    {
+      "failures": 12,
+      "backoff_seconds": 300
+    }
+  ],
+  "keys": [
+    {
+      "email": "user@example.com",
+      "ip": "203.0.113.7",
+      "keys": [
+        "email:user@example.com",
+        "ip:203.0.113.7"
+      ]
+    },
+    {
+      "email": "User@Example.COM",
+      "ip": "203.0.113.7",
+      "keys": [
+        "email:user@example.com",
+        "ip:203.0.113.7"
+      ]
+    },
+    {
+      "email": "  padded@example.com\t",
+      "ip": "198.51.100.20",
+      "keys": [
+        "email:padded@example.com",
+        "ip:198.51.100.20"
+      ]
+    },
+    {
+      "email": "loopback@example.com",
+      "ip": "::1",
+      "keys": [
+        "email:loopback@example.com",
+        "ip:::1"
+      ]
+    },
+    {
+      "email": "v6@example.com",
+      "ip": "2001:db8::1",
+      "keys": [
+        "email:v6@example.com",
+        "ip:2001:db8::1"
+      ]
+    },
+    {
+      "email": "v6@example.com",
+      "ip": "2001:db8::1:0:0:1",
+      "keys": [
+        "email:v6@example.com",
+        "ip:2001:db8::1:0:0:1"
+      ]
+    },
+    {
+      "email": "v6@example.com",
+      "ip": "2001:db8:0:1::1",
+      "keys": [
+        "email:v6@example.com",
+        "ip:2001:db8:0:1::1"
+      ]
+    }
+  ]
+}

@@ -1,9 +1,11 @@
 package config
 
 import (
+	"encoding/json"
 	"os"
 	"strings"
 	"testing"
+	"time"
 )
 
 func setEnv(t *testing.T, kv map[string]string) {
@@ -13,7 +15,7 @@ func setEnv(t *testing.T, kv map[string]string) {
 	for _, k := range []string{
 		"DATABASE_URL", "PORT", "LOG_FORMAT", "LOG_LEVEL", "AUTO_MIGRATE",
 		"AUTH_LOCAL_ENABLED", "AUTH_GOOGLE_ENABLED", "COOKIE_SECURE", "VERSION",
-		"HTTP_WRITE_TIMEOUT",
+		"HTTP_WRITE_TIMEOUT", "LOGIN_FIRST_BACKOFF", "LOGIN_MAX_BACKOFF",
 	} {
 		if old, ok := os.LookupEnv(k); ok {
 			t.Cleanup(func() { _ = os.Setenv(k, old) })
@@ -96,6 +98,12 @@ func TestLoadRejectsBadEnums(t *testing.T) {
 		// 0 would cancel every request on arrival (#30), not disable the bound.
 		{"zero write timeout", "HTTP_WRITE_TIMEOUT", "0s"},
 		{"negative write timeout", "HTTP_WRITE_TIMEOUT", "-1s"},
+		// No backoff at all is not a backoff.
+		{"zero first backoff", "LOGIN_FIRST_BACKOFF", "0s"},
+		{"negative first backoff", "LOGIN_FIRST_BACKOFF", "-1s"},
+		// A cap below the first window: the second failure would wait less
+		// than the first.
+		{"max backoff below the first", "LOGIN_MAX_BACKOFF", "500ms"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			setEnv(t, map[string]string{"DATABASE_URL": "postgres://x/y", tc.key: tc.value})
@@ -103,5 +111,42 @@ func TestLoadRejectsBadEnums(t *testing.T) {
 				t.Errorf("Load accepted %s=%s", tc.key, tc.value)
 			}
 		})
+	}
+}
+
+// The backoff defaults are the parameters contract/testdata/login_backoff.json
+// computes its curve from (#16). Kotlin's AppConfigSpec holds its defaults to
+// the same file, so a default changed in one backend fails there.
+func TestBackoffDefaultsMatchTheSharedFixture(t *testing.T) {
+	raw, err := os.ReadFile("../../../contract/testdata/login_backoff.json")
+	if err != nil {
+		t.Fatalf("read fixture: %v", err)
+	}
+	var fx struct {
+		Parameters struct {
+			FirstBackoff string `json:"first_backoff"`
+			MaxBackoff   string `json:"max_backoff"`
+		} `json:"parameters"`
+	}
+	if err := json.Unmarshal(raw, &fx); err != nil {
+		t.Fatalf("parse fixture: %v", err)
+	}
+	first, err := time.ParseDuration(fx.Parameters.FirstBackoff)
+	if err != nil {
+		t.Fatalf("fixture first_backoff: %v", err)
+	}
+	maxBackoff, err := time.ParseDuration(fx.Parameters.MaxBackoff)
+	if err != nil {
+		t.Fatalf("fixture max_backoff: %v", err)
+	}
+
+	setEnv(t, map[string]string{"DATABASE_URL": "postgres://x/y"})
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.LoginFirstBackoff != first || cfg.LoginMaxBackoff != maxBackoff {
+		t.Errorf("defaults are %s and %s, the fixture's are %s and %s",
+			cfg.LoginFirstBackoff, cfg.LoginMaxBackoff, first, maxBackoff)
 	}
 }

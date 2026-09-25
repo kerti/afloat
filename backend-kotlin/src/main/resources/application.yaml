@@ -72,5 +72,7 @@ afloat:
   auth-google-enabled: ${AUTH_GOOGLE_ENABLED:false}
   session-ttl: ${SESSION_TTL:720h}
   session-max-lifetime: ${SESSION_MAX_LIFETIME:2160h}
+  login-first-backoff: ${LOGIN_FIRST_BACKOFF:1s}
+  login-max-backoff: ${LOGIN_MAX_BACKOFF:5m}
   cookie-secure: ${COOKIE_SECURE:true}
   version: ${VERSION:dev}

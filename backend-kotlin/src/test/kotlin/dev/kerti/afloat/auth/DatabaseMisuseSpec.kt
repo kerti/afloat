@@ -19,6 +19,7 @@ import io.kotest.matchers.shouldBe
 import jakarta.servlet.http.Cookie
 import org.mockito.ArgumentMatchers.any
 import org.mockito.ArgumentMatchers.anyCollection
+import org.mockito.ArgumentMatchers.anyDouble
 import org.mockito.ArgumentMatchers.anyLong
 import org.mockito.ArgumentMatchers.anyString
 import org.mockito.Mockito.doThrow
@@ -123,7 +124,7 @@ class DatabaseMisuseSpec : WebDatabaseSpec() {
         // Its catch answers 401, so a swallowed misuse would too.
         "lets misuse past recordFailures' catch" {
             val account = AuthFixtures.account(dataSource)
-            doThrow(misuse).`when`(loginAttemptRepository).recordFailure(anyString(), anyLong(), anyLong())
+            doThrow(misuse).`when`(loginAttemptRepository).recordFailure(anyString(), anyDouble(), anyDouble())
 
             answers500Without("login: record failure") { login(account.email, "not the password") }
         }

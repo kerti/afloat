@@ -7,7 +7,8 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
-	"strings"
+	"regexp"
+	"strconv"
 	"sync/atomic"
 	"unicode/utf8"
 
@@ -156,42 +157,42 @@ type argonParams struct {
 	threads uint8
 }
 
+// phcShape is the one PHC spelling both backends accept (contract/testdata/
+// argon2.json, #16): argon2id, version 19, the three parameters in that order,
+// unpadded standard base64. Anything looser verified in one backend and not the
+// other: Sscanf read "v=19x" as 19 and ignored text after the parameters, and
+// Spring's decoder ignores a sixth field and accepts base64 padding.
+var phcShape = regexp.MustCompile(`^\$argon2id\$v=(\d+)\$m=(\d+),t=(\d+),p=(\d+)\$([A-Za-z0-9+/]+)\$([A-Za-z0-9+/]+)$`)
+
 func parsePHC(phc string) (argonParams, []byte, []byte, error) {
-	parts := strings.Split(phc, "$")
-	// ["", algo, v=..., m=...,t=...,p=..., salt, hash]
-	if len(parts) != 6 {
-		return argonParams{}, nil, nil, errors.New("malformed PHC string")
+	m := phcShape.FindStringSubmatch(phc)
+	if m == nil {
+		return argonParams{}, nil, nil, errors.New("not an argon2id PHC string")
 	}
-	if parts[1] != argonAlgo {
-		return argonParams{}, nil, nil, fmt.Errorf("unsupported algorithm %q", parts[1])
+	if version, err := strconv.Atoi(m[1]); err != nil || version != argon2.Version {
+		return argonParams{}, nil, nil, fmt.Errorf("unsupported argon2 version %q", m[1])
 	}
-
-	var version int
-	if _, err := fmt.Sscanf(parts[2], "v=%d", &version); err != nil {
-		return argonParams{}, nil, nil, fmt.Errorf("parse version: %w", err)
-	}
-	if version != argon2.Version {
-		return argonParams{}, nil, nil, fmt.Errorf("unsupported argon2 version %d", version)
-	}
-
-	var p argonParams
-	if _, err := fmt.Sscanf(parts[3], "m=%d,t=%d,p=%d", &p.memory, &p.time, &p.threads); err != nil {
-		return argonParams{}, nil, nil, fmt.Errorf("parse parameters: %w", err)
+	memory, errM := strconv.ParseUint(m[2], 10, 32)
+	iterations, errT := strconv.ParseUint(m[3], 10, 32)
+	threads, errP := strconv.ParseUint(m[4], 10, 8)
+	// argon2.IDKey panics on zero iterations or zero parallelism, so a
+	// malformed stored string would crash a login into the recoverer's 500
+	// where Kotlin answers "does not verify".
+	if err := errors.Join(errM, errT, errP); err != nil || iterations < 1 || threads < 1 {
+		return argonParams{}, nil, nil, errors.New("argon2 parameters out of range")
 	}
 
-	salt, err := base64.RawStdEncoding.DecodeString(parts[4])
+	salt, err := base64.RawStdEncoding.DecodeString(m[5])
 	if err != nil {
 		return argonParams{}, nil, nil, fmt.Errorf("decode salt: %w", err)
 	}
-	hash, err := base64.RawStdEncoding.DecodeString(parts[5])
+	hash, err := base64.RawStdEncoding.DecodeString(m[6])
 	if err != nil {
 		return argonParams{}, nil, nil, fmt.Errorf("decode hash: %w", err)
 	}
-	return p, salt, hash, nil
+	return argonParams{memory: uint32(memory), time: uint32(iterations), threads: uint8(threads)}, salt, hash, nil
 }
 
-// buildPHC assembles the stored representation. Split out so tests can build a
-// hash with parameters other than the current constants.
 func buildPHC(memory, time uint32, threads uint8, salt, sum []byte) string {
 	return fmt.Sprintf("$%s$v=%d$m=%d,t=%d,p=%d$%s$%s",
 		argonAlgo, argon2.Version, memory, time, threads,

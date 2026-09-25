@@ -5,6 +5,8 @@ import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.StringSpec
 import io.kotest.datatest.withData
 import io.kotest.matchers.shouldBe
+import tools.jackson.databind.json.JsonMapper
+import java.io.File
 import java.time.Duration
 
 data class AppConfigCase(
@@ -47,6 +49,8 @@ open class AppConfigSpec : StringSpec({
                     authGoogleEnabled = true,
                     sessionTtl = Duration.ofHours(48),
                     sessionMaxLifetime = Duration.ofHours(96),
+                    loginFirstBackoff = Duration.ofSeconds(1),
+                    loginMaxBackoff = Duration.ofMinutes(5),
                     cookieSecure = false,
                     version = "1.2.3",
                 )
@@ -68,6 +72,8 @@ open class AppConfigSpec : StringSpec({
                     authGoogleEnabled = false,
                     sessionTtl = Duration.ofHours(720),
                     sessionMaxLifetime = Duration.ofHours(2160),
+                    loginFirstBackoff = Duration.ofSeconds(1),
+                    loginMaxBackoff = Duration.ofMinutes(5),
                     cookieSecure = true,
                     version = "dev",
                 )
@@ -85,6 +91,8 @@ open class AppConfigSpec : StringSpec({
                     authLocalEnabled = true, authGoogleEnabled = false,
                     sessionTtl = Duration.ofHours(720),
                     sessionMaxLifetime = Duration.ofHours(2160),
+                    loginFirstBackoff = Duration.ofSeconds(1),
+                    loginMaxBackoff = Duration.ofMinutes(5),
                     cookieSecure = true, version = "dev",
                 )
             ),
@@ -101,6 +109,8 @@ open class AppConfigSpec : StringSpec({
                     authLocalEnabled = true, authGoogleEnabled = false,
                     sessionTtl = Duration.ofHours(720),
                     sessionMaxLifetime = Duration.ofHours(2160),
+                    loginFirstBackoff = Duration.ofSeconds(1),
+                    loginMaxBackoff = Duration.ofMinutes(5),
                     cookieSecure = true, version = "dev",
                 )
             ),
@@ -120,6 +130,8 @@ open class AppConfigSpec : StringSpec({
                     authLocalEnabled = true, authGoogleEnabled = false,
                     sessionTtl = Duration.ofMinutes(36 * 60 + 30),
                     sessionMaxLifetime = Duration.ofHours(96),
+                    loginFirstBackoff = Duration.ofSeconds(1),
+                    loginMaxBackoff = Duration.ofMinutes(5),
                     cookieSecure = true, version = "dev",
                 )
             ),
@@ -237,9 +249,40 @@ open class AppConfigSpec : StringSpec({
                 input = TestConfigDefaults.testConfigBase("HTTP_WRITE_TIMEOUT" to "-1s"),
                 expectedMessage = "HTTP_WRITE_TIMEOUT 'PT-1S': must be positive",
             ),
+            // No backoff at all is not a backoff, and a cap below the first
+            // window would make the second failure wait less than the first.
+            // Go refuses the same three (config_test.go).
+            AppConfigCase(
+                name = "LOGIN_FIRST_BACKOFF: '0s'",
+                input = TestConfigDefaults.testConfigBase("LOGIN_FIRST_BACKOFF" to "0s"),
+                expectedMessage = "LOGIN_FIRST_BACKOFF 'PT0S': must be positive",
+            ),
+            AppConfigCase(
+                name = "LOGIN_FIRST_BACKOFF: '-1s'",
+                input = TestConfigDefaults.testConfigBase("LOGIN_FIRST_BACKOFF" to "-1s"),
+                expectedMessage = "LOGIN_FIRST_BACKOFF 'PT-1S': must be positive",
+            ),
+            AppConfigCase(
+                name = "LOGIN_MAX_BACKOFF: '500ms'",
+                input = TestConfigDefaults.testConfigBase("LOGIN_MAX_BACKOFF" to "500ms"),
+                expectedMessage = "LOGIN_MAX_BACKOFF ('PT0.5S') is shorter than LOGIN_FIRST_BACKOFF ('PT1S')",
+            ),
         )
     ) { (_, input, _, expectedMessage) ->
         val ex = shouldThrow<ConfigException> { AppConfig.parse(input) }
         ex.message shouldBe expectedMessage
+    }
+
+    // The backoff defaults are the parameters contract/testdata/login_backoff.json
+    // computes its curve from (#16). Go's config_test.go holds its defaults to
+    // the same file, so a default changed in one backend fails there.
+    "backoff defaults match the shared fixture" {
+        val parameters = JsonMapper()
+            .readTree(File(System.getProperty("afloat.contract.testdata"), "login_backoff.json"))
+            .get("parameters")
+        val cfg = AppConfig.parse(TestConfigDefaults.testConfigBase())
+
+        cfg.loginFirstBackoff shouldBe DurationParser.parse(parameters.get("first_backoff").asString())
+        cfg.loginMaxBackoff shouldBe DurationParser.parse(parameters.get("max_backoff").asString())
     }
 })

@@ -8,14 +8,6 @@ import (
 	"github.com/kerti/afloat/backend/internal/db"
 )
 
-// Backoff shape for failed logins: doubling from one second, capped. Backoff,
-// never a hard lockout — a lockout on a self-hosted household app locks the
-// household out of its own data.
-const (
-	firstBackoff = 1 * time.Second
-	maxBackoff   = 5 * time.Minute
-)
-
 // Handlers implements the authentication half of api.StrictServerInterface.
 type Handlers struct {
 	q  db.Querier
@@ -24,6 +16,13 @@ type Handlers struct {
 	sessionTTL         time.Duration
 	sessionMaxLifetime time.Duration
 	cookieSecure       bool
+
+	// The backoff for failed logins: firstBackoff after the first, doubling per
+	// failure after it, capped at maxBackoff. Backoff, never a hard lockout - a
+	// lockout on a self-hosted household app locks the household out of its own
+	// data. LOGIN_FIRST_BACKOFF and LOGIN_MAX_BACKOFF (BOOTSTRAP.md §12).
+	firstBackoff time.Duration
+	maxBackoff   time.Duration
 
 	// now is a seam for tests, which need to reach a session's expiry without
 	// waiting thirty days for it.
@@ -41,6 +40,8 @@ type Deps struct {
 	SessionTTL         time.Duration
 	SessionMaxLifetime time.Duration
 	CookieSecure       bool
+	FirstBackoff       time.Duration
+	MaxBackoff         time.Duration
 	Now                func() time.Time
 }
 
@@ -55,6 +56,8 @@ func New(d Deps) *Handlers {
 		sessionTTL:         d.SessionTTL,
 		sessionMaxLifetime: d.SessionMaxLifetime,
 		cookieSecure:       d.CookieSecure,
+		firstBackoff:       d.FirstBackoff,
+		maxBackoff:         d.MaxBackoff,
 		now:                now,
 	}
 }

@@ -78,6 +78,8 @@ func run() error {
 			SessionTTL:         cfg.SessionTTL,
 			SessionMaxLifetime: cfg.SessionMaxLifetime,
 			CookieSecure:       cfg.CookieSecure,
+			FirstBackoff:       cfg.LoginFirstBackoff,
+			MaxBackoff:         cfg.LoginMaxBackoff,
 		}),
 		System: system.New(system.Deps{
 			Querier:       queries,

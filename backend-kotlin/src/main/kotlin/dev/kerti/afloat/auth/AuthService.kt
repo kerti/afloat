@@ -162,7 +162,11 @@ class AuthService(
     private fun recordFailures(keys: List<String>) {
         keys.forEach {
             try {
-                loginAttemptRepository.recordFailure(it, FIRST_BACKOFF_SECONDS, MAX_BACKOFF_SECONDS)
+                loginAttemptRepository.recordFailure(
+                    it,
+                    appConfig.loginFirstBackoff.toSecondsDouble(),
+                    appConfig.loginMaxBackoff.toSecondsDouble(),
+                )
             } catch (e: RuntimeException) {
                 if (!e.isDatabaseFailure()) throw e
                 log.error("login: record failure", e)
@@ -232,11 +236,10 @@ class AuthService(
     }
 
     companion object {
-        // Backoff shape: doubling from one second, capped at five minutes.
-        const val FIRST_BACKOFF_SECONDS = 1L
-        const val MAX_BACKOFF_SECONDS = 300L
-
         private val TIME_FORMATTER: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm")
         private val log = LoggerFactory.getLogger(AuthService::class.java)
     }
 }
+
+// Microsecond precision, Postgres's own, as Go's pgtype.Interval carries it.
+internal fun java.time.Duration.toSecondsDouble(): Double = toNanos() / 1_000 / 1_000_000.0

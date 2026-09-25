@@ -57,8 +57,12 @@ class PasswordService internal constructor(private val permitWait: Duration) {
     // UnsupportedOperation for an algorithm or version it does not implement -
     // so the catch is by outcome, not by exception type. Go's verifyHoldingPermit
     // returns a bool for the same reason.
+    //
+    // The shape is checked first, because the decoder is looser than Go's
+    // parsePHC: it ignores a sixth field and accepts base64 padding, so a string
+    // Go refused verified here (contract/testdata/argon2.json, #16).
     internal fun verifyHoldingPermit(password: String, phc: String): Boolean = try {
-        encoder.matches(password, phc)
+        hasPhcShape(phc) && encoder.matches(password, phc)
     } catch (e: RuntimeException) {
         log.warn("password verify: unusable stored hash", e)
         false
@@ -87,6 +91,20 @@ class PasswordService internal constructor(private val permitWait: Duration) {
         private val log = LoggerFactory.getLogger(PasswordService::class.java)
 
         // Fixed by the #33 ruling, not an operator knob: 4 x 19 MiB ~ 76 MiB of
+        // The one PHC spelling both backends accept, Go's phcShape: argon2id,
+        // version 19, the three parameters in that order, unpadded standard
+        // base64, at least one iteration and 1..255 lanes (Go reads the lane
+        // count into a byte).
+        private val PHC_SHAPE =
+            Regex("""^[$]argon2id[$]v=19[$]m=(\d+),t=(\d+),p=(\d+)[$][A-Za-z0-9+/]+[$][A-Za-z0-9+/]+$""")
+
+        internal fun hasPhcShape(phc: String): Boolean {
+            val (memory, iterations, lanes) = PHC_SHAPE.matchEntire(phc)?.destructured ?: return false
+            return memory.toUIntOrNull() != null &&
+                (iterations.toUIntOrNull() ?: 0u) >= 1u &&
+                (lanes.toUByteOrNull() ?: 0u) >= 1u
+        }
+
         // Argon2 memory at most (BOOTSTRAP.md §5.1). Go's argonConcurrencyCap.
         internal const val ARGON_CONCURRENCY_CAP = 4
 

@@ -18,6 +18,10 @@ import (
 const (
 	testTTL         = 30 * 24 * time.Hour
 	testMaxLifetime = 90 * 24 * time.Hour
+	// The §12 defaults, which TestBackoffCurveMatchesTheSharedFixture checks
+	// against contract/testdata/login_backoff.json.
+	testFirstBackoff = time.Second
+	testMaxBackoff   = 5 * time.Minute
 )
 
 type harness struct {
@@ -42,6 +46,8 @@ func (h harness) withQuerier(q db.Querier) harness {
 		SessionTTL:         testTTL,
 		SessionMaxLifetime: testMaxLifetime,
 		CookieSecure:       true,
+		FirstBackoff:       testFirstBackoff,
+		MaxBackoff:         testMaxBackoff,
 		Now:                h.now,
 	})
 	return h

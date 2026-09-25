@@ -23,8 +23,10 @@ interface LoginAttemptRepository : JpaRepository<LoginAttempt, String> {
     )
     fun activeBackoffSeconds(@Param("keys") keys: Collection<String>): Double?
 
-    // Exponential, capped: 2^n seconds from the first failure, never longer
-    // than the cap. Backoff, never a hard lockout: a lockout on a self-hosted
+    // Exponential, capped: the first window doubled per failure, never longer
+    // than the cap (LOGIN_FIRST_BACKOFF, LOGIN_MAX_BACKOFF). Seconds as a
+    // double, not a Long, so a sub-second setting is not truncated where Go's
+    // interval keeps it; make_interval takes fractional seconds. Backoff, never a hard lockout: a lockout on a self-hosted
     // household app locks the household out of its own data. Mirrors the sqlc
     // query in backend/queries/auth.sql exactly. Its own transaction, and
     // AuthService.login holds none: a failure here aborts only this statement.
@@ -43,8 +45,8 @@ interface LoginAttemptRepository : JpaRepository<LoginAttempt, String> {
     """)
     fun recordFailure(
         @Param("key") key: String,
-        @Param("firstBackoff") firstBackoff: Long,
-        @Param("maxBackoff") maxBackoff: Long,
+        @Param("firstBackoff") firstBackoffSeconds: Double,
+        @Param("maxBackoff") maxBackoffSeconds: Double,
     )
 
     // One statement, like Go's DELETE ... = ANY($1): the derived form

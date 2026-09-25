@@ -125,7 +125,7 @@ class LoginSpec : WebDatabaseSpec() {
                 .query(Long::class.java).single() shouldBe 0L
         }
 
-        // emailIsMatchedCaseInsensitivelyAndTrimmed (case half; see the note)
+        // emailIsMatchedCaseInsensitivelyAndTrimmed (case half)
         "matches the email case-insensitively" {
             AuthFixtures.account(dataSource, email = "user@example.com")
 
@@ -150,21 +150,13 @@ class LoginSpec : WebDatabaseSpec() {
             }
         }
 
-        // The trimming half of #14 test 17 is NOT asserted here, deliberately.
-        // Go accepts "  A@ExAmPlE.CoM  " and answers 204
-        // (login_integration_test.go:TestLoginIsCaseInsensitiveOnEmail) because
-        // it runs no field validation on this route at all. Kotlin answers 400:
-        // the generated LocalLoginRequest carries @Email from the contract's
-        // `format: email`, and Hibernate Validator rejects surrounding
-        // whitespace before normalizeEmail() ever runs. Whichever backend is
-        // wrong, they disagree, and choosing for them here would bake the
-        // answer into a test. Open on #14.
-        "still answers 400 for a padded address, which Go answers 204 for" {
+        // emailIsMatchedCaseInsensitivelyAndTrimmed (trimming half). #18 ruled
+        // "trim, then validate": @Email judges the trimmed address
+        // (TrimmedEmailValidator), and normalizeEmail trims again for the lookup.
+        "logs in with a padded address" {
             AuthFixtures.account(dataSource, email = "user@example.com")
 
-            // Pinned as the current, divergent behaviour so the parity decision
-            // shows up as a failing test the day either side moves.
-            login(" User@Example.COM ", AuthFixtures.PASSWORD).response.status shouldBe 400
+            login("  User@Example.COM  ", AuthFixtures.PASSWORD).response.status shouldBe 204
         }
 
         // loginIgnoresASoftDeletedUser
@@ -223,18 +215,55 @@ class LoginSpec : WebDatabaseSpec() {
             result.response.contentAsString shouldBe """{"code":"INVALID_JSON_BODY"}"""
         }
 
-        // missingRequiredFieldReturns400ValidationWithFieldAndRule
-        // An ABSENT field never reaches Bean Validation: @JsonProperty(required
-        // = true) on the generated model makes Jackson fail the decode, which
-        // is a HttpMessageNotReadableException and therefore INVALID_JSON_BODY.
-        // Pinned as-is; #14 asks for VALIDATION here and the two disagree.
-        "reports a missing required field as INVALID_JSON_BODY" {
+        // missingRequiredFieldReturns400ValidationWithFieldAndRule (#18)
+        "reports a missing required field as VALIDATION required" {
             val result = mockMvc.perform(
                 post(loginPath).contentType(MediaType.APPLICATION_JSON).content("""{"email":"user@example.com"}""")
             ).andReturn()
 
             result.response.status shouldBe 400
-            result.response.contentAsString shouldBe """{"code":"INVALID_JSON_BODY"}"""
+            result.response.contentAsString shouldBe """{"code":"VALIDATION","args":{"field":"password","rule":"required"}}"""
+        }
+
+        // The rest of the table Go's login_validation_test.go drives, body for
+        // body. An absent field competes with the present ones for the one
+        // field reported (AbsentFieldAdvice); a body that is not the declared
+        // shape is INVALID_JSON_BODY whatever else is wrong with it.
+        "answers each body exactly as Go does" {
+            AuthFixtures.account(dataSource)
+            val validation = { field: String, rule: String ->
+                """{"code":"VALIDATION","args":{"field":"$field","rule":"$rule"}}"""
+            }
+            val invalidJson = """{"code":"INVALID_JSON_BODY"}"""
+            listOf(
+                """{}""" to validation("email", "required"),
+                """{"password":"x"}""" to validation("email", "required"),
+                // kin-openapi and Jackson would both reach password first; the
+                // sort says email.
+                """{"password":""}""" to validation("email", "required"),
+                """{"email":"not-an-email"}""" to validation("email", "email"),
+                // Hibernate's @Email alone calls "" valid.
+                """{"email":"","password":"x"}""" to validation("email", "email"),
+                """{"email":"   ","password":"x"}""" to validation("email", "email"),
+                """{"email":5,"password":"x"}""" to invalidJson,
+                """{"email":"user@example.com","password":true}""" to invalidJson,
+                """{"email":null,"password":"x"}""" to invalidJson,
+                """{"password":null}""" to invalidJson,
+                """{"password":"","admin":true}""" to invalidJson,
+                """["user@example.com"]""" to invalidJson,
+            ).forEach { (body, expected) ->
+                withClue(body) {
+                    val result = mockMvc.perform(
+                        post(loginPath).contentType(MediaType.APPLICATION_JSON).content(body)
+                    ).andReturn()
+
+                    result.response.status shouldBe 400
+                    result.response.contentAsString shouldBe expected
+                }
+            }
+            // None of them got as far as the handler.
+            JdbcClient.create(dataSource).sql("SELECT count(*) FROM login_attempts")
+                .query(Long::class.java).single() shouldBe 0L
         }
 
         // The envelope #14 test 26 is actually about: a field that is present
@@ -258,12 +287,8 @@ class LoginSpec : WebDatabaseSpec() {
 
         // Every request schema in the contract declares additionalProperties:
         // false, and spring.jackson.deserialization.fail-on-unknown-properties
-        // makes Jackson honour it (#13 §3.6).
-        //
-        // A KNOWN divergence, pinned rather than discovered: Go decodes with
-        // encoding/json, which ignores unknown fields, so the same body is a
-        // 401 there. Closing it needs DisallowUnknownFields in the generated
-        // decode path, which is the generator's, and is filed.
+        // makes Jackson honour it (#13 §3.6). Go's spec-validating middleware
+        // answers the same (#18).
         "rejects a body carrying a field the contract does not declare" {
             AuthFixtures.account(dataSource)
 

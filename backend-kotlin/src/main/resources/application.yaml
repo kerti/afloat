@@ -28,12 +28,8 @@ spring:
       # Every request schema in the contract declares additionalProperties:
       # false, so an unexpected field is a client bug worth surfacing rather
       # than silently dropping (#13 §3.6). Jackson's default is to ignore it.
-      #
-      # This is a KNOWN divergence from Go, which decodes with encoding/json and
-      # ignores unknown fields — pinned by a test in LoginSpec rather than left
-      # for someone to discover. Closing it on the Go side means
-      # DisallowUnknownFields in the generated decode path, which the generator
-      # owns; filed rather than hand-patched.
+      # Go answers the same INVALID_JSON_BODY from its spec-validating
+      # middleware (#18); LoginSpec pins both.
       fail-on-unknown-properties: true
 
 server:

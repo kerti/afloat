@@ -30,7 +30,8 @@ import (
 // handler, which is exactly the gap #18 names in login_integration_test.go:36
 // (decode, bind and validation all sit upstream of that call).
 // additionalProperties: false is not here: an unknown property is an
-// undecodable body, not a constraint (the test below).
+// undecodable body, not a constraint (the test below). Kotlin's LoginSpec
+// drives the same bodies ("answers each body exactly as Go does").
 //
 // fakeQuerier is enough for every case here: a request that fails validation
 // never reaches the handler, so nothing calls the database at all.
@@ -96,6 +97,30 @@ func TestLoginRequestValidation(t *testing.T) {
 			wantField: "email",
 			wantRule:  "email",
 		},
+		{
+			name:      "empty object",
+			body:      `{}`,
+			wantField: "email",
+			wantRule:  "required",
+		},
+		{
+			name:      "email invalid and password absent",
+			body:      `{"email":"not-an-email"}`,
+			wantField: "email",
+			wantRule:  "email",
+		},
+		{
+			name:      "email empty",
+			body:      `{"email":"","password":"a valid password"}`,
+			wantField: "email",
+			wantRule:  "email",
+		},
+		{
+			name:      "email only whitespace",
+			body:      `{"email":"   ","password":"a valid password"}`,
+			wantField: "email",
+			wantRule:  "email",
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			req := httptest.NewRequest(http.MethodPost, "/api/auth/local/login", strings.NewReader(tc.body))
@@ -130,6 +155,9 @@ func TestLoginRequestValidationUndecodableBodyIsInvalidJSONBody(t *testing.T) {
 		{name: "field is null", body: `{"email":null,"password":"a valid password"}`},
 		{name: "unknown property", body: `{"email":"a@example.com","password":"a valid password","admin":true}`},
 		{name: "unknown property beside an invalid field", body: `{"email":"not-an-email","password":"a valid password","zzz":1}`},
+		{name: "unknown property beside an absent field", body: `{"password":"","admin":true}`},
+		{name: "null beside an absent field", body: `{"password":null}`},
+		{name: "boolean where a string belongs", body: `{"email":"a@example.com","password":true}`},
 		{name: "malformed JSON", body: `{"email": `},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

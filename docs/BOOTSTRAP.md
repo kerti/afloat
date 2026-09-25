@@ -407,6 +407,24 @@ The error envelope is Balances ADR-0027 exactly: `{"code": "SCREAMING_SNAKE", "a
 `message` field, `args` values JSON primitives only. `VALIDATION` carries `{field, rule}` and reports
 the first failing field only.
 
+**Which request-body failure gets reported (#18).** Both backends answer these bodies byte for byte
+the same, and each one's login tests drive the same table:
+
+- A body that is not an instance of the declared shape is `INVALID_JSON_BODY` with no `args`, whatever
+  else is wrong with it. That covers malformed JSON, a non-object root, a wrong type (no scalar
+  coercion: `5` is not a string), a `null`, and a property the schema does not declare.
+- Otherwise every failing field competes, an absent required one (`rule: required`) included. The
+  reported one is the least by wire field name, then by rule.
+- `rule` uses go-playground/validator's tag names: `required`, `min`, `max`, `email`, `pattern`.
+- `format: email` trims, then validates: a padded address is accepted and trimmed again for the
+  lookup, and an empty or all-space one is not an address. The trim is inside the format check only,
+  so `maxLength` counts the padding.
+
+Go gets this from the spec-validating middleware (`httpserver/openapi_validate.go`). Kotlin gets it from
+Bean Validation plus three pieces in `httperr/`: `AbsentFieldAdvice`, which stops Jackson failing on the
+first absent field before the others are validated; `TrimmedEmailValidator`; and a Jackson coercion
+guard.
+
 ### Response headers
 
 Both backends send this fixed set on every response, as explicit middleware on Go and Spring

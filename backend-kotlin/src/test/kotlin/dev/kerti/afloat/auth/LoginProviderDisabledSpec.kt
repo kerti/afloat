@@ -7,12 +7,14 @@ import dev.kerti.afloat.testsupport.AuthFixtures
 import dev.kerti.afloat.testsupport.WebDatabaseSpec
 import dev.kerti.afloat.testsupport.jsonFields
 import dev.kerti.afloat.testsupport.loginBody
+import io.kotest.assertions.withClue
 import io.kotest.matchers.shouldBe
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.http.MediaType
 import org.springframework.test.context.TestPropertySource
 import org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get
 import org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post
+import java.net.URI
 
 @TestPropertySource(
     properties = [
@@ -79,6 +81,26 @@ class LoginProviderDisabledSpec : WebDatabaseSpec() {
 
             rec.response.status shouldBe 404
             sessionRepository.count() shouldBe 0
+        }
+
+        // An encoded spelling of the path is the path (#56), so the gate holds
+        // on every one. Compared against the raw URI it did not: these signed
+        // the account in with the provider off.
+        "...on every percent-encoded spelling of the path, with no session written" {
+            val account = AuthFixtures.account(dataSource)
+            listOf("/api/auth/local/%6Cogin", "/api/auth/local/l%6Fgin", "/%61pi/auth/local/login").forEach { path ->
+                val rec = mockMvc.perform(
+                    post(URI.create(path))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(loginBody(account.email, AuthFixtures.PASSWORD))
+                ).andReturn()
+
+                withClue(path) {
+                    rec.response.status shouldBe 404
+                    rec.response.contentAsString shouldBe ""
+                    sessionRepository.count() shouldBe 0
+                }
+            }
         }
 
         "...and /auth/methods still reports the gate's flag (local: false)" {

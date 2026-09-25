@@ -24,8 +24,15 @@ import org.springframework.web.bind.annotation.RequestMapping
 class ApiErrorController : ErrorController {
     @RequestMapping("\${server.error.path:\${error.path:/error}}")
     fun error(request: HttpServletRequest, response: HttpServletResponse) {
-        val status = request.getAttribute(RequestDispatcher.ERROR_STATUS_CODE) as? Int ?: 500
         SecurityHeaders.write(request, response)
+        // No error status means no error dispatch: a client asked for /error
+        // itself. That is a path the API does not have, and answers as one,
+        // as Go does for it.
+        val status = request.getAttribute(RequestDispatcher.ERROR_STATUS_CODE) as? Int
+        if (status == null) {
+            response.status = HttpServletResponse.SC_NOT_FOUND
+            return
+        }
         if (status >= 500) {
             ApiErrorWriter.write(response, 500, ErrorCode.INTERNAL)
             return

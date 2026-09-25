@@ -103,6 +103,16 @@
     status: 404
     same_as: *no-such-get
 
+- name: routing - an encoded backslash is a path that does not exist
+  issue: "56"
+  permit: [unmatched-path-404]
+  request:
+    method: GET
+    path: /health%5C
+  expect:
+    status: 404
+    same_as: *no-such-get
+
 # A body on a route that reads none is never read, so the cap never meets it.
 - name: routing - an oversize body on a route that reads none is ignored
   issue: "56"
@@ -134,6 +144,38 @@
         secure: false
         same_site: Lax
         expires: past
+
+# Signed in, too: /me reads no body. Go's spec validator read it anyway,
+# inside its security check, and answered a signed-in /me with 401.
+- name: routing - an oversize body on a signed-in /me is ignored
+  issue: "56"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: GET
+    path: /me
+    body: '{pad}'
+    pad: {with: a, count: 1572864}
+  expect:
+    status: 200
+    body_json:
+      id: 0192f0a0-0000-7000-8000-0000000000a1
+      household_id: 0192f0a0-0000-7000-8000-000000000001
+      email: alice@example.com
+      display_name: Alice
+      locale: en-GB
+      time_zone: Asia/Jakarta
+      household_display_name: Conformance Household
+      reporting_currency: IDR
+      period_start_day: 1
+      day_starts_at: "04:00"
+      allowance_mode: adaptive
 
 # Read, the same body meets the cap: the decode stops at 1 MiB and never sees
 # the end of the object, so this is the undecodable body, not a password over

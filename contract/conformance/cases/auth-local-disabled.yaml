@@ -58,3 +58,46 @@
     body_json:
       local: false
       google: true
+
+# #56 made a percent-encoded path its decoded route, so an encoded spelling of
+# the login path IS the login path, and the gate must hold on every spelling.
+# Kotlin's gate compared the still-encoded request URI while Spring routed on
+# the decoded one: with local login off, POST /api/auth/local/%6Cogin signed a
+# user in. The seeded password is correct, so any answer but the 404 means the
+# gate did not hold; the rows prove no session was written.
+- name: local login disabled - an encoded spelling of the path is gated too
+  issue: "56"
+  profile: local-disabled
+  permit: [unmatched-path-404]
+  request:
+    method: POST
+    path: /auth/local/%6Cogin
+    headers:
+      Content-Type: application/json
+    body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+  expect:
+    status: 404
+    same_as: &no-such-login-post
+      method: POST
+      path: /no-such-route
+      headers:
+        Content-Type: application/json
+      body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+    rows: &no-session
+      - sql: SELECT count(*)::int AS n FROM sessions
+        rows: [{n: 0}]
+
+- name: local login disabled - an encoded letter anywhere in the path is gated
+  issue: "56"
+  profile: local-disabled
+  permit: [unmatched-path-404]
+  request:
+    method: POST
+    path: /auth/local/l%6Fgin
+    headers:
+      Content-Type: application/json
+    body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+  expect:
+    status: 404
+    same_as: *no-such-login-post
+    rows: *no-session

@@ -14,6 +14,7 @@ import dev.kerti.afloat.auth.data.SessionRepository
 import dev.kerti.afloat.auth.data.UserRepository
 import dev.kerti.afloat.config.AppConfig
 import jakarta.servlet.DispatcherType
+import jakarta.servlet.http.HttpServletRequest
 import jakarta.servlet.http.HttpServletResponse
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.context.annotation.Bean
@@ -21,7 +22,9 @@ import org.springframework.context.annotation.Configuration
 import org.springframework.security.config.annotation.web.builders.HttpSecurity
 import org.springframework.security.config.http.SessionCreationPolicy
 import org.springframework.security.web.SecurityFilterChain
+import org.springframework.security.web.firewall.RequestRejectedException
 import org.springframework.security.web.firewall.RequestRejectedHandler
+import org.springframework.security.web.firewall.StrictHttpFirewall
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter
 import org.springframework.security.web.util.matcher.RequestMatcher
 import org.springframework.web.servlet.HandlerMapping
@@ -63,6 +66,11 @@ class SecurityConfiguration {
                 // Security 6; without this an unauthenticated error forward
                 // answers with the entry point's 401 instead of its own body.
                 it.dispatcherTypeMatchers(DispatcherType.ERROR).permitAll()
+                // Requested directly, /error is a path the API does not have
+                // (ApiErrorController answers the bare 404), and a missing path
+                // is a 404 for everyone, not a 401 that says it exists.
+                // server.error.path is left at Boot's default everywhere.
+                it.requestMatchers("/error").permitAll()
                 // Public by exception, authenticated by default: a new endpoint
                 // in the contract cannot ship open because nobody remembered a
                 // matcher (Go enforces the same per handler, server.go:82-86).
@@ -113,10 +121,38 @@ class SecurityConfiguration {
     // HeaderWriterFilter, and the /error dispatch sendError leads to skips it,
     // so the header set is written directly to answer exactly as an
     // unregistered path does. Found and used by WebSecurity as a bean.
+    //
+    // The firewall refuses more than paths - a header value with a control
+    // character, a method it does not know - and those are a malformed request
+    // on a route that exists, not a missing route. The exception does not say
+    // which it was except in prose, so the request is checked again by a
+    // firewall that looks at the path alone: refused there, 404; otherwise a
+    // bare 400, the status these always had, with the same header set.
     @Bean
     fun requestRejectedHandler() = RequestRejectedHandler { request, response, _ ->
         SecurityHeaders.write(request, response)
-        response.status = HttpServletResponse.SC_NOT_FOUND
+        response.status = if (pathRefused(request)) HttpServletResponse.SC_NOT_FOUND else HttpServletResponse.SC_BAD_REQUEST
+    }
+
+    private fun pathRefused(request: HttpServletRequest): Boolean = try {
+        PATH_ONLY_FIREWALL.getFirewalledRequest(request)
+        false
+    } catch (e: RequestRejectedException) {
+        true
+    }
+
+    private companion object {
+        // StrictHttpFirewall's defaults for the path, and nothing else: any
+        // method, any header, any parameter. getFirewalledRequest checks the
+        // method, the URL and the host up front, and headers only as they are
+        // read, so with the method check off it refuses on the URL alone.
+        val PATH_ONLY_FIREWALL = StrictHttpFirewall().apply {
+            setUnsafeAllowAnyHttpMethod(true)
+            setAllowedHeaderNames { true }
+            setAllowedHeaderValues { true }
+            setAllowedParameterNames { true }
+            setAllowedParameterValues { true }
+        }
     }
 
     // True when no controller method maps the request. Only handler-method

@@ -10,16 +10,21 @@ import org.springframework.context.annotation.Configuration
 @Configuration
 class TomcatConfiguration {
 
-    // Tomcat refuses an encoded slash (%2F) itself, with a 400 and its own
-    // error page, before any filter runs. Passed through, it reaches Spring
-    // Security's firewall, which refuses it the way it refuses every other
-    // malformed path: as a path that does not exist, the bare 404 an
-    // unregistered path gets (#56). Never decoded - that would make %2F a
-    // separator, which the ruling forbids and Go's router does not do.
+    // Tomcat refuses an encoded slash (%2F) or backslash (%5C) itself, with a
+    // 400 and its own HTML error page, before any filter runs. Passed through,
+    // each reaches Spring Security's firewall, which refuses it the way it
+    // refuses every other malformed path: as a path that does not exist, the
+    // bare 404 an unregistered path gets (#56). Never decoded - that would make
+    // either a separator, which the ruling forbids and Go's router does not do.
+    //
+    // A literal backslash, %00 and invalid UTF-8 are still Tomcat's 400: the
+    // connector has no pass-through for them, and allowBackslash would turn a
+    // backslash into a separator. #64.
     @Bean
-    fun passEncodedSlashToFirewall() = WebServerFactoryCustomizer<TomcatServletWebServerFactory> { factory ->
+    fun passEncodedSeparatorsToFirewall() = WebServerFactoryCustomizer<TomcatServletWebServerFactory> { factory ->
         factory.addConnectorCustomizers(TomcatConnectorCustomizer {
             it.encodedSolidusHandling = EncodedSolidusHandling.PASS_THROUGH.value
+            it.encodedReverseSolidusHandling = EncodedSolidusHandling.PASS_THROUGH.value
         })
     }
 }

@@ -167,6 +167,19 @@ class LoginSpec : WebDatabaseSpec() {
             ).andReturn().response.status shouldBe 204
         }
 
+        // Of a duplicate key, the last value is the one read: an earlier value
+        // that is not an address does not stop the login
+        // (TestLoginReadsTheLastOfADuplicateKey).
+        "reads the last value of a duplicate key, as Go does" {
+            AuthFixtures.account(dataSource, email = "user@example.com")
+
+            mockMvc.perform(
+                post(loginPath).contentType(MediaType.APPLICATION_JSON)
+                    .content("""{"email":"not-an-email","password":"${AuthFixtures.PASSWORD}","email":"user@example.com"}""")
+                    .with { it.remoteAddr = "198.51.100.${nextAddress++}"; it }
+            ).andReturn().response.status shouldBe 204
+        }
+
         // loginIgnoresASoftDeletedUser
         "refuses a soft-deleted user" {
             AuthFixtures.account(dataSource, userDeletedAt = Instant.now().minusSeconds(3600))
@@ -251,7 +264,7 @@ class LoginSpec : WebDatabaseSpec() {
                 "null" to invalidJson,
                 """{}""" to validation("email", "required"),
                 """{"password":"x"}""" to validation("email", "required"),
-                // kin-openapi and Jackson would both reach password first; the
+                // kin-openapi alone would report password's min first; the
                 // sort says email.
                 """{"password":""}""" to validation("email", "required"),
                 """{"email":"not-an-email"}""" to validation("email", "email"),
@@ -259,8 +272,13 @@ class LoginSpec : WebDatabaseSpec() {
                 """{"email":"","password":"x"}""" to validation("email", "email"),
                 """{"email":"   ","password":"x"}""" to validation("email", "email"),
                 """{"email":"  user@example.com  "}""" to validation("password", "required"),
+                // Of a duplicate key, the last value is the one validated.
+                """{"email":"user@example.com","password":"x","email":"not-an-email"}""" to validation("email", "email"),
                 """{"email":5,"password":"x"}""" to invalidJson,
                 """{"email":"user@example.com","password":true}""" to invalidJson,
+                // Jackson type-checks every value of a duplicate key, as Go's
+                // generated decode does; kin-openapi sees only the last.
+                """{"email":"user@example.com","password":5,"password":"x"}""" to invalidJson,
                 """{"email":null,"password":"x"}""" to invalidJson,
                 """{"password":null}""" to invalidJson,
                 """{"password":"","admin":true}""" to invalidJson,

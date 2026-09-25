@@ -1,15 +1,21 @@
 package httpserver
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/getkin/kin-openapi/openapi3"
+	"github.com/getkin/kin-openapi/openapi3filter"
 	"github.com/jackc/pgx/v5"
+	nethttpmiddleware "github.com/oapi-codegen/nethttp-middleware"
 
 	"github.com/kerti/afloat/backend/internal/auth"
 	"github.com/kerti/afloat/backend/internal/db"
@@ -23,6 +29,8 @@ import (
 // than constructing an api.LocalLoginRequestObject directly and calling the
 // handler, which is exactly the gap #18 names in login_integration_test.go:36
 // (decode, bind and validation all sit upstream of that call).
+// additionalProperties: false is not here: an unknown property is an
+// undecodable body, not a constraint (the test below).
 //
 // fakeQuerier is enough for every case here: a request that fails validation
 // never reaches the handler, so nothing calls the database at all.
@@ -75,10 +83,18 @@ func TestLoginRequestValidation(t *testing.T) {
 			wantRule:  "email",
 		},
 		{
-			name:      "unknown property",
-			body:      `{"email":"a@example.com","password":"a valid password","admin":true}`,
-			wantField: "admin",
-			wantRule:  "unknown",
+			// kin-openapi checks present properties before required ones, so
+			// it finds password's first; Kotlin reports the least field name.
+			name:      "email absent and password empty",
+			body:      `{"password":""}`,
+			wantField: "email",
+			wantRule:  "required",
+		},
+		{
+			name:      "email invalid and password empty",
+			body:      `{"email":"not-an-email","password":""}`,
+			wantField: "email",
+			wantRule:  "email",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -96,22 +112,124 @@ func TestLoginRequestValidation(t *testing.T) {
 	}
 }
 
-// A body the JSON decoder can parse but whose root isn't an object at all is
-// not a field failing a constraint — it's the same "did not decode as what
-// the contract declares" bucket as truncated or malformed JSON.
-func TestLoginRequestValidationRootTypeMismatchIsInvalidJSONBody(t *testing.T) {
+// A body the JSON decoder can parse but that is not an instance of the
+// declared shape is not a field failing a constraint: it is the same "did not
+// decode as what the contract declares" bucket as malformed JSON, and the
+// bucket Kotlin's Jackson decode puts every one of these in (LoginSpec). It
+// wins over a constraint failure elsewhere in the body, because in Kotlin the
+// decode fails before Bean Validation ever runs.
+func TestLoginRequestValidationUndecodableBodyIsInvalidJSONBody(t *testing.T) {
 	srv := newTestServer()
 
-	req := httptest.NewRequest(http.MethodPost, "/api/auth/local/login", strings.NewReader(`["not","an","object"]`))
-	req.Header.Set("Content-Type", "application/json")
+	for _, tc := range []struct {
+		name string
+		body string
+	}{
+		{name: "root is not an object", body: `["not","an","object"]`},
+		{name: "field of the wrong type", body: `{"email":5,"password":"a valid password"}`},
+		{name: "field is null", body: `{"email":null,"password":"a valid password"}`},
+		{name: "unknown property", body: `{"email":"a@example.com","password":"a valid password","admin":true}`},
+		{name: "unknown property beside an invalid field", body: `{"email":"not-an-email","password":"a valid password","zzz":1}`},
+		{name: "malformed JSON", body: `{"email": `},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/api/auth/local/login", strings.NewReader(tc.body))
+			req.Header.Set("Content-Type", "application/json")
 
-	rec := httptest.NewRecorder()
-	srv.ServeHTTP(rec, req)
+			rec := httptest.NewRecorder()
+			srv.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400", rec.Code)
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400 (body %s)", rec.Code, rec.Body.String())
+			}
+			assertEnvelope(t, rec, "INVALID_JSON_BODY")
+			if strings.Contains(rec.Body.String(), "args") {
+				t.Errorf("body = %s, want no args", rec.Body.String())
+			}
+		})
 	}
-	assertEnvelope(t, rec, "INVALID_JSON_BODY")
+}
+
+// kin-openapi's SchemaError.Error() prints the offending value, and on this
+// route the offending value can be the password.
+func TestLoginRequestValidationDoesNotLogTheRejectedValue(t *testing.T) {
+	logged := captureLog(t)
+	srv := newTestServer()
+
+	const secret = "kucing oranye di atap"
+	for _, body := range []string{
+		`["` + secret + `"]`,
+		`{"email":"a@example.com","password":["` + secret + `"]}`,
+	} {
+		req := httptest.NewRequest(http.MethodPost, "/api/auth/local/login", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		srv.ServeHTTP(httptest.NewRecorder(), req)
+	}
+
+	if !strings.Contains(logged.String(), "request body rejected by contract") {
+		t.Fatalf("nothing logged for a rejected body: %q", logged.String())
+	}
+	if strings.Contains(logged.String(), secret) {
+		t.Errorf("log carries the rejected value: %q", logged.String())
+	}
+}
+
+// The paths no login body reaches today, driven directly: a parameter that
+// binds but breaks the contract, and an error that is no verdict on the
+// request at all.
+func TestWriteOpenAPIValidationErrorUnreachedPaths(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		err        error
+		wantStatus int
+		wantCode   string
+		wantField  string
+		wantRule   string
+	}{
+		{
+			name:       "required parameter absent",
+			err:        openapi3.MultiError{&openapi3filter.RequestError{Parameter: &openapi3.Parameter{Name: "cursor"}, Err: openapi3filter.ErrInvalidRequired}},
+			wantStatus: http.StatusBadRequest,
+			wantCode:   "VALIDATION",
+			wantField:  "cursor",
+			wantRule:   "required",
+		},
+		{
+			name:       "parameter over its maxLength",
+			err:        &openapi3filter.RequestError{Parameter: &openapi3.Parameter{Name: "cursor"}, Err: &openapi3.SchemaError{SchemaField: "maxLength"}},
+			wantStatus: http.StatusBadRequest,
+			wantCode:   "VALIDATION",
+			wantField:  "cursor",
+			wantRule:   "max",
+		},
+		{
+			name:       "route the contract's router could not find",
+			err:        errors.New("no matching operation was found"),
+			wantStatus: http.StatusInternalServerError,
+			wantCode:   "INTERNAL",
+		},
+		{
+			name:       "security requirement failed",
+			err:        &openapi3filter.SecurityRequirementsError{},
+			wantStatus: http.StatusUnauthorized,
+			wantCode:   "UNAUTHORIZED",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/api/me", nil)
+			rec := httptest.NewRecorder()
+			writeOpenAPIValidationError(req.Context(), tc.err, rec, req, nethttpmiddleware.ErrorHandlerOpts{})
+
+			if rec.Code != tc.wantStatus {
+				t.Fatalf("status = %d, want %d (body %s)", rec.Code, tc.wantStatus, rec.Body.String())
+			}
+			if tc.wantField != "" {
+				assertValidationArgs(t, rec, tc.wantField, tc.wantRule)
+				return
+			}
+			assertEnvelope(t, rec, tc.wantCode)
+		})
+	}
 }
 
 // emailLookupSpy records whether GetUserByEmail was reached, standing in for
@@ -240,4 +358,13 @@ func assertValidationArgs(t *testing.T, rec *httptest.ResponseRecorder, wantFiel
 	if body.Args.Rule != wantRule {
 		t.Errorf("args.rule = %q, want %q", body.Args.Rule, wantRule)
 	}
+}
+
+func captureLog(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var logged bytes.Buffer
+	defaultLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logged, nil)))
+	t.Cleanup(func() { slog.SetDefault(defaultLogger) })
+	return &logged
 }

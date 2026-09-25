@@ -44,13 +44,34 @@ class ApiExceptionHandler {
     // one body that exists today — LocalLoginRequest is (email, password) in
     // both spellings.
     @ExceptionHandler(MethodArgumentNotValidException::class)
-    fun handleValidation(e: MethodArgumentNotValidException): ResponseEntity<Error> {
-        // Sorted by rule as well as field: two constraints can fail on the SAME
-        // field (a @Size and a @Pattern), and then the field name alone still
-        // leaves the reported rule to chance.
-        val first = e.bindingResult.fieldErrors
-            .map { snakeCase(it.field) to ruleOf(it) }
-            .minWithOrNull(compareBy({ it.first }, { it.second }))
+    fun handleValidation(e: MethodArgumentNotValidException): ResponseEntity<Error> =
+        firstFailure(
+            e.bindingResult.fieldErrors.map {
+                snakeCase(it.field) to ruleOf(it.code, it.constraintAttribute("min"), it.rejectedValue)
+            },
+        )
+
+    // Absent required fields and the present fields' own violations, sorted
+    // together (AbsentFieldAdvice).
+    @ExceptionHandler(AbsentFieldsException::class)
+    fun handleAbsentFields(e: AbsentFieldsException): ResponseEntity<Error> =
+        firstFailure(
+            e.absent.map { snakeCase(it) to "required" } +
+                e.violations.map {
+                    val constraint = it.constraintDescriptor
+                    snakeCase(it.propertyPath.toString()) to ruleOf(
+                        constraint.annotation.annotationClass.java.simpleName,
+                        constraint.attributes["min"] as? Int,
+                        it.invalidValue,
+                    )
+                },
+        )
+
+    // Sorted by rule as well as field: two constraints can fail on the SAME
+    // field (a @Size and a @Pattern), and then the field name alone still
+    // leaves the reported rule to chance.
+    private fun firstFailure(failures: List<Pair<String, String>>): ResponseEntity<Error> {
+        val first = failures.minWithOrNull(compareBy({ it.first }, { it.second }))
             ?: return badRequest(Error(ErrorCode.VALIDATION, null))
         return badRequest(
             Error(ErrorCode.VALIDATION, mapOf("field" to first.first, "rule" to first.second))
@@ -119,12 +140,12 @@ class ApiExceptionHandler {
 
         // Go reports the validator tag, Bean Validation the constraint class.
         // One vocabulary, or the i18n catalogue needs two sets of keys.
-        private fun ruleOf(error: FieldError): String = when (val code = error.code) {
+        private fun ruleOf(code: String?, min: Int?, rejected: Any?): String = when (code) {
             "NotNull", "NotBlank", "NotEmpty" -> "required"
             "Email" -> "email"
             "Min", "DecimalMin" -> "min"
             "Max", "DecimalMax" -> "max"
-            "Size" -> sizeBound(error)
+            "Size" -> sizeBound(min, rejected)
             "Pattern" -> "pattern"
             else -> code?.lowercase() ?: "invalid"
         }
@@ -132,11 +153,12 @@ class ApiExceptionHandler {
         // One @Size carries both bounds, where Go writes them as separate
         // `min=` and `max=` tags and reports whichever failed. Collapsing both
         // to "max" hands the frontend the key for "too long" when the value was
-        // too short, so the bound is recovered from the constraint itself.
-        private fun sizeBound(error: FieldError): String {
-            val min = error.constraintAttribute("min") ?: return "max"
-            val length = when (val rejected = error.rejectedValue) {
-                is CharSequence -> rejected.length
+        // too short, so the bound is recovered from the constraint itself. A
+        // string is measured as CodePointSizeValidator measures it.
+        private fun sizeBound(min: Int?, rejected: Any?): String {
+            if (min == null) return "max"
+            val length = when (rejected) {
+                is CharSequence -> Character.codePointCount(rejected, 0, rejected.length)
                 is Collection<*> -> rejected.size
                 is Map<*, *> -> rejected.size
                 is Array<*> -> rejected.size

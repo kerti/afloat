@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
-	openapi_types "github.com/oapi-codegen/runtime/types"
 
 	"github.com/kerti/afloat/backend/internal/api"
 	"github.com/kerti/afloat/backend/internal/auth"
@@ -42,7 +41,7 @@ func (h harness) login(ctx context.Context, t *testing.T, email, password string
 	t.Helper()
 	resp, err := h.auth.LocalLogin(ctx, api.LocalLoginRequestObject{
 		Body: &api.LocalLoginJSONRequestBody{
-			Email:    openapi_types.Email(email),
+			Email:    email,
 			Password: password,
 		},
 	})
@@ -301,7 +300,7 @@ func TestLoginConcurrencyBoundsArgon2AndAnswersEveryRequest(t *testing.T) {
 			}
 			resp, err := h.auth.LocalLogin(ipContext(ip), api.LocalLoginRequestObject{
 				Body: &api.LocalLoginJSONRequestBody{
-					Email:    openapi_types.Email(email),
+					Email:    email,
 					Password: "wrong password entirely",
 				},
 			})
@@ -344,7 +343,7 @@ func (h harness) loginInBackground(ctx context.Context, email, password string) 
 	go func() {
 		resp, _ := h.auth.LocalLogin(ctx, api.LocalLoginRequestObject{
 			Body: &api.LocalLoginJSONRequestBody{
-				Email:    openapi_types.Email(email),
+				Email:    email,
 				Password: password,
 			},
 		})

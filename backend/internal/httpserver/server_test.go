@@ -97,9 +97,10 @@ func TestErrorsUseTheSharedEnvelope(t *testing.T) {
 // unbounded decode everywhere else. This is that gap closed.
 //
 // The assertion is the envelope, not merely "not 200": the oversized body is
-// refused by MaxBytesReader mid-decode, which is one of the generated server's
-// escape hatches and answered http.Error — text/plain carrying an English
-// message — until errors.go wired it.
+// refused by MaxBytesReader mid-read, outside any handler, where the default
+// answer was http.Error — text/plain carrying an English message. The
+// spec-validating middleware is the reader now (openapi_validate.go); before
+// it, the generated decode was, and errors.go had to wire it.
 func TestBodyIsCapped(t *testing.T) {
 	srv := newTestServer()
 
@@ -117,7 +118,7 @@ func TestBodyIsCapped(t *testing.T) {
 }
 
 // A body that did not decode is INVALID_JSON_BODY, in the envelope. The
-// generated strict handler decodes before any handler runs, so nothing in
+// spec-validating middleware rejects it before any handler runs, so nothing in
 // internal/auth can answer this path — it is the server's to wire, and its
 // default was a plain-text message (PRD N7, non-negotiable 7).
 func TestMalformedBodyIsTheEnvelope(t *testing.T) {

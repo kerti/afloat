@@ -128,6 +128,9 @@ func New(d Deps) http.Handler {
 	r.Mount("/api", api.HandlerWithOptions(strict, api.ChiServerOptions{
 		BaseRouter:       chi.NewRouter(),
 		ErrorHandlerFunc: paramErrorHandler,
+		// Per-operation, not r.Use above: this only ever runs once chi has
+		// matched a request to a route the contract declares (openapi_validate.go).
+		Middlewares: []api.MiddlewareFunc{openapiRequestValidator()},
 	}))
 
 	return r

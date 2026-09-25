@@ -37,7 +37,7 @@ var dummyHash = func() string {
 // and a request for an address with no account still pays the full hashing
 // cost. All three, not two of three: any one missing re-opens enumeration.
 func (h *Handlers) LocalLogin(ctx context.Context, request api.LocalLoginRequestObject) (api.LocalLoginResponseObject, error) {
-	email := normalizeEmail(string(request.Body.Email))
+	email := normalizeEmail(request.Body.Email)
 	password := request.Body.Password
 
 	keys := backoffKeys(ctx, email)

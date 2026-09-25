@@ -109,6 +109,13 @@ tasks.withType<Test> {
     // is the worst shape a flake can have. This makes the test runnable; it
     // does not fix the product exposure it demonstrates - see issue #33.
     maxHeapSize = "3g"
+
+    // Fixtures both backends' tests read (contract/testdata). Declared as an
+    // input so a fixture edit re-runs the tests rather than leaving them
+    // UP-TO-DATE.
+    val contractTestdata = project.file("../contract/testdata")
+    inputs.dir(contractTestdata).withPathSensitivity(PathSensitivity.RELATIVE)
+    systemProperty("afloat.contract.testdata", contractTestdata.path)
 }
 
 // XML only: the HTML report is for a human at a terminal, and nothing here

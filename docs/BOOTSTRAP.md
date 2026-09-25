@@ -464,9 +464,11 @@ guard.
   (`TomcatConfiguration`) rather than refusing them itself. A literal backslash, `%00` and invalid
   UTF-8 are still refused by Tomcat, with its own 400 page, before Spring sees them — a known gap, #64.
   The firewall's other refusals — a header value with a control character, a
-  method it does not know — are a malformed request on a route that exists, not a missing route: a bare
-  400 with the same headers. And `/error`, Boot's error page, is not an API path when asked for
-  directly: a bare 404 for everyone, as on Go. The disabled-login gate compares the decoded path in
+  method it does not know — are a malformed request on a route that exists, not a missing route, and get
+  a bare 400 with the same headers, whether a filter or MVC read the header first. Go refuses neither,
+  and whether Kotlin should is open: #67 (header values, which include ordinary UTF-8 such as an em
+  dash), #66 (methods). And `/error`, Boot's error page, is not an API path when asked for directly: a
+  bare 404, as on Go, for every method but OPTIONS (#66). The disabled-login gate compares the decoded path in
   both backends, so no spelling of the login path escapes it.
 - **The 1 MiB cap meets only the bytes a handler reads**, as Go's `MaxBytesReader` does: a declared
   `Content-Length` is not refused up front, and `/health` or logout answers normally with any body.

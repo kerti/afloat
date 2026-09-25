@@ -135,6 +135,21 @@ class ErrorDispatchSpec : DatabaseSpec() {
                 raw.lowercase() shouldContain "x-content-type-options: nosniff"
                 raw.substringAfter("\r\n\r\n") shouldBe ""
             }
+
+            // The same refusal for a header first read inside MVC rather than
+            // by a filter: Accept, read by content negotiation. It used to fall
+            // into ApiExceptionHandler's catch-all as a 500.
+            val accept = Socket("localhost", port).use { socket ->
+                socket.getOutputStream().write(
+                    "GET /api/health HTTP/1.1\r\nHost: localhost\r\nAccept: application/json, x/".toByteArray() +
+                        byteArrayOf(0x85.toByte()) + "\r\nConnection: close\r\n\r\n".toByteArray(),
+                )
+                socket.getInputStream().readAllBytes().toString(Charsets.ISO_8859_1)
+            }
+            withClue(accept) {
+                accept.lineSequence().first().trim() shouldBe "HTTP/1.1 400"
+                accept.substringAfter("\r\n\r\n") shouldBe ""
+            }
         }
 
         // A browser asks for HTML. Boot's BasicErrorController has an HTML

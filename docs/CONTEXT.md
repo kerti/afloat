@@ -182,8 +182,20 @@ Buffer Days                = V / B
   from the Household's own future rather than presented as found money. **[OPEN Q-04]** — whether to
   additionally cap displayed `A` at some multiple of `B`.
 - **Rounding.** Store `DECIMAL(20,4)`, mirroring Balances (ADR-0011); serialise decimals as strings
-  on the wire. Every *allowance* figure is **floored** to the display unit (Rp1.000 for IDR) so Afloat
-  never tells a Household it can spend more than it can. Spend and variance figures round half-up.
+  on the wire. Everything is computed from exact values and rounded only on output — never feed a
+  rounded intermediate into another figure, except `A` into Left to Spend Today below.
+  - **R1 — allowance figures floor at 4dp on the server.** Baseline Daily Budget, Today's Allowance,
+    Forward Daily Rate and Left to Spend Today are **floored** (`RoundingMode.FLOOR`, toward −∞, not
+    toward zero) at the storage scale, so Afloat never tells a Household it can spend more than it
+    can. `A` is rounded once, then Left to Spend Today is that floored `A` minus `S_today`. Forward
+    Daily Rate is computed from exact values, then floored. The client's own floor to the display unit
+    (Rp1.000 for IDR, N5a) is separate and downstream of this — the server never applies a display
+    unit.
+  - **R2 — Trajectory Variance and Buffer Days go on the wire half-up at 4dp.** Half-up means half
+    away from zero (`RoundingMode.HALF_UP`, shopspring `Round`). State is decided from the *exact*
+    (unrounded) `V` and `B` — compared as `V` against `threshold × B`, with no division — never from
+    the rounded Buffer Days figure, so a boundary can round to a tidy number while State still reads
+    the far side of it.
 
 ### Adaptive vs fixed
 
@@ -208,7 +220,10 @@ in month one. **[OPEN Q-05]** — whether three days is the right floor, and whe
 distinct neutral "getting a read" presentation rather than reusing `afloat`.
 
 **Thresholds are configuration, not constants.** They live in one place and are expected to be tuned
-once real data exists.
+once real data exists. Both the warm-up floor (`e < 3` above) and the two State thresholds
+(`drifting_below: -1`, `taking_on_water_below: -3`) are **arguments to the calculation**, not literals
+inside it — `contract/testdata/trajectory.json`'s `parameters` section carries the defaults, and any
+row may override them, so a future change to the defaults is a fixture edit, not a code change.
 
 ### Future-dated Expenses
 
@@ -249,6 +264,11 @@ now, not what it believed at the time.
 
 These are the reference values the implementation must reproduce. Daily Pool `P` = Rp6.000.000 over
 `D` = 30 days, so `B` = Rp200.000/day.
+
+The table below rounds to whole rupiah for readability. The authoritative values are the 4dp ones in
+`contract/testdata/trajectory.json`'s `figures` rows (BOOTSTRAP.md §6) — e.g. the day-2 row's `A` is
+`203448.2758`, which the table shows as `203.448`. Both backends' unit tests read the fixture, never
+this table.
 
 | Case | `e` | `S_settled` | `S_today` | `A` | Left today | Fwd rate | Buffer | State |
 |---|---|---|---|---|---|---|---|---|
@@ -316,7 +336,8 @@ change, no vertical jump) → exactly 7.500.000 at day 30.
 
 > **Q:** "I refunded a purchase."
 > **A:** Edit the original Expense down, or delete it. Afloat has no immutable events to compensate
-> for. If the original was never recorded, a negative-amount Expense is valid. **[OPEN Q-07]**
+> for. If the original was never recorded, a negative-amount Expense is valid (Q-07 resolved
+> 2026-09-13, PRD.md change log; `CHECK (amount <> 0)` forbids only zero).
 
 ---
 

@@ -132,7 +132,6 @@ func TestFiguresMatchTheSharedFixture(t *testing.T) {
 	fx := loadFixture(t)
 
 	for _, row := range fx.Figures {
-		row := row
 		t.Run(row.Name, func(t *testing.T) {
 			in := trajectory.Inputs{
 				DailyPool:    mustDecimal(t, row.Inputs.DailyPool),
@@ -194,7 +193,6 @@ func TestTargetLineMatchesTheSharedFixture(t *testing.T) {
 	fx := loadFixture(t)
 
 	for _, row := range fx.TargetLine {
-		row := row
 		t.Run(row.Name, func(t *testing.T) {
 			if len(row.Expected.Targets) == 0 {
 				t.Fatal("target_line row has no `expected.targets`: a fixture that asserts nothing looks like coverage")

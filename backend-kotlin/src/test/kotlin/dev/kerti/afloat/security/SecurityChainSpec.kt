@@ -9,6 +9,7 @@ import dev.kerti.afloat.testsupport.loginBody
 import dev.kerti.afloat.testsupport.sha256Hex
 import io.kotest.assertions.withClue
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.shouldNotBe
 import io.kotest.matchers.string.shouldNotContain
 import jakarta.servlet.http.Cookie
 import org.springframework.http.MediaType
@@ -214,6 +215,7 @@ class SecurityChainSpec : WebDatabaseSpec() {
             val result = mockMvc.perform(put(SystemApi.BASE_PATH + SystemApi.PATH_GET_HEALTH)).andReturn()
             result.response.status shouldBe 405
             result.response.contentAsString shouldBe ""
+            result.response.getHeader("Allow") shouldNotBe null
         }
     }
 }

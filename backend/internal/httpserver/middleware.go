@@ -133,8 +133,14 @@ func maxBodyBytes(n int64) func(http.Handler) http.Handler {
 // router already set that field during its own pass before this one runs),
 // and a cloned request's Method for everything downstream of routing.
 // Discarding only the bytes a ResponseWriter is asked to write keeps the
-// rest: the httptest.Recorder output for HEAD /api/health is byte-identical
-// to GET's but for the body.
+// rest: status and every header GET sets are unchanged. On a real server,
+// net/http itself then omits Content-Length from a HEAD answer where GET's
+// carries one (chunked instead, since the handler never told it a length up
+// front) - a difference RFC 9110 §9.1 explicitly allows, and Content-Length
+// is already a global permitted difference (permitted-differences.yaml),
+// framing rather than content. Not something to chase into matching: the
+// point is the same status and the same declared headers, not identical
+// bytes on the wire.
 //
 // Mounted on the API's own base router (server.go), inside the mount at
 // basePath: its look-ahead is chi's ordinary routing, on that router's own

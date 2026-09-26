@@ -2,6 +2,7 @@ package conformance_test
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -187,7 +188,7 @@ func TestConformance(t *testing.T) {
 				t.Run("expected/"+b.name, func(t *testing.T) {
 					assertExpected(t, c, r.resp, b.name)
 					if r.ref != nil {
-						assertSameAs(t, c, r.resp, *r.ref)
+						assertSameAs(t, c, b.name, r.resp, *r.ref)
 					}
 					assertRows(t, c, r.rows)
 				})
@@ -285,8 +286,8 @@ func runCase(ctx context.Context, b backend, c conformance.Case, permitted *conf
 	if r.state, err = b.db.Snapshot(ctx, permitted.MasksColumn); err != nil {
 		return run{}, fmt.Errorf("snapshot: %w", err)
 	}
-	if c.Expect.SameAs != nil {
-		ref, err := do(client, b, *c.Expect.SameAs)
+	if sameAs := c.Expect.SameAsRequest(b.name); sameAs != nil {
+		ref, err := do(client, b, *sameAs)
 		if err != nil {
 			return run{}, fmt.Errorf("same_as: %w", err)
 		}
@@ -339,7 +340,15 @@ func do(client *http.Client, b backend, r conformance.Request) (response, error)
 	}
 	var req *http.Request
 	var err error
-	if r.RawTarget != "" {
+	switch {
+	case r.RawTarget == "*":
+		// The asterisk-form (RFC 9110 §7.1, S2's OPTIONS *): never under the
+		// API base, so no base path is prefixed.
+		if req, err = http.NewRequest(r.Method, b.baseURL, body); err != nil {
+			return response{}, err
+		}
+		req.URL.Opaque = "*"
+	case r.RawTarget != "":
 		// URL.Opaque is sent as the request line's target verbatim, with no
 		// escaping and no re-parse: what RawTarget exists for (#64) - a byte
 		// url.Parse would otherwise normalise, such as %5C's un-encoded form,
@@ -353,7 +362,7 @@ func do(client *http.Client, b backend, r conformance.Request) (response, error)
 			return response{}, err
 		}
 		req.URL.Opaque = base.Path + r.RawTarget
-	} else {
+	default:
 		if req, err = http.NewRequest(r.Method, b.baseURL+r.Path, body); err != nil {
 			return response{}, err
 		}
@@ -367,6 +376,18 @@ func do(client *http.Client, b backend, r conformance.Request) (response, error)
 			continue
 		}
 		req.Header.Set(k, v)
+	}
+	for k, hexValue := range r.HeadersHex {
+		// Sent as the exact decoded bytes, bypassing Header.Set's string
+		// handling: a YAML string is Unicode text and cannot hold an invalid
+		// UTF-8 byte directly (R1), so cases that need one spell it as hex
+		// instead. Go's own header-value validity check (CR/LF, and nothing
+		// else) still applies, same as it would through Header.Set.
+		decoded, herr := hex.DecodeString(hexValue)
+		if herr != nil {
+			return response{}, fmt.Errorf("headers_hex[%s]: %w", k, herr)
+		}
+		req.Header[http.CanonicalHeaderKey(k)] = []string{string(decoded)}
 	}
 
 	resp, err := client.Do(req)
@@ -470,9 +491,9 @@ func assertRows(t *testing.T, c conformance.Case, got [][]map[string]any) {
 // request: status, every header but the per-response ones, and the body bytes.
 // It runs under expected/<backend>, because a mismatch means that backend is
 // wrong, whatever the other one does.
-func assertSameAs(t *testing.T, c conformance.Case, got, ref response) {
+func assertSameAs(t *testing.T, c conformance.Case, backend string, got, ref response) {
 	t.Helper()
-	s := c.Expect.SameAs
+	s := c.Expect.SameAsRequest(backend)
 
 	if got.status != ref.status {
 		t.Errorf("same_as %s %s: status %d, but that request answers %d", s.Method, s.Path, got.status, ref.status)

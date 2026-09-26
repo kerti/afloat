@@ -1,0 +1,236 @@
+# R1 (26 Sep ruling): sessions.user_agent's storage rule, in order - absent or
+# empty is NULL (#32 item 4, unchanged); not valid UTF-8 is NULL, because a
+# Postgres TEXT column is UTF8-encoded and an invalid header used to fail the
+# whole login with a 500 on Go and silent U+FFFD mojibake on Kotlin; otherwise
+# truncated to 512 Unicode code points, on a code point boundary. Login
+# succeeds in every case here - the row is what changes, never the answer.
+#
+# The invalid-UTF-8 rows use headers_hex: a YAML string is Unicode text and
+# cannot hold an invalid byte sequence directly (`\x85` in YAML means the
+# code point U+0085, encoded as two valid UTF-8 bytes - not the raw byte
+# 0x85), so these send the header's exact wire bytes as hex instead.
+
+- name: user-agent storage - a lone 0x85 is invalid UTF-8, stored as NULL
+  issue: "69"
+  request:
+    method: POST
+    path: /auth/local/login
+    headers:
+      Content-Type: application/json
+    headers_hex:
+      User-Agent: "788579"
+    body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+  expect:
+    status: 204
+    body_empty: true
+    cookies:
+      afloat_session:
+        value_pattern: '[A-Za-z0-9_-]{43}'
+        path: /
+        max_age: 2592000
+        http_only: true
+        secure: false
+        same_site: Lax
+        expires: max-age
+    rows:
+      - sql: SELECT user_agent FROM sessions
+        rows: [{user_agent: null}]
+- name: user-agent storage - an overlong encoding (C0 AF) is invalid UTF-8, stored as NULL
+  issue: "69"
+  request:
+    method: POST
+    path: /auth/local/login
+    headers:
+      Content-Type: application/json
+    headers_hex:
+      User-Agent: "78c0af79"
+    body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+  expect:
+    status: 204
+    body_empty: true
+    cookies:
+      afloat_session:
+        value_pattern: '[A-Za-z0-9_-]{43}'
+        path: /
+        max_age: 2592000
+        http_only: true
+        secure: false
+        same_site: Lax
+        expires: max-age
+    rows:
+      - sql: SELECT user_agent FROM sessions
+        rows: [{user_agent: null}]
+- name: user-agent storage - a truncated 3-byte sequence is invalid UTF-8, stored as NULL
+  issue: "69"
+  request:
+    method: POST
+    path: /auth/local/login
+    headers:
+      Content-Type: application/json
+    headers_hex:
+      User-Agent: "78e28079"
+    body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+  expect:
+    status: 204
+    body_empty: true
+    cookies:
+      afloat_session:
+        value_pattern: '[A-Za-z0-9_-]{43}'
+        path: /
+        max_age: 2592000
+        http_only: true
+        secure: false
+        same_site: Lax
+        expires: max-age
+    rows:
+      - sql: SELECT user_agent FROM sessions
+        rows: [{user_agent: null}]
+- name: user-agent storage - a lone 0xFF is invalid UTF-8, stored as NULL
+  issue: "69"
+  request:
+    method: POST
+    path: /auth/local/login
+    headers:
+      Content-Type: application/json
+    headers_hex:
+      User-Agent: "78ff79"
+    body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+  expect:
+    status: 204
+    body_empty: true
+    cookies:
+      afloat_session:
+        value_pattern: '[A-Za-z0-9_-]{43}'
+        path: /
+        max_age: 2592000
+        http_only: true
+        secure: false
+        same_site: Lax
+        expires: max-age
+    rows:
+      - sql: SELECT user_agent FROM sessions
+        rows: [{user_agent: null}]
+- name: user-agent storage - Latin-1 'caf\xe9' is invalid UTF-8, stored as NULL
+  issue: "69"
+  request:
+    method: POST
+    path: /auth/local/login
+    headers:
+      Content-Type: application/json
+    headers_hex:
+      User-Agent: "636166e9"
+    body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+  expect:
+    status: 204
+    body_empty: true
+    cookies:
+      afloat_session:
+        value_pattern: '[A-Za-z0-9_-]{43}'
+        path: /
+        max_age: 2592000
+        http_only: true
+        secure: false
+        same_site: Lax
+        expires: max-age
+    rows:
+      - sql: SELECT user_agent FROM sessions
+        rows: [{user_agent: null}]
+- name: user-agent storage - valid text with one invalid byte is invalid UTF-8 as a whole, stored as NULL
+  issue: "69"
+  request:
+    method: POST
+    path: /auth/local/login
+    headers:
+      Content-Type: application/json
+    headers_hex:
+      User-Agent: "61626385646566"
+    body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+  expect:
+    status: 204
+    body_empty: true
+    cookies:
+      afloat_session:
+        value_pattern: '[A-Za-z0-9_-]{43}'
+        path: /
+        max_age: 2592000
+        http_only: true
+        secure: false
+        same_site: Lax
+        expires: max-age
+    rows:
+      - sql: SELECT user_agent FROM sessions
+        rows: [{user_agent: null}]
+# The boundary rows: truncation happens on a whole code point, never a split
+# sequence, whatever the eventual number of bytes turns out to be.
+- name: user-agent storage - 511 code points is stored untouched
+  issue: "69"
+  request:
+    method: POST
+    path: /auth/local/login
+    headers:
+      Content-Type: application/json
+      User-Agent: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+  expect:
+    status: 204
+    body_empty: true
+    cookies:
+      afloat_session:
+        value_pattern: '[A-Za-z0-9_-]{43}'
+        path: /
+        max_age: 2592000
+        http_only: true
+        secure: false
+        same_site: Lax
+        expires: max-age
+    rows:
+      - sql: SELECT user_agent FROM sessions
+        rows: [{user_agent: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]
+- name: user-agent storage - 512 code points, a multibyte character at the boundary, is stored untouched
+  issue: "69"
+  request:
+    method: POST
+    path: /auth/local/login
+    headers:
+      Content-Type: application/json
+      User-Agent: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa💚"
+    body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+  expect:
+    status: 204
+    body_empty: true
+    cookies:
+      afloat_session:
+        value_pattern: '[A-Za-z0-9_-]{43}'
+        path: /
+        max_age: 2592000
+        http_only: true
+        secure: false
+        same_site: Lax
+        expires: max-age
+    rows:
+      - sql: SELECT user_agent FROM sessions
+        rows: [{user_agent: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa💚"}]
+- name: user-agent storage - 513 code points truncates to 512 without splitting the boundary character
+  issue: "69"
+  request:
+    method: POST
+    path: /auth/local/login
+    headers:
+      Content-Type: application/json
+      User-Agent: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa💚a"
+    body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+  expect:
+    status: 204
+    body_empty: true
+    cookies:
+      afloat_session:
+        value_pattern: '[A-Za-z0-9_-]{43}'
+        path: /
+        max_age: 2592000
+        http_only: true
+        secure: false
+        same_site: Lax
+        expires: max-age
+    rows:
+      - sql: SELECT user_agent FROM sessions
+        rows: [{user_agent: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa💚"}]

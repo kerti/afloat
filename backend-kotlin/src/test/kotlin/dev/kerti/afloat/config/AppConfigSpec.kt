@@ -300,6 +300,21 @@ open class AppConfigSpec : StringSpec({
                 input = TestConfigDefaults.testConfigBase("LOGIN_FIRST_BACKOFF" to "999us"),
                 expectedMessage = "LOGIN_FIRST_BACKOFF 'PT0.000999S': must be at least 1ms",
             ),
+            // S3 (second review of #69): whitespace-only is not the same as
+            // unset - requiredDuration's ifEmpty only special-cases the exact
+            // empty string, matching Go's caarlos0/env, so this reaches
+            // DurationParser and is refused like any other unparseable
+            // spelling, not silently defaulted.
+            AppConfigCase(
+                name = "LOGIN_FIRST_BACKOFF: '   ' (whitespace is not unset)",
+                input = TestConfigDefaults.testConfigBase("LOGIN_FIRST_BACKOFF" to "   "),
+                expectedMessage = "LOGIN_FIRST_BACKOFF: '   ' is not a valid duration",
+            ),
+            AppConfigCase(
+                name = "LOGIN_FIRST_BACKOFF: '\\t' (a tab is not unset)",
+                input = TestConfigDefaults.testConfigBase("LOGIN_FIRST_BACKOFF" to "\t"),
+                expectedMessage = "LOGIN_FIRST_BACKOFF: '\t' is not a valid duration",
+            ),
             AppConfigCase(
                 name = "LOGIN_MAX_BACKOFF: '500ms'",
                 input = TestConfigDefaults.testConfigBase("LOGIN_MAX_BACKOFF" to "500ms"),

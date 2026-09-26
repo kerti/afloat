@@ -5,6 +5,9 @@ import jakarta.servlet.http.HttpServletRequest
 import jakarta.servlet.http.HttpServletResponse
 import org.springframework.http.HttpHeaders
 import org.springframework.web.filter.OncePerRequestFilter
+import java.nio.ByteBuffer
+import java.nio.charset.CharacterCodingException
+import java.nio.charset.CodingErrorAction
 
 data class RequestFacts(
     val clientIp: String,
@@ -12,20 +15,45 @@ data class RequestFacts(
     val sessionToken: String?,
 )
 
-// Tomcat decodes every header VALUE's bytes as ISO-8859-1 - HTTP/1.1's own
-// field-content is undefined past US-ASCII (RFC 7230 §3.2, obs-text), and
-// Java's Http11InputBuffer picks Latin-1, a lossless 1-byte-to-1-char
-// mapping, as its reading of that undefined range. Go's r.UserAgent() carries
-// the raw bytes through untouched, so a client that sends User-Agent as UTF-8
-// (an em dash, say) lands in sessions.user_agent differently on each backend
-// unless reversed (#67): re-encoding Tomcat's String back to ISO-8859-1
-// recovers the original bytes exactly, and decoding those as UTF-8 reproduces
-// what Go stored. A genuinely non-UTF-8 header (a literal Latin-1 UA) decodes
-// with the standard replacement character instead of Go's byte-for-byte
-// string - out of scope: #67's case is a UTF-8 header, which is what a real
-// client sends.
-internal fun reinterpretHeaderAsUtf8(value: String): String =
-    String(value.toByteArray(Charsets.ISO_8859_1), Charsets.UTF_8)
+// sessions.user_agent's storage rule, in order (R1, on top of #32 item 4's
+// original empty-is-NULL rule):
+//
+// 1. Absent or empty: null.
+// 2. Not valid UTF-8: null. Tomcat decodes every header VALUE's bytes as
+//    ISO-8859-1 - HTTP/1.1's own field-content is undefined past US-ASCII
+//    (RFC 7230 §3.2, obs-text), and Java's Http11InputBuffer picks Latin-1, a
+//    lossless 1-byte-to-1-char mapping, as its reading of that undefined
+//    range - so recovering what the client actually sent means re-encoding
+//    Tomcat's String back to those bytes and decoding THEM as UTF-8, with a
+//    STRICT decoder (CodingErrorAction.REPORT): the previous version used
+//    String(bytes, UTF_8), which silently replaces an invalid sequence with
+//    U+FFFD instead of refusing it, so a client that sent invalid UTF-8 (Go's
+//    r.UserAgent() carries the raw bytes through untouched, and a Postgres
+//    TEXT column is UTF8-encoded, so THAT used to fail Go's login outright
+//    with a 500) was quietly stored as mojibake here rather than as nothing,
+//    which is what Go effectively does by refusing the whole request.
+// 3. Otherwise, truncated to MAX_USER_AGENT_CODE_POINTS Unicode code points -
+//    never bytes, never UTF-16 units, matching every other length limit in
+//    this codebase (BOOTSTRAP.md §5.1) - on a code point boundary via
+//    offsetByCodePoints, which can only ever land between two of them.
+private val MAX_USER_AGENT_CODE_POINTS = 512
+
+internal fun sanitizeUserAgent(headerValue: String?): String? {
+    if (headerValue.isNullOrEmpty()) return null
+    val decoder = Charsets.UTF_8.newDecoder()
+        .onMalformedInput(CodingErrorAction.REPORT)
+        .onUnmappableCharacter(CodingErrorAction.REPORT)
+    val decoded = try {
+        decoder.decode(ByteBuffer.wrap(headerValue.toByteArray(Charsets.ISO_8859_1))).toString()
+    } catch (e: CharacterCodingException) {
+        return null
+    }
+    if (decoded.isEmpty()) return null
+    val codePointCount = decoded.codePointCount(0, decoded.length)
+    if (codePointCount <= MAX_USER_AGENT_CODE_POINTS) return decoded
+    val cut = decoded.offsetByCodePoints(0, MAX_USER_AGENT_CODE_POINTS)
+    return decoded.substring(0, cut)
+}
 
 // The generated controllers carry no HttpServletRequest, so the few
 // request-scoped facts authentication needs live here, populated by the filter
@@ -57,9 +85,9 @@ class RequestFactsFilter : OncePerRequestFilter() {
             RequestContext.set(
                 RequestFacts(
                     clientIp = normalizeIp(request.remoteAddr),
-                    // An empty header is no user agent: NULL in sessions.user_agent,
-                    // as Go's nullString writes it, never '' (#32 item 4).
-                    userAgent = request.getHeader(HttpHeaders.USER_AGENT)?.let(::reinterpretHeaderAsUtf8)?.ifEmpty { null },
+                    // Absent, empty, invalid UTF-8, or over 512 code points:
+                    // sanitizeUserAgent's rule (R1, #32 item 4).
+                    userAgent = sanitizeUserAgent(request.getHeader(HttpHeaders.USER_AGENT)),
                     sessionToken = token,
                 )
             )

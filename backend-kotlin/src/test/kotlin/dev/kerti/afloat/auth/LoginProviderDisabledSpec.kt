@@ -119,6 +119,24 @@ class LoginProviderDisabledSpec : WebDatabaseSpec() {
             rec.response.getHeader("Allow") shouldBe unregistered.response.getHeader("Allow")
         }
 
+        // S1, on the local-disabled profile too: a path the firewall refuses
+        // answers OPTIONS the same flat 405 as any other OPTIONS, with local
+        // login off as well as on (ErrorDispatchSpec covers it on). This gate
+        // being off must not change what a firewall-refused OPTIONS answers.
+        "...and OPTIONS on a firewall-refused path is the same flat 405 too" {
+            val baseline = mockMvc.perform(options("/api/health")).andReturn()
+            baseline.response.status shouldBe 405
+
+            listOf("/api/health;x=1", "/api//health", "/api/%2e%2e/health", "/api/auth%2Fmethods").forEach { path ->
+                withClue(path) {
+                    val refused = mockMvc.perform(options(URI.create(path))).andReturn()
+                    refused.response.status shouldBe 405
+                    refused.response.getHeader("Allow") shouldBe null
+                    refused.response.contentAsString shouldBe ""
+                }
+            }
+        }
+
         "...and /auth/methods still reports the gate's flag (local: false)" {
             val rec = mockMvc.perform(
                 get(SystemApi.BASE_PATH + SystemApi.PATH_GET_AUTH_METHODS)

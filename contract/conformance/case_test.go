@@ -74,6 +74,25 @@ func TestLoadRejectsUnusableCases(t *testing.T) {
 			want: "needs a case-scoped permit entry",
 		},
 		{
+			// S4 / review finding: a permit on GET /health with
+			// status_by_backend {go: 200, kotlin: 200} is nonsense - the two
+			// backends do not differ at all, so this is not a status
+			// permitted to differ, and belongs in expect.status instead.
+			name: "status_by_backend with the same status for both backends",
+			yaml: "- name: x\n  permit: [p]\n  request: {method: GET, path: /health}\n  expect: {status_by_backend: {go: 200, kotlin: 200}}\n",
+			want: "same status for both backends",
+		},
+		{
+			name: "status_by_backend with an unknown backend",
+			yaml: "- name: x\n  permit: [p]\n  request: {method: GET, path: /health}\n  expect: {status_by_backend: {go: 404, kotlin: 400, postgres: 500}}\n",
+			want: "unknown backend \"postgres\"",
+		},
+		{
+			name: "same_as_for with an unknown backend",
+			yaml: "- name: x\n  request: {method: GET, path: /health}\n  expect: {status: 200, same_as_for: {postgres: {method: GET, path: /nowhere}}}\n",
+			want: "unknown backend \"postgres\"",
+		},
+		{
 			name: "two body assertions",
 			yaml: "- name: x\n  request: {method: GET, path: /health}\n  expect: {status: 200, body_raw: \"a\", body_json: {b: 1}}\n",
 			want: "mutually exclusive",

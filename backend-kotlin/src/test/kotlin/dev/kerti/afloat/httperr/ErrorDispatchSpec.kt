@@ -67,6 +67,12 @@ class ErrorDispatchSpec : DatabaseSpec() {
     private fun headersWithoutPerResponse(response: HttpResponse<String>) =
         response.headers().map().filterKeys { it.lowercase() !in setOf("date", "x-request-id") }
 
+    private fun options(path: String): HttpResponse<String> =
+        HttpClient.newHttpClient().send(
+            HttpRequest.newBuilder(URI("http://localhost:$port$path")).method("OPTIONS", HttpRequest.BodyPublishers.noBody()).build(),
+            HttpResponse.BodyHandlers.ofString(),
+        )
+
     init {
         "answers a filter that throws with the envelope, not Boot's error body" {
             val response = get("/api/boom")
@@ -167,6 +173,45 @@ class ErrorDispatchSpec : DatabaseSpec() {
 
             response.statusCode() shouldBe 500
             response.body() shouldBe """{"code":"INTERNAL"}"""
+        }
+
+        // S1: OptionsRefusedFilter never gets a chance to run on a path the
+        // firewall refuses - FilterChainProxy refuses it before dispatching
+        // into the filter chain at all - so requestRejectedHandler is the one
+        // place left to answer OPTIONS the same flat 405, no Allow, as every
+        // other OPTIONS (#66), on this profile with local login on. The
+        // disabled-login-profile variant is LoginProviderDisabledSpec's.
+        "answers OPTIONS on a firewall-refused path with the same flat 405 as any other OPTIONS" {
+            val baseline = options("/api/health")
+            baseline.statusCode() shouldBe 405
+
+            listOf("/api/health;x=1", "/api//health", "/api/%2e%2e/health", "/api/auth%2Fmethods").forEach { path ->
+                withClue(path) {
+                    val refused = options(path)
+                    refused.statusCode() shouldBe 405
+                    refused.headers().firstValue("Allow").isPresent shouldBe false
+                    refused.body() shouldBe ""
+                }
+            }
+        }
+
+        // N2: unlike a UTF-8 byte in the 0x80-0xFF range (#67), a C0 control
+        // character (0x01) in a header value is refused at the connector
+        // itself, before Spring Security's firewall or this app's own filters
+        // ever see the request - #67's setAllowedHeaderValues only reaches
+        // the firewall, and Tomcat's own HTTP/1.1 parser still treats a raw
+        // control byte as a malformed request line.
+        "still refuses a raw C0 control byte in a header value at the connector" {
+            val raw = Socket("localhost", port).use { socket ->
+                socket.getOutputStream().write(
+                    "GET /api/health HTTP/1.1\r\nHost: localhost\r\nUser-Agent: x".toByteArray() +
+                        byteArrayOf(0x01.toByte()) + "y\r\nConnection: close\r\n\r\n".toByteArray(),
+                )
+                socket.getInputStream().readAllBytes().toString(Charsets.ISO_8859_1)
+            }
+            withClue(raw) {
+                raw.lineSequence().first().trim() shouldBe "HTTP/1.1 400"
+            }
         }
     }
 }

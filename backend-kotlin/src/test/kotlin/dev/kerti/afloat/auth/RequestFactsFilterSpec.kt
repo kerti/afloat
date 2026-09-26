@@ -2,6 +2,8 @@ package dev.kerti.afloat.auth
 
 import io.kotest.assertions.withClue
 import io.kotest.core.spec.style.StringSpec
+import io.kotest.datatest.withData
+import io.kotest.matchers.ints.shouldBeLessThanOrEqual
 import io.kotest.matchers.nulls.shouldBeNull
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.shouldNotBe
@@ -111,9 +113,9 @@ class RequestFactsFilterSpec : StringSpec({
     // hands the filter the mis-decoded String this constructs by hand - the
     // same three chars "Afloat — test"'s UTF-8 bytes (E2 80 94, the em dash)
     // become when each is read back as its own Latin-1 codepoint. Without
-    // reinterpretHeaderAsUtf8, sessions.user_agent would hold different bytes
-    // for the same wire bytes than Go's r.UserAgent(), which carries them
-    // through untouched.
+    // sanitizeUserAgent's decode step, sessions.user_agent would hold
+    // different bytes for the same wire bytes than Go's r.UserAgent(), which
+    // carries them through untouched.
     "recovers a UTF-8 User-Agent Tomcat mis-decoded as ISO-8859-1" {
         val wireBytes = "Afloat — test".toByteArray(Charsets.UTF_8)
         val asTomcatDeliversIt = String(wireBytes, Charsets.ISO_8859_1)
@@ -135,8 +137,59 @@ class RequestFactsFilterSpec : StringSpec({
         seen?.userAgent shouldBe "Afloat — test"
     }
 
-    "reinterpretHeaderAsUtf8 leaves a plain ASCII value untouched" {
-        reinterpretHeaderAsUtf8("conformance/1.0") shouldBe "conformance/1.0"
+    // R1: the storage rule for sessions.user_agent, in order - absent/empty is
+    // null (#32 item 4, unchanged), not-valid-UTF-8 is null (a stored invalid
+    // header used to fail the whole login with a Postgres 500 on Go, and
+    // silently stored U+FFFD mojibake here before this rule), otherwise
+    // truncated to 512 Unicode code points on a code point boundary. Go's
+    // request_test.go holds the same rows. Each `wire` is the exact bytes a
+    // client sent; asTomcatDeliversIt reproduces what Tomcat's ISO-8859-1
+    // header decoding hands the filter for those bytes.
+    fun asTomcatDeliversIt(wire: ByteArray): String = String(wire, Charsets.ISO_8859_1)
+
+    data class UserAgentCase(val name: String, val wire: ByteArray, val want: String?)
+
+    withData(
+        nameFn = { it.name },
+        listOf(
+            UserAgentCase("ordinary ASCII passes through", "conformance/1.0".toByteArray(Charsets.US_ASCII), "conformance/1.0"),
+            UserAgentCase("valid multibyte UTF-8 passes through", "Afloat — test 🔐".toByteArray(Charsets.UTF_8), "Afloat — test 🔐"),
+            UserAgentCase("lone continuation byte 0x85 is invalid UTF-8", byteArrayOf('x'.code.toByte(), 0x85.toByte(), 'y'.code.toByte()), null),
+            UserAgentCase("overlong encoding C0 AF is invalid UTF-8", byteArrayOf('x'.code.toByte(), 0xc0.toByte(), 0xaf.toByte(), 'y'.code.toByte()), null),
+            UserAgentCase("a truncated 3-byte sequence is invalid UTF-8", byteArrayOf('x'.code.toByte(), 0xe2.toByte(), 0x80.toByte(), 'y'.code.toByte()), null),
+            UserAgentCase("a lone 0xFF is invalid UTF-8", byteArrayOf('x'.code.toByte(), 0xff.toByte(), 'y'.code.toByte()), null),
+            UserAgentCase("Latin-1 'café' (not UTF-8) is invalid UTF-8", byteArrayOf('c'.code.toByte(), 'a'.code.toByte(), 'f'.code.toByte(), 0xe9.toByte()), null),
+            UserAgentCase(
+                "valid text with one invalid byte is invalid UTF-8 as a whole",
+                byteArrayOf('a'.code.toByte(), 'b'.code.toByte(), 'c'.code.toByte(), 0x85.toByte(), 'd'.code.toByte(), 'e'.code.toByte(), 'f'.code.toByte()),
+                null,
+            ),
+            UserAgentCase("511 code points is untouched", "a".repeat(511).toByteArray(Charsets.US_ASCII), "a".repeat(511)),
+            UserAgentCase(
+                "512 code points, multibyte at the boundary, is untouched",
+                ("a".repeat(511) + "💚").toByteArray(Charsets.UTF_8),
+                "a".repeat(511) + "💚",
+            ),
+            UserAgentCase(
+                "513 code points, multibyte astride the cut, truncates to 512 without splitting it",
+                ("a".repeat(511) + "💚" + "a").toByteArray(Charsets.UTF_8),
+                "a".repeat(511) + "💚",
+            ),
+        ),
+    ) { case ->
+        val got = sanitizeUserAgent(asTomcatDeliversIt(case.wire))
+        got shouldBe case.want
+        if (got != null) {
+            got.codePointCount(0, got.length) shouldBeLessThanOrEqual 512
+        }
+    }
+
+    "sanitizeUserAgent treats an absent header as null" {
+        sanitizeUserAgent(null) shouldBe null
+    }
+
+    "sanitizeUserAgent treats an empty header as null" {
+        sanitizeUserAgent("") shouldBe null
     }
 
     "carries the normalised address into the context" {

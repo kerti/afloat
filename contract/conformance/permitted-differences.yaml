@@ -68,6 +68,24 @@
     valve would need maintaining across every Tomcat upgrade for a difference
     no caller can trigger by accident.
 
+- name: options-star
+  issue: "66"
+  status: true
+  headers: [Allow, Content-Type, Cache-Control, Content-Language, Expires, Pragma, X-Content-Type-Options, X-Frame-Options, X-Xss-Protection]
+  body: true
+  why: >
+    `OPTIONS *` (RFC 9110 §7.1's asterisk-form) is the one OPTIONS request
+    optionsRefused cannot answer on Go without an extra opt-out: net/http
+    intercepts it before Handler ever runs and answers 200 itself, unless
+    Server.DisableGeneralOptionsHandler is set (S2, cmd/afloat/main.go) - which
+    it now is, so Go's answer matches every other OPTIONS. Tomcat has no such
+    switch: its CoyoteAdapter answers `OPTIONS *` with its own 200 and an Allow
+    header, before Spring Security's filter chain - OptionsRefusedFilter
+    included - ever runs. No client sends this form (Afloat is same-origin
+    with no CORS, and browsers reserve it for CONNECT-tunnelled proxies), so
+    fixing it in Kotlin would mean a custom Tomcat connector for a request
+    shape nothing here ever makes.
+
 - name: unmatched-path-404
   issue: "24"
   headers: [Content-Type]

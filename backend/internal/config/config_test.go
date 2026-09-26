@@ -104,6 +104,12 @@ func TestLoadRejectsBadEnums(t *testing.T) {
 		{"zero first backoff", "LOGIN_FIRST_BACKOFF", "0s"},
 		{"negative first backoff", "LOGIN_FIRST_BACKOFF", "-1s"},
 		{"first backoff below 1ms", "LOGIN_FIRST_BACKOFF", "999us"},
+		// S3: whitespace-only is not the same as unset (#69's empty-string
+		// rule) - caarlos0/env's getOr only special-cases `value == ""`, so
+		// this reaches time.ParseDuration and is refused like any other
+		// unparseable spelling.
+		{"first backoff is whitespace", "LOGIN_FIRST_BACKOFF", "   "},
+		{"first backoff is a tab", "LOGIN_FIRST_BACKOFF", "\t"},
 		// A cap below the first window: the second failure would wait less
 		// than the first.
 		{"max backoff below the first", "LOGIN_MAX_BACKOFF", "500ms"},

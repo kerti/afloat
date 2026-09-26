@@ -72,9 +72,145 @@
       method: OPTIONS
       path: /no-such-route
 
+# S1: OptionsRefusedFilter never gets a chance to run on a path the firewall
+# refuses (`;x`, `//`, `%2e%2e`, `%2F`) - the firewall refuses it before
+# FilterChainProxy dispatches into the filter chain at all - so Kotlin's
+# requestRejectedHandler special-cases OPTIONS to answer the same flat 405
+# there too. same_as (not same_as_for): both backends now agree, so the
+# relation holds identically on each - this backend's answer to the malformed
+# path equals its own answer to an ordinary OPTIONS. Run on both profiles: the
+# disabled-login gate being off must not change what a firewall-refused
+# OPTIONS answers either.
+- name: http methods - OPTIONS on a firewall-refused path matches an ordinary OPTIONS
+  issue: "66"
+  request:
+    method: OPTIONS
+    path: /health;x=1
+  expect:
+    status: 405
+    same_as:
+      method: OPTIONS
+      path: /health
+
+- name: http methods - OPTIONS on a double slash matches an ordinary OPTIONS
+  issue: "66"
+  request:
+    method: OPTIONS
+    path: //health
+  expect:
+    status: 405
+    same_as:
+      method: OPTIONS
+      path: /health
+
+- name: http methods - OPTIONS on a dot segment matches an ordinary OPTIONS
+  issue: "66"
+  request:
+    method: OPTIONS
+    path: /%2e%2e/health
+  expect:
+    status: 405
+    same_as:
+      method: OPTIONS
+      path: /health
+
+- name: http methods - OPTIONS on an encoded slash matches an ordinary OPTIONS
+  issue: "66"
+  request:
+    method: OPTIONS
+    path: /auth%2Fmethods
+  expect:
+    status: 405
+    same_as:
+      method: OPTIONS
+      path: /health
+
+- name: http methods - OPTIONS on a firewall-refused path matches an ordinary OPTIONS (local login disabled)
+  issue: "66"
+  profile: local-disabled
+  request:
+    method: OPTIONS
+    path: /health;x=1
+  expect:
+    status: 405
+    same_as:
+      method: OPTIONS
+      path: /health
+
+- name: http methods - OPTIONS on a double slash matches an ordinary OPTIONS (local login disabled)
+  issue: "66"
+  profile: local-disabled
+  request:
+    method: OPTIONS
+    path: //health
+  expect:
+    status: 405
+    same_as:
+      method: OPTIONS
+      path: /health
+
+- name: http methods - OPTIONS on a dot segment matches an ordinary OPTIONS (local login disabled)
+  issue: "66"
+  profile: local-disabled
+  request:
+    method: OPTIONS
+    path: /%2e%2e/health
+  expect:
+    status: 405
+    same_as:
+      method: OPTIONS
+      path: /health
+
+- name: http methods - OPTIONS on an encoded slash matches an ordinary OPTIONS (local login disabled)
+  issue: "66"
+  profile: local-disabled
+  request:
+    method: OPTIONS
+    path: /auth%2Fmethods
+  expect:
+    status: 405
+    same_as:
+      method: OPTIONS
+      path: /health
+
+# The one connector-level shape (#64) under OPTIONS: Go's optionsRefused
+# intercepts every OPTIONS before path validity is even examined, so it still
+# answers 405 (matching every other OPTIONS, via same_as_for); Tomcat's
+# connector refuses %00 before Spring's filter chain - OptionsRefusedFilter
+# included - ever runs, so Kotlin still answers its connector-level 400.
+- name: http methods - OPTIONS on a connector-refused path is a permitted connector-vs-router difference
+  issue: "64"
+  permit: [malformed-path-connector-400]
+  request:
+    method: OPTIONS
+    path: /health%00
+  expect:
+    status_by_backend: {go: 405, kotlin: 400}
+    same_as_for:
+      go:
+        method: OPTIONS
+        path: /health
+
 # The first 405 case in the harness (#66's acceptance criterion): a wrong
 # method on a route that exists, Go's chi default answered before this ruling
 # and after it alike, pinned as the reference both backends must give.
+# S2: OPTIONS * (RFC 9110 §7.1) is answered by the connector itself on both
+# backends, before Handler/the filter chain gets a look - see the
+# `options-star` permitted difference for why neither can be made to match
+# the other's bytes.
+- name: http methods - OPTIONS star is a permitted connector difference
+  issue: "66"
+  permit: [options-star]
+  request:
+    method: OPTIONS
+    raw_target: "*"
+  expect:
+    status_by_backend: {go: 405, kotlin: 200}
+    same_as_for:
+      go:
+        method: OPTIONS
+        path: /health
+
 - name: http methods - PUT on GET-only /health is method not allowed
   issue: "66"
   request:

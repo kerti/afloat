@@ -79,8 +79,15 @@ data class AppConfig(
             // only falls back when the property is absent, not when it resolves
             // to "" - so application.yaml's defaults cannot be trusted to catch
             // this case, and each duration is re-defaulted here instead.
+            //
+            // ifEmpty, not ifBlank (S3, second review of #69): Go's getOr only
+            // special-cases the exact empty string (`value == ""`), so
+            // `LOGIN_FIRST_BACKOFF="   "` reaches time.ParseDuration and is
+            // refused there, same as any other unparseable spelling. ifBlank
+            // would have treated whitespace-only as unset too, accepting a
+            // value Go refuses.
             fun requiredDuration(name: String, default: String): String =
-                required(name).ifBlank { default }
+                required(name).ifEmpty { default }
 
             val cfg = AppConfig(
                 databaseUrl = values["DATABASE_URL"] ?: "",

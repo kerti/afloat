@@ -207,18 +207,20 @@ func CheckPermits(cases []Case, p *PermittedSet) error {
 					c.SourceFile, c.Name, n)
 			}
 			cited[n] = true
-			// A case using status_by_backend already asserts something real
-			// and per-backend: which status each one gives. Also demanding an
-			// exact body match for what is, on the two-different-status cases
-			// this exists for (#64), a framework-rendered HTML error page
-			// would be the same maintenance burden the ruling rejected a
-			// custom Tomcat valve for - pinned against a body that changes
-			// across Tomcat's own point releases, for no gain over the status
-			// already pinned.
-			if e.Body && c.Expect.StatusByBackend == nil &&
-				c.Expect.SameAs == nil && c.Expect.BodyJSON == nil && c.Expect.BodyRaw == "" && !c.Expect.BodyEmpty {
+			// A case permitted a body difference must still pin SOME body,
+			// on SOME backend, or the parity check has gone blind on it
+			// entirely. same_as_for (SameAsFor) counts alongside same_as: a
+			// status_by_backend case (#64) usually cannot use plain same_as
+			// on both backends (Go's malformed-path answer IS its own
+			// unregistered-path 404; Kotlin's connector-level 400 is not),
+			// but pinning Go's side that way, plus the status already pinned,
+			// is enough - a byte-exact pin of a framework-rendered HTML page
+			// that changes across Tomcat's own point releases would be the
+			// maintenance burden the #64 ruling rejected a Tomcat valve for.
+			if e.Body && c.Expect.SameAs == nil && len(c.Expect.SameAsFor) == 0 &&
+				c.Expect.BodyJSON == nil && c.Expect.BodyRaw == "" && !c.Expect.BodyEmpty {
 				return fmt.Errorf("%s: %q permits a body difference via %q but asserts nothing about the body; "+
-					"add expect.same_as or a body assertion", c.SourceFile, c.Name, n)
+					"add expect.same_as, expect.same_as_for, or a body assertion", c.SourceFile, c.Name, n)
 			}
 			if e.Status && c.Expect.StatusByBackend == nil {
 				return fmt.Errorf("%s: %q permits a status difference via %q but expect.status pins one value for "+

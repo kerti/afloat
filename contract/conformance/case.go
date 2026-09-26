@@ -7,6 +7,7 @@
 package conformance
 
 import (
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -70,6 +71,14 @@ type Request struct {
 	// /api, same as Path, and takes its leading slash the same way.
 	RawTarget string            `yaml:"raw_target"`
 	Headers   map[string]string `yaml:"headers"`
+	// HeadersHex is Headers' alternative for a value that is not valid UTF-8 -
+	// a YAML string is Unicode text, so it cannot hold arbitrary bytes, and a
+	// `\xHH` escape in YAML means the Unicode code point U+00HH, not the raw
+	// byte (R1: proving sessions.user_agent's invalid-UTF-8 rows needs the raw
+	// byte on the wire, such as a lone 0x85). Each value is hex, decoded and
+	// sent as the header's exact bytes; do() rejects a name also set in
+	// Headers.
+	HeadersHex map[string]string `yaml:"headers_hex"`
 	// Body is sent verbatim. A string rather than a map, because some cases
 	// exist precisely to send bytes that are not valid JSON.
 	Body string `yaml:"body"`
@@ -149,6 +158,16 @@ type Expect struct {
 	// the two backends' unregistered-path answers are permitted to differ.
 	SameAs *Request `yaml:"same_as"`
 
+	// SameAsFor is SameAs restricted to one backend ("go"/"kotlin"), for a
+	// case whose two backends are permitted to differ so much (a
+	// status_by_backend case, #64) that the relation SameAs asserts holds on
+	// one backend and not the other: Go's malformed-path answer IS its own
+	// unregistered-path 404, but Kotlin's connector-level 400 (or OPTIONS *'s
+	// 200) is not that backend's own 404. Keyed the same as StatusByBackend.
+	// A case may set SameAs, SameAsFor, both (for different backends), or
+	// neither.
+	SameAsFor map[string]*Request `yaml:"same_as_for"`
+
 	// Cookies asserts every Set-Cookie on the answer, by cookie name. A nil map
 	// asserts nothing; an empty one (`cookies: {}`) asserts that no cookie is
 	// set at all, and any cookie not named is a failure.
@@ -168,6 +187,16 @@ func (e Expect) StatusFor(backend string) int {
 		return e.StatusByBackend[backend]
 	}
 	return e.Status
+}
+
+// SameAsRequest is the same_as request one backend's answer must equal, if
+// any: SameAsFor's entry for backend when the case sets one, else the shared
+// SameAs, else nil (a case need not use either).
+func (e Expect) SameAsRequest(backend string) *Request {
+	if r, ok := e.SameAsFor[backend]; ok {
+		return r
+	}
+	return e.SameAs
 }
 
 // CookieExpect is one Set-Cookie, attribute by attribute. Every field but
@@ -280,13 +309,27 @@ func (c *Case) validate() error {
 	case c.Expect.Status == 0 && c.Expect.StatusByBackend == nil:
 		return fmt.Errorf("%s: expect.status is required (or expect.status_by_backend, for a case whose backends differ by ruling)", c.Name)
 	case c.Expect.StatusByBackend != nil:
+		for k := range c.Expect.StatusByBackend {
+			if k != "go" && k != "kotlin" {
+				return fmt.Errorf("%s: expect.status_by_backend has an unknown backend %q, want go or kotlin", c.Name, k)
+			}
+		}
 		for _, backend := range []string{"go", "kotlin"} {
 			if c.Expect.StatusByBackend[backend] == 0 {
 				return fmt.Errorf("%s: expect.status_by_backend is missing %q", c.Name, backend)
 			}
 		}
+		if c.Expect.StatusByBackend["go"] == c.Expect.StatusByBackend["kotlin"] {
+			return fmt.Errorf("%s: expect.status_by_backend has the same status for both backends (%d); "+
+				"use expect.status instead", c.Name, c.Expect.StatusByBackend["go"])
+		}
 		if len(c.Permit) == 0 {
 			return fmt.Errorf("%s: expect.status_by_backend needs a case-scoped permit entry with `status: true`", c.Name)
+		}
+	}
+	for k := range c.Expect.SameAsFor {
+		if k != "go" && k != "kotlin" {
+			return fmt.Errorf("%s: expect.same_as_for has an unknown backend %q, want go or kotlin", c.Name, k)
 		}
 	}
 	if c.Expect.BodyJSON != nil && c.Expect.BodyRaw != "" {
@@ -300,6 +343,11 @@ func (c *Case) validate() error {
 	}
 	if s := c.Expect.SameAs; s != nil {
 		if err := s.validate(c.Name, "expect.same_as"); err != nil {
+			return err
+		}
+	}
+	for backend, s := range c.Expect.SameAsFor {
+		if err := s.validate(c.Name, "expect.same_as_for."+backend); err != nil {
 			return err
 		}
 	}
@@ -360,12 +408,24 @@ func (r *Request) validate(caseName, at string) error {
 	switch {
 	case r.Path != "" && r.RawTarget != "":
 		return fmt.Errorf("%s: %s.path and %s.raw_target are mutually exclusive", caseName, at, at)
+	case r.RawTarget == "*":
+		// The asterisk-form request-target (RFC 9110 §7.1), OPTIONS *'s own -
+		// never nested under the API base, so the "/" prefix rule does not
+		// apply to it (S2).
 	case r.RawTarget != "":
 		if !strings.HasPrefix(r.RawTarget, "/") {
-			return fmt.Errorf("%s: %s.raw_target must start with / and exclude the /api base", caseName, at)
+			return fmt.Errorf("%s: %s.raw_target must start with / (or be exactly \"*\") and exclude the /api base", caseName, at)
 		}
 	case !strings.HasPrefix(r.Path, "/"):
 		return fmt.Errorf("%s: %s.path must start with / and exclude the /api base", caseName, at)
+	}
+	for name := range r.HeadersHex {
+		if _, dup := r.Headers[name]; dup {
+			return fmt.Errorf("%s: %s.headers_hex.%s also appears in %s.headers", caseName, at, name, at)
+		}
+		if _, err := hex.DecodeString(r.HeadersHex[name]); err != nil {
+			return fmt.Errorf("%s: %s.headers_hex.%s is not valid hex: %w", caseName, at, name, err)
+		}
 	}
 	if r.Pad != nil {
 		if r.Pad.With == "" || r.Pad.Count <= 0 {

@@ -149,7 +149,18 @@ class SecurityConfiguration {
     @Bean
     fun requestRejectedHandler() = RequestRejectedHandler { request, response, _ ->
         SecurityHeaders.write(request, response)
-        response.status = if (pathRefused(request)) HttpServletResponse.SC_NOT_FOUND else HttpServletResponse.SC_BAD_REQUEST
+        response.status = when {
+            // S1: OPTIONS on a firewall-refused path (`;x`, `//`, `%2e%2e`,
+            // `%2F`) must answer the same flat 405 as every other OPTIONS
+            // (#66) - OptionsRefusedFilter never gets a chance to run here,
+            // since the firewall refuses the request before FilterChainProxy
+            // ever dispatches into the filter chain, so this handler is the
+            // one place left to make that hold. No Allow header, matching
+            // optionsRefused (Go: httpserver/middleware.go).
+            request.method == "OPTIONS" -> HttpServletResponse.SC_METHOD_NOT_ALLOWED
+            pathRefused(request) -> HttpServletResponse.SC_NOT_FOUND
+            else -> HttpServletResponse.SC_BAD_REQUEST
+        }
     }
 
     private fun pathRefused(request: HttpServletRequest): Boolean = try {

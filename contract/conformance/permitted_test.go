@@ -131,12 +131,19 @@ func TestCheckPermits(t *testing.T) {
 	statusPinnedButUnpermitted.Expect.SameAs = sameAs
 	statusPinnedButUnpermitted.Expect.StatusByBackend = map[string]int{"go": 404, "kotlin": 400}
 
-	// #64's own shape: a body difference is permitted alongside the status
-	// one, and status_by_backend alone is enough pinning - no body assertion
-	// demanded on top of it (a framework-rendered HTML page, pinning it would
-	// be the maintenance burden the ruling rejected a Tomcat valve for).
-	statusAndBodyPinnedByStatusAlone := conformance.Case{Name: "s4", Permit: []string{"status-and-body-diff"}}
-	statusAndBodyPinnedByStatusAlone.Expect.StatusByBackend = map[string]int{"go": 404, "kotlin": 400}
+	// S4 restored the strict rule: status_by_backend alone does NOT excuse a
+	// permitted body difference from being pinned some other way.
+	statusByBackendAloneIsNotEnough := conformance.Case{Name: "s4", Permit: []string{"status-and-body-diff"}}
+	statusByBackendAloneIsNotEnough.Expect.StatusByBackend = map[string]int{"go": 404, "kotlin": 400}
+
+	// #64's own shape: same_as_for pins Go's side (its malformed-path answer
+	// IS its own unregistered-path 404), and that plus the status already
+	// pinned is enough - no byte-exact pin of Kotlin's framework-rendered
+	// page demanded on top, which would be the maintenance burden the ruling
+	// rejected a Tomcat valve for.
+	statusAndBodyPinnedViaSameAsFor := conformance.Case{Name: "s5", Permit: []string{"status-and-body-diff"}}
+	statusAndBodyPinnedViaSameAsFor.Expect.StatusByBackend = map[string]int{"go": 404, "kotlin": 400}
+	statusAndBodyPinnedViaSameAsFor.Expect.SameAsFor = map[string]*conformance.Request{"go": sameAs}
 
 	for _, tc := range []struct {
 		name  string
@@ -149,8 +156,13 @@ func TestCheckPermits(t *testing.T) {
 		{"status permitted, status unpinned", []conformance.Case{withStatusByBackend, statusPermittedButUnpinned}, "expect.status pins one value"},
 		{"status pinned, status unpermitted", []conformance.Case{withStatusByBackend, statusPinnedButUnpermitted}, "permits no case-scoped entry with `status: true`"},
 		{
-			"status_by_backend alone excuses a permitted body difference and every entry is cited",
-			[]conformance.Case{withSameAs, withStatusByBackend, statusAndBodyPinnedByStatusAlone},
+			"status_by_backend alone does not excuse a permitted body difference (S4)",
+			[]conformance.Case{withSameAs, withStatusByBackend, statusByBackendAloneIsNotEnough},
+			"asserts nothing about the body",
+		},
+		{
+			"same_as_for pins the body status_by_backend alone could not, and every entry is cited",
+			[]conformance.Case{withSameAs, withStatusByBackend, statusAndBodyPinnedViaSameAsFor},
 			"",
 		},
 	} {

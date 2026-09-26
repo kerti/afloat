@@ -32,7 +32,9 @@ class NormalizedServerTimeoutPropertySource(private val environment: Environment
             // falls back when the property is ABSENT, never when it resolves to
             // "", so a blank HTTP_READ_TIMEOUT would otherwise reach DurationParser
             // and fail Boot to start rather than take its documented default.
-            .ifBlank { relay.default }
+            // ifEmpty, not ifBlank (S3): whitespace-only is refused, matching
+            // Go, which only special-cases the exact empty string.
+            .ifEmpty { relay.default }
         return try {
             DurationParser.parse(raw).toString()
         } catch (e: IllegalArgumentException) {

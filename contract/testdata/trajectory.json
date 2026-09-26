@@ -1,0 +1,531 @@
+{
+  "_comment": [
+    "The trajectory calculation both backends must implement alike (docs/CONTEXT.md §Calculation",
+    "spec, BOOTSTRAP.md §6, issue #73). Both suites read this file; neither keeps a copy of the",
+    "numbers.",
+    "`parameters`: the fixture-wide defaults. `warm_up_days` pins State to afloat while",
+    "days_elapsed < warm_up_days. `drifting_below` and `taking_on_water_below` are dimensionless",
+    "multipliers of the Baseline Daily Budget (B): State compares Trajectory Variance (V) against",
+    "threshold x B directly, with no division, so a non-terminating B never enters the comparison",
+    "as a rounded number. Any `figures` row may override any of the three via its own",
+    "`warm_up_days` / `drifting_below` / `taking_on_water_below` fields.",
+    "`figures` rows: symbols follow CONTEXT.md's table (P=daily_pool, D=period_days,",
+    "e=days_elapsed, S_settled=settled_spend, S_today=today_spend, S_future=future_spend). Every",
+    "money figure is a 4dp string. `forward_daily_rate` is null exactly when r = D - e = 1 (the",
+    "last day of the Period), per CONTEXT's 'undefined on the last day' rule. Every allowance",
+    "figure (baseline_daily_budget, todays_allowance, forward_daily_rate) is floored toward -inf at",
+    "4dp (R1); left_to_spend_today is floored A minus the exact S_today, never independently",
+    "rounded. trajectory_variance and buffer_days go on the wire half-up (half away from zero) at",
+    "4dp (R2), computed from exact values, never from another figure's rounded output.",
+    "`target_line` rows: the mid-period Budget change from CONTEXT §Mid-period Budget changes.",
+    "`effective_day` is 1-indexed (`j`); T(j-1) is the cumulative target through day j-1 under the",
+    "old baseline. `expected.targets` lists the cumulative target at specific days, half-up at 4dp;",
+    "`expected.baseline_after` is the new baseline (B_new), floored at 4dp, and may be zero or",
+    "negative when the clamp engages (P_new <= T(j-1)) - the target line itself stays flat at",
+    "T(j-1) for the rest of the Period in that case, never dipping below it.",
+    "Every expected value here was computed independently in exact rational arithmetic (Python's",
+    "fractions.Fraction) and cross-checked against Python's decimal module with ROUND_FLOOR /",
+    "ROUND_HALF_UP, not derived from either backend's implementation."
+  ],
+  "parameters": {
+    "warm_up_days": 3,
+    "drifting_below": "-1",
+    "taking_on_water_below": "-3"
+  },
+  "figures": [
+    {
+      "name": "day_1_nothing_spent",
+      "inputs": {
+        "daily_pool": "6000000.0000",
+        "period_days": 30,
+        "days_elapsed": 0,
+        "settled_spend": "0.0000",
+        "today_spend": "0.0000",
+        "future_spend": "0.0000",
+        "mode": "adaptive"
+      },
+      "expected": {
+        "baseline_daily_budget": "200000.0000",
+        "available_pool": "6000000.0000",
+        "todays_allowance": "200000.0000",
+        "left_to_spend_today": "200000.0000",
+        "forward_daily_rate": "206896.5517",
+        "trajectory_variance": "0.0000",
+        "buffer_days": "0.0000",
+        "state": "afloat"
+      }
+    },
+    {
+      "name": "day_2_spent_100k",
+      "inputs": {
+        "daily_pool": "6000000.0000",
+        "period_days": 30,
+        "days_elapsed": 1,
+        "settled_spend": "100000.0000",
+        "today_spend": "0.0000",
+        "future_spend": "0.0000",
+        "mode": "adaptive"
+      },
+      "expected": {
+        "baseline_daily_budget": "200000.0000",
+        "available_pool": "6000000.0000",
+        "todays_allowance": "203448.2758",
+        "left_to_spend_today": "203448.2758",
+        "forward_daily_rate": "210714.2857",
+        "trajectory_variance": "100000.0000",
+        "buffer_days": "0.5000",
+        "state": "afloat"
+      }
+    },
+    {
+      "name": "day_16_exactly_on_pace",
+      "inputs": {
+        "daily_pool": "6000000.0000",
+        "period_days": 30,
+        "days_elapsed": 15,
+        "settled_spend": "3000000.0000",
+        "today_spend": "0.0000",
+        "future_spend": "0.0000",
+        "mode": "adaptive"
+      },
+      "expected": {
+        "baseline_daily_budget": "200000.0000",
+        "available_pool": "6000000.0000",
+        "todays_allowance": "200000.0000",
+        "left_to_spend_today": "200000.0000",
+        "forward_daily_rate": "214285.7142",
+        "trajectory_variance": "0.0000",
+        "buffer_days": "0.0000",
+        "state": "afloat"
+      }
+    },
+    {
+      "name": "day_16_600k_over",
+      "inputs": {
+        "daily_pool": "6000000.0000",
+        "period_days": 30,
+        "days_elapsed": 15,
+        "settled_spend": "3600000.0000",
+        "today_spend": "0.0000",
+        "future_spend": "0.0000",
+        "mode": "adaptive"
+      },
+      "expected": {
+        "baseline_daily_budget": "200000.0000",
+        "available_pool": "6000000.0000",
+        "todays_allowance": "160000.0000",
+        "left_to_spend_today": "160000.0000",
+        "forward_daily_rate": "171428.5714",
+        "trajectory_variance": "-600000.0000",
+        "buffer_days": "-3.0000",
+        "state": "drifting"
+      }
+    },
+    {
+      "name": "day_16_700k_over",
+      "inputs": {
+        "daily_pool": "6000000.0000",
+        "period_days": 30,
+        "days_elapsed": 15,
+        "settled_spend": "3700000.0000",
+        "today_spend": "0.0000",
+        "future_spend": "0.0000",
+        "mode": "adaptive"
+      },
+      "expected": {
+        "baseline_daily_budget": "200000.0000",
+        "available_pool": "6000000.0000",
+        "todays_allowance": "153333.3333",
+        "left_to_spend_today": "153333.3333",
+        "forward_daily_rate": "164285.7142",
+        "trajectory_variance": "-700000.0000",
+        "buffer_days": "-3.5000",
+        "state": "taking_on_water"
+      }
+    },
+    {
+      "name": "day_30_settled_5_5m_today_200k",
+      "inputs": {
+        "daily_pool": "6000000.0000",
+        "period_days": 30,
+        "days_elapsed": 29,
+        "settled_spend": "5500000.0000",
+        "today_spend": "200000.0000",
+        "future_spend": "0.0000",
+        "mode": "adaptive"
+      },
+      "expected": {
+        "baseline_daily_budget": "200000.0000",
+        "available_pool": "6000000.0000",
+        "todays_allowance": "500000.0000",
+        "left_to_spend_today": "300000.0000",
+        "forward_daily_rate": null,
+        "trajectory_variance": "300000.0000",
+        "buffer_days": "1.5000",
+        "state": "afloat"
+      }
+    },
+    {
+      "name": "day_10_500k_future_dated",
+      "inputs": {
+        "daily_pool": "6000000.0000",
+        "period_days": 30,
+        "days_elapsed": 9,
+        "settled_spend": "1800000.0000",
+        "today_spend": "0.0000",
+        "future_spend": "500000.0000",
+        "mode": "adaptive"
+      },
+      "expected": {
+        "baseline_daily_budget": "200000.0000",
+        "available_pool": "5500000.0000",
+        "todays_allowance": "176190.4761",
+        "left_to_spend_today": "176190.4761",
+        "forward_daily_rate": "185000.0000",
+        "trajectory_variance": "0.0000",
+        "buffer_days": "0.0000",
+        "state": "afloat"
+      }
+    },
+    {
+      "name": "state_boundary_afloat_at_exactly_negative_1B",
+      "inputs": {
+        "daily_pool": "6000000.0000",
+        "period_days": 30,
+        "days_elapsed": 10,
+        "settled_spend": "2200000.0000",
+        "today_spend": "0.0000",
+        "future_spend": "0.0000",
+        "mode": "adaptive"
+      },
+      "expected": {
+        "baseline_daily_budget": "200000.0000",
+        "available_pool": "6000000.0000",
+        "todays_allowance": "190000.0000",
+        "left_to_spend_today": "190000.0000",
+        "forward_daily_rate": "200000.0000",
+        "trajectory_variance": "-200000.0000",
+        "buffer_days": "-1.0000",
+        "state": "afloat"
+      }
+    },
+    {
+      "name": "state_boundary_drifting_just_below_negative_1B",
+      "inputs": {
+        "daily_pool": "6000000.0000",
+        "period_days": 30,
+        "days_elapsed": 10,
+        "settled_spend": "2200000.0001",
+        "today_spend": "0.0000",
+        "future_spend": "0.0000",
+        "mode": "adaptive"
+      },
+      "expected": {
+        "baseline_daily_budget": "200000.0000",
+        "available_pool": "6000000.0000",
+        "todays_allowance": "189999.9999",
+        "left_to_spend_today": "189999.9999",
+        "forward_daily_rate": "199999.9999",
+        "trajectory_variance": "-200000.0001",
+        "buffer_days": "-1.0000",
+        "state": "drifting"
+      }
+    },
+    {
+      "name": "state_boundary_drifting_at_exactly_negative_3B",
+      "inputs": {
+        "daily_pool": "6000000.0000",
+        "period_days": 30,
+        "days_elapsed": 10,
+        "settled_spend": "2600000.0000",
+        "today_spend": "0.0000",
+        "future_spend": "0.0000",
+        "mode": "adaptive"
+      },
+      "expected": {
+        "baseline_daily_budget": "200000.0000",
+        "available_pool": "6000000.0000",
+        "todays_allowance": "170000.0000",
+        "left_to_spend_today": "170000.0000",
+        "forward_daily_rate": "178947.3684",
+        "trajectory_variance": "-600000.0000",
+        "buffer_days": "-3.0000",
+        "state": "drifting"
+      }
+    },
+    {
+      "name": "state_boundary_taking_on_water_just_below_negative_3B",
+      "inputs": {
+        "daily_pool": "6000000.0000",
+        "period_days": 30,
+        "days_elapsed": 10,
+        "settled_spend": "2600000.0001",
+        "today_spend": "0.0000",
+        "future_spend": "0.0000",
+        "mode": "adaptive"
+      },
+      "expected": {
+        "baseline_daily_budget": "200000.0000",
+        "available_pool": "6000000.0000",
+        "todays_allowance": "169999.9999",
+        "left_to_spend_today": "169999.9999",
+        "forward_daily_rate": "178947.3684",
+        "trajectory_variance": "-600000.0001",
+        "buffer_days": "-3.0000",
+        "state": "taking_on_water"
+      }
+    },
+    {
+      "name": "warmup_e2_deep_underwater_stays_afloat",
+      "inputs": {
+        "daily_pool": "6000000.0000",
+        "period_days": 30,
+        "days_elapsed": 2,
+        "settled_spend": "1300000.0000",
+        "today_spend": "0.0000",
+        "future_spend": "0.0000",
+        "mode": "adaptive"
+      },
+      "expected": {
+        "baseline_daily_budget": "200000.0000",
+        "available_pool": "6000000.0000",
+        "todays_allowance": "167857.1428",
+        "left_to_spend_today": "167857.1428",
+        "forward_daily_rate": "174074.0740",
+        "trajectory_variance": "-900000.0000",
+        "buffer_days": "-4.5000",
+        "state": "afloat"
+      }
+    },
+    {
+      "name": "warmup_e3_same_numbers_taking_on_water",
+      "inputs": {
+        "daily_pool": "6000000.0000",
+        "period_days": 30,
+        "days_elapsed": 3,
+        "settled_spend": "1300000.0000",
+        "today_spend": "0.0000",
+        "future_spend": "0.0000",
+        "mode": "adaptive"
+      },
+      "expected": {
+        "baseline_daily_budget": "200000.0000",
+        "available_pool": "6000000.0000",
+        "todays_allowance": "174074.0740",
+        "left_to_spend_today": "174074.0740",
+        "forward_daily_rate": "180769.2307",
+        "trajectory_variance": "-700000.0000",
+        "buffer_days": "-3.5000",
+        "state": "taking_on_water"
+      }
+    },
+    {
+      "name": "warmup_override_e3_stays_afloat_with_4day_floor",
+      "inputs": {
+        "daily_pool": "6000000.0000",
+        "period_days": 30,
+        "days_elapsed": 3,
+        "settled_spend": "1300000.0000",
+        "today_spend": "0.0000",
+        "future_spend": "0.0000",
+        "mode": "adaptive",
+        "warm_up_days": 4
+      },
+      "expected": {
+        "baseline_daily_budget": "200000.0000",
+        "available_pool": "6000000.0000",
+        "todays_allowance": "174074.0740",
+        "left_to_spend_today": "174074.0740",
+        "forward_daily_rate": "180769.2307",
+        "trajectory_variance": "-700000.0000",
+        "buffer_days": "-3.5000",
+        "state": "afloat"
+      }
+    },
+    {
+      "name": "fixed_mode_matches_adaptive_V_buffer_state",
+      "inputs": {
+        "daily_pool": "6000000.0000",
+        "period_days": 30,
+        "days_elapsed": 15,
+        "settled_spend": "3600000.0000",
+        "today_spend": "0.0000",
+        "future_spend": "0.0000",
+        "mode": "fixed"
+      },
+      "expected": {
+        "baseline_daily_budget": "200000.0000",
+        "available_pool": "6000000.0000",
+        "todays_allowance": "200000.0000",
+        "left_to_spend_today": "200000.0000",
+        "forward_daily_rate": "171428.5714",
+        "trajectory_variance": "-600000.0000",
+        "buffer_days": "-3.0000",
+        "state": "drifting"
+      }
+    },
+    {
+      "name": "non_terminating_baseline_7_5m_over_31_days",
+      "inputs": {
+        "daily_pool": "7500000.0000",
+        "period_days": 31,
+        "days_elapsed": 0,
+        "settled_spend": "0.0000",
+        "today_spend": "0.0000",
+        "future_spend": "0.0000",
+        "mode": "adaptive"
+      },
+      "expected": {
+        "baseline_daily_budget": "241935.4838",
+        "available_pool": "7500000.0000",
+        "todays_allowance": "241935.4838",
+        "left_to_spend_today": "241935.4838",
+        "forward_daily_rate": "250000.0000",
+        "trajectory_variance": "0.0000",
+        "buffer_days": "0.0000",
+        "state": "afloat"
+      }
+    },
+    {
+      "name": "negative_allowance_overspent_beyond_the_pool",
+      "inputs": {
+        "daily_pool": "100000.0000",
+        "period_days": 7,
+        "days_elapsed": 3,
+        "settled_spend": "130000.0000",
+        "today_spend": "0.0000",
+        "future_spend": "0.0000",
+        "mode": "adaptive"
+      },
+      "expected": {
+        "baseline_daily_budget": "14285.7142",
+        "available_pool": "100000.0000",
+        "todays_allowance": "-7500.0000",
+        "left_to_spend_today": "-7500.0000",
+        "forward_daily_rate": "-10000.0000",
+        "trajectory_variance": "-87142.8571",
+        "buffer_days": "-6.1000",
+        "state": "taking_on_water"
+      }
+    },
+    {
+      "name": "negative_spend_is_a_refund_and_raises_the_allowance",
+      "inputs": {
+        "daily_pool": "6000000.0000",
+        "period_days": 30,
+        "days_elapsed": 5,
+        "settled_spend": "-50000.0000",
+        "today_spend": "0.0000",
+        "future_spend": "0.0000",
+        "mode": "adaptive"
+      },
+      "expected": {
+        "baseline_daily_budget": "200000.0000",
+        "available_pool": "6000000.0000",
+        "todays_allowance": "242000.0000",
+        "left_to_spend_today": "242000.0000",
+        "forward_daily_rate": "252083.3333",
+        "trajectory_variance": "1050000.0000",
+        "buffer_days": "5.2500",
+        "state": "afloat"
+      }
+    },
+    {
+      "name": "half_up_tie_rounds_a_negative_buffer_away_from_zero",
+      "inputs": {
+        "daily_pool": "6000000.0000",
+        "period_days": 30,
+        "days_elapsed": 10,
+        "settled_spend": "2000010.0000",
+        "today_spend": "0.0000",
+        "future_spend": "0.0000",
+        "mode": "adaptive"
+      },
+      "expected": {
+        "baseline_daily_budget": "200000.0000",
+        "available_pool": "6000000.0000",
+        "todays_allowance": "199999.5000",
+        "left_to_spend_today": "199999.5000",
+        "forward_daily_rate": "210525.7894",
+        "trajectory_variance": "-10.0000",
+        "buffer_days": "-0.0001",
+        "state": "afloat"
+      }
+    },
+    {
+      "name": "negative_left_to_spend_today_is_shown_not_clamped",
+      "inputs": {
+        "daily_pool": "6000000.0000",
+        "period_days": 30,
+        "days_elapsed": 5,
+        "settled_spend": "0.0000",
+        "today_spend": "250000.0000",
+        "future_spend": "0.0000",
+        "mode": "adaptive"
+      },
+      "expected": {
+        "baseline_daily_budget": "200000.0000",
+        "available_pool": "6000000.0000",
+        "todays_allowance": "240000.0000",
+        "left_to_spend_today": "-10000.0000",
+        "forward_daily_rate": "239583.3333",
+        "trajectory_variance": "1000000.0000",
+        "buffer_days": "5.0000",
+        "state": "afloat"
+      }
+    }
+  ],
+  "target_line": [
+    {
+      "name": "continuity_example_6m_to_7_5m_effective_day_11",
+      "inputs": {
+        "period_days": 30,
+        "daily_pool_before": "6000000.0000",
+        "daily_pool_after": "7500000.0000",
+        "effective_day": 11
+      },
+      "expected": {
+        "targets": [
+          { "day": 10, "target": "2000000.0000" },
+          { "day": 11, "target": "2275000.0000" },
+          { "day": 30, "target": "7500000.0000" }
+        ],
+        "baseline_after": "275000.0000"
+      }
+    },
+    {
+      "name": "clamp_engages_exactly_at_P_new_equals_T",
+      "inputs": {
+        "period_days": 30,
+        "daily_pool_before": "6000000.0000",
+        "daily_pool_after": "2000000.0000",
+        "effective_day": 11
+      },
+      "expected": {
+        "targets": [
+          { "day": 10, "target": "2000000.0000" },
+          { "day": 11, "target": "2000000.0000" },
+          { "day": 30, "target": "2000000.0000" }
+        ],
+        "baseline_after": "0.0000"
+      }
+    },
+    {
+      "name": "clamp_engages_below_T_with_a_non_terminating_baseline",
+      "inputs": {
+        "period_days": 30,
+        "daily_pool_before": "6000000.0000",
+        "daily_pool_after": "1000000.0000",
+        "effective_day": 12
+      },
+      "expected": {
+        "targets": [
+          { "day": 11, "target": "2200000.0000" },
+          { "day": 12, "target": "2200000.0000" },
+          { "day": 30, "target": "2200000.0000" }
+        ],
+        "baseline_after": "-63157.8948"
+      }
+    }
+  ]
+}

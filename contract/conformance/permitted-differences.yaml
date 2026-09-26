@@ -39,6 +39,71 @@
 # Always a ruling, so always an issue.
 # ---------------------------------------------------------------------------
 
+- name: malformed-path-connector-400
+  issue: "64"
+  status: true
+  headers:
+    [
+      Content-Type,
+      Cache-Control,
+      Content-Language,
+      Expires,
+      Pragma,
+      X-Content-Type-Options,
+      X-Frame-Options,
+      X-Xss-Protection,
+    ]
+  body: true
+  why: >
+    Every shape citing this entry reaches Go's router and finds no route -
+    its bare 404, WITH its usual header set, since that comes from middleware
+    ahead of routing - while Tomcat's connector refuses the request outright
+    with its own HTML 400 before Spring Security's firewall, or any filter -
+    including HeaderWriterFilter, which is why none of Kotlin's usual security
+    headers or securityHeaders' Go equivalent reach this answer at all - ever
+    sees the request. The shapes: a literal backslash, `%00`, invalid UTF-8
+    (a lone byte, an overlong encoding, or a raw non-ASCII sequence) and an
+    overlong-encoded solidus (`%C0%AF`) in the path (TomcatConfiguration has
+    no pass-through for any of these, unlike the `%2F`/`%5C` it does relay -
+    #56); and a non-OPTIONS method (GET, HEAD, POST, TRACE) with the
+    asterisk-form target `*` (ruling 2, 26 Sep) - not RFC 9110 §7.1's
+    asterisk-form at all, since that section reserves the form for OPTIONS,
+    so Tomcat's connector refuses the request-target itself rather than
+    dispatching it anywhere. Ruled a permitted difference rather than a
+    custom `ErrorReportValve`: no client sends these shapes, nothing reaches
+    a handler on either backend, and a valve would need maintaining across
+    every Tomcat upgrade for a difference no caller can trigger by accident.
+
+- name: options-star
+  issue: "66"
+  status: true
+  headers: [Allow, Content-Type, Cache-Control, Content-Language, Expires, Pragma, X-Content-Type-Options, X-Frame-Options, X-Xss-Protection]
+  body: true
+  why: >
+    Three shapes, all about OPTIONS's own asterisk/absolute-form dispatch
+    rather than path routing. `OPTIONS *` (RFC 9110 §7.1's asterisk-form) is
+    the one OPTIONS request optionsRefused cannot answer on Go without an
+    extra opt-out: net/http intercepts it before Handler ever runs and
+    answers 200 itself, unless Server.DisableGeneralOptionsHandler is set
+    (#66, cmd/afloat/main.go) - which it now is, so Go's answer matches every
+    other OPTIONS. Tomcat has no such switch: its CoyoteAdapter answers
+    `OPTIONS *` with its own 200 and an Allow header, before Spring Security's
+    filter chain - OptionsRefusedFilter included - ever runs. `OPTIONS *?x=1`
+    (ruling 2, 26 Sep) is not that same bare form: it is malformed enough that
+    Go's own request-line parser refuses it before Handler runs at all (a bare
+    400 text/plain, the same class as a raw C0 control byte in a header),
+    where Tomcat's parser is lenient about the trailing query and dispatches
+    it exactly like the bare form - 200 with Allow. `OPTIONS http://x*`
+    (absolute-form, not asterisk-form) reaches optionsRefused on Go regardless
+    of what the request-target parses to - a flat 405, the same as every
+    other OPTIONS - while Tomcat's connector refuses `x*` as a host before
+    Spring Security's filter chain ever runs, its own 400. No client sends
+    any of the three (Afloat is same-origin with no CORS, and a browser never
+    sends OPTIONS with an asterisk or absolute-form target - CONNECT, which
+    does use a form of its own, is a proxy request no browser sends to an
+    origin server either), so fixing any of them in Kotlin would mean a
+    custom Tomcat connector for request shapes nothing here ever makes.
+
 - name: unmatched-path-404
   issue: "24"
   headers: [Content-Type]

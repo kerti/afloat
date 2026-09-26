@@ -1,0 +1,414 @@
+# The method rules #66 ruled: HEAD answers like GET (RFC 9110 §9.1); OPTIONS
+# is a flat, content-free 405 everywhere - a registered route, an unregistered
+# path, and the disabled-login route alike, so none of the three can be told
+# apart by the one header (Allow) that would otherwise vary; and the actuator
+# is not exposed over HTTP at all.
+
+- name: http methods - HEAD answers like GET
+  issue: "66"
+  request:
+    method: HEAD
+    path: /health
+  expect:
+    status: 200
+    body_empty: true
+    headers:
+      Content-Type: application/json
+
+- name: http methods - HEAD on a POST-only route is method not allowed
+  issue: "66"
+  request:
+    method: HEAD
+    path: /auth/logout
+  expect:
+    status: 405
+    body_empty: true
+
+- name: http methods - OPTIONS on a registered route is method not allowed, no Allow
+  issue: "66"
+  request:
+    method: OPTIONS
+    path: /health
+  expect:
+    status: 405
+    body_empty: true
+    headers:
+      Allow: ""
+
+- name: http methods - OPTIONS on an unregistered path is method not allowed, no Allow
+  issue: "66"
+  request:
+    method: OPTIONS
+    path: /no-such-route
+  expect:
+    status: 405
+    body_empty: true
+    headers:
+      Allow: ""
+
+- name: http methods - OPTIONS on local login (enabled) is method not allowed, no Allow
+  issue: "66"
+  request:
+    method: OPTIONS
+    path: /auth/local/login
+  expect:
+    status: 405
+    body_empty: true
+    headers:
+      Allow: ""
+
+# The second-review finding this ruling settles: OPTIONS on the disabled-login
+# route must be indistinguishable from OPTIONS on a path that was never
+# registered - same_as makes that a relation, not a repeated byte assertion.
+- name: http methods - OPTIONS on local login (disabled) matches an unregistered path
+  issue: "66"
+  profile: local-disabled
+  request:
+    method: OPTIONS
+    path: /auth/local/login
+  expect:
+    status: 405
+    same_as:
+      method: OPTIONS
+      path: /no-such-route
+
+# #66 second review: OptionsRefusedFilter never gets a chance to run on a path the firewall
+# refuses (`;x`, `//`, `%2e%2e`, `%2F`) - the firewall refuses it before
+# FilterChainProxy dispatches into the filter chain at all - so Kotlin's
+# requestRejectedHandler special-cases OPTIONS to answer the same flat 405
+# there too. same_as (not same_as_for): both backends now agree, so the
+# relation holds identically on each - this backend's answer to the malformed
+# path equals its own answer to an ordinary OPTIONS. Run on both profiles: the
+# disabled-login gate being off must not change what a firewall-refused
+# OPTIONS answers either.
+- name: http methods - OPTIONS on a firewall-refused path matches an ordinary OPTIONS
+  issue: "66"
+  request:
+    method: OPTIONS
+    path: /health;x=1
+  expect:
+    status: 405
+    same_as:
+      method: OPTIONS
+      path: /health
+
+- name: http methods - OPTIONS on a double slash matches an ordinary OPTIONS
+  issue: "66"
+  request:
+    method: OPTIONS
+    path: //health
+  expect:
+    status: 405
+    same_as:
+      method: OPTIONS
+      path: /health
+
+- name: http methods - OPTIONS on a dot segment matches an ordinary OPTIONS
+  issue: "66"
+  request:
+    method: OPTIONS
+    path: /%2e%2e/health
+  expect:
+    status: 405
+    same_as:
+      method: OPTIONS
+      path: /health
+
+- name: http methods - OPTIONS on an encoded slash matches an ordinary OPTIONS
+  issue: "66"
+  request:
+    method: OPTIONS
+    path: /auth%2Fmethods
+  expect:
+    status: 405
+    same_as:
+      method: OPTIONS
+      path: /health
+
+- name: http methods - OPTIONS on a firewall-refused path matches an ordinary OPTIONS (local login disabled)
+  issue: "66"
+  profile: local-disabled
+  request:
+    method: OPTIONS
+    path: /health;x=1
+  expect:
+    status: 405
+    same_as:
+      method: OPTIONS
+      path: /health
+
+- name: http methods - OPTIONS on a double slash matches an ordinary OPTIONS (local login disabled)
+  issue: "66"
+  profile: local-disabled
+  request:
+    method: OPTIONS
+    path: //health
+  expect:
+    status: 405
+    same_as:
+      method: OPTIONS
+      path: /health
+
+- name: http methods - OPTIONS on a dot segment matches an ordinary OPTIONS (local login disabled)
+  issue: "66"
+  profile: local-disabled
+  request:
+    method: OPTIONS
+    path: /%2e%2e/health
+  expect:
+    status: 405
+    same_as:
+      method: OPTIONS
+      path: /health
+
+- name: http methods - OPTIONS on an encoded slash matches an ordinary OPTIONS (local login disabled)
+  issue: "66"
+  profile: local-disabled
+  request:
+    method: OPTIONS
+    path: /auth%2Fmethods
+  expect:
+    status: 405
+    same_as:
+      method: OPTIONS
+      path: /health
+
+# The one connector-level shape (#64) under OPTIONS: Go's optionsRefused
+# intercepts every OPTIONS before path validity is even examined, so it still
+# answers 405 (matching every other OPTIONS, via same_as_for); Tomcat's
+# connector refuses %00 before Spring's filter chain - OptionsRefusedFilter
+# included - ever runs, so Kotlin still answers its connector-level 400.
+- name: http methods - OPTIONS on a connector-refused path (%00) is a permitted connector-vs-router difference
+  issue: "64"
+  permit: [malformed-path-connector-400]
+  request:
+    method: OPTIONS
+    path: /health%00
+  expect:
+    status_by_backend: {go: 405, kotlin: 400}
+    same_as_for:
+      go:
+        method: OPTIONS
+        path: /health
+
+# N-a: every connector-refused path shape under OPTIONS, not just %00 - Go's
+# optionsRefused answers every OPTIONS the same flat 405 regardless of the
+# path's validity, and Tomcat's connector refuses each of these before Spring
+# Security's filter chain - OptionsRefusedFilter included - ever runs, the
+# same as it does for any other method.
+- name: http methods - OPTIONS on a connector-refused path (a literal backslash) is a permitted connector-vs-router difference
+  issue: "64"
+  permit: [malformed-path-connector-400]
+  request:
+    method: OPTIONS
+    raw_target: /health\
+  expect:
+    status_by_backend: {go: 405, kotlin: 400}
+    same_as_for:
+      go:
+        method: OPTIONS
+        path: /health
+
+- name: http methods - OPTIONS on a connector-refused path (invalid UTF-8, %FF) is a permitted connector-vs-router difference
+  issue: "64"
+  permit: [malformed-path-connector-400]
+  request:
+    method: OPTIONS
+    path: /health%FF
+  expect:
+    status_by_backend: {go: 405, kotlin: 400}
+    same_as_for:
+      go:
+        method: OPTIONS
+        path: /health
+
+- name: http methods - OPTIONS on a connector-refused path (overlong %C0%AF) is a permitted connector-vs-router difference
+  issue: "64"
+  permit: [malformed-path-connector-400]
+  request:
+    method: OPTIONS
+    path: /health%C0%AF
+  expect:
+    status_by_backend: {go: 405, kotlin: 400}
+    same_as_for:
+      go:
+        method: OPTIONS
+        path: /health
+
+- name: http methods - OPTIONS on a connector-refused path (a raw non-ASCII byte sequence) is a permitted connector-vs-router difference
+  issue: "64"
+  permit: [malformed-path-connector-400]
+  request:
+    method: OPTIONS
+    raw_target: /healthé
+  expect:
+    status_by_backend: {go: 405, kotlin: 400}
+    same_as_for:
+      go:
+        method: OPTIONS
+        path: /health
+
+# The first 405 case in the harness (#66's acceptance criterion): a wrong
+# method on a route that exists, Go's chi default answered before this ruling
+# and after it alike, pinned as the reference both backends must give.
+# #66: OPTIONS * (RFC 9110 §7.1) is answered by the connector itself on both
+# backends, before Handler/the filter chain gets a look - see the
+# `options-star` permitted difference for why neither can be made to match
+# the other's bytes.
+- name: http methods - OPTIONS star is a permitted connector difference
+  issue: "66"
+  permit: [options-star]
+  request:
+    method: OPTIONS
+    raw_target: "*"
+  expect:
+    status_by_backend: {go: 405, kotlin: 200}
+    same_as_for:
+      go:
+        method: OPTIONS
+        path: /health
+
+# Ruling 2 (26 Sep): every asterisk-form shape Rad measured beyond the bare
+# "OPTIONS *" above, folded into the same two connector permits. A non-OPTIONS
+# method with target "*" is not RFC 9110 §7.1's asterisk-form at all (that
+# section reserves it for OPTIONS) - Go's router simply has no route for it
+# and answers its bare 404, while Tomcat's connector refuses the request-target
+# outright with its own HTML 400, the same shape as `malformed-path-connector-400`'s
+# other rows.
+- name: http methods - GET star is a permitted connector-vs-router difference
+  issue: "64"
+  permit: [malformed-path-connector-400]
+  request:
+    method: GET
+    raw_target: "*"
+  expect:
+    status_by_backend: {go: 404, kotlin: 400}
+    same_as_for:
+      go:
+        method: GET
+        path: /no-such-route
+
+- name: http methods - HEAD star is a permitted connector-vs-router difference
+  issue: "64"
+  permit: [malformed-path-connector-400]
+  request:
+    method: HEAD
+    raw_target: "*"
+  # No same_as_for, unlike its siblings: "*" never reaches the /api mount, so
+  # Go's headAsGet never runs and net/http counts the fallback 404's 19-byte
+  # body into Content-Length, where HEAD /no-such-route (under /api) goes
+  # through headAsGet's discarding writer and sends none. No Path or
+  # RawTarget can name a request outside the base, so body_empty is the pin.
+  expect:
+    status_by_backend: {go: 404, kotlin: 400}
+    body_empty: true
+
+- name: http methods - POST star is a permitted connector-vs-router difference
+  issue: "64"
+  permit: [malformed-path-connector-400]
+  request:
+    method: POST
+    raw_target: "*"
+  expect:
+    status_by_backend: {go: 404, kotlin: 400}
+    same_as_for:
+      go:
+        method: POST
+        path: /no-such-route
+
+- name: http methods - TRACE star is a permitted connector-vs-router difference
+  issue: "64"
+  permit: [malformed-path-connector-400]
+  request:
+    method: TRACE
+    raw_target: "*"
+  expect:
+    status_by_backend: {go: 404, kotlin: 400}
+    same_as_for:
+      go:
+        method: TRACE
+        path: /no-such-route
+
+# OPTIONS *?x=1 is not the bare asterisk-form RFC 9110 §7.1 describes either -
+# it is invalid enough that Go's own request-line parser refuses it before
+# Handler runs at all (a bare 400 text/plain, the same class as a raw C0
+# control byte in a header), where Tomcat's parser is lenient about the query
+# string and dispatches it exactly like a bare "OPTIONS *" - 200 with Allow.
+# Grouped with `options-star`, not the connector-path permit: this is about
+# the asterisk-form's own dispatch, not path routing. same_as (not
+# same_as_for): both backends answer this the same way they answer any other
+# asterisk-form-with-query, so the relation holds identically on each -
+# verified against real servers, since neither answer depends on the query's
+# own content.
+- name: http methods - OPTIONS star with a query string is a permitted connector difference
+  issue: "66"
+  permit: [options-star]
+  request:
+    method: OPTIONS
+    raw_target: "*?x=1"
+  expect:
+    status_by_backend: {go: 400, kotlin: 200}
+    same_as:
+      method: OPTIONS
+      raw_target: "*?y=2"
+
+# OPTIONS http://x* is absolute-form (RFC 9110 §7.1), not asterisk-form - Go's
+# optionsRefused answers every OPTIONS the same flat 405 regardless of the
+# request-target's shape, where Tomcat's connector refuses "x*" as a host
+# before Spring Security's filter chain - OptionsRefusedFilter included -
+# ever runs.
+- name: http methods - OPTIONS to an absolute-form target ending in a star is a permitted connector difference
+  issue: "66"
+  permit: [options-star]
+  request:
+    method: OPTIONS
+    raw_target: "http://x*"
+  expect:
+    status_by_backend: {go: 405, kotlin: 400}
+    same_as_for:
+      go:
+        method: OPTIONS
+        path: /health
+
+- name: http methods - PUT on GET-only /health is method not allowed
+  issue: "66"
+  request:
+    method: PUT
+    path: /health
+  expect:
+    status: 405
+    body_empty: true
+
+# #66 item 4: actuator is a ratified dependency (BOOTSTRAP.md §3) that answers
+# nothing over HTTP. Kotlin's management.server.port: -1 leaves no controller
+# mapping it, so it falls through to the same "no handler mapped this path"
+# 404 any unregistered path gets; Go never had it to begin with.
+- name: http methods - actuator is an unregistered path, unauthenticated
+  issue: "66"
+  permit: [unmatched-path-404]
+  request:
+    method: GET
+    path: /actuator/health
+  expect:
+    status: 404
+    same_as: &no-such-get
+      method: GET
+      path: /no-such-route
+
+- name: http methods - actuator is an unregistered path, signed in
+  issue: "66"
+  permit: [unmatched-path-404]
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: GET
+    path: /actuator/health
+  expect:
+    status: 404
+    same_as: *no-such-get

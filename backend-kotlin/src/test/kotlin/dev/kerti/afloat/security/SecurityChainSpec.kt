@@ -9,13 +9,17 @@ import dev.kerti.afloat.testsupport.loginBody
 import dev.kerti.afloat.testsupport.sha256Hex
 import io.kotest.assertions.withClue
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.shouldNotBe
 import io.kotest.matchers.string.shouldNotContain
 import jakarta.servlet.http.Cookie
 import org.springframework.http.MediaType
 import org.springframework.jdbc.core.simple.JdbcClient
 import org.springframework.test.web.servlet.MvcResult
 import org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get
+import org.springframework.test.web.servlet.request.MockMvcRequestBuilders.head
+import org.springframework.test.web.servlet.request.MockMvcRequestBuilders.options
 import org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post
+import org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put
 import java.time.Instant
 import java.util.UUID
 
@@ -142,10 +146,76 @@ class SecurityChainSpec : WebDatabaseSpec() {
             ).andReturn().issuedNoJsessionid()
         }
 
-        // The actuator is deliberately not public: it is not part of the
-        // contract, and /api/health is the liveness route both backends serve.
-        "keeps the actuator behind authentication" {
-            mockMvc.perform(get("/actuator/health")).andReturn().response.status shouldBe 401
+        // The actuator is not exposed over HTTP at all (#66): management.server.port:
+        // -1 (application.yaml) leaves no controller mapping it, so it falls
+        // through `unmapped` the same way any unregistered path does, to
+        // Spring MVC's own "no handler" 404 - never a 401 that would still
+        // disclose the actuator exists, with or without a session, and never
+        // reachable at /api/actuator/health either, since nothing maps that
+        // either. Go never had it (#66's acceptance criteria).
+        "answers the actuator as an unregistered path, unauthenticated" {
+            val result = mockMvc.perform(get("/actuator/health")).andReturn()
+            result.response.status shouldBe 404
+            result.response.contentAsString shouldBe ""
+        }
+
+        "answers the actuator as an unregistered path, signed in" {
+            AuthFixtures.account(dataSource)
+            mockMvc.perform(
+                post(AuthApi.BASE_PATH + AuthApi.PATH_LOCAL_LOGIN)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .content(loginBody("user@example.com", AuthFixtures.PASSWORD))
+            ).andReturn().response.status shouldBe 204
+
+            val result = mockMvc.perform(get("/actuator/health")).andReturn()
+            result.response.status shouldBe 404
+            result.response.contentAsString shouldBe ""
+        }
+
+        "answers the actuator under the API base path as an unregistered path too" {
+            mockMvc.perform(get(SystemApi.BASE_PATH + "/actuator/health")).andReturn().response.status shouldBe 404
+        }
+
+        // #66: RFC 9110 §9.1 requires HEAD of a general-purpose server; Spring
+        // already does it for any @GetMapping, with no code of Afloat's own,
+        // via the servlet spec's own HttpServlet.doHead() - which MockMvc does
+        // not fully emulate (it does not strip the body the way a real
+        // container does), so the body-is-empty half of this is the
+        // conformance suite's to prove, against the real jar
+        // (cases/http-methods.yaml). This still pins that the request reaches
+        // the GET handler at all, and gets the same status and Content-Type,
+        // behind the full security chain.
+        "answers HEAD the same route GET does, status and Content-Type alike" {
+            val get = mockMvc.perform(get(SystemApi.BASE_PATH + SystemApi.PATH_GET_HEALTH)).andReturn()
+            val headResult = mockMvc.perform(head(SystemApi.BASE_PATH + SystemApi.PATH_GET_HEALTH)).andReturn()
+
+            headResult.response.status shouldBe get.response.status
+            headResult.response.getHeader("Content-Type") shouldBe get.response.getHeader("Content-Type")
+        }
+
+        // #66: OPTIONS is a flat, content-free 405 everywhere - no Allow header
+        // naming the route's methods, on a registered route or an unregistered
+        // path alike, since Afloat is same-origin with no CORS and no client
+        // sends it.
+        "answers OPTIONS with a flat 405 and no Allow header, registered or not" {
+            for (path in listOf(SystemApi.BASE_PATH + SystemApi.PATH_GET_HEALTH, "/api/no-such-route")) {
+                withClue(path) {
+                    val result = mockMvc.perform(options(path)).andReturn()
+                    result.response.status shouldBe 405
+                    result.response.getHeader("Allow") shouldBe null
+                    result.response.contentAsString shouldBe ""
+                }
+            }
+        }
+
+        // The first 405 case (#66's acceptance criterion): a wrong method on a
+        // route that exists still answers 405, Allow included per RFC 9110
+        // §15.5.6 - only OPTIONS is special-cased to withhold it.
+        "answers a wrong method on an existing route with 405" {
+            val result = mockMvc.perform(put(SystemApi.BASE_PATH + SystemApi.PATH_GET_HEALTH)).andReturn()
+            result.response.status shouldBe 405
+            result.response.contentAsString shouldBe ""
+            result.response.getHeader("Allow") shouldNotBe null
         }
     }
 }

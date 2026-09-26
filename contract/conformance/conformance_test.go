@@ -2,11 +2,13 @@ package conformance_test
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/cookiejar"
+	"net/url"
 	"os"
 	"reflect"
 	"slices"
@@ -184,9 +186,9 @@ func TestConformance(t *testing.T) {
 				}
 				runs[b.name] = r
 				t.Run("expected/"+b.name, func(t *testing.T) {
-					assertExpected(t, c, r.resp)
+					assertExpected(t, c, r.resp, b.name)
 					if r.ref != nil {
-						assertSameAs(t, c, r.resp, *r.ref)
+						assertSameAs(t, c, b.name, r.resp, *r.ref)
 					}
 					assertRows(t, c, r.rows)
 				})
@@ -284,8 +286,8 @@ func runCase(ctx context.Context, b backend, c conformance.Case, permitted *conf
 	if r.state, err = b.db.Snapshot(ctx, permitted.MasksColumn); err != nil {
 		return run{}, fmt.Errorf("snapshot: %w", err)
 	}
-	if c.Expect.SameAs != nil {
-		ref, err := do(client, b, *c.Expect.SameAs)
+	if sameAs := c.Expect.SameAsRequest(b.name); sameAs != nil {
+		ref, err := do(client, b, *sameAs)
 		if err != nil {
 			return run{}, fmt.Errorf("same_as: %w", err)
 		}
@@ -336,9 +338,36 @@ func do(client *http.Client, b backend, r conformance.Request) (response, error)
 	if sent := r.SentBody(); sent != "" {
 		body = strings.NewReader(sent)
 	}
-	req, err := http.NewRequest(r.Method, b.baseURL+r.Path, body)
-	if err != nil {
-		return response{}, err
+	var req *http.Request
+	var err error
+	switch {
+	case strings.HasPrefix(r.RawTarget, "*") || strings.Contains(r.RawTarget, "://"):
+		// The asterisk-form (RFC 9110 §7.1's "*", or a ruling #70 shape such
+		// as "*?x=1") and the absolute-form (a full URI, e.g. "http://x*"):
+		// neither is under the API base, so RawTarget is sent exactly as
+		// given, with no base path prefixed.
+		if req, err = http.NewRequest(r.Method, b.baseURL, body); err != nil {
+			return response{}, err
+		}
+		req.URL.Opaque = r.RawTarget
+	case r.RawTarget != "":
+		// URL.Opaque is sent as the request line's target verbatim, with no
+		// escaping and no re-parse: what RawTarget exists for (#64) - a byte
+		// url.Parse would otherwise normalise, such as %5C's un-encoded form,
+		// which a Path-based request can never express because
+		// http.NewRequest necessarily builds and re-serialises a full URL.
+		base, perr := url.Parse(b.baseURL)
+		if perr != nil {
+			return response{}, perr
+		}
+		if req, err = http.NewRequest(r.Method, b.baseURL, body); err != nil {
+			return response{}, err
+		}
+		req.URL.Opaque = base.Path + r.RawTarget
+	default:
+		if req, err = http.NewRequest(r.Method, b.baseURL+r.Path, body); err != nil {
+			return response{}, err
+		}
 	}
 	for k, v := range r.Headers {
 		// Host is the request's, not a header's, in net/http. Setting it
@@ -349,6 +378,21 @@ func do(client *http.Client, b backend, r conformance.Request) (response, error)
 			continue
 		}
 		req.Header.Set(k, v)
+	}
+	for k, hexValue := range r.HeadersHex {
+		// Sent as the exact decoded bytes, bypassing Header.Set's string
+		// handling: a YAML string is Unicode text and cannot hold an invalid
+		// UTF-8 byte directly (#70), so cases that need one spell it as hex
+		// instead. This client's own check still applies even writing the map
+		// directly - verified: it refuses NUL, 0x01, 0x1B, 0x7F and a bare CR
+		// or LF, and allows everything else, HTAB (0x09) and any C1/UTF-8 byte
+		// (0x80-0xFF) included - so a case naming one of the refused bytes can
+		// only be exercised with a raw socket, not through this harness.
+		decoded, herr := hex.DecodeString(hexValue)
+		if herr != nil {
+			return response{}, fmt.Errorf("headers_hex[%s]: %w", k, herr)
+		}
+		req.Header[http.CanonicalHeaderKey(k)] = []string{string(decoded)}
 	}
 
 	resp, err := client.Do(req)
@@ -364,11 +408,11 @@ func do(client *http.Client, b backend, r conformance.Request) (response, error)
 	return response{status: resp.StatusCode, headers: resp.Header, body: raw}, nil
 }
 
-func assertExpected(t *testing.T, c conformance.Case, got response) {
+func assertExpected(t *testing.T, c conformance.Case, got response, backend string) {
 	t.Helper()
 
-	if got.status != c.Expect.Status {
-		t.Errorf("status: want %d, got %d\nbody: %s", c.Expect.Status, got.status, truncate(got.body))
+	if want := c.Expect.StatusFor(backend); got.status != want {
+		t.Errorf("status: want %d, got %d\nbody: %s", want, got.status, truncate(got.body))
 	}
 
 	for name, want := range c.Expect.Headers {
@@ -452,9 +496,9 @@ func assertRows(t *testing.T, c conformance.Case, got [][]map[string]any) {
 // request: status, every header but the per-response ones, and the body bytes.
 // It runs under expected/<backend>, because a mismatch means that backend is
 // wrong, whatever the other one does.
-func assertSameAs(t *testing.T, c conformance.Case, got, ref response) {
+func assertSameAs(t *testing.T, c conformance.Case, backend string, got, ref response) {
 	t.Helper()
-	s := c.Expect.SameAs
+	s := c.Expect.SameAsRequest(backend)
 
 	if got.status != ref.status {
 		t.Errorf("same_as %s %s: status %d, but that request answers %d", s.Method, s.Path, got.status, ref.status)
@@ -487,7 +531,9 @@ func assertSameAs(t *testing.T, c conformance.Case, got, ref response) {
 func assertParity(t *testing.T, c conformance.Case, permitted *conformance.PermittedSet, goResp, ktResp response) {
 	t.Helper()
 
-	if goResp.status != ktResp.status {
+	allowsHeader, allowsBody, allowsStatus := permitted.ForCase(c)
+
+	if !allowsStatus && goResp.status != ktResp.status {
 		t.Errorf("status differs between backends: go %d, kotlin %d", goResp.status, ktResp.status)
 	}
 
@@ -503,8 +549,6 @@ func assertParity(t *testing.T, c conformance.Case, permitted *conformance.Permi
 		sorted = append(sorted, n)
 	}
 	sort.Strings(sorted)
-
-	allowsHeader, allowsBody := permitted.ForCase(c)
 	for _, n := range sorted {
 		if allowsHeader(n) {
 			continue

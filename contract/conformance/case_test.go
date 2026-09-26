@@ -44,9 +44,85 @@ func TestLoadRejectsUnusableCases(t *testing.T) {
 			want: "must start with /",
 		},
 		{
+			name: "path and raw_target at once",
+			yaml: "- name: x\n  request: {method: GET, path: /health, raw_target: /health}\n  expect: {status: 200}\n",
+			want: "mutually exclusive",
+		},
+		{
+			name: "raw_target without a leading slash",
+			yaml: "- name: x\n  request: {method: GET, raw_target: health}\n  expect: {status: 200}\n",
+			want: "raw_target must start with /",
+		},
+		{
+			name: "headers_hex with invalid hex",
+			yaml: "- name: x\n  request: {method: GET, path: /health, headers_hex: {User-Agent: \"zz\"}}\n  expect: {status: 200}\n",
+			want: "not valid hex",
+		},
+		{
+			name: "headers_hex duplicating a headers name",
+			yaml: "- name: x\n  request: {method: GET, path: /health, headers: {User-Agent: x}, headers_hex: {User-Agent: \"78\"}}\n  expect: {status: 200}\n",
+			want: "also appears in",
+		},
+		{
+			name: "headers_hex duplicating a headers name, case-insensitively",
+			yaml: "- name: x\n  request: {method: GET, path: /health, headers: {user-agent: x}, headers_hex: {User-Agent: \"78\"}}\n  expect: {status: 200}\n",
+			want: "also appears in",
+		},
+		{
+			name: "headers_hex naming Host",
+			yaml: "- name: x\n  request: {method: GET, path: /health, headers_hex: {Host: \"78\"}}\n  expect: {status: 200}\n",
+			want: "Host has no raw-bytes equivalent",
+		},
+		{
 			name: "no status",
 			yaml: "- name: x\n  request: {method: GET, path: /health}\n  expect: {}\n",
 			want: "expect.status is required",
+		},
+		{
+			name: "status and status_by_backend at once",
+			yaml: "- name: x\n  permit: [p]\n  request: {method: GET, path: /health}\n  expect: {status: 200, status_by_backend: {go: 404, kotlin: 400}}\n",
+			want: "mutually exclusive",
+		},
+		{
+			name: "status_by_backend missing a backend",
+			yaml: "- name: x\n  permit: [p]\n  request: {method: GET, path: /health}\n  expect: {status_by_backend: {go: 404}}\n",
+			want: "missing \"kotlin\"",
+		},
+		{
+			name: "status_by_backend with no permit",
+			yaml: "- name: x\n  request: {method: GET, path: /health}\n  expect: {status_by_backend: {go: 404, kotlin: 400}}\n",
+			want: "needs a case-scoped permit entry",
+		},
+		{
+			// S4 / review finding: a permit on GET /health with
+			// status_by_backend {go: 200, kotlin: 200} is nonsense - the two
+			// backends do not differ at all, so this is not a status
+			// permitted to differ, and belongs in expect.status instead.
+			name: "status_by_backend with the same status for both backends",
+			yaml: "- name: x\n  permit: [p]\n  request: {method: GET, path: /health}\n  expect: {status_by_backend: {go: 200, kotlin: 200}}\n",
+			want: "same status for both backends",
+		},
+		{
+			name: "status_by_backend with an unknown backend",
+			yaml: "- name: x\n  permit: [p]\n  request: {method: GET, path: /health}\n  expect: {status_by_backend: {go: 404, kotlin: 400, postgres: 500}}\n",
+			want: "unknown backend \"postgres\"",
+		},
+		{
+			name: "same_as_for with an unknown backend",
+			yaml: "- name: x\n  request: {method: GET, path: /health}\n  expect: {status: 200, same_as_for: {postgres: {method: GET, path: /nowhere}}}\n",
+			want: "unknown backend \"postgres\"",
+		},
+		{
+			// S-A: a same_as identical to the case's own request only ever
+			// compares an answer to itself - always equal, asserting nothing.
+			name: "same_as identical to request",
+			yaml: "- name: x\n  request: {method: GET, path: /health}\n  expect: {status: 200, same_as: {method: GET, path: /health}}\n",
+			want: "identical to request",
+		},
+		{
+			name: "same_as_for identical to request",
+			yaml: "- name: x\n  request: {method: GET, path: /health}\n  expect: {status: 200, same_as_for: {go: {method: GET, path: /health}}}\n",
+			want: "identical to request",
 		},
 		{
 			name: "two body assertions",
@@ -198,6 +274,31 @@ func TestCommittedFilesLoad(t *testing.T) {
 	}
 	if err := conformance.CheckPermits(cases, permitted); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// S-B: SameAsRequest's own three cases, each of which a mutation that
+// disabled the SameAsFor lookup (e.g. changing its `ok` check to always
+// fail) would break - the third case is the one that would still pass
+// against such a mutation on its own, which is why the first two matter.
+func TestSameAsRequestPrefersSameAsForOverSameAs(t *testing.T) {
+	sameAs := &conformance.Request{Method: "GET", Path: "/same-as"}
+	sameAsForGo := &conformance.Request{Method: "GET", Path: "/same-as-for-go"}
+	e := conformance.Expect{
+		SameAs:    sameAs,
+		SameAsFor: map[string]*conformance.Request{"go": sameAsForGo},
+	}
+
+	if got := e.SameAsRequest("go"); got != sameAsForGo {
+		t.Errorf("SameAsRequest(go) = %v, want the same_as_for entry (%v), not same_as (%v)", got, sameAsForGo, sameAs)
+	}
+	if got := e.SameAsRequest("kotlin"); got != sameAs {
+		t.Errorf("SameAsRequest(kotlin) = %v, want the same_as fallback (%v), since same_as_for has no kotlin entry", got, sameAs)
+	}
+
+	empty := conformance.Expect{}
+	if got := empty.SameAsRequest("go"); got != nil {
+		t.Errorf("SameAsRequest(go) on an Expect with neither set = %v, want nil", got)
 	}
 }
 

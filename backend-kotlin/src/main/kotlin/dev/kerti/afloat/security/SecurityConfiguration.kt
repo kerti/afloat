@@ -7,6 +7,7 @@ import dev.kerti.afloat.auth.DisabledLocalLogin404Filter
 import dev.kerti.afloat.auth.EnvelopeAccessDeniedHandler
 import dev.kerti.afloat.auth.EnvelopeAuthenticationEntryPoint
 import dev.kerti.afloat.auth.MaxBodyFilter
+import dev.kerti.afloat.auth.OptionsRefusedFilter
 import dev.kerti.afloat.auth.RequestFactsFilter
 import dev.kerti.afloat.auth.SessionCookieFactory
 import dev.kerti.afloat.auth.SessionFilter
@@ -22,6 +23,7 @@ import org.springframework.context.annotation.Configuration
 import org.springframework.security.config.annotation.web.builders.HttpSecurity
 import org.springframework.security.config.http.SessionCreationPolicy
 import org.springframework.security.web.SecurityFilterChain
+import org.springframework.security.web.firewall.HttpFirewall
 import org.springframework.security.web.firewall.RequestRejectedException
 import org.springframework.security.web.firewall.RequestRejectedHandler
 import org.springframework.security.web.firewall.StrictHttpFirewall
@@ -44,6 +46,7 @@ class SecurityConfiguration {
         appConfig: AppConfig,
         handlerMappings: List<HandlerMapping>,
     ): SecurityFilterChain {
+        val optionsRefused = OptionsRefusedFilter()
         val localLogin404 = DisabledLocalLogin404Filter(appConfig.authLocalEnabled, basePath + AuthApi.PATH_LOCAL_LOGIN)
         val maxBody = MaxBodyFilter()
         val crossSiteGuard = CrossSiteGuardFilter()
@@ -104,15 +107,29 @@ class SecurityConfiguration {
                 it.accessDeniedHandler(EnvelopeAccessDeniedHandler())
             }
             // Go's order, anchored explicitly rather than inherited from the
-            // order these lines happen to run in (server.go:75-86):
-            // localLogin404 -> maxBody -> crossSiteGuard -> requestFacts -> session.
+            // order these lines happen to run in (server.go:70-86):
+            // optionsRefused -> localLogin404 -> maxBody -> crossSiteGuard -> requestFacts -> session.
             .addFilterBefore(maxBody, UsernamePasswordAuthenticationFilter::class.java)
             .addFilterBefore(localLogin404, MaxBodyFilter::class.java)
+            .addFilterBefore(optionsRefused, DisabledLocalLogin404Filter::class.java)
             .addFilterAfter(crossSiteGuard, MaxBodyFilter::class.java)
             .addFilterAfter(requestFacts, CrossSiteGuardFilter::class.java)
             .addFilterAfter(sessionFilter, RequestFactsFilter::class.java)
             .build()
     }
+
+    // The firewall Spring Security actually guards the chain with, replacing
+    // the auto-configured StrictHttpFirewall with header VALUES accepted
+    // (#67): a UTF-8 User-Agent or an em dash used to be a "header value with
+    // a control character" refusal below, which Go never made and no client
+    // here can avoid making, since Afloat's own denylist and email fields
+    // already accept the same Unicode (BOOTSTRAP.md §5.1). Header NAMES stay
+    // strict - only the value predicate changes. CR and LF are still refused,
+    // by Tomcat at the connector, before this firewall ever sees the request.
+    // Picked up automatically: WebSecurityConfiguration autowires the one
+    // HttpFirewall bean in the context.
+    @Bean
+    fun httpFirewall(): HttpFirewall = StrictHttpFirewall().apply { setAllowedHeaderValues { true } }
 
     // A path StrictHttpFirewall refuses - `;`, `//`, `/./`, an encoded slash or
     // percent - is a path that does not exist (#56): a bare 404, as Go's router
@@ -122,16 +139,28 @@ class SecurityConfiguration {
     // so the header set is written directly to answer exactly as an
     // unregistered path does. Found and used by WebSecurity as a bean.
     //
-    // The firewall refuses more than paths - a header value with a control
-    // character, a method it does not know - and those are a malformed request
-    // on a route that exists, not a missing route. The exception does not say
-    // which it was except in prose, so the request is checked again by a
-    // firewall that looks at the path alone: refused there, 404; otherwise a
-    // bare 400, the status these always had, with the same header set.
+    // The firewall refuses more than paths - a method it does not know, and
+    // (before #67) a header value with a control character - and those are a
+    // malformed request on a route that exists, not a missing route. The
+    // exception does not say which it was except in prose, so the request is
+    // checked again by a firewall that looks at the path alone: refused
+    // there, 404; otherwise a bare 400, the status these always had, with the
+    // same header set.
     @Bean
     fun requestRejectedHandler() = RequestRejectedHandler { request, response, _ ->
         SecurityHeaders.write(request, response)
-        response.status = if (pathRefused(request)) HttpServletResponse.SC_NOT_FOUND else HttpServletResponse.SC_BAD_REQUEST
+        response.status = when {
+            // #66 second review: OPTIONS on a firewall-refused path (`;x`, `//`, `%2e%2e`,
+            // `%2F`) must answer the same flat 405 as every other OPTIONS
+            // (#66) - OptionsRefusedFilter never gets a chance to run here,
+            // since the firewall refuses the request before FilterChainProxy
+            // ever dispatches into the filter chain, so this handler is the
+            // one place left to make that hold. No Allow header, matching
+            // optionsRefused (Go: httpserver/middleware.go).
+            request.method == "OPTIONS" -> HttpServletResponse.SC_METHOD_NOT_ALLOWED
+            pathRefused(request) -> HttpServletResponse.SC_NOT_FOUND
+            else -> HttpServletResponse.SC_BAD_REQUEST
+        }
     }
 
     private fun pathRefused(request: HttpServletRequest): Boolean = try {

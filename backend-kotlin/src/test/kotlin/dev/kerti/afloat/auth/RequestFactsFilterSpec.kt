@@ -2,8 +2,11 @@ package dev.kerti.afloat.auth
 
 import io.kotest.assertions.withClue
 import io.kotest.core.spec.style.StringSpec
+import io.kotest.datatest.withData
+import io.kotest.matchers.ints.shouldBeLessThanOrEqual
 import io.kotest.matchers.nulls.shouldBeNull
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.shouldNotBe
 import jakarta.servlet.http.Cookie
 import jakarta.servlet.http.HttpServlet
 import jakarta.servlet.http.HttpServletRequest
@@ -104,6 +107,124 @@ class RequestFactsFilterSpec : StringSpec({
         ).forEach { (raw, expected) ->
             withClue(raw) { normalizeIp(raw) shouldBe expected }
         }
+    }
+
+    // #67: Tomcat decodes header bytes as ISO-8859-1, so a real connector
+    // hands the filter the mis-decoded String this constructs by hand - the
+    // same three chars "Afloat — test"'s UTF-8 bytes (E2 80 94, the em dash)
+    // become when each is read back as its own Latin-1 codepoint. Without
+    // sanitizeUserAgent's decode step, sessions.user_agent would hold
+    // different bytes for the same wire bytes than Go's r.UserAgent(), which
+    // carries them through untouched.
+    "recovers a UTF-8 User-Agent Tomcat mis-decoded as ISO-8859-1" {
+        val wireBytes = "Afloat — test".toByteArray(Charsets.UTF_8)
+        val asTomcatDeliversIt = String(wireBytes, Charsets.ISO_8859_1)
+        asTomcatDeliversIt shouldNotBe "Afloat — test" // the fixture is genuinely mis-decoded, or this proves nothing
+
+        val request = MockHttpServletRequest().apply {
+            remoteAddr = "203.0.113.7"
+            addHeader("User-Agent", asTomcatDeliversIt)
+        }
+        var seen: RequestFacts? = null
+        val chain = MockFilterChain(object : HttpServlet() {
+            override fun service(req: HttpServletRequest, res: HttpServletResponse) {
+                seen = RequestContext.current()
+            }
+        })
+
+        RequestFactsFilter().doFilter(request, MockHttpServletResponse(), chain)
+
+        seen?.userAgent shouldBe "Afloat — test"
+    }
+
+    // #70: the storage rule for sessions.user_agent, in order - fold HTAB to
+    // SP and trim SP/HTAB from both ends, absent/empty is null (#32 item 4,
+    // unchanged), not-valid-UTF-8 is null (a stored invalid header used to
+    // fail the whole login with a Postgres 500 on Go, and silently stored
+    // U+FFFD mojibake here before this rule), otherwise truncated to 512
+    // Unicode code points on a code point boundary. Go's request_test.go
+    // holds the same rows; the obs-fold-specific ones (a real fold's CRLF,
+    // which cannot be sent through this function directly) are
+    // ErrorDispatchSpec's. Each `wire` is the exact bytes a client sent;
+    // asTomcatDeliversIt reproduces what Tomcat's ISO-8859-1 header decoding
+    // hands the filter for those bytes.
+    fun asTomcatDeliversIt(wire: ByteArray): String = String(wire, Charsets.ISO_8859_1)
+
+    // Raw bytes as ints, so a multi-byte invalid UTF-8 sequence reads as its
+    // hex shape rather than a wall of .code.toByte() calls.
+    fun bytes(vararg b: Int): ByteArray = ByteArray(b.size) { b[it].toByte() }
+
+    data class UserAgentCase(val name: String, val wire: ByteArray, val want: String?)
+
+    withData(
+        nameFn = { it.name },
+        listOf(
+            UserAgentCase("ordinary ASCII passes through", "conformance/1.0".toByteArray(Charsets.US_ASCII), "conformance/1.0"),
+            UserAgentCase("valid multibyte UTF-8 passes through", "Afloat — test 🔐".toByteArray(Charsets.UTF_8), "Afloat — test 🔐"),
+            UserAgentCase("lone continuation byte 0x85 is invalid UTF-8", byteArrayOf('x'.code.toByte(), 0x85.toByte(), 'y'.code.toByte()), null),
+            UserAgentCase("overlong encoding C0 AF is invalid UTF-8", byteArrayOf('x'.code.toByte(), 0xc0.toByte(), 0xaf.toByte(), 'y'.code.toByte()), null),
+            UserAgentCase("a truncated 3-byte sequence is invalid UTF-8", byteArrayOf('x'.code.toByte(), 0xe2.toByte(), 0x80.toByte(), 'y'.code.toByte()), null),
+            UserAgentCase("a lone 0xFF is invalid UTF-8", byteArrayOf('x'.code.toByte(), 0xff.toByte(), 'y'.code.toByte()), null),
+            UserAgentCase("Latin-1 'café' (not UTF-8) is invalid UTF-8", byteArrayOf('c'.code.toByte(), 'a'.code.toByte(), 'f'.code.toByte(), 0xe9.toByte()), null),
+            UserAgentCase(
+                "valid text with one invalid byte is invalid UTF-8 as a whole",
+                byteArrayOf('a'.code.toByte(), 'b'.code.toByte(), 'c'.code.toByte(), 0x85.toByte(), 'd'.code.toByte(), 'e'.code.toByte(), 'f'.code.toByte()),
+                null,
+            ),
+            UserAgentCase(
+                "a UTF-8-encoded lone high surrogate (U+D800) is invalid UTF-8",
+                bytes('x'.code, 0xed, 0xa0, 0x80, 'y'.code),
+                null,
+            ),
+            UserAgentCase(
+                "a UTF-8-encoded lone low surrogate (U+DFFF) is invalid UTF-8",
+                bytes('x'.code, 0xed, 0xbf, 0xbf, 'y'.code),
+                null,
+            ),
+            UserAgentCase(
+                "a code point past U+10FFFF is invalid UTF-8",
+                bytes('x'.code, 0xf4, 0x90, 0x80, 0x80, 'y'.code),
+                null,
+            ),
+            UserAgentCase(
+                "a pre-RFC-3629 5-byte form is invalid UTF-8",
+                bytes('x'.code, 0xf8, 0x88, 0x80, 0x80, 0x80, 'y'.code),
+                null,
+            ),
+            UserAgentCase(
+                "a pre-RFC-3629 6-byte form is invalid UTF-8",
+                bytes('x'.code, 0xfc, 0x84, 0x80, 0x80, 0x80, 0x80, 'y'.code),
+                null,
+            ),
+            UserAgentCase("an internal tab is folded to a space", "before\tafter".toByteArray(Charsets.US_ASCII), "before after"),
+            UserAgentCase("leading and trailing spaces are trimmed", "  padded  ".toByteArray(Charsets.US_ASCII), "padded"),
+            UserAgentCase("a leading tab is trimmed like a space", "\tpadded".toByteArray(Charsets.US_ASCII), "padded"),
+            UserAgentCase("511 code points is untouched", "a".repeat(511).toByteArray(Charsets.US_ASCII), "a".repeat(511)),
+            UserAgentCase(
+                "512 code points, multibyte at the boundary, is untouched",
+                ("a".repeat(511) + "💚").toByteArray(Charsets.UTF_8),
+                "a".repeat(511) + "💚",
+            ),
+            UserAgentCase(
+                "513 code points, multibyte astride the cut, truncates to 512 without splitting it",
+                ("a".repeat(511) + "💚" + "a").toByteArray(Charsets.UTF_8),
+                "a".repeat(511) + "💚",
+            ),
+        ),
+    ) { case ->
+        val got = sanitizeUserAgent(asTomcatDeliversIt(case.wire))
+        got shouldBe case.want
+        if (got != null) {
+            got.codePointCount(0, got.length) shouldBeLessThanOrEqual 512
+        }
+    }
+
+    "sanitizeUserAgent treats an absent header as null" {
+        sanitizeUserAgent(null) shouldBe null
+    }
+
+    "sanitizeUserAgent treats an empty header as null" {
+        sanitizeUserAgent("") shouldBe null
     }
 
     "carries the normalised address into the context" {

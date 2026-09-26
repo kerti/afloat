@@ -31,12 +31,16 @@ type PermittedDifference struct {
 	Header string `yaml:"header"`
 
 	// Name is what a case cites under `permit:`. Set on a case-scoped entry
-	// only, together with Headers and/or Body.
+	// only, together with Headers, Body and/or Status.
 	Name    string   `yaml:"name"`
 	Headers []string `yaml:"headers"`
 	// Body lets the body bytes differ. A case citing it must still say
 	// something about the body, which is what CheckPermits enforces.
 	Body bool `yaml:"body"`
+	// Status lets the two backends answer different HTTP statuses outright
+	// (#64). A case citing it must pin both via expect.status_by_backend,
+	// which CheckPermits enforces the same way it enforces Body's pairing.
+	Status bool `yaml:"status"`
 
 	// Column is "table.column", left out of the persisted-state comparison.
 	// For a value one backend cannot reproduce from the other's, such as a
@@ -133,8 +137,8 @@ func (e PermittedDifference) validate() error {
 	if e.Provisional && strings.TrimSpace(e.Issue) == "" {
 		return fmt.Errorf("%q is provisional but cites no issue", label)
 	}
-	if (hasHeader || hasColumn) && (len(e.Headers) > 0 || e.Body) {
-		return fmt.Errorf("%q: `headers` and `body` belong to a case-scoped entry, which needs a `name`", label)
+	if (hasHeader || hasColumn) && (len(e.Headers) > 0 || e.Body || e.Status) {
+		return fmt.Errorf("%q: `headers`, `body` and `status` belong to a case-scoped entry, which needs a `name`", label)
 	}
 	if hasName {
 		// Scoping a difference to named cases is always a ruling about those
@@ -142,8 +146,8 @@ func (e PermittedDifference) validate() error {
 		if strings.TrimSpace(e.Issue) == "" {
 			return fmt.Errorf("%q is case-scoped but cites no issue", label)
 		}
-		if len(e.Headers) == 0 && !e.Body {
-			return fmt.Errorf("%q permits nothing: give it `headers`, `body`, or both", label)
+		if len(e.Headers) == 0 && !e.Body && !e.Status {
+			return fmt.Errorf("%q permits nothing: give it `headers`, `body`, `status`, or some combination", label)
 		}
 	}
 	return nil
@@ -163,7 +167,7 @@ func (p *PermittedSet) MasksColumn(table, column string) bool {
 
 // ForCase is what may differ on one case: the global headers plus whatever
 // the case-scoped entries it cites add.
-func (p *PermittedSet) ForCase(c Case) (allowsHeader func(string) bool, allowsBody bool) {
+func (p *PermittedSet) ForCase(c Case) (allowsHeader func(string) bool, allowsBody bool, allowsStatus bool) {
 	extra := map[string]bool{}
 	for _, n := range c.Permit {
 		e := p.byName[n]
@@ -171,8 +175,9 @@ func (p *PermittedSet) ForCase(c Case) (allowsHeader func(string) bool, allowsBo
 			extra[strings.ToLower(h)] = true
 		}
 		allowsBody = allowsBody || e.Body
+		allowsStatus = allowsStatus || e.Status
 	}
-	return func(h string) bool { return p.Allows(h) || extra[strings.ToLower(h)] }, allowsBody
+	return func(h string) bool { return p.Allows(h) || extra[strings.ToLower(h)] }, allowsBody, allowsStatus
 }
 
 // CheckPermits cross-checks the cases against the list. A case may cite only
@@ -182,6 +187,19 @@ func (p *PermittedSet) ForCase(c Case) (allowsHeader func(string) bool, allowsBo
 func CheckPermits(cases []Case, p *PermittedSet) error {
 	cited := map[string]bool{}
 	for _, c := range cases {
+		if c.Expect.StatusByBackend != nil {
+			ok := false
+			for _, n := range c.Permit {
+				if p.byName[n].Status {
+					ok = true
+					break
+				}
+			}
+			if !ok {
+				return fmt.Errorf("%s: %q sets expect.status_by_backend but permits no case-scoped entry with `status: true`",
+					c.SourceFile, c.Name)
+			}
+		}
 		for _, n := range c.Permit {
 			e, ok := p.byName[n]
 			if !ok {
@@ -189,9 +207,34 @@ func CheckPermits(cases []Case, p *PermittedSet) error {
 					c.SourceFile, c.Name, n)
 			}
 			cited[n] = true
-			if e.Body && c.Expect.SameAs == nil && c.Expect.BodyJSON == nil && c.Expect.BodyRaw == "" && !c.Expect.BodyEmpty {
-				return fmt.Errorf("%s: %q permits a body difference via %q but asserts nothing about the body; "+
-					"add expect.same_as or a body assertion", c.SourceFile, c.Name, n)
+			// A case permitted a body difference must still pin SOME body,
+			// on SOME backend, or the parity check has gone blind on it
+			// entirely. same_as_for (SameAsFor) counts alongside same_as: a
+			// status_by_backend case (#64) usually cannot use plain same_as
+			// on both backends (Go's malformed-path answer IS its own
+			// unregistered-path 404; Kotlin's connector-level 400 is not),
+			// but pinning Go's side that way, plus the status already pinned,
+			// is enough - a byte-exact pin of a framework-rendered HTML page
+			// that changes across Tomcat's own point releases would be the
+			// maintenance burden the #64 ruling rejected a Tomcat valve for.
+			hasOtherBodyPin := c.Expect.SameAs != nil || c.Expect.BodyJSON != nil || c.Expect.BodyRaw != "" || c.Expect.BodyEmpty
+			if e.Body && !hasOtherBodyPin {
+				if len(c.Expect.SameAsFor) == 0 {
+					return fmt.Errorf("%s: %q permits a body difference via %q but asserts nothing about the body; "+
+						"add expect.same_as, expect.same_as_for, or a body assertion", c.SourceFile, c.Name, n)
+				}
+				// same_as_for as the ONLY pin must name go: it is Go's answer
+				// that is reliably self-consistent (its malformed-path answer
+				// IS its own unregistered-path 404); pinning only Kotlin's
+				// side would leave the actually-testable half unpinned.
+				if _, hasGo := c.Expect.SameAsFor["go"]; !hasGo {
+					return fmt.Errorf("%s: %q permits a body difference via %q and same_as_for is its only body pin, "+
+						"but same_as_for has no \"go\" key", c.SourceFile, c.Name, n)
+				}
+			}
+			if e.Status && c.Expect.StatusByBackend == nil {
+				return fmt.Errorf("%s: %q permits a status difference via %q but expect.status pins one value for "+
+					"both backends; use expect.status_by_backend instead", c.SourceFile, c.Name, n)
 			}
 		}
 	}

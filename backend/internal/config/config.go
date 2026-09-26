@@ -109,10 +109,14 @@ func (c Config) validate() error {
 	default:
 		return fmt.Errorf("LOG_LEVEL %q: want debug, info, warn or error", c.LogLevel)
 	}
-	// A zero first window is no backoff at all, and a cap below it would make
-	// the second failure's window shorter than the first's.
-	if c.LoginFirstBackoff <= 0 {
-		return fmt.Errorf("LOGIN_FIRST_BACKOFF (%s) must be positive", c.LoginFirstBackoff)
+	// A zero or sub-millisecond first window is not a backoff a caller could
+	// ever observe (#69): time.Duration can express nanoseconds, but nothing
+	// in either backend's login path resolves that finely, so a value that
+	// small is indistinguishable from no backoff at all. A cap below the
+	// floor would also make the second failure's window shorter than the
+	// first's.
+	if c.LoginFirstBackoff < time.Millisecond {
+		return fmt.Errorf("LOGIN_FIRST_BACKOFF (%s) must be at least 1ms", c.LoginFirstBackoff)
 	}
 	if c.LoginMaxBackoff < c.LoginFirstBackoff {
 		return fmt.Errorf("LOGIN_MAX_BACKOFF (%s) is shorter than LOGIN_FIRST_BACKOFF (%s)",

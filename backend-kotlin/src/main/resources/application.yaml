@@ -44,6 +44,16 @@ server:
     connection-timeout: ${HTTP_READ_TIMEOUT:30s}
     keep-alive-timeout: ${HTTP_IDLE_TIMEOUT:120s}
 
+management:
+  server:
+    # No actuator endpoint over HTTP, ever (#66): -1 maps no management port
+    # or path at all, rather than trusting an exposure allowlist to stay
+    # narrow. The dependency stays (BOOTSTRAP.md §3's ratified list), for a
+    # later JMX or same-process use; /api/actuator/** answers exactly like
+    # any other unregistered path, because nothing maps it - SecurityConfiguration's
+    # `unmapped` matcher never sees an actuator handler to treat specially.
+    port: -1
+
 logging:
   level:
     # Go's LOG_LEVEL steers the app's own logger (slog), not the container. Pin

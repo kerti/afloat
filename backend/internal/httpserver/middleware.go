@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 
 	"github.com/kerti/afloat/backend/internal/httperr"
@@ -115,6 +116,82 @@ func maxBodyBytes(n int64) func(http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+// headAsGet answers HEAD by running the GET handler and discarding the
+// body (RFC 9110 §9.1): the same status and headers as GET, nothing written.
+//
+// Not chi's middleware.GetHead, which rewrites only rctx.RouteMethod — the
+// field chi's own tree lookup keys off — and leaves r.Method as HEAD. Every
+// layer downstream of routing that inspects the method disagrees with what
+// got matched, and one of them does: oapi-codegen's per-operation
+// spec-validating middleware (openapi_validate.go) reads r.Method directly
+// and refused a HEAD against a GET-only operation with "method not allowed"
+// before a single handler ran. So this rewrites both: rctx.RouteMethod for
+// this mounted router's own routing (its tree lookup would otherwise still
+// match against HEAD — chi shares one *Context across a Mount, and the outer
+// router already set that field during its own pass before this one runs),
+// and a cloned request's Method for everything downstream of routing.
+// Discarding only the bytes a ResponseWriter is asked to write keeps the
+// rest: status and every header GET sets are unchanged. On a real server,
+// net/http itself then omits Content-Length from a HEAD answer where GET's
+// carries one (chunked instead, since the handler never told it a length up
+// front) - a difference RFC 9110 §9.1 explicitly allows, and Content-Length
+// is already a global permitted difference (permitted-differences.yaml),
+// framing rather than content. Not something to chase into matching: the
+// point is the same status and the same declared headers, not identical
+// bytes on the wire.
+//
+// Mounted on the API's own base router (server.go), inside the mount at
+// basePath: its look-ahead is chi's ordinary routing, on that router's own
+// tree of the contract's actual operations, so a HEAD to a route the
+// contract does not register as GET still 405s like any other wrong method.
+func headAsGet(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodHead {
+			next.ServeHTTP(w, r)
+			return
+		}
+		// chi's own routing (mux.routeHTTP) keys off rctx.RouteMethod, not
+		// r.Method, and that field is already set — to HEAD — by the outer
+		// router's own routeHTTP pass before this mounted router ever runs
+		// (chi shares one *Context across a Mount). Changing only the
+		// request's Method, as below, would leave this router's tree lookup
+		// still matching against the stale HEAD, same as chi's own
+		// middleware.GetHead would if it ran here instead of at the mux's
+		// own top level.
+		if rctx := chi.RouteContext(r.Context()); rctx != nil {
+			rctx.RouteMethod = http.MethodGet
+		}
+		r2 := r.Clone(r.Context())
+		r2.Method = http.MethodGet
+		next.ServeHTTP(headDiscardingWriter{w}, r2)
+	})
+}
+
+// headDiscardingWriter passes every header and status write through
+// unchanged and drops only the body: what HEAD asks for.
+type headDiscardingWriter struct{ http.ResponseWriter }
+
+func (headDiscardingWriter) Write(b []byte) (int, error) { return len(b), nil }
+
+// optionsRefused answers every OPTIONS request with a flat 405: empty body,
+// no Allow header naming the route's methods (#66). Afloat is same-origin
+// with no CORS, so no client sends OPTIONS, and answering it identically on
+// every path - registered, unregistered, or the disabled-login route - is
+// what keeps the disabled route indistinguishable from one never registered
+// at all (#24's rule "on every method"), without a second gate that could
+// drift from disabledLocalLogin404's. Mounted ahead of routing entirely, so
+// chi's own method-not-allowed handling (which would add Allow: GET, HEAD for
+// a route it does find) never runs for this method.
+func optionsRefused(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // requestIDHeader carries the correlation id in both directions: honoured

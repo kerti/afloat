@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/json"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -98,9 +99,17 @@ func TestLoadRejectsBadEnums(t *testing.T) {
 		// 0 would cancel every request on arrival (#30), not disable the bound.
 		{"zero write timeout", "HTTP_WRITE_TIMEOUT", "0s"},
 		{"negative write timeout", "HTTP_WRITE_TIMEOUT", "-1s"},
-		// No backoff at all is not a backoff.
+		// No backoff at all is not a backoff, and below 1ms is not one a
+		// caller could ever observe either (#69).
 		{"zero first backoff", "LOGIN_FIRST_BACKOFF", "0s"},
 		{"negative first backoff", "LOGIN_FIRST_BACKOFF", "-1s"},
+		{"first backoff below 1ms", "LOGIN_FIRST_BACKOFF", "999us"},
+		// #69 second review: whitespace-only is not the same as unset (#69's empty-string
+		// rule) - caarlos0/env's getOr only special-cases `value == ""`, so
+		// this reaches time.ParseDuration and is refused like any other
+		// unparseable spelling.
+		{"first backoff is whitespace", "LOGIN_FIRST_BACKOFF", "   "},
+		{"first backoff is a tab", "LOGIN_FIRST_BACKOFF", "\t"},
 		// A cap below the first window: the second failure would wait less
 		// than the first.
 		{"max backoff below the first", "LOGIN_MAX_BACKOFF", "500ms"},
@@ -149,4 +158,61 @@ func TestBackoffDefaultsMatchTheSharedFixture(t *testing.T) {
 		t.Errorf("defaults are %s and %s, the fixture's are %s and %s",
 			cfg.LoginFirstBackoff, cfg.LoginMaxBackoff, first, maxBackoff)
 	}
+}
+
+// #69: 1ms is the floor, not a value just under it.
+func TestLoadAcceptsLoginFirstBackoffAtTheFloor(t *testing.T) {
+	setEnv(t, map[string]string{"DATABASE_URL": "postgres://x/y", "LOGIN_FIRST_BACKOFF": "1ms"})
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.LoginFirstBackoff != time.Millisecond {
+		t.Errorf("LoginFirstBackoff = %s, want 1ms", cfg.LoginFirstBackoff)
+	}
+}
+
+// #69: a duration variable set to the empty string is unset, not a parse
+// failure - "FOO=" in a .env boots with FOO's documented default. Every
+// duration variable, not only the login backoffs this issue started from.
+func TestBlankDurationVarsFallBackToTheirDefault(t *testing.T) {
+	for _, tc := range []struct {
+		key  string
+		want time.Duration
+	}{
+		{"HTTP_READ_TIMEOUT", 30 * time.Second},
+		{"HTTP_WRITE_TIMEOUT", 60 * time.Second},
+		{"HTTP_IDLE_TIMEOUT", 120 * time.Second},
+		{"SHUTDOWN_TIMEOUT", 10 * time.Second},
+		{"SESSION_TTL", 720 * time.Hour},
+		{"SESSION_MAX_LIFETIME", 2160 * time.Hour},
+		{"LOGIN_FIRST_BACKOFF", time.Second},
+		{"LOGIN_MAX_BACKOFF", 5 * time.Minute},
+	} {
+		t.Run(tc.key, func(t *testing.T) {
+			setEnv(t, map[string]string{"DATABASE_URL": "postgres://x/y", tc.key: ""})
+			cfg, err := Load()
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			got := durationFieldByEnvName(cfg, tc.key)
+			if got != tc.want {
+				t.Errorf("%s=\"\": got %s, want the default %s", tc.key, got, tc.want)
+			}
+		})
+	}
+}
+
+// durationFieldByEnvName reads the table above against the struct Load
+// itself parses, rather than a second, driftable copy of the field list.
+func durationFieldByEnvName(cfg Config, envName string) time.Duration {
+	v := reflect.ValueOf(cfg)
+	t := v.Type()
+	for i := 0; i < t.NumField(); i++ {
+		name, _, _ := strings.Cut(t.Field(i).Tag.Get("env"), ",")
+		if name == envName {
+			return v.Field(i).Interface().(time.Duration)
+		}
+	}
+	panic("no Config field tagged env:" + envName)
 }

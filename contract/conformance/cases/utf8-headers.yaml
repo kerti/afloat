@@ -1,0 +1,63 @@
+# #67: Kotlin's firewall accepts any header VALUE now (StrictHttpFirewall's
+# default refused a control character, and Tomcat decoding a UTF-8 byte as
+# Latin-1 can produce one - an em dash's middle byte, 0x80, among them).
+# Header NAMES stay strict; nothing here touches that. CR and LF are still
+# refused, by Tomcat at the connector, before the firewall or this filter ever
+# sees the request - no case here can reach that, since net/http itself
+# refuses to put a raw CR or LF in a header value.
+
+- name: utf8 headers - a UTF-8 User-Agent on health is ordinary
+  issue: "67"
+  request:
+    method: GET
+    path: /health
+    headers:
+      User-Agent: "Afloat — test"
+  expect:
+    status: 200
+    body_json: {status: ok, version: dev}
+
+# The row check is the point: Tomcat decodes header bytes as ISO-8859-1, so
+# without RequestContext.sanitizeUserAgent's decode-and-reencode step, the
+# stored user_agent would be Kotlin-only mojibake for the same bytes Go
+# accepts. See user-agent-storage.yaml for the full #70 storage rule (absent,
+# invalid UTF-8, and the 512-code-point truncation).
+- name: utf8 headers - a UTF-8 User-Agent survives into the session row
+  issue: "67"
+  request:
+    method: POST
+    path: /auth/local/login
+    headers:
+      Content-Type: application/json
+      User-Agent: "Afloat — test"
+    body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+  expect:
+    status: 204
+    body_empty: true
+    cookies:
+      afloat_session:
+        value_pattern: '[A-Za-z0-9_-]{43}'
+        path: /
+        max_age: 2592000
+        http_only: true
+        secure: false
+        same_site: Lax
+        expires: max-age
+    rows:
+      - sql: SELECT user_agent FROM sessions
+        rows: [{user_agent: "Afloat — test"}]
+
+- name: utf8 headers - a UTF-8 Origin still fails the cross-site guard
+  issue: "67"
+  request:
+    method: POST
+    path: /auth/local/login
+    headers:
+      Content-Type: application/json
+      Host: afloat.test
+      Origin: "http://😀"
+    body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+  expect:
+    status: 403
+    body_json: {code: CROSS_SITE_REQUEST_BLOCKED}
+    cookies: {}

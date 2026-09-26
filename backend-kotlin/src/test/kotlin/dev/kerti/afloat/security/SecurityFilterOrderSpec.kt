@@ -3,6 +3,7 @@ package dev.kerti.afloat.security
 import dev.kerti.afloat.auth.CrossSiteGuardFilter
 import dev.kerti.afloat.auth.DisabledLocalLogin404Filter
 import dev.kerti.afloat.auth.MaxBodyFilter
+import dev.kerti.afloat.auth.OptionsRefusedFilter
 import dev.kerti.afloat.auth.RequestFactsFilter
 import dev.kerti.afloat.auth.SessionFilter
 import dev.kerti.afloat.testsupport.DatabaseSpec
@@ -22,12 +23,17 @@ class SecurityFilterOrderSpec : DatabaseSpec() {
     private lateinit var filterChainProxy: FilterChainProxy
 
     init {
-        // Go's chain: disabledLocalLogin404 -> maxBodyBytes -> crossSiteGuard
-        // -> RequestContextMiddleware -> SessionMiddleware (server.go:75-86).
-        // The session filter reads the facts the request-facts filter sets, so
-        // the order is load-bearing, not cosmetic.
+        // Go's chain: optionsRefused -> disabledLocalLogin404 -> maxBodyBytes
+        // -> crossSiteGuard -> RequestContextMiddleware -> SessionMiddleware
+        // (server.go:70-86). The session filter reads the facts the
+        // request-facts filter sets, so the order is load-bearing, not
+        // cosmetic - and optionsRefused ahead of localLogin404 is what makes
+        // an OPTIONS to the disabled-login route indistinguishable from one to
+        // an unregistered path by construction, rather than by a second gate
+        // that could drift from the first (#66).
         "runs the request filters in Go's order" {
             val filters = filterChainProxy.filterChains.first().filters
+            val optionsRefused = filters.indexOfFilter<OptionsRefusedFilter>()
             val localLogin404 = filters.indexOfFilter<DisabledLocalLogin404Filter>()
             val maxBody = filters.indexOfFilter<MaxBodyFilter>()
             val crossSite = filters.indexOfFilter<CrossSiteGuardFilter>()
@@ -36,12 +42,14 @@ class SecurityFilterOrderSpec : DatabaseSpec() {
 
             // indexOfFirst returns -1 for a filter that was never registered,
             // which would otherwise satisfy every ordering assertion below.
+            optionsRefused shouldBeGreaterThanOrEqual 0
             localLogin404 shouldBeGreaterThanOrEqual 0
             maxBody shouldBeGreaterThanOrEqual 0
             crossSite shouldBeGreaterThanOrEqual 0
             facts shouldBeGreaterThanOrEqual 0
             session shouldBeGreaterThanOrEqual 0
 
+            optionsRefused shouldBeLessThan localLogin404
             localLogin404 shouldBeLessThan maxBody
             maxBody shouldBeLessThan crossSite
             crossSite shouldBeLessThan facts

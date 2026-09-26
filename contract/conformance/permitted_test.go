@@ -131,7 +131,7 @@ func TestCheckPermits(t *testing.T) {
 	statusPinnedButUnpermitted.Expect.SameAs = sameAs
 	statusPinnedButUnpermitted.Expect.StatusByBackend = map[string]int{"go": 404, "kotlin": 400}
 
-	// S4 restored the strict rule: status_by_backend alone does NOT excuse a
+	// The strict rule: status_by_backend alone does NOT excuse a
 	// permitted body difference from being pinned some other way.
 	statusByBackendAloneIsNotEnough := conformance.Case{Name: "s4", Permit: []string{"status-and-body-diff"}}
 	statusByBackendAloneIsNotEnough.Expect.StatusByBackend = map[string]int{"go": 404, "kotlin": 400}
@@ -145,6 +145,13 @@ func TestCheckPermits(t *testing.T) {
 	statusAndBodyPinnedViaSameAsFor.Expect.StatusByBackend = map[string]int{"go": 404, "kotlin": 400}
 	statusAndBodyPinnedViaSameAsFor.Expect.SameAsFor = map[string]*conformance.Request{"go": sameAs}
 
+	// S-A: same_as_for as the ONLY body pin must carry the go key - Kotlin's
+	// side is the framework-rendered one nobody wants pinned byte-for-byte.
+	kotlinOnlySameAsFor := &conformance.Request{Method: "GET", Path: "/kotlin-side"}
+	sameAsForKotlinOnly := conformance.Case{Name: "s6", Permit: []string{"status-and-body-diff"}}
+	sameAsForKotlinOnly.Expect.StatusByBackend = map[string]int{"go": 404, "kotlin": 400}
+	sameAsForKotlinOnly.Expect.SameAsFor = map[string]*conformance.Request{"kotlin": kotlinOnlySameAsFor}
+
 	for _, tc := range []struct {
 		name  string
 		cases []conformance.Case
@@ -156,7 +163,7 @@ func TestCheckPermits(t *testing.T) {
 		{"status permitted, status unpinned", []conformance.Case{withStatusByBackend, statusPermittedButUnpinned}, "expect.status pins one value"},
 		{"status pinned, status unpermitted", []conformance.Case{withStatusByBackend, statusPinnedButUnpermitted}, "permits no case-scoped entry with `status: true`"},
 		{
-			"status_by_backend alone does not excuse a permitted body difference (S4)",
+			"status_by_backend alone does not excuse a permitted body difference",
 			[]conformance.Case{withSameAs, withStatusByBackend, statusByBackendAloneIsNotEnough},
 			"asserts nothing about the body",
 		},
@@ -164,6 +171,11 @@ func TestCheckPermits(t *testing.T) {
 			"same_as_for pins the body status_by_backend alone could not, and every entry is cited",
 			[]conformance.Case{withSameAs, withStatusByBackend, statusAndBodyPinnedViaSameAsFor},
 			"",
+		},
+		{
+			"same_as_for as the only body pin with no go key is rejected (S-A)",
+			[]conformance.Case{withSameAs, withStatusByBackend, sameAsForKotlinOnly},
+			"same_as_for has no \"go\" key",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

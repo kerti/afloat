@@ -104,7 +104,7 @@ func TestLoadRejectsBadEnums(t *testing.T) {
 		{"zero first backoff", "LOGIN_FIRST_BACKOFF", "0s"},
 		{"negative first backoff", "LOGIN_FIRST_BACKOFF", "-1s"},
 		{"first backoff below 1ms", "LOGIN_FIRST_BACKOFF", "999us"},
-		// S3: whitespace-only is not the same as unset (#69's empty-string
+		// #69 second review: whitespace-only is not the same as unset (#69's empty-string
 		// rule) - caarlos0/env's getOr only special-cases `value == ""`, so
 		// this reaches time.ParseDuration and is refused like any other
 		// unparseable spelling.

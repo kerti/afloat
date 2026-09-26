@@ -226,10 +226,63 @@ answers *exactly like an unregistered path* — on each backend, where the two
 backends' unregistered-path 404s are themselves permitted to differ. A byte
 assertion would fail one of them; `same_as` pins the ruling itself.
 
+**`expect.same_as_for`** is `same_as` restricted to one backend (`go` or
+`kotlin`), for a case whose two backends are permitted to differ so much
+(`status_by_backend`, below) that the relation cannot hold on both at once:
+Go's answer to a malformed path IS its own unregistered-path 404, but Kotlin's
+connector-level 400 is not Kotlin's own 404. A case may set `same_as`,
+`same_as_for`, both (for different backends), or neither — but a `same_as` or
+`same_as_for` identical to the case's own `request` is rejected at load time,
+since it would only ever compare an answer to itself.
+
 **Not generated from the OpenAPI spec, on purpose.** The spec says what a
 response *may* look like; a case says what it *is* — which status a specific bad
 body produces, what the envelope's `code` is, what the cookie's attributes are.
 Generating these would re-derive the ambiguity the harness exists to remove.
+
+### When the two backends are permitted to answer different statuses
+
+`expect.status` is a single value both backends must match — the ordinary
+case. `expect.status_by_backend` (a `{go: ..., kotlin: ...}` map, both keys
+required, and the two values must actually differ) is its alternative for a
+case-scoped permitted difference whose whole point is that the backends
+*don't* agree on status (`status: true` on the entry, #64's connector-vs-router
+404-or-400 split and #66's `OPTIONS *` are the two rulings that needed this).
+The two are mutually exclusive, and using `status_by_backend` requires citing a
+permit entry with `status: true` — the loader rejects a case that sets one
+without the other.
+
+### `raw_target`: bytes url.Parse would otherwise normalise away
+
+`request.path` goes through Go's own `http.NewRequest`, which silently fixes
+up anything the URL type doesn't like — an unescaped backslash becomes `%5C`,
+for instance — before the request ever reaches either server. `request.raw_target`
+is `path`'s alternative for a case that needs the literal bytes on the wire:
+sent verbatim as the request line's target via `URL.Opaque`, never escaped,
+never re-parsed. Relative to the API base and takes a leading slash the same
+way `path` does, with two exceptions that are not nested under the base at
+all: the bare asterisk-form `*` (RFC 9110 §7.1's `OPTIONS *`, and any
+asterisk-form variant such as `*?x=1`) and an absolute-form target (a full
+URI, such as `http://x*`) — recognised by a leading `*` or a `://` anywhere in
+the value.
+
+### `headers_hex`: header values that are not valid UTF-8
+
+`request.headers` is a YAML string, which is Unicode text — it cannot hold an
+arbitrary byte sequence, and a `\xHH` escape inside a quoted YAML scalar means
+the Unicode code point U+00HH (encoded as however many UTF-8 bytes that takes),
+never the raw byte `0xHH`. `request.headers_hex` is `headers`' alternative for
+exactly that case (#70's invalid-UTF-8 `sessions.user_agent` rows): each value
+is hex, decoded and sent as the header's exact bytes. A name may appear in only
+one of `headers` or `headers_hex` (checked case-insensitively, since HTTP
+header names are), and `Host` is rejected from `headers_hex` outright — `path`
+gives it its own connection-level meaning (`req.Host`, never a literal header),
+which raw bytes have no equivalent for. This client's own header-value check
+still applies even writing bytes directly: it refuses NUL, `0x01`, `0x1B`,
+`0x7F` and a bare CR or LF, and allows everything else, HTAB and any UTF-8/C1
+byte (`0x80`–`0xFF`) included — a case naming one of the refused bytes needs a
+raw socket instead (`obs_fold_test.go`, `ErrorDispatchSpec.kt`'s Kotlin
+equivalent), not this harness.
 
 ## The permitted-difference list
 
@@ -239,14 +292,17 @@ file is the list, and the runner reads it, so prose and enforcement cannot drift
 apart.
 
 Three kinds of entry. A **global** one names a `header` and applies to every
-case. A **case-scoped** one has a `name`, lists `headers` and/or `body`, and
-applies only to cases that cite it under `permit:` — for a difference that is
-right on those answers and would be a bug anywhere else. A **column** one names
-a `table.column` the persisted-state comparison skips on every case. A scoped entry is always a
-ruling, so it always needs an `issue`. The loader and `go test -short` refuse a
-case that cites an undefined entry, a scoped entry no case cites, and a case
-that permits a body difference without pinning the body another way
-(`same_as` or a body assertion), since parity would otherwise go blind on it.
+case. A **case-scoped** one has a `name`, lists any of `headers`, `body` or
+`status`, and applies only to cases that cite it under `permit:` — for a
+difference that is right on those answers and would be a bug anywhere else. A
+**column** one names a `table.column` the persisted-state comparison skips on
+every case. A scoped entry is always a ruling, so it always needs an `issue`.
+The loader and `go test -short` refuse a case that cites an undefined entry, a
+scoped entry no case cites, a case that permits a body difference without
+pinning the body another way (`same_as`, `same_as_for`, or a body assertion —
+and if `same_as_for` is the *only* one, it must carry the `go` key: Go's side
+is the one that is reliably self-consistent), and a case that permits a status
+difference without `status_by_backend`.
 
 Every entry needs a `why`. An entry that encodes a **decision** also needs its
 `issue`, and `provisional: true` marks one that exists only because the decision
@@ -259,13 +315,18 @@ a divergence rather than ruling on one.
 Today the list holds three permanent global entries — `Date` and
 `Content-Length`, both properties of HTTP rather than decisions, and
 `X-Request-Id` (#26: both backends send it, but a minted id is random; the
-sanitising rule is pinned by `cases/request-id.yaml` instead) — and one
-case-scoped entry, `unmatched-path-404` (#24: each backend keeps its own
+sanitising rule is pinned by `cases/request-id.yaml` instead) — and several
+case-scoped entries: `unmatched-path-404` (#24: each backend keeps its own
 unregistered-path 404, so the frontend must act on a non-envelope 404's status
-alone). #26 retired the provisional entries: the six security headers are
-identical on both backends and compared like any other, and neither backend
-sends `Strict-Transport-Security`. One column entry, `sessions.id`: the hash of
-a random token, which two backends never share.
+alone); `malformed-path-connector-400` (#64: a handful of path shapes, and a
+non-OPTIONS method with an asterisk-form target, that Tomcat's connector
+refuses outright where Go's router simply finds no route); and `options-star`
+(#66: the asterisk-form and absolute-form targets that OPTIONS's own dispatch,
+not path routing, treats differently on the two connectors). #26 retired the
+provisional entries: the six security headers are identical on both backends
+and compared like any other, and neither backend sends
+`Strict-Transport-Security`. One column entry, `sessions.id`: the hash of a
+random token, which two backends never share.
 
 ## Design decisions, and what they rejected
 

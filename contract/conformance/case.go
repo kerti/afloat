@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"slices"
 	"sort"
@@ -74,10 +75,13 @@ type Request struct {
 	// HeadersHex is Headers' alternative for a value that is not valid UTF-8 -
 	// a YAML string is Unicode text, so it cannot hold arbitrary bytes, and a
 	// `\xHH` escape in YAML means the Unicode code point U+00HH, not the raw
-	// byte (R1: proving sessions.user_agent's invalid-UTF-8 rows needs the raw
-	// byte on the wire, such as a lone 0x85). Each value is hex, decoded and
-	// sent as the header's exact bytes; do() rejects a name also set in
-	// Headers.
+	// byte (#70: proving sessions.user_agent's invalid-UTF-8 rows needs the
+	// raw byte on the wire, such as a lone 0x85). Each value is hex, decoded
+	// and sent as the header's exact bytes. validate() rejects a name also
+	// set in Headers (case-insensitively: HTTP header names are) and rejects
+	// Host outright, which Headers gives its own connection-level meaning to
+	// (do() sets req.Host, never a literal Host header) that raw bytes have
+	// no equivalent for.
 	HeadersHex map[string]string `yaml:"headers_hex"`
 	// Body is sent verbatim. A string rather than a map, because some cases
 	// exist precisely to send bytes that are not valid JSON.
@@ -345,10 +349,18 @@ func (c *Case) validate() error {
 		if err := s.validate(c.Name, "expect.same_as"); err != nil {
 			return err
 		}
+		if reflect.DeepEqual(*s, c.Request) {
+			return fmt.Errorf("%s: expect.same_as is identical to request; it would only ever compare an answer "+
+				"to itself, which asserts nothing", c.Name)
+		}
 	}
 	for backend, s := range c.Expect.SameAsFor {
 		if err := s.validate(c.Name, "expect.same_as_for."+backend); err != nil {
 			return err
+		}
+		if reflect.DeepEqual(*s, c.Request) {
+			return fmt.Errorf("%s: expect.same_as_for.%s is identical to request; it would only ever compare an "+
+				"answer to itself, which asserts nothing", c.Name, backend)
 		}
 	}
 	for i, g := range c.Given {
@@ -408,22 +420,31 @@ func (r *Request) validate(caseName, at string) error {
 	switch {
 	case r.Path != "" && r.RawTarget != "":
 		return fmt.Errorf("%s: %s.path and %s.raw_target are mutually exclusive", caseName, at, at)
-	case r.RawTarget == "*":
-		// The asterisk-form request-target (RFC 9110 §7.1), OPTIONS *'s own -
-		// never nested under the API base, so the "/" prefix rule does not
-		// apply to it (S2).
+	case strings.HasPrefix(r.RawTarget, "*") || strings.Contains(r.RawTarget, "://"):
+		// The asterisk-form request-target (RFC 9110 §7.1: "*", or a ruling
+		// #70 shape such as "*?x=1") and the absolute-form (a full URI, e.g.
+		// "http://x*") are never nested under the API base, so the "/" prefix
+		// rule does not apply to either.
 	case r.RawTarget != "":
 		if !strings.HasPrefix(r.RawTarget, "/") {
-			return fmt.Errorf("%s: %s.raw_target must start with / (or be exactly \"*\") and exclude the /api base", caseName, at)
+			return fmt.Errorf("%s: %s.raw_target must start with / (or be an asterisk-form or absolute-form "+
+				"target) and exclude the /api base", caseName, at)
 		}
 	case !strings.HasPrefix(r.Path, "/"):
 		return fmt.Errorf("%s: %s.path must start with / and exclude the /api base", caseName, at)
 	}
-	for name := range r.HeadersHex {
-		if _, dup := r.Headers[name]; dup {
-			return fmt.Errorf("%s: %s.headers_hex.%s also appears in %s.headers", caseName, at, name, at)
+	for name, hexValue := range r.HeadersHex {
+		if strings.EqualFold(name, "Host") {
+			return fmt.Errorf("%s: %s.headers_hex.%s: Host has no raw-bytes equivalent - do() sets req.Host from "+
+				"%s.headers.Host, never a literal header - so put it there instead", caseName, at, name, at)
 		}
-		if _, err := hex.DecodeString(r.HeadersHex[name]); err != nil {
+		for other := range r.Headers {
+			if strings.EqualFold(name, other) {
+				return fmt.Errorf("%s: %s.headers_hex.%s also appears in %s.headers.%s (header names are "+
+					"case-insensitive)", caseName, at, name, at, other)
+			}
+		}
+		if _, err := hex.DecodeString(hexValue); err != nil {
 			return fmt.Errorf("%s: %s.headers_hex.%s is not valid hex: %w", caseName, at, name, err)
 		}
 	}

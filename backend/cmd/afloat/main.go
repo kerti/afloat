@@ -133,7 +133,7 @@ func newHTTPServer(cfg config.Config, handler http.Handler) *http.Server {
 		// Without this, net/http answers OPTIONS * itself - a bare 200, never
 		// reaching Handler - before optionsRefused (httpserver/middleware.go)
 		// gets a chance to answer it the same flat 405 as every other OPTIONS
-		// (S2). Tomcat's CoyoteAdapter answers OPTIONS * the same way net/http
+		// (#66). Tomcat's CoyoteAdapter answers OPTIONS * the same way net/http
 		// would have, before any of Kotlin's own filters run, with no
 		// equivalent switch to disable it - a permitted difference instead
 		// (permitted-differences.yaml).

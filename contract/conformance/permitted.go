@@ -217,10 +217,20 @@ func CheckPermits(cases []Case, p *PermittedSet) error {
 			// is enough - a byte-exact pin of a framework-rendered HTML page
 			// that changes across Tomcat's own point releases would be the
 			// maintenance burden the #64 ruling rejected a Tomcat valve for.
-			if e.Body && c.Expect.SameAs == nil && len(c.Expect.SameAsFor) == 0 &&
-				c.Expect.BodyJSON == nil && c.Expect.BodyRaw == "" && !c.Expect.BodyEmpty {
-				return fmt.Errorf("%s: %q permits a body difference via %q but asserts nothing about the body; "+
-					"add expect.same_as, expect.same_as_for, or a body assertion", c.SourceFile, c.Name, n)
+			hasOtherBodyPin := c.Expect.SameAs != nil || c.Expect.BodyJSON != nil || c.Expect.BodyRaw != "" || c.Expect.BodyEmpty
+			if e.Body && !hasOtherBodyPin {
+				if len(c.Expect.SameAsFor) == 0 {
+					return fmt.Errorf("%s: %q permits a body difference via %q but asserts nothing about the body; "+
+						"add expect.same_as, expect.same_as_for, or a body assertion", c.SourceFile, c.Name, n)
+				}
+				// same_as_for as the ONLY pin must name go: it is Go's answer
+				// that is reliably self-consistent (its malformed-path answer
+				// IS its own unregistered-path 404); pinning only Kotlin's
+				// side would leave the actually-testable half unpinned.
+				if _, hasGo := c.Expect.SameAsFor["go"]; !hasGo {
+					return fmt.Errorf("%s: %q permits a body difference via %q and same_as_for is its only body pin, "+
+						"but same_as_for has no \"go\" key", c.SourceFile, c.Name, n)
+				}
 			}
 			if e.Status && c.Expect.StatusByBackend == nil {
 				return fmt.Errorf("%s: %q permits a status difference via %q but expect.status pins one value for "+

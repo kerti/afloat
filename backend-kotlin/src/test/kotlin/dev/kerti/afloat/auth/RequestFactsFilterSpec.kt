@@ -137,15 +137,22 @@ class RequestFactsFilterSpec : StringSpec({
         seen?.userAgent shouldBe "Afloat — test"
     }
 
-    // R1: the storage rule for sessions.user_agent, in order - absent/empty is
-    // null (#32 item 4, unchanged), not-valid-UTF-8 is null (a stored invalid
-    // header used to fail the whole login with a Postgres 500 on Go, and
-    // silently stored U+FFFD mojibake here before this rule), otherwise
-    // truncated to 512 Unicode code points on a code point boundary. Go's
-    // request_test.go holds the same rows. Each `wire` is the exact bytes a
-    // client sent; asTomcatDeliversIt reproduces what Tomcat's ISO-8859-1
-    // header decoding hands the filter for those bytes.
+    // #70: the storage rule for sessions.user_agent, in order - fold HTAB to
+    // SP and trim SP/HTAB from both ends, absent/empty is null (#32 item 4,
+    // unchanged), not-valid-UTF-8 is null (a stored invalid header used to
+    // fail the whole login with a Postgres 500 on Go, and silently stored
+    // U+FFFD mojibake here before this rule), otherwise truncated to 512
+    // Unicode code points on a code point boundary. Go's request_test.go
+    // holds the same rows; the obs-fold-specific ones (a real fold's CRLF,
+    // which cannot be sent through this function directly) are
+    // ErrorDispatchSpec's. Each `wire` is the exact bytes a client sent;
+    // asTomcatDeliversIt reproduces what Tomcat's ISO-8859-1 header decoding
+    // hands the filter for those bytes.
     fun asTomcatDeliversIt(wire: ByteArray): String = String(wire, Charsets.ISO_8859_1)
+
+    // Raw bytes as ints, so a multi-byte invalid UTF-8 sequence reads as its
+    // hex shape rather than a wall of .code.toByte() calls.
+    fun bytes(vararg b: Int): ByteArray = ByteArray(b.size) { b[it].toByte() }
 
     data class UserAgentCase(val name: String, val wire: ByteArray, val want: String?)
 
@@ -164,6 +171,34 @@ class RequestFactsFilterSpec : StringSpec({
                 byteArrayOf('a'.code.toByte(), 'b'.code.toByte(), 'c'.code.toByte(), 0x85.toByte(), 'd'.code.toByte(), 'e'.code.toByte(), 'f'.code.toByte()),
                 null,
             ),
+            UserAgentCase(
+                "a UTF-8-encoded lone high surrogate (U+D800) is invalid UTF-8",
+                bytes('x'.code, 0xed, 0xa0, 0x80, 'y'.code),
+                null,
+            ),
+            UserAgentCase(
+                "a UTF-8-encoded lone low surrogate (U+DFFF) is invalid UTF-8",
+                bytes('x'.code, 0xed, 0xbf, 0xbf, 'y'.code),
+                null,
+            ),
+            UserAgentCase(
+                "a code point past U+10FFFF is invalid UTF-8",
+                bytes('x'.code, 0xf4, 0x90, 0x80, 0x80, 'y'.code),
+                null,
+            ),
+            UserAgentCase(
+                "a pre-RFC-3629 5-byte form is invalid UTF-8",
+                bytes('x'.code, 0xf8, 0x88, 0x80, 0x80, 0x80, 'y'.code),
+                null,
+            ),
+            UserAgentCase(
+                "a pre-RFC-3629 6-byte form is invalid UTF-8",
+                bytes('x'.code, 0xfc, 0x84, 0x80, 0x80, 0x80, 0x80, 'y'.code),
+                null,
+            ),
+            UserAgentCase("an internal tab is folded to a space", "before\tafter".toByteArray(Charsets.US_ASCII), "before after"),
+            UserAgentCase("leading and trailing spaces are trimmed", "  padded  ".toByteArray(Charsets.US_ASCII), "padded"),
+            UserAgentCase("a leading tab is trimmed like a space", "\tpadded".toByteArray(Charsets.US_ASCII), "padded"),
             UserAgentCase("511 code points is untouched", "a".repeat(511).toByteArray(Charsets.US_ASCII), "a".repeat(511)),
             UserAgentCase(
                 "512 code points, multibyte at the boundary, is untouched",

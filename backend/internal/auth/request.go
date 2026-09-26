@@ -37,29 +37,44 @@ func RequestContextMiddleware(next http.Handler) http.Handler {
 
 // maxUserAgentCodePoints bounds what sessions.user_agent stores. Unicode code
 // points, like every other length limit in this codebase (BOOTSTRAP.md §5.1) -
-// never bytes, never UTF-16 units - so a passphrase in a non-Latin script is
-// not penalised for encoding wider, and so Go and Kotlin cut at the same
-// character regardless of how many bytes or UTF-16 units it took to get there.
+// never bytes, never UTF-16 units - so a User-Agent that happens to carry
+// multibyte characters is not penalised for encoding wider, and so Go and
+// Kotlin cut at the same character regardless of how many bytes or UTF-16
+// units it took to get there.
 const maxUserAgentCodePoints = 512
 
 // sanitizeUserAgent applies the storage rule for sessions.user_agent, in
-// order (R1, on top of #32 item 4's original empty-is-NULL rule):
+// order (#70, on top of #32 item 4's original empty-is-NULL rule):
 //
-//  1. Absent or empty: NULL. nullString's existing "" -> nil already does
+//  1. Fold HTAB to SP, then trim SP/HTAB from both ends. The two connectors
+//     unfold an obsolete header fold (RFC 7230 §3.2.4's obs-fold) differently
+//     - Go collapses "CRLF 1*(SP/HTAB)" to a single SP; Tomcat drops only the
+//     CRLF and keeps the fold's own whitespace verbatim, tab included - so
+//     "abc\r\n\tdef" reaches this function as "abc def" from Go but
+//     "abc\tdef" from Kotlin. Folding HTAB to SP and trimming both ends
+//     converges every case the review measured (an internal tab, a leading fold with
+//     nothing before it, a trailing fold with nothing after) to the same
+//     stored string on both backends, without either connector's own
+//     unfolding needing to agree in the first place. A real inline tab a
+//     client meant literally is stored as a space; nothing here can tell it
+//     apart from a fold's byte, because past this rewrite there is no
+//     difference to tell apart.
+//  2. Absent or empty: NULL. nullString's existing "" -> nil already does
 //     this, so this returns "" unchanged.
-//  2. Not valid UTF-8: NULL. Go's r.UserAgent() carries a header's raw bytes
+//  3. Not valid UTF-8: NULL. Go's r.UserAgent() carries a header's raw bytes
 //     through untouched (net/http never validates them), and a Postgres TEXT
 //     column is UTF8-encoded - so a client that sent invalid UTF-8 used to
 //     fail CreateSession, and the whole login, with a 500 that had nothing to
 //     do with the password. A malformed header is not a database outage
 //     either, so this is refused quietly, the same way a malformed Argon2
 //     hash is (auth/password.go), not surfaced as an error.
-//  3. Otherwise, truncated to maxUserAgentCodePoints Unicode code points, on
+//  4. Otherwise, truncated to maxUserAgentCodePoints Unicode code points, on
 //     a code point boundary. Runes ARE Go's Unicode code points, so slicing a
 //     []rune conversion can only ever cut between two of them, never through
-//     one - safe here specifically because step 2 already guarantees valid
+//     one - safe here specifically because step 3 already guarantees valid
 //     UTF-8, which is what makes a []rune round-trip lossless.
 func sanitizeUserAgent(raw string) string {
+	raw = strings.Trim(strings.ReplaceAll(raw, "\t", " "), " ")
 	if raw == "" {
 		return ""
 	}

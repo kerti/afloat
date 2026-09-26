@@ -20,7 +20,7 @@
 # The row check is the point: Tomcat decodes header bytes as ISO-8859-1, so
 # without RequestContext.sanitizeUserAgent's decode-and-reencode step, the
 # stored user_agent would be Kotlin-only mojibake for the same bytes Go
-# accepts. See user-agent-storage.yaml for the full R1 storage rule (absent,
+# accepts. See user-agent-storage.yaml for the full #70 storage rule (absent,
 # invalid UTF-8, and the 512-code-point truncation).
 - name: utf8 headers - a UTF-8 User-Agent survives into the session row
   issue: "67"

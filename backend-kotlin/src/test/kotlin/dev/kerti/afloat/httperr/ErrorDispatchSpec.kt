@@ -1,7 +1,9 @@
 package dev.kerti.afloat.httperr
 
+import dev.kerti.afloat.testsupport.AuthFixtures
 import dev.kerti.afloat.testsupport.DatabaseSpec
 import io.kotest.assertions.withClue
+import io.kotest.datatest.withData
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
 import jakarta.servlet.Filter
@@ -11,6 +13,7 @@ import org.springframework.boot.web.servlet.FilterRegistrationBean
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Import
 import org.springframework.core.Ordered
+import org.springframework.jdbc.core.simple.JdbcClient
 import org.springframework.test.context.DynamicPropertyRegistry
 import org.springframework.test.context.DynamicPropertySource
 import java.net.ServerSocket
@@ -175,7 +178,7 @@ class ErrorDispatchSpec : DatabaseSpec() {
             response.body() shouldBe """{"code":"INTERNAL"}"""
         }
 
-        // S1: OptionsRefusedFilter never gets a chance to run on a path the
+        // #66 second review: OptionsRefusedFilter never gets a chance to run on a path the
         // firewall refuses - FilterChainProxy refuses it before dispatching
         // into the filter chain at all - so requestRejectedHandler is the one
         // place left to answer OPTIONS the same flat 405, no Allow, as every
@@ -195,7 +198,7 @@ class ErrorDispatchSpec : DatabaseSpec() {
             }
         }
 
-        // N2: unlike a UTF-8 byte in the 0x80-0xFF range (#67), a C0 control
+        // #67 second review: unlike a UTF-8 byte in the 0x80-0xFF range (#67), a C0 control
         // character (0x01) in a header value is refused at the connector
         // itself, before Spring Security's firewall or this app's own filters
         // ever see the request - #67's setAllowedHeaderValues only reaches
@@ -211,6 +214,50 @@ class ErrorDispatchSpec : DatabaseSpec() {
             }
             withClue(raw) {
                 raw.lineSequence().first().trim() shouldBe "HTTP/1.1 400"
+            }
+        }
+
+        // #70's obs-fold ruling: Go and Tomcat unfold an obsolete header fold
+        // (RFC 7230 §3.2.4) differently, so the row a login leaves behind used
+        // to depend on which backend answered it. This cannot be driven
+        // through the conformance harness - net/http's own client refuses to
+        // put a raw CR or LF in a header value - so it needs a raw socket
+        // against this real Tomcat and a real login, the same way Go's
+        // TestObsFoldUserAgentConvergesInTheStoredRow does.
+        data class ObsFoldCase(val name: String, val fold: String, val want: String)
+
+        withData(
+            nameFn = { it.name },
+            listOf(
+                ObsFoldCase("an internal fold with a tab converges to a single space", "abc\r\n\tdef", "abc def"),
+                ObsFoldCase("a leading fold with nothing before it converges to no leading space", "\r\n def", "def"),
+                ObsFoldCase("a trailing fold with nothing after it converges to no trailing space", "abc\r\n ", "abc"),
+            ),
+        ) { case ->
+            val account = AuthFixtures.account(dataSource, email = "obsfold-${case.hashCode()}@example.com")
+            val body = """{"email":"${account.email}","password":"${AuthFixtures.PASSWORD}"}"""
+            val raw = Socket("localhost", port).use { socket ->
+                socket.getOutputStream().write(
+                    ("POST /api/auth/local/login HTTP/1.1\r\n" +
+                        "Host: localhost\r\n" +
+                        "Content-Type: application/json\r\n" +
+                        "Content-Length: ${body.toByteArray().size}\r\n" +
+                        "User-Agent: ${case.fold}\r\n" +
+                        "Connection: close\r\n\r\n" + body).toByteArray(),
+                )
+                socket.getInputStream().readAllBytes().toString(Charsets.ISO_8859_1)
+            }
+            withClue(raw) {
+                raw.lineSequence().first().trim() shouldBe "HTTP/1.1 204"
+            }
+
+            val stored = JdbcClient.create(dataSource)
+                .sql("SELECT user_agent FROM sessions WHERE user_id = :userId")
+                .param("userId", account.userId)
+                .query(String::class.java)
+                .optional()
+            withClue("stored user_agent for fold ${case.fold.replace("\r\n", "<CRLF>")}") {
+                stored.orElse(null) shouldBe case.want
             }
         }
     }

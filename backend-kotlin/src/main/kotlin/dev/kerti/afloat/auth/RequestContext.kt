@@ -15,24 +15,40 @@ data class RequestFacts(
     val sessionToken: String?,
 )
 
-// sessions.user_agent's storage rule, in order (R1, on top of #32 item 4's
+// sessions.user_agent's storage rule, in order (#70, on top of #32 item 4's
 // original empty-is-NULL rule):
 //
-// 1. Absent or empty: null.
-// 2. Not valid UTF-8: null. Tomcat decodes every header VALUE's bytes as
+// 1. Fold HTAB to SP, then trim SP/HTAB from both ends. The two connectors
+//    unfold an obsolete header fold (RFC 7230 §3.2.4's obs-fold) differently -
+//    Go collapses "CRLF 1*(SP/HTAB)" to a single SP; Tomcat drops only the
+//    CRLF and keeps the fold's own whitespace verbatim, tab included - so
+//    "abc\r\n\tdef" reaches Go's sanitizeUserAgent as "abc def" but this one
+//    as "abc\tdef". Folding HTAB to SP and trimming both ends converges every
+//    case the review measured (an internal tab, a leading fold with nothing before
+//    it, a trailing fold with nothing after) to the same stored string on
+//    both backends, without either connector's own unfolding needing to
+//    agree in the first place. A real inline tab a client meant literally is
+//    stored as a space; nothing here can tell it apart from a fold's byte,
+//    because past this rewrite there is no difference to tell apart. Done on
+//    the raw ISO-8859-1 String, before the UTF-8 decode below: HTAB (0x09)
+//    and SP (0x20) are the same single byte whether read as Latin-1 or as
+//    ASCII inside a longer UTF-8 sequence, so this cannot corrupt a
+//    multibyte character - none of its bytes are ever 0x09 or 0x20.
+// 2. Absent or empty: null.
+// 3. Not valid UTF-8: null. Tomcat decodes every header VALUE's bytes as
 //    ISO-8859-1 - HTTP/1.1's own field-content is undefined past US-ASCII
 //    (RFC 7230 §3.2, obs-text), and Java's Http11InputBuffer picks Latin-1, a
 //    lossless 1-byte-to-1-char mapping, as its reading of that undefined
 //    range - so recovering what the client actually sent means re-encoding
 //    Tomcat's String back to those bytes and decoding THEM as UTF-8, with a
-//    STRICT decoder (CodingErrorAction.REPORT): the previous version used
+//    STRICT decoder (CodingErrorAction.REPORT): an earlier version used
 //    String(bytes, UTF_8), which silently replaces an invalid sequence with
 //    U+FFFD instead of refusing it, so a client that sent invalid UTF-8 (Go's
 //    r.UserAgent() carries the raw bytes through untouched, and a Postgres
 //    TEXT column is UTF8-encoded, so THAT used to fail Go's login outright
 //    with a 500) was quietly stored as mojibake here rather than as nothing,
 //    which is what Go effectively does by refusing the whole request.
-// 3. Otherwise, truncated to MAX_USER_AGENT_CODE_POINTS Unicode code points -
+// 4. Otherwise, truncated to MAX_USER_AGENT_CODE_POINTS Unicode code points -
 //    never bytes, never UTF-16 units, matching every other length limit in
 //    this codebase (BOOTSTRAP.md §5.1) - on a code point boundary via
 //    offsetByCodePoints, which can only ever land between two of them.
@@ -40,11 +56,13 @@ private val MAX_USER_AGENT_CODE_POINTS = 512
 
 internal fun sanitizeUserAgent(headerValue: String?): String? {
     if (headerValue.isNullOrEmpty()) return null
+    val folded = headerValue.replace('\t', ' ').trim(' ', '\t')
+    if (folded.isEmpty()) return null
     val decoder = Charsets.UTF_8.newDecoder()
         .onMalformedInput(CodingErrorAction.REPORT)
         .onUnmappableCharacter(CodingErrorAction.REPORT)
     val decoded = try {
-        decoder.decode(ByteBuffer.wrap(headerValue.toByteArray(Charsets.ISO_8859_1))).toString()
+        decoder.decode(ByteBuffer.wrap(folded.toByteArray(Charsets.ISO_8859_1))).toString()
     } catch (e: CharacterCodingException) {
         return null
     }
@@ -85,8 +103,8 @@ class RequestFactsFilter : OncePerRequestFilter() {
             RequestContext.set(
                 RequestFacts(
                     clientIp = normalizeIp(request.remoteAddr),
-                    // Absent, empty, invalid UTF-8, or over 512 code points:
-                    // sanitizeUserAgent's rule (R1, #32 item 4).
+                    // Folded, trimmed, absent, empty, invalid UTF-8, or over
+                    // 512 code points: sanitizeUserAgent's rule (#70, #32 item 4).
                     userAgent = sanitizeUserAgent(request.getHeader(HttpHeaders.USER_AGENT)),
                     sessionToken = token,
                 )

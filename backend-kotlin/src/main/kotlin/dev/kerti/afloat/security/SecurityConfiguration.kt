@@ -150,7 +150,7 @@ class SecurityConfiguration {
     fun requestRejectedHandler() = RequestRejectedHandler { request, response, _ ->
         SecurityHeaders.write(request, response)
         response.status = when {
-            // S1: OPTIONS on a firewall-refused path (`;x`, `//`, `%2e%2e`,
+            // #66 second review: OPTIONS on a firewall-refused path (`;x`, `//`, `%2e%2e`,
             // `%2F`) must answer the same flat 405 as every other OPTIONS
             // (#66) - OptionsRefusedFilter never gets a chance to run here,
             // since the firewall refuses the request before FilterChainProxy

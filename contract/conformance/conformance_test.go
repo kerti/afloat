@@ -341,13 +341,15 @@ func do(client *http.Client, b backend, r conformance.Request) (response, error)
 	var req *http.Request
 	var err error
 	switch {
-	case r.RawTarget == "*":
-		// The asterisk-form (RFC 9110 §7.1, S2's OPTIONS *): never under the
-		// API base, so no base path is prefixed.
+	case strings.HasPrefix(r.RawTarget, "*") || strings.Contains(r.RawTarget, "://"):
+		// The asterisk-form (RFC 9110 §7.1's "*", or a ruling #70 shape such
+		// as "*?x=1") and the absolute-form (a full URI, e.g. "http://x*"):
+		// neither is under the API base, so RawTarget is sent exactly as
+		// given, with no base path prefixed.
 		if req, err = http.NewRequest(r.Method, b.baseURL, body); err != nil {
 			return response{}, err
 		}
-		req.URL.Opaque = "*"
+		req.URL.Opaque = r.RawTarget
 	case r.RawTarget != "":
 		// URL.Opaque is sent as the request line's target verbatim, with no
 		// escaping and no re-parse: what RawTarget exists for (#64) - a byte
@@ -380,9 +382,12 @@ func do(client *http.Client, b backend, r conformance.Request) (response, error)
 	for k, hexValue := range r.HeadersHex {
 		// Sent as the exact decoded bytes, bypassing Header.Set's string
 		// handling: a YAML string is Unicode text and cannot hold an invalid
-		// UTF-8 byte directly (R1), so cases that need one spell it as hex
-		// instead. Go's own header-value validity check (CR/LF, and nothing
-		// else) still applies, same as it would through Header.Set.
+		// UTF-8 byte directly (#70), so cases that need one spell it as hex
+		// instead. This client's own check still applies even writing the map
+		// directly - verified: it refuses NUL, 0x01, 0x1B, 0x7F and a bare CR
+		// or LF, and allows everything else, HTAB (0x09) and any C1/UTF-8 byte
+		// (0x80-0xFF) included - so a case naming one of the refused bytes can
+		// only be exercised with a raw socket, not through this harness.
 		decoded, herr := hex.DecodeString(hexValue)
 		if herr != nil {
 			return response{}, fmt.Errorf("headers_hex[%s]: %w", k, herr)

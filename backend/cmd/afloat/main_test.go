@@ -57,7 +57,7 @@ func TestHandlerTimeoutAnswerReachesClient(t *testing.T) {
 	}
 }
 
-// S2: net/http answers a bare "OPTIONS *" itself, before Handler ever runs,
+// #66: net/http answers a bare "OPTIONS *" itself, before Handler ever runs,
 // unless DisableGeneralOptionsHandler is set - httptest.NewRecorder cannot
 // catch this either, since that shortcut lives in Server.Serve, not in
 // Handler. Without it, this answered 200 with an empty body: no Allow header,
@@ -84,6 +84,11 @@ func TestOptionsStarReachesTheHandler(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = conn.Close() }()
+	// A server bug here is "answers nothing", not "answers wrong" - hanging
+	// forever with a passing test suite is worse than a clear timeout.
+	if err := conn.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := conn.Write([]byte("OPTIONS * HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")); err != nil {
 		t.Fatal(err)
 	}

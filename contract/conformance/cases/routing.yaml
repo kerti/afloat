@@ -154,7 +154,7 @@
     same_as_for:
       go: *no-such-get
 
-# S5: %C0%AF is an overlong encoding of "/" - two bytes standing in for one
+# #64's second review: %C0%AF is an overlong encoding of "/" - two bytes standing in for one
 # ASCII character, invalid UTF-8 (RFC 3629 forbids overlong forms), and
 # exactly the second shape #64's own ruling comment names.
 - name: routing - an overlong-encoded solidus is a permitted connector-vs-router difference
@@ -168,7 +168,7 @@
     same_as_for:
       go: *no-such-get
 
-# R5: a raw, unencoded non-ASCII byte sequence in the path - not percent-encoded,
+# #64's second review: a raw, unencoded non-ASCII byte sequence in the path - not percent-encoded,
 # so it is not RFC 3986 pchar at all, only reachable via raw_target the same
 # way the literal backslash is. The literal character below IS the byte
 # sequence: it is typed directly into this UTF-8 file, unescaped (a YAML

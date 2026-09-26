@@ -245,17 +245,27 @@ edit the canonical file.
 `sessions` primary key is its SHA-256. A database leak yields nothing usable. Hash before every read
 and write; the cookie keeps the plaintext, or the next lookup never matches.
 
-**`sessions.user_agent`'s storage rule, in order (R1, on top of #32 item 4's original empty-is-NULL
-rule): absent or empty is NULL; not valid UTF-8 is NULL; otherwise truncated to 512 Unicode code
-points, on a code point boundary.** Neither backend may read a client-supplied header and hand it to
-the database unexamined: Go's `r.UserAgent()` carries a header's raw bytes through untouched, and a
-Postgres `TEXT` column is UTF8-encoded, so an invalid header used to fail the whole login with a 500
-(`invalid byte sequence for encoding "UTF8": 0x85`) that had nothing to do with the password; Tomcat
-decodes header bytes as ISO-8859-1, so recovering what a UTF-8 client actually sent means re-encoding
-that String back to bytes and decoding *those* with a strict decoder, and doing it with a replacing one
-instead used to store silent `U+FFFD` mojibake for exactly the bytes that should have been refused.
-`sanitizeUserAgent` (both backends) applies the rule at capture time, before the value ever reaches a
-session row.
+**`sessions.user_agent`'s storage rule, in order (#70, on top of #32 item 4's original empty-is-NULL
+rule): fold HTAB to SP and trim SP/HTAB from both ends; absent or empty is NULL; not valid UTF-8 is
+NULL; otherwise truncated to 512 Unicode code points, on a code point boundary.** Neither backend may
+read a client-supplied header and hand it to the database unexamined: Go's `r.UserAgent()` carries a
+header's raw bytes through untouched, and a Postgres `TEXT` column is UTF8-encoded, so an invalid
+header used to fail the whole login with a 500 (`invalid byte sequence for encoding "UTF8": 0x85`)
+that had nothing to do with the password; Tomcat decodes header bytes as ISO-8859-1, so recovering
+what a UTF-8 client actually sent means re-encoding that String back to bytes and decoding *those*
+with a strict decoder, and doing it with a replacing one instead used to store silent `U+FFFD`
+mojibake for exactly the bytes that should have been refused. The fold step exists because the two
+connectors unfold an obsolete header fold (RFC 7230 §3.2.4's obs-fold) differently: Go collapses
+`CRLF 1*(SP/HTAB)` to a single SP; Tomcat drops only the CRLF and keeps the fold's own whitespace, tab
+included, so `abc\r\n\tdef` reached this rule as `"abc def"` from Go and `"abc\tdef"` from Kotlin
+before it existed. Folding HTAB to SP and trimming both ends converges every measured case (an
+internal tab, a fold with nothing before it, a fold with nothing after it) to the same stored string
+regardless of which connector produced it — a real inline tab a client meant literally is stored as a
+space, because past this rewrite there is no byte left to tell the two apart by. `sanitizeUserAgent`
+(both backends) applies the whole rule at capture time, before the value ever reaches a session row;
+raw-socket tests in each backend (`obs_fold_test.go`, `ErrorDispatchSpec.kt`) exercise it end to end,
+since a client library that refuses to put a raw CR or LF in a header value — as Go's own does — cannot
+drive the conformance harness through it.
 
 **Sliding TTL, with an absolute cap — this is a departure.** Balances refreshes `expires_at` on every
 authenticated request and never consults `created_at`, so a stolen cookie stays valid for as long as
@@ -513,24 +523,30 @@ guard.
 - **Header values are unrestricted at the firewall on both backends (#67).** Kotlin's
   `StrictHttpFirewall.setAllowedHeaderValues { true }` replaced the default that refused a control
   character — including a byte a UTF-8 client legitimately sends and Tomcat then reads as Latin-1 (an
-  em dash's middle byte, 0x80, among them). Header *names* stay strict on Kotlin; Go restricts neither.
-  This is about the **firewall**, one layer up from the **connector**: Tomcat's own HTTP/1.1 parser
-  still refuses a genuine control character (C0, 0x00–0x1F, and DEL, 0x7F) in a header value with its
-  own 400 before the firewall or any filter ever sees the request, and Go's `net/http` refuses the same
-  bytes the same way, with its own bare `400 Bad Request` (`text/plain`) before `httpserver` ever sees
-  the request either — both connectors agree here, independent of anything either app configures. Only
-  the *value* predicate moved; a control character was never the shape #67 was about (a real client
-  never sends one), a UTF-8 byte in the 0x80–0xFF range is.
-- **A literal backslash, `%00`, invalid UTF-8, and an overlong or raw non-ASCII byte sequence in the
-  path are a permitted difference (#64, #67's second review as R5).** Tomcat's connector refuses each
-  with its own HTML 400 before Spring Security's firewall, or any filter, ever sees the request; Go's
-  router simply finds no route and answers its bare 404. Neither is wrong — no client sends these
-  shapes, nothing reaches a handler either way, and a custom Tomcat `ErrorReportValve` to make the two
-  bytes match would need maintaining across every Tomcat upgrade for a difference no caller can trigger
-  by accident. `contract/conformance/permitted-differences.yaml` carries the entry
-  (`malformed-path-connector-400`), cited by a case per shape in `routing.yaml` — including the same
-  shapes under OPTIONS, where Go still answers its flat 405 (optionsRefused runs ahead of routing) and
-  Kotlin still answers the connector's 400 (`OptionsRefusedFilter` never gets a chance to run either).
+  em dash's middle byte, 0x80, among them). Header *names* stay strict on Kotlin, and Go's own connector
+  refuses an invalid name outright too — verified with `X-\xe9: 1` and a DEL or HTAB byte in the name,
+  each a bare `400 Bad Request` — so this is not a place the two diverge. This is about the
+  **firewall**, one layer up from the **connector**: Tomcat's own HTTP/1.1 parser still refuses a
+  genuine control character in a header *value* — C0 minus HTAB, which both connectors accept in a
+  value, plus DEL — with its own 400 before the firewall or any filter ever sees the request, and Go's
+  `net/http` refuses the same bytes before `httpserver` ever sees the request either. The two connectors
+  agree on the *status* there, not the bytes: Go's is a bare `400 Bad Request` (`text/plain`); Tomcat's
+  is its own HTML page, `Content-Language` header included. Only the firewall's *value* predicate moved;
+  a control character was never the shape #67 was about (a real client never sends one), a UTF-8 byte in
+  the 0x80–0xFF range is.
+- **A literal backslash, `%00`, invalid UTF-8, an overlong or raw non-ASCII byte sequence in the path,
+  and a non-OPTIONS method with the asterisk-form target `*` are a permitted difference (#64, ruling 2
+  of its second review).** Tomcat's connector refuses each with its own HTML 400 before Spring
+  Security's firewall, or any filter, ever sees the request; Go's router simply finds no route (or, for
+  `*` with a non-OPTIONS method — RFC 9110 §7.1 reserves that form for OPTIONS — never parses a route
+  for it either way) and answers its bare 404. Neither is wrong — no client sends these shapes, nothing
+  reaches a handler either way, and a custom Tomcat `ErrorReportValve` to make the two bytes match would
+  need maintaining across every Tomcat upgrade for a difference no caller can trigger by accident.
+  `contract/conformance/permitted-differences.yaml` carries the entry (`malformed-path-connector-400`),
+  cited by a case per shape in `routing.yaml` and `http-methods.yaml` — including the path shapes (not
+  `*`, which is `options-star`'s) under OPTIONS, where Go still answers its flat 405 (optionsRefused
+  runs ahead of routing) and Kotlin still answers the connector's 400 (`OptionsRefusedFilter` never gets
+  a chance to run either).
 - **HEAD, OPTIONS and the actuator (#66).** HEAD answers like GET in both backends — RFC 9110 §9.1
   requires it of a general-purpose server, Spring already did it, and Go gained it via a `headAsGet`
   middleware ahead of the contract's own router (chi's `middleware.GetHead` rewrites only its routing
@@ -541,12 +557,17 @@ guard.
   the firewall refuses before dispatch) — because Afloat is same-origin with no CORS, so no client sends
   it, and an `Allow` header would otherwise tell a prober which routes exist; answering it identically
   everywhere is also what keeps the disabled-login route indistinguishable from an unregistered path on
-  this method, with no second gate to keep in sync with the first. Two shapes stay permitted
+  this method, with no second gate to keep in sync with the first. Some shapes stay permitted
   differences even so: `OPTIONS *` (RFC 9110 §7.1's asterisk-form; Go opts out of `net/http`'s own
   built-in 200 for it via `Server.DisableGeneralOptionsHandler`, but Tomcat's `CoyoteAdapter` answers it
-  before Spring Security's filter chain runs at all, with no equivalent switch — the `options-star`
-  entry), and the connector-level path shapes above (`malformed-path-connector-400`, which OPTIONS cites
-  too). Actuator is kept as a dependency (§3) but exposed over HTTP nowhere: Kotlin sets
+  before Spring Security's filter chain runs at all, with no equivalent switch), `OPTIONS *?x=1` (a
+  shape malformed enough that Go's own request-line parser refuses it outright, where Tomcat's is
+  lenient about the trailing query and dispatches it like the bare form) and `OPTIONS` to an
+  absolute-form target ending in `*` (Go's `optionsRefused` still answers its flat 405 regardless of the
+  target's shape; Tomcat's connector refuses the target itself) all live in the `options-star` entry;
+  the connector-level path shapes above (`malformed-path-connector-400`, which OPTIONS cites too) are
+  separate, since those are about path routing rather than the asterisk-form's own dispatch. Actuator is
+  kept as a dependency (§3) but exposed over HTTP nowhere: Kotlin sets
   `management.server.port: -1`, so `/api/actuator/**` answers exactly like any other unregistered path,
   session or none; Go never had it.
 - **The 1 MiB cap meets only the bytes a handler reads**, as Go's `MaxBytesReader` does: a declared
@@ -815,7 +836,7 @@ does ask.
 
 **A set-but-empty duration variable is treated as unset, in both backends, for every duration
 variable (#69).** `FOO=` in a `.env` file boots with `FOO`'s documented default, not a parse failure.
-"Empty" is exactly the empty string, never whitespace-only (S3, #69's second review):
+"Empty" is exactly the empty string, never whitespace-only (#69's second review):
 `LOGIN_FIRST_BACKOFF="   "` is refused in both backends, the same as any other unparseable spelling,
 because Go's `caarlos0/env` only special-cases `value == ""` (`getOr`'s `exists && value == "" &&
 defExists` case, true for any field carrying an `envDefault` tag, duration or not) and Kotlin's

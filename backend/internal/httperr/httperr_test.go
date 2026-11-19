@@ -66,8 +66,8 @@ func TestWriteValidationReportsFirstFieldAndRule(t *testing.T) {
 	if body.Code != "VALIDATION" {
 		t.Errorf("code = %q, want VALIDATION", body.Code)
 	}
-	// First failure only: the envelope is flat, and both backends must agree on
-	// which one is reported (BOOTSTRAP.md §5.2).
+	// First failure only: the envelope is flat, and which one is reported is
+	// pinned (BOOTSTRAP.md §5.2).
 	if body.Args["field"] != "email" {
 		t.Errorf("field = %q, want email (the first failing field)", body.Args["field"])
 	}

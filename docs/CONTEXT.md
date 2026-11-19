@@ -192,7 +192,7 @@ Buffer Days                = V / B
     (Rp1.000 for IDR, N5a) is separate and downstream of this — the server never applies a display
     unit.
   - **R2 — Trajectory Variance and Buffer Days go on the wire half-up at 4dp.** Half-up means half
-    away from zero (`RoundingMode.HALF_UP`, shopspring `Round`). State is decided from the *exact*
+    away from zero (shopspring `Round`). State is decided from the *exact*
     (unrounded) `V` and `B` — compared as `V` against `threshold × B`, with no division — never from
     the rounded Buffer Days figure, so a boundary can round to a tidy number while State still reads
     the far side of it.
@@ -267,7 +267,7 @@ These are the reference values the implementation must reproduce. Daily Pool `P`
 
 The table below rounds to whole rupiah for readability. The authoritative values are the 4dp ones in
 `contract/testdata/trajectory.json`'s `figures` rows (BOOTSTRAP.md §6) — e.g. the day-2 row's `A` is
-`203448.2758`, which the table shows as `203.448`. Both backends' unit tests read the fixture, never
+`203448.2758`, which the table shows as `203.448`. The backend's unit tests read the fixture, never
 this table.
 
 | Case | `e` | `S_settled` | `S_today` | `A` | Left today | Fwd rate | Buffer | State |

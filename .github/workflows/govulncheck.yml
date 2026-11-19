@@ -1,9 +1,6 @@
 # Reachability-based vulnerability scanning for the Go backend: govulncheck
 # reports a CVE only when the binary can actually reach the affected symbol,
 # which is why it earns a slot where a generic dependency scanner does not.
-#
-# Go only. The Kotlin backend's equivalent is Dependabot's security updates -
-# there is no reachability analysis for the JVM worth the noise here.
 name: govulncheck
 
 on:

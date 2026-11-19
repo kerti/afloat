@@ -1,8 +1,8 @@
 {
   "_comment": [
-    "The login backoff both backends must implement alike (BOOTSTRAP.md §5.1, issue #16).",
-    "`parameters` are the §12 defaults, LOGIN_FIRST_BACKOFF and LOGIN_MAX_BACKOFF; each backend's config",
-    "test holds its own defaults to them, so a default that drifts fails there.",
+    "The login backoff as pinned (BOOTSTRAP.md §5.1, issue #16).",
+    "`parameters` are the §12 defaults, LOGIN_FIRST_BACKOFF and LOGIN_MAX_BACKOFF; the config test holds",
+    "the defaults to them, so a default that drifts fails there.",
     "`curve`: the window after the nth consecutive failure on one key, in seconds. Rows ascend but need not be",
     "adjacent: each suite drives the query up to each row's count. The rows past 40 hold the cap where an unclamped",
     "doubling overflows interval (failure 45 at 1s), which stopped the key from ever being throttled again.",

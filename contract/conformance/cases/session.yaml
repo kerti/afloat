@@ -4,7 +4,7 @@
 # that fails any check is refused as UNAUTHORIZED and its cookie cleared, so
 # the client stops presenting it.
 #
-# The given SQL moves a session in time where no request can; each backend's
+# The given SQL moves a session in time where no request can; the backend's
 # own suite has the clock seams for the rest.
 
 - name: me with a fresh session is the user and their household
@@ -22,9 +22,9 @@
   expect:
     status: 200
     # Every Household default comes from the schema (fixtures/seed.sql sets
-    # none of them), so this also pins that both read the defaults alike.
+    # none of them), so this also pins that the defaults are read as stored.
     # expected_monthly_income is null in the row and absent here: the contract
-    # makes it optional as well as nullable, both backends omit it, and the
+    # makes it optional as well as nullable, the backend omits it, and the
     # client must read absent as null.
     body_json:
       id: 0192f0a0-0000-7000-8000-0000000000a1

@@ -61,10 +61,9 @@ var registerEmailFormat = sync.OnceFunc(func() {
 })
 
 // emailAddress is the WHATWG rule for <input type=email>, so the server
-// accepts what a browser's email field does. Kotlin's TrimmedEmailValidator
-// holds a copy, and contract/testdata/email.json pins both to the same
-// answers. No part of it can match the same text two ways, so it stays linear
-// on Java's backtracking engine too.
+// accepts what a browser's email field does; contract/testdata/email.json pins
+// its answers. No part of it can match the same text two ways, so it stays
+// linear on a backtracking engine too.
 var emailAddress = regexp.MustCompile("^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+" +
 	`@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$`)
 
@@ -74,12 +73,11 @@ func isEmailAddress(v string) bool {
 
 // registerStrictJSONDecoder replaces kin-openapi's application/json decoder,
 // which stops after the first JSON value and lets encoding/json swap invalid
-// UTF-8 for U+FFFD. Kotlin rejects a body with anything after the value
-// (Jackson) or one that is not UTF-8 JSON text (JsonTextAdvice), so both are
-// INVALID_JSON_BODY here too. A byte order mark, and the NULs of a UTF-16 or
-// UTF-32 body, fail encoding/json as stray characters, and the charset a
-// Content-Type claims is never consulted, however unknown its name (Kotlin's
-// Utf8CharsetFilter). Like the email format, the registry is process-global.
+// UTF-8 for U+FFFD. A body with anything after the value, or one that is not
+// UTF-8 JSON text, is INVALID_JSON_BODY instead. A byte order mark, and the
+// NULs of a UTF-16 or UTF-32 body, fail encoding/json as stray characters, and
+// the charset a Content-Type claims is never consulted, however unknown its
+// name. Like the email format, the registry is process-global.
 var registerStrictJSONDecoder = sync.OnceFunc(func() {
 	openapi3filter.RegisterBodyDecoder("application/json", strictJSONBodyDecoder)
 })
@@ -125,8 +123,8 @@ func strictJSONBodyDecoder(body io.Reader, _ http.Header, _ *openapi3.SchemaRef,
 // own opinion, which disagrees with that design the moment the two diverge.
 //
 // MultiError is on so that every failure is collected and the reported one
-// is chosen the way Kotlin chooses it (writeOpenAPIValidationError), not
-// whichever check kin-openapi happens to run first.
+// is chosen by the rule in writeOpenAPIValidationError, not whichever check
+// kin-openapi happens to run first.
 func openapiRequestValidator() func(http.Handler) http.Handler {
 	registerEmailFormat()
 	registerStrictJSONDecoder()
@@ -183,13 +181,11 @@ func withoutSecurityRequirements(spec *openapi3.T) {
 // the whitespace around them. kin-openapi finds both the operation's content
 // entry and its body decoder by comparing that part byte for byte, so
 // "Application/JSON" or "application/json ; charset=utf-8" was refused as
-// INVALID_JSON_BODY. HTTP calls those the same media type (RFC 9110 §8.3.1),
-// and Spring reads them as JSON. The parameters are left for the decoder,
-// which ignores them.
+// INVALID_JSON_BODY. HTTP calls those the same media type (RFC 9110 §8.3.1).
+// The parameters are left for the decoder, which ignores them.
 //
-// ASCII letters only: Spring refuses any other character as a token before it
-// lowercases, so only ASCII ever folds there. strings.ToLower also folds U+0130
-// to "i", which made "applİcation/json" JSON here and a bad token there.
+// ASCII letters only: a token is ASCII (RFC 9110 §5.6.2), and strings.ToLower
+// also folds U+0130 to "i", which would make "applİcation/json" JSON.
 func canonicalMediaType(h http.Header) {
 	contentType := h.Get("Content-Type")
 	if contentType == "" {
@@ -209,17 +205,14 @@ func canonicalMediaType(h http.Header) {
 }
 
 // writeOpenAPIValidationError translates the middleware's error into the
-// shared envelope, answering exactly as Kotlin's ApiExceptionHandler does for
-// the same body:
+// shared envelope:
 //
 //   - A body that is not an instance of the declared shape at all — malformed
 //     JSON, a wrong type, a null, a property the contract does not declare —
-//     is INVALID_JSON_BODY, whatever else is wrong with it. Kotlin's Jackson
-//     decode fails on all of these before Bean Validation ever runs, and Go's
-//     own generated decode answers the same code (requestErrorHandler).
+//     is INVALID_JSON_BODY, whatever else is wrong with it. The generated
+//     decode answers the same code (requestErrorHandler).
 //   - Otherwise every failure is a named field breaking a constraint, and the
-//     one reported is the least by (field, rule): Kotlin's rule (#13 §3.5),
-//     which kin-openapi's own order — present properties, sorted, then
+//     one reported is the least by (field, rule) (#13 §3.5), which kin-openapi's own order — present properties, sorted, then
 //     required in declared order — does not match once two fields fail.
 //
 // It writes through httperr.Write rather than httperr.WriteValidation: that
@@ -360,13 +353,12 @@ func parameterRule(err error) string {
 }
 
 // constraintRule maps a kin-openapi schema keyword onto the {rule} vocabulary
-// httperr.WriteValidation and Kotlin's ruleOf already share —
-// go-playground/validator's tag names, plus pattern — or "" for a keyword
-// Kotlin enforces by failing the decode instead (type, nullable,
-// additionalProperties, enum, ...), which is INVALID_JSON_BODY, not
-// VALIDATION. The same goes for every format but email: Kotlin's generated
-// field for date, date-time or uuid is a typed one, and a bad value fails
-// Jackson, not Bean Validation.
+// httperr.WriteValidation already uses — go-playground/validator's tag names,
+// plus pattern — or "" for a keyword that means the body is not an instance of
+// the declared shape (type, nullable, additionalProperties, enum, ...), which
+// is INVALID_JSON_BODY, not VALIDATION. The same goes for every format but
+// email: a bad date, date-time or uuid is a value of the wrong type, not a
+// constraint failure.
 func constraintRule(err *openapi3.SchemaError) string {
 	switch err.SchemaField {
 	case "required":

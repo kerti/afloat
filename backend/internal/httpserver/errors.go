@@ -13,7 +13,7 @@ import (
 // body decoding, parameter binding, and a handler returning a non-nil error.
 // All three default to http.Error, which writes text/plain carrying err.Error():
 // an English message on the wire, which is exactly what PRD N7 and
-// non-negotiable 7 forbid, and which the Kotlin backend answers as an envelope.
+// non-negotiable 7 forbid.
 //
 // They are wired here rather than left at their defaults because a default that
 // is wrong is invisible: nothing in the contract describes these paths, so no
@@ -25,7 +25,7 @@ import (
 // 1 MiB cap are answered there. What reaches this is a body that passes the
 // contract and still fails the generated decode: a duplicate key whose earlier
 // value has the wrong type. kin-openapi checks only the last value, where
-// encoding/json type-checks every one, as Jackson does. The error text names
+// encoding/json type-checks every one. The error text names
 // the JSON kind (number, array), never the value.
 func requestErrorHandler(w http.ResponseWriter, r *http.Request, err error) {
 	slog.Warn("request body rejected", "path", r.URL.Path, "err", err)
@@ -64,7 +64,7 @@ func paramErrorHandler(w http.ResponseWriter, r *http.Request, err error) {
 
 // paramFieldAndRule reports the offending parameter and the rule vocabulary the
 // frontend's catalogue uses — the same two keys, spelled the same way, as
-// WriteValidation and the Kotlin ApiExceptionHandler.
+// WriteValidation.
 func paramFieldAndRule(err error) (string, string) {
 	if e, ok := errors.AsType[*api.RequiredParamError](err); ok {
 		return e.ParamName, "required"

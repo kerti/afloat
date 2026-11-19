@@ -17,12 +17,11 @@ import (
 	"github.com/kerti/afloat/backend/internal/testutil"
 )
 
-// #70's obs-fold ruling: Go and Tomcat unfold an obsolete header fold (RFC
-// 7230 §3.2.4) differently, so the row a login leaves behind used to depend on
-// which backend answered it. This cannot be driven through the conformance
-// harness - net/http's own client refuses to put a raw CR or LF in a header
-// value - so it needs a raw socket against a real server and a real database,
-// the same way ErrorDispatchSpec.kt's Kotlin equivalent does.
+// #70's obs-fold ruling: servers unfold an obsolete header fold (RFC 7230
+// §3.2.4) differently, and the stored row must not depend on how it was
+// unfolded. This cannot be driven through the conformance harness - net/http's
+// own client refuses to put a raw CR or LF in a header value - so it needs a
+// raw socket against a real server and a real database.
 func TestObsFoldUserAgentConvergesInTheStoredRow(t *testing.T) {
 	tdb := testutil.NewTestDB(t)
 

@@ -2,7 +2,7 @@
 # HTAB to SP and trim SP/HTAB from both ends; absent or empty is NULL (#32
 # item 4, unchanged); not valid UTF-8 is NULL, because a Postgres TEXT column
 # is UTF8-encoded and an invalid header used to fail the whole login with a
-# 500 on Go and silent U+FFFD mojibake on Kotlin; otherwise truncated to 512
+# 500; otherwise truncated to 512
 # Unicode code points, on a code point boundary. Login succeeds in every case
 # here - the row is what changes, never the answer.
 #
@@ -13,8 +13,8 @@
 #
 # The obs-fold rows (a real fold's CRLF) are NOT here: this harness's client
 # is net/http, which refuses to put a raw CR or LF in a header value at all -
-# obs_fold_test.go (Go) and ErrorDispatchSpec.kt (Kotlin) cover those over raw
-# sockets against real servers instead.
+# backend/internal/httpserver/obs_fold_test.go covers those over a raw socket
+# against a real server instead.
 
 - name: user-agent storage - a lone 0x85 is invalid UTF-8, stored as NULL
   issue: "70"

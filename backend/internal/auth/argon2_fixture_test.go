@@ -12,10 +12,9 @@ import (
 	"golang.org/x/crypto/argon2"
 )
 
-// The PHC strings both backends must read alike (contract/testdata/argon2.json,
-// issue #16). Kotlin's PasswordFixtureSpec reads the same file: a hash either
-// backend wrote must verify in the other, and a string neither should accept
-// must be refused by both - as "does not verify", never as a panic.
+// The PHC strings the verifier must read as pinned (contract/testdata/
+// argon2.json, issue #16): a hash that should verify does, and a string that
+// should not is refused - as "does not verify", never as a panic.
 type argon2Fixture struct {
 	Verifies []struct {
 		MintedBy string `json:"minted_by"`
@@ -85,8 +84,7 @@ func TestArgon2FixtureRejects(t *testing.T) {
 // the one a lenient parser would compute: with any other tag it is refused by
 // the mismatch, and the rule it names goes untested. So the Go-minted tags are
 // recomputed here from whatever the string says, read as loosely as the old
-// Sscanf parser read it. Kotlin's PasswordFixtureSpec does the same for the
-// BouncyCastle-minted ones.
+// Sscanf parser read it.
 var lenientPHC = regexp.MustCompile(`^\$argon2id\$v=(\d+)\$m=(\d+),t=(\d+),p=(\d+)\$([^$]+)\$([^$]+)$`)
 
 func TestArgon2FixtureGoMintedTagsAreGenuine(t *testing.T) {

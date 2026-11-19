@@ -73,11 +73,9 @@ func (h *Handlers) setSessionCookie(w http.ResponseWriter, token string, expires
 }
 
 func (h *Handlers) sessionCookie(token string, expires time.Time) *http.Cookie {
-	// Max-Age alongside Expires, not instead of it. Spring's ResponseCookie
-	// always emits both, so a cookie carrying only Expires is a header the two
-	// backends do not spell the same way — and Max-Age is the one a browser
-	// prefers, which makes it the one that matters on a client with a skewed
-	// clock. Rounded up, so a sub-second remainder never truncates to 0 and
+	// Max-Age alongside Expires, not instead of it. Max-Age is the one a
+	// browser prefers, which makes it the one that matters on a client with a
+	// skewed clock, and Expires covers a client that ignores it. Rounded up, so a sub-second remainder never truncates to 0 and
 	// turns a fresh session into a session cookie.
 	//
 	// Measured against h.now(), not time.Now(): expires was computed from the
@@ -102,9 +100,9 @@ func (h *Handlers) sessionCookie(token string, expires time.Time) *http.Cookie {
 // that invalidates a session owes the client this, or the browser keeps
 // presenting a token that can never work.
 //
-// Expires is the epoch as well as Max-Age=0, because Spring's ResponseCookie
-// always writes both (#32 item 2). A zero time.Time would leave Expires off,
-// and the two backends' clearing headers would differ by an attribute.
+// Expires is the epoch as well as Max-Age=0 (#32 item 2), so a client that
+// ignores Max-Age still deletes its copy. A zero time.Time would leave Expires
+// off.
 func (h *Handlers) ClearedSessionCookie() *http.Cookie {
 	return &http.Cookie{
 		Name:     SessionCookieName,

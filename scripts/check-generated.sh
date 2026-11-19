@@ -49,7 +49,7 @@ else
   report "backend/internal/api (oapi-codegen)" "stale or hand-edited; run make gen-oapi"
 fi
 
-# --- db/migrations + queries -> typed queries --------------------------------
+# --- migrations + queries -> typed queries --------------------------------
 # sqlc takes its output path from the config file, so the check runs a copy with
 # `out` pointed at the scratch directory. Paths inside the config are relative
 # to backend/, which is why the copy lives there.

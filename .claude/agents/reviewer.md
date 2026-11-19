@@ -1,6 +1,6 @@
 ---
 name: reviewer
-description: Read-only review of a finished slice before the PR — correctness against the docs, the non-negotiables, and parity between backends. Use after a builder reports done and before the maintainer is asked for a commit.
+description: Read-only review of a finished slice before the PR — correctness against the docs and the non-negotiables. Use after a builder reports done and before the maintainer is asked for a commit.
 model: sonnet
 effort: high
 disallowedTools: Write, Edit, NotebookEdit, Agent
@@ -15,10 +15,9 @@ Work the checklist and skip loudly anything the diff doesn't touch:
 - Primary keys are client-generated UUIDv7; create is idempotent on the id.
 - `household_id` is filtered in SQL on every Household-scoped query, not only in middleware.
 - Soft delete only — no hard-delete path added.
-- If `contract/openapi.yaml` changed: Go, Kotlin, and TypeScript artefacts were all regenerated and
-  none of the generated output was hand-edited.
-- If the trajectory calculation changed: both backends changed together, and
-  `contract/testdata/trajectory.json` covers the new behaviour.
+- If `contract/openapi.yaml` changed: Go and TypeScript artefacts were all regenerated and none of the
+  generated output was hand-edited.
+- If the trajectory calculation changed: `contract/testdata/trajectory.json` covers the new behaviour.
 - No enforcement crept in — nothing blocks, gates, scores, or moralises spending (`VISION.md` §3).
 - No feature/screen/setting beyond what `PRD.md` §4 asks for.
 - Error responses carry codes, not user-facing messages; new copy is centralized and covers both

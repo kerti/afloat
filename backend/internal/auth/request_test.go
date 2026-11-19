@@ -10,9 +10,9 @@ import (
 // and trim SP/HTAB from both ends, absent/empty is NULL (#32 item 4,
 // unchanged), not-valid-UTF-8 is NULL (a stored invalid header used to fail
 // the whole login with a Postgres 500), otherwise truncated to 512 Unicode
-// code points on a code point boundary. Kotlin's RequestFactsFilterSpec holds
-// the same rows; the obs-fold-specific ones (a real fold's CRLF, which cannot
-// be sent through this function directly) are obs_fold_test.go's.
+// code points on a code point boundary. The obs-fold-specific rows (a real
+// fold's CRLF, which cannot be sent through this function directly) are
+// obs_fold_test.go's.
 func TestSanitizeUserAgent(t *testing.T) {
 	longEmoji := strings.Repeat("a", 511) + "💚" + "a" // 513 code points, multibyte at the cut
 

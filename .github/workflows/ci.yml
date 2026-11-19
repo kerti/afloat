@@ -5,8 +5,8 @@
 #
 # `migrations` and `conformance` are the exceptions, and deliberately so: both
 # need docker and minutes, which is why `make check` leaves them out locally.
-# CI has both, so nothing merges on an unproven schema, or on two backends
-# that answer the same request differently.
+# CI has both, so nothing merges on an unproven schema, or on a backend that
+# answers the contract's cases wrongly.
 #
 # Every action is pinned to a commit SHA: a tag like `v5` is mutable, and a
 # compromised one runs with this workflow's token. The trailing `# vX.Y.Z`
@@ -30,10 +30,9 @@ jobs:
     name: check (mirrors make check)
     runs-on: ubuntu-latest
     env:
-      # Both suites skip themselves when docker is missing, which on a runner
-      # that has docker would mean a green build that never ran. One variable,
-      # one meaning, in both backends: backend/internal/testutil/db.go and
-      # backend-kotlin/.../testsupport/TestDatabase.kt.
+      # The integration suite skips itself when docker is missing, which on a
+      # runner that has docker would mean a green build that never ran
+      # (backend/internal/testutil/db.go).
       AFLOAT_REQUIRE_TEST_DB: "1"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -42,23 +41,6 @@ jobs:
         with:
           go-version-file: backend/go.mod
           cache-dependency-path: backend/go.sum
-
-      # Temurin 21 per BOOTSTRAP.md §3. Present from this commit even though
-      # `make check` still skips the Kotlin surface: the alternative is that the
-      # step which scaffolds backend-kotlin/ also has to remember to set up a
-      # JDK here, and the gate would go red on a runner with no Java for a
-      # reason that has nothing to do with the code that turned it on.
-      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
-        with:
-          distribution: temurin
-          java-version: '21'
-
-      # Caches ~/.gradle and reports the build in the job summary. A no-op while
-      # backend-kotlin/ does not exist; `cache-read-only` keeps pull requests
-      # from writing entries that main's cache would then have to live with.
-      - uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
-        with:
-          cache-read-only: ${{ github.ref != 'refs/heads/main' }}
 
       # The pinned version from the Makefile, so the lint gate is the same one
       # twice. check-go falls back to gofmt+vet when the binary is absent rather
@@ -71,10 +53,10 @@ jobs:
 
       - run: make check
 
-      # Both profiles are produced BY `make check` (make check-go writes
-      # backend/coverage.out, Gradle's check runs jacocoTestReport), so these
-      # steps upload what the gate already measured rather than re-running
-      # either suite - the mirror stays one run, not two.
+      # The profile is produced BY `make check` (make check-go writes
+      # backend/coverage.out), so this step uploads what the gate already
+      # measured rather than re-running the suite - the mirror stays one run,
+      # not two.
       #
       # The token is an input, not step env: the action builds its own CLI
       # invocation and passes `-t` only from the input. fail_ci_if_error is on
@@ -90,10 +72,8 @@ jobs:
       # measures nothing new.
       #
       # disable_search is not optional here. `files` adds to the CLI's file
-      # list, it does not replace it: left searching, EACH step finds BOTH
-      # profiles and ships them under its own flag, so `backend-go` carries the
-      # Kotlin report and vice versa. codecov.yml's flag paths happen to mask
-      # the damage; the numbers would still be assembled from the wrong inputs.
+      # list, it does not replace it: left searching, the step would also ship
+      # any other coverage file it finds under the `backend-go` flag.
       - name: Upload Go coverage
         if: github.actor != 'dependabot[bot]'
         uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
@@ -104,16 +84,6 @@ jobs:
           fail_ci_if_error: true
           token: ${{ secrets.CODECOV_TOKEN }}
 
-      - name: Upload Kotlin coverage
-        if: github.actor != 'dependabot[bot]'
-        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
-        with:
-          files: backend-kotlin/build/reports/jacoco/test/jacocoTestReport.xml
-          disable_search: true
-          flags: backend-kotlin
-          fail_ci_if_error: true
-          token: ${{ secrets.CODECOV_TOKEN }}
-
       # make check reports one line per surface and swallows the detail. On a
       # failure, re-run the parts that can fail, verbosely, so the log says what
       # broke instead of which target to run locally.
@@ -121,18 +91,16 @@ jobs:
         if: failure()
         run: |
           ./scripts/check-generated.sh || true
-          ./scripts/check-env-parity.sh || true
+          ./scripts/check-env-docs.sh || true
           make check-go || true
-          make check-kotlin || true
 
   migrations:
-    name: migrations (both runners, real schema)
+    name: migrations (goose, real schema)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      # test-migration-runners runs goose via `go run`; test-migrations does not
-      # need Go, but shares the job.
+      # test-migrations runs goose via `go run`.
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: backend/go.mod
@@ -146,27 +114,17 @@ jobs:
           fi
           psql --version
 
-      - name: Start Postgres
-        run: make db-up
-
-      # Flyway and goose against their own database, schemas compared.
-      - run: make test-migration-runners
-
-      # The SQL itself: defaults, CHECKs, soft-delete indexes, cascades, undo.
-      # Throwaway container of its own, so it does not touch the one above.
+      # The SQL through goose: defaults, CHECKs, soft-delete indexes, cascades,
+      # the §7.1 in-place edit, Down. A throwaway container of its own.
       - run: make test-migrations
 
-      - name: Postgres logs
-        if: failure()
-        run: docker compose logs --tail=50 postgres
-
-  # The cross-backend conformance harness (#28): both backends built and booted
-  # from this commit, every case in contract/conformance/cases run against the
-  # pair, answers and persisted rows compared. scripts/conformance.sh owns the
-  # lifecycle and sets AFLOAT_REQUIRE_CONFORMANCE=1, so a backend that never
-  # came up is a failure here, not a skip.
+  # The conformance harness (#28): the backend built and booted from this
+  # commit, every case in contract/conformance/cases run against it, answers
+  # and persisted rows asserted. scripts/conformance.sh owns the lifecycle and
+  # sets AFLOAT_REQUIRE_CONFORMANCE=1, so a backend that never came up is a
+  # failure here, not a skip.
   conformance:
-    name: conformance (both backends, one suite)
+    name: conformance (black-box suite)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -177,15 +135,6 @@ jobs:
           cache-dependency-path: |
             backend/go.sum
             contract/conformance/go.sum
-
-      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
-        with:
-          distribution: temurin
-          java-version: '21'
-
-      - uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
-        with:
-          cache-read-only: ${{ github.ref != 'refs/heads/main' }}
 
       # The script tails every backend's log itself when it fails.
       - run: make conformance

@@ -12,7 +12,6 @@ import (
 	"os"
 	"reflect"
 	"slices"
-	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -20,48 +19,39 @@ import (
 	"github.com/kerti/afloat/conformance"
 )
 
-// backend is one running server under test. Both are black boxes here: the
-// harness knows a base URL and the database the backend writes to, and
-// nothing else, which is the whole point.
-type backend struct {
-	name    string
+// server is one running backend under test, as a black box: the harness knows
+// a base URL and the database it writes to, and nothing else, which is the
+// whole point.
+type server struct {
+	profile string
 	baseURL string
 	db      *conformance.DB
 }
 
-// databases is where each backend's own database is. Keyed by backend, not by
-// profile: a second profile's pair shares its default twin's database.
-var databases = map[string]struct{ envKey, fallback string }{
-	"go":     {"AFLOAT_GO_DATABASE_URL", "postgres://afloat:afloat@localhost:5184/afloat_go"},
-	"kotlin": {"AFLOAT_KOTLIN_DATABASE_URL", "postgres://afloat:afloat@localhost:5184/afloat_kotlin"},
+// database is where the backend's database is. Every profile's server shares
+// it: scripts/conformance.sh boots them all against the one database.
+var database = struct{ envKey, fallback string }{
+	"AFLOAT_DATABASE_URL", "postgres://afloat:afloat@localhost:5184/afloat",
 }
 
-// pairs is where each profile's two backends answer by default, and the
-// variables that move them. scripts/conformance.sh boots one pair per profile.
-var pairs = map[string][2]struct{ name, envKey, fallback string }{
-	conformance.ProfileDefault: {
-		{"go", "AFLOAT_GO_BASE_URL", "http://localhost:5182/api"},
-		{"kotlin", "AFLOAT_KOTLIN_BASE_URL", "http://localhost:5183/api"},
-	},
-	conformance.ProfileLocalDisabled: {
-		{"go", "AFLOAT_GO_LOCAL_DISABLED_BASE_URL", "http://localhost:5186/api"},
-		{"kotlin", "AFLOAT_KOTLIN_LOCAL_DISABLED_BASE_URL", "http://localhost:5187/api"},
-	},
+// servers is where each profile's server answers by default, and the
+// variable that moves it. scripts/conformance.sh boots one per profile.
+var servers = map[string]struct{ envKey, fallback string }{
+	conformance.ProfileDefault:       {"AFLOAT_BASE_URL", "http://localhost:5182/api"},
+	conformance.ProfileLocalDisabled: {"AFLOAT_LOCAL_DISABLED_BASE_URL", "http://localhost:5186/api"},
 }
 
 // perResponseHeaders carry a value minted per response, so two answers from
-// the SAME backend differ on them by construction. Only same_as skips them;
-// parity between backends is the permitted list's business.
+// the same server differ on them by construction. same_as skips them.
 var perResponseHeaders = []string{"Date", "X-Request-Id"}
 
 const (
 	casesDir      = "cases"
-	permittedFile = "permitted-differences.yaml"
 	seedFile      = "fixtures/seed.sql"
 	readinessPath = "/health"
 
 	// Short when the run is optional, because the common case is a developer
-	// running `go test ./...` with no backends up and wanting the skip
+	// running `go test ./...` with no backend up and wanting the skip
 	// immediately. Long when it is required, because then something is
 	// supposed to be starting and the wait is the point.
 	readinessLimitOptional = 2 * time.Second
@@ -72,8 +62,7 @@ const (
 	readinessLimitRequired = 30 * time.Second
 )
 
-// response is everything observable about one answer. Captured whole, because
-// failure mode 2 compares the parts no case asserts.
+// response is everything observable about one answer.
 type response struct {
 	status  int
 	headers http.Header
@@ -87,140 +76,92 @@ func env(key, fallback string) string {
 	return fallback
 }
 
-// TestConformance is the whole harness. One test function, subtests per case
-// per mode, so a failure names the case and which kind of failure it is.
+// TestConformance is the whole harness. One test function, a subtest per
+// case, so a failure names the case.
 func TestConformance(t *testing.T) {
-	// Same shape as AFLOAT_REQUIRE_TEST_DB in both backends' suites: a machine
-	// that has the backends running must never report green on a run that never
+	// Same shape as AFLOAT_REQUIRE_TEST_DB in the backend's suite: a machine
+	// that has the backend running must never report green on a run that never
 	// happened, and a machine that does not must not fail for it.
 	required := os.Getenv("AFLOAT_REQUIRE_CONFORMANCE") == "1"
-	// `go test -short` runs the case-file and allowlist tests and nothing that
-	// needs a server. That is what `make check` uses: the committed files are
-	// validated by the pre-push gate without the gate ever depending on two
-	// backends being up, or quietly running the whole suite when they happen to
-	// be. AFLOAT_REQUIRE_CONFORMANCE wins, so a required run cannot be
+	// `go test -short` runs the case-file tests and nothing that needs a
+	// server. That is what `make check` uses: the committed files are validated
+	// by the pre-push gate without the gate ever depending on a backend being
+	// up, or quietly running the whole suite when one happens to be. AFLOAT_REQUIRE_CONFORMANCE wins, so a required run cannot be
 	// short-circuited by a stray flag.
 	if testing.Short() && !required {
 		t.Skip("skipping: -short runs no case that needs a running backend")
 	}
 
-	permitted, err := conformance.LoadPermitted(permittedFile)
-	if err != nil {
-		t.Fatalf("loading %s: %v", permittedFile, err)
-	}
 	cases, err := conformance.Load(casesDir)
 	if err != nil {
 		t.Fatalf("loading cases: %v", err)
 	}
-	if err := conformance.CheckPermits(cases, permitted); err != nil {
-		t.Fatal(err)
-	}
-	if prov := permitted.Provisional(); len(prov) > 0 {
-		names := make([]string, 0, len(prov))
-		for _, p := range prov {
-			names = append(names, fmt.Sprintf("%s%s (%s)", p.Header, p.Name, p.Issue))
-		}
-		sort.Strings(names)
-		t.Logf("%d permitted difference(s) are PROVISIONAL, pending a decision: %s",
-			len(prov), strings.Join(names, ", "))
-	}
 
-	// Only the profiles some case uses have to be up: a pair nothing runs
+	// Only the profiles some case uses have to be up: a server nothing runs
 	// against is not a reason to skip, or to fail.
 	limit := readinessLimitOptional
 	if required {
 		limit = readinessLimitRequired
 	}
 	ctx := context.Background()
-	dbs := map[string]*conformance.DB{}
-	for name, d := range databases {
-		url := env(d.envKey, d.fallback)
-		db, err := conformance.OpenDB(ctx, url)
-		if err != nil {
-			if required {
-				t.Fatalf("AFLOAT_REQUIRE_CONFORMANCE=1 but the %s database is not reachable at %s: %v", name, d.envKey, err)
-			}
-			t.Skipf("skipping: the %s database is not reachable (%v). "+
-				"Run `make conformance`, or set AFLOAT_REQUIRE_CONFORMANCE=1 to make this a failure.", name, err)
+	db, err := conformance.OpenDB(ctx, env(database.envKey, database.fallback))
+	if err != nil {
+		if required {
+			t.Fatalf("AFLOAT_REQUIRE_CONFORMANCE=1 but the database is not reachable at %s: %v", database.envKey, err)
 		}
-		t.Cleanup(func() { db.Close(ctx) })
-		dbs[name] = db
+		t.Skipf("skipping: the database is not reachable (%v). "+
+			"Run `make conformance`, or set AFLOAT_REQUIRE_CONFORMANCE=1 to make this a failure.", err)
 	}
+	t.Cleanup(func() { db.Close(ctx) })
 
-	backendsFor := map[string][]backend{}
+	serverFor := map[string]server{}
 	for _, c := range cases {
 		profile := c.ProfileOf()
-		if _, done := backendsFor[profile]; done {
+		if _, done := serverFor[profile]; done {
 			continue
 		}
-		var bs []backend
-		for _, p := range pairs[profile] {
-			bs = append(bs, backend{name: p.name, baseURL: env(p.envKey, p.fallback), db: dbs[p.name]})
-		}
-		for _, b := range bs {
-			if err := waitReady(b, limit); err != nil {
-				if required {
-					t.Fatalf("AFLOAT_REQUIRE_CONFORMANCE=1 but the %s backend (%s profile) is not answering at %s: %v",
-						b.name, profile, b.baseURL, err)
-				}
-				t.Skipf("skipping: the %s backend (%s profile) is not answering at %s (%v). "+
-					"Run `make conformance`, or set AFLOAT_REQUIRE_CONFORMANCE=1 to make this a failure.",
-					b.name, profile, b.baseURL, err)
+		s := server{profile: profile, baseURL: env(servers[profile].envKey, servers[profile].fallback), db: db}
+		if err := waitReady(s, limit); err != nil {
+			if required {
+				t.Fatalf("AFLOAT_REQUIRE_CONFORMANCE=1 but the %s server is not answering at %s: %v",
+					profile, s.baseURL, err)
 			}
+			t.Skipf("skipping: the %s server is not answering at %s (%v). "+
+				"Run `make conformance`, or set AFLOAT_REQUIRE_CONFORMANCE=1 to make this a failure.",
+				profile, s.baseURL, err)
 		}
-		backendsFor[profile] = bs
+		serverFor[profile] = s
 	}
-	t.Logf("%d case(s) from %s, across %d profile(s)", len(cases), casesDir, len(backendsFor))
+	t.Logf("%d case(s) from %s, across %d profile(s)", len(cases), casesDir, len(serverFor))
 
 	for _, c := range cases {
-		backends := backendsFor[c.ProfileOf()]
+		s := serverFor[c.ProfileOf()]
 		t.Run(c.Name, func(t *testing.T) {
-			runs := make(map[string]run, len(backends))
-
-			// Failure mode 1: a backend disagrees with the expected answer.
-			// That backend is wrong, and the case names which one.
-			for _, b := range backends {
-				r, err := runCase(ctx, b, c, permitted)
-				if err != nil {
-					t.Fatalf("%s: %v", b.name, err)
-				}
-				runs[b.name] = r
-				t.Run("expected/"+b.name, func(t *testing.T) {
-					assertExpected(t, c, r.resp, b.name)
-					if r.ref != nil {
-						assertSameAs(t, c, b.name, r.resp, *r.ref)
-					}
-					assertRows(t, c, r.rows)
-				})
+			r, err := runCase(ctx, s, c)
+			if err != nil {
+				t.Fatal(err)
 			}
-
-			// Failure mode 2: the two agree with the case and still differ on
-			// something no case asserts - in the answer, or in the rows they
-			// left behind. That is not a pass: it means the case file is
-			// incomplete, which is the finding this harness exists for.
-			t.Run("parity", func(t *testing.T) {
-				assertParity(t, c, permitted, runs["go"].resp, runs["kotlin"].resp)
-				for _, d := range conformance.SnapshotParity(runs["go"].state, runs["kotlin"].state) {
-					t.Errorf("persisted state differs between backends: %s", d)
-				}
-			})
+			assertExpected(t, c, r.resp)
+			if r.ref != nil {
+				assertSameAs(t, c, r.resp, *r.ref)
+			}
+			assertRows(t, c, r.rows)
 		})
 	}
 }
 
-// run is everything one backend did for one case.
+// run is everything the server did for one case.
 type run struct {
-	resp  response
-	ref   *response // the same_as answer, when the case has one
-	rows  [][]map[string]any
-	state conformance.Snapshot
+	resp response
+	ref  *response // the same_as answer, when the case has one
+	rows [][]map[string]any
 }
 
-// runCase drives one backend through one case from a freshly seeded database:
-// the given steps, the request, the rows and the snapshot, and only then the
-// same_as request, whose own writes are nobody's business. An error here is a
-// setup failure - a given step that did not land - and names the step.
-func runCase(ctx context.Context, b backend, c conformance.Case, permitted *conformance.PermittedSet) (run, error) {
+// runCase drives the server through one case from a freshly seeded database:
+// the given steps, the request and the rows, and only then the same_as
+// request, whose own writes are nobody's business. An error here is a setup
+// failure - a given step that did not land - and names the step.
+func runCase(ctx context.Context, b server, c conformance.Case) (run, error) {
 	if err := b.db.Reset(ctx, seedFile); err != nil {
 		return run{}, fmt.Errorf("resetting the database: %w", err)
 	}
@@ -229,7 +170,7 @@ func runCase(ctx context.Context, b backend, c conformance.Case, permitted *conf
 		return run{}, err
 	}
 	// Redirects are an observable answer, not something to resolve on the
-	// client's behalf: a backend that 302s where the other 200s is a finding.
+	// client's behalf: a 302 where the case expects a 200 is a finding.
 	client := &http.Client{
 		Jar:           jar,
 		Timeout:       requestTimeout,
@@ -270,8 +211,8 @@ func runCase(ctx context.Context, b backend, c conformance.Case, permitted *conf
 	}
 	if slices.ContainsFunc(c.Given, func(g conformance.Step) bool { return g.Outage }) {
 		// A pool rebuilds its connections in its own time. The next case
-		// must not start while this backend is still recovering, or it
-		// would fail for a reason that belongs to this one.
+		// must not start while the server is still recovering, or it would
+		// fail for a reason that belongs to this one.
 		if err := waitHealthy(b, readinessLimitRequired); err != nil {
 			return run{}, fmt.Errorf("not healthy after the outage ended: %w", err)
 		}
@@ -283,10 +224,7 @@ func runCase(ctx context.Context, b backend, c conformance.Case, permitted *conf
 		}
 		r.rows = append(r.rows, got)
 	}
-	if r.state, err = b.db.Snapshot(ctx, permitted.MasksColumn); err != nil {
-		return run{}, fmt.Errorf("snapshot: %w", err)
-	}
-	if sameAs := c.Expect.SameAsRequest(b.name); sameAs != nil {
+	if sameAs := c.Expect.SameAs; sameAs != nil {
 		ref, err := do(client, b, *sameAs)
 		if err != nil {
 			return run{}, fmt.Errorf("same_as: %w", err)
@@ -296,7 +234,7 @@ func runCase(ctx context.Context, b backend, c conformance.Case, permitted *conf
 	return r, nil
 }
 
-func waitReady(b backend, limit time.Duration) error {
+func waitReady(b server, limit time.Duration) error {
 	deadline := time.Now().Add(limit)
 	var last error
 	for time.Now().Before(deadline) {
@@ -316,7 +254,7 @@ func waitReady(b backend, limit time.Duration) error {
 }
 
 // waitHealthy waits for /health to answer 200, not merely to answer.
-func waitHealthy(b backend, limit time.Duration) error {
+func waitHealthy(b server, limit time.Duration) error {
 	deadline := time.Now().Add(limit)
 	status := 0
 	for time.Now().Before(deadline) {
@@ -333,7 +271,7 @@ func waitHealthy(b backend, limit time.Duration) error {
 	return fmt.Errorf("/health still %d after %s", status, limit)
 }
 
-func do(client *http.Client, b backend, r conformance.Request) (response, error) {
+func do(client *http.Client, b server, r conformance.Request) (response, error) {
 	var body io.Reader
 	if sent := r.SentBody(); sent != "" {
 		body = strings.NewReader(sent)
@@ -372,7 +310,7 @@ func do(client *http.Client, b backend, r conformance.Request) (response, error)
 	for k, v := range r.Headers {
 		// Host is the request's, not a header's, in net/http. Setting it
 		// lets a case that compares Origin with Host mean the same thing on
-		// two backends listening on two ports.
+		// whichever port the server listens on.
 		if strings.EqualFold(k, "Host") {
 			req.Host = v
 			continue
@@ -408,10 +346,10 @@ func do(client *http.Client, b backend, r conformance.Request) (response, error)
 	return response{status: resp.StatusCode, headers: resp.Header, body: raw}, nil
 }
 
-func assertExpected(t *testing.T, c conformance.Case, got response, backend string) {
+func assertExpected(t *testing.T, c conformance.Case, got response) {
 	t.Helper()
 
-	if want := c.Expect.StatusFor(backend); got.status != want {
+	if want := c.Expect.Status; got.status != want {
 		t.Errorf("status: want %d, got %d\nbody: %s", want, got.status, truncate(got.body))
 	}
 
@@ -492,13 +430,11 @@ func assertRows(t *testing.T, c conformance.Case, got [][]map[string]any) {
 	}
 }
 
-// assertSameAs holds one backend's answer to its own answer for the same_as
+// assertSameAs holds the answer to the server's own answer for the same_as
 // request: status, every header but the per-response ones, and the body bytes.
-// It runs under expected/<backend>, because a mismatch means that backend is
-// wrong, whatever the other one does.
-func assertSameAs(t *testing.T, c conformance.Case, backend string, got, ref response) {
+func assertSameAs(t *testing.T, c conformance.Case, got, ref response) {
 	t.Helper()
-	s := c.Expect.SameAsRequest(backend)
+	s := c.Expect.SameAs
 
 	if got.status != ref.status {
 		t.Errorf("same_as %s %s: status %d, but that request answers %d", s.Method, s.Path, got.status, ref.status)
@@ -523,91 +459,6 @@ func assertSameAs(t *testing.T, c conformance.Case, backend string, got, ref res
 		t.Errorf("same_as %s %s: body %s, but that request answers %s",
 			s.Method, s.Path, truncate(got.body), truncate(ref.body))
 	}
-}
-
-// assertParity is failure mode 2. It compares the FULL answers and reports
-// anything that differs and is neither asserted by the case nor on the
-// permitted-difference list.
-func assertParity(t *testing.T, c conformance.Case, permitted *conformance.PermittedSet, goResp, ktResp response) {
-	t.Helper()
-
-	allowsHeader, allowsBody, allowsStatus := permitted.ForCase(c)
-
-	if !allowsStatus && goResp.status != ktResp.status {
-		t.Errorf("status differs between backends: go %d, kotlin %d", goResp.status, ktResp.status)
-	}
-
-	names := map[string]struct{}{}
-	for n := range goResp.headers {
-		names[n] = struct{}{}
-	}
-	for n := range ktResp.headers {
-		names[n] = struct{}{}
-	}
-	sorted := make([]string, 0, len(names))
-	for n := range names {
-		sorted = append(sorted, n)
-	}
-	sort.Strings(sorted)
-	for _, n := range sorted {
-		if allowsHeader(n) {
-			continue
-		}
-		if strings.EqualFold(n, "Set-Cookie") {
-			continue // compared attribute by attribute below
-		}
-		g, k := goResp.headers.Values(n), ktResp.headers.Values(n)
-		if reflect.DeepEqual(g, k) {
-			continue
-		}
-		switch {
-		case len(g) == 0:
-			t.Errorf("header %s: kotlin sends %q, go sends nothing. "+
-				"Either both should, or %s belongs on the permitted-difference list with the issue that decided it.",
-				n, strings.Join(k, ", "), n)
-		case len(k) == 0:
-			t.Errorf("header %s: go sends %q, kotlin sends nothing. "+
-				"Either both should, or %s belongs on the permitted-difference list with the issue that decided it.",
-				n, strings.Join(g, ", "), n)
-		default:
-			t.Errorf("header %s differs: go %q, kotlin %q", n, strings.Join(g, ", "), strings.Join(k, ", "))
-		}
-	}
-
-	if !allowsHeader("Set-Cookie") {
-		goCookies, gErr := conformance.ParseSetCookies(goResp.headers)
-		ktCookies, kErr := conformance.ParseSetCookies(ktResp.headers)
-		if gErr != nil || kErr != nil {
-			t.Errorf("Set-Cookie: go %v, kotlin %v", gErr, kErr)
-		} else {
-			goDate, _ := http.ParseTime(goResp.headers.Get("Date"))
-			ktDate, _ := http.ParseTime(ktResp.headers.Get("Date"))
-			for _, d := range conformance.CookieParity(goCookies, ktCookies, goDate, ktDate) {
-				t.Errorf("Set-Cookie differs: %s\n  go:     %q\n  kotlin: %q", d,
-					goResp.headers.Values("Set-Cookie"), ktResp.headers.Values("Set-Cookie"))
-			}
-		}
-	}
-
-	if !allowsBody && !equalBodies(goResp.body, ktResp.body) {
-		t.Errorf("body differs between backends\n  go:     %s\n  kotlin: %s",
-			truncate(goResp.body), truncate(ktResp.body))
-	}
-}
-
-// equalBodies compares bytes, falling back to a JSON comparison only when BOTH
-// parse. Byte equality is the standard; key order is the one difference that is
-// not worth hand-rolling a serialiser in either backend to remove, and a case
-// that needs byte-exactness says so with expect.body_raw.
-func equalBodies(a, b []byte) bool {
-	if string(a) == string(b) {
-		return true
-	}
-	var av, bv any
-	if json.Unmarshal(a, &av) != nil || json.Unmarshal(b, &bv) != nil {
-		return false
-	}
-	return reflect.DeepEqual(av, bv)
 }
 
 func normalise(t *testing.T, v any) any {

@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
-# Apply db/migrations against a real PostgreSQL and assert the schema behaves:
-# defaults land where PRD.md §5 says, every CHECK rejects what it should, the
-# soft-delete-aware indexes allow what they should, foreign keys cascade the way
-# BOOTSTRAP.md §4's soft-delete carve-out implies, and the undo file drops
-# everything it created.
+# Apply backend/internal/migrations with goose against a real PostgreSQL and
+# assert the schema behaves: defaults land where PRD.md §5 says, every CHECK
+# rejects what it should, the soft-delete-aware indexes allow what they should,
+# foreign keys cascade the way BOOTSTRAP.md §4's soft-delete carve-out implies,
+# and the Down section drops everything Up created.
 #
-# This is a schema test, not a migration-runner test. It runs the SQL directly
-# with psql rather than through Flyway or goose, so it is meaningful before
-# either backend exists (BOOTSTRAP.md §11 steps 5-6). Step 4 is what proves the
-# two runners themselves agree.
+# Through goose rather than psql: psql would run each file's Up AND Down, and
+# going through the runner also catches a file goose cannot parse. It also
+# asserts the in-place-edit behaviour BOOTSTRAP.md §7.1 warns about.
 #
-# Spins up a throwaway container and removes it on exit. Needs docker and psql.
+# Spins up a throwaway container and removes it on exit. Needs docker, go and
+# psql.
 #
 # Usage: test-migrations.sh
 
@@ -30,7 +30,7 @@ export PGPASSWORD=test
 # server package; add it if psql isn't already there.
 command -v psql >/dev/null 2>&1 || PATH="/opt/homebrew/opt/libpq/bin:$PATH"
 
-for tool in docker psql; do
+for tool in docker go psql; do
   command -v "$tool" >/dev/null 2>&1 || { echo "test-migrations: $tool not found" >&2; exit 1; }
 done
 docker info >/dev/null 2>&1 || { echo "test-migrations: docker is not running" >&2; exit 1; }
@@ -67,6 +67,17 @@ fi
 
 psql() { command psql -h localhost -p "$PORT" -U postgres -d afloat_test -qtA "$@"; }
 
+# The goose the binary links, not @latest: a runner newer than the one in
+# production could accept a file the shipped one refuses.
+goose_version=$(awk '$1 == "github.com/pressly/goose/v3" { print $2 }' backend/go.mod)
+[ -n "$goose_version" ] || { echo "test-migrations: no goose version in backend/go.mod" >&2; exit 1; }
+# goose DIR COMMAND...
+goose() {
+  local dir=$1; shift
+  go run "github.com/pressly/goose/v3/cmd/goose@$goose_version" -dir "$dir" \
+    postgres "host=localhost port=$PORT user=postgres password=test dbname=afloat_test sslmode=disable" "$@" 2>&1
+}
+
 pass=0
 fail=0
 # Asserts a statement is REJECTED — a constraint doing its job.
@@ -87,10 +98,11 @@ U=019212e0-0000-7000-8000-000000000002
 U2=019212e0-0000-7000-8000-000000000003
 
 echo "up"
-if psql -v ON_ERROR_STOP=1 -f db/migrations/V0001__baseline.sql >/dev/null 2>&1; then
-  echo "  PASS  V0001 applies clean"; ((pass++))
+up_out=$(goose backend/internal/migrations up)
+if grep -q "successfully migrated database to version: 1" <<<"$up_out"; then
+  echo "  PASS  00001 applies clean"; ((pass++))
 else
-  echo "  FAIL  V0001 did not apply:"; psql -v ON_ERROR_STOP=1 -f db/migrations/V0001__baseline.sql 2>&1 | tail -5
+  echo "  FAIL  goose up did not apply:"; tail -5 <<<"$up_out"
   exit 1
 fi
 
@@ -149,17 +161,43 @@ else
 fi
 rejects "household delete, users live"   "DELETE FROM households WHERE id='$H';"
 
-echo "down"
-if psql -v ON_ERROR_STOP=1 -f db/undo/U0001__baseline.sql >/dev/null 2>&1; then
-  echo "  PASS  U0001 applies clean"; ((pass++))
+# ---------------------------------------------------------------------------
+# The §7.1 hazard. Edit an applied migration in place and re-run goose
+# against a database that already has version 1: it must silently do nothing.
+# The edit goes into a scratch copy, so the tree is never written to.
+# ---------------------------------------------------------------------------
+echo "in-place edit (BOOTSTRAP.md §7.1)"
+edited=$(mktemp -d)
+cp backend/internal/migrations/*.sql "$edited"/
+awk '/^-- \+goose Down$/ { print "ALTER TABLE households ADD COLUMN edit_probe text;"; print "" } { print }' \
+  backend/internal/migrations/00001_baseline.sql >"$edited"/00001_baseline.sql
+edit_out=$(goose "$edited" up)
+if grep -q "no migrations to run" <<<"$edit_out"; then
+  echo "  PASS  goose reports nothing to do"; ((pass++))
 else
-  echo "  FAIL  U0001 did not apply"; ((fail++))
+  echo "  FAIL  goose did not report 'no migrations to run': $(tail -2 <<<"$edit_out")"; ((fail++))
 fi
-left=$(value "SELECT count(*) FROM information_schema.tables WHERE table_schema='public';")
-if [ "$left" = "0" ]; then
-  echo "  PASS  undo left no tables behind"; ((pass++))
+probe=$(value "SELECT count(*) FROM information_schema.columns WHERE table_name='households' AND column_name='edit_probe';")
+if [ "$probe" = "0" ]; then
+  echo "  PASS  goose left the OLD schema in place, silently — §7.1 confirmed"; ((pass++))
 else
-  echo "  FAIL  undo left $left table(s) behind"; ((fail++))
+  echo "  FAIL  goose applied the edit; §7.1's claim is wrong and the doc needs correcting"; ((fail++))
+fi
+rm -rf "$edited"
+
+echo "down"
+down_out=$(goose backend/internal/migrations down)
+if grep -q "OK" <<<"$down_out"; then
+  echo "  PASS  00001 Down applies clean"; ((pass++))
+else
+  echo "  FAIL  goose down did not apply: $(tail -2 <<<"$down_out")"; ((fail++))
+fi
+# goose_db_version is goose's own ledger and survives a down by design.
+left=$(value "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name <> 'goose_db_version';")
+if [ "$left" = "0" ]; then
+  echo "  PASS  Down left no tables behind"; ((pass++))
+else
+  echo "  FAIL  Down left $left table(s) behind"; ((fail++))
 fi
 
 echo

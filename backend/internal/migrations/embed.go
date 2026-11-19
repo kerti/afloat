@@ -1,9 +1,8 @@
 // Package migrations embeds the goose migration files the binary applies to
 // itself on boot (BOOTSTRAP.md §3).
 //
-// The .sql files here are GENERATED from db/migrations + db/undo by
-// `make gen-goose-migrations` and must never be hand-edited; `make check`
-// regenerates them into a scratch directory and diffs.
+// The .sql files here are the canonical, hand-written migrations, Up and Down
+// in one file each (BOOTSTRAP.md §7).
 package migrations
 
 import "embed"

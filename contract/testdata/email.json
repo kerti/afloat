@@ -1,5 +1,5 @@
 {
-  "about": "What `format: email` accepts, in both backends (BOOTSTRAP.md §5). Each address is trimmed by Go's strings.TrimSpace set, then matched against the WHATWG <input type=email> rule. Go: httpserver/login_validation_test.go. Kotlin: httperr/TrimmedEmailValidatorSpec.kt.",
+  "about": "What `format: email` accepts (BOOTSTRAP.md §5). Each address is trimmed by Go's strings.TrimSpace set, then matched against the WHATWG <input type=email> rule. Read by backend/internal/httpserver/login_validation_test.go.",
   "valid": [
     "a@example.com",
     "User@Example.COM",

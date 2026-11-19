@@ -37,9 +37,5 @@ case "$f" in
         ;;
     esac
     ;;
-  *.kt|*.kts)
-    [ -x backend-kotlin/gradlew ] &&
-      (cd backend-kotlin && ./gradlew -q ktlintFormat >/dev/null 2>&1) || true
-    ;;
 esac
 exit 0

@@ -1,8 +1,7 @@
 {
   "_comment": [
-    "The trajectory calculation both backends must implement alike (docs/CONTEXT.md §Calculation",
-    "spec, BOOTSTRAP.md §6, issue #73). Both suites read this file; neither keeps a copy of the",
-    "numbers.",
+    "The trajectory calculation as pinned (docs/CONTEXT.md §Calculation spec, BOOTSTRAP.md §6,",
+    "issue #73). The suite reads this file and keeps no copy of the numbers.",
     "`parameters`: the fixture-wide defaults. `warm_up_days` pins State to afloat while",
     "days_elapsed < warm_up_days. `drifting_below` and `taking_on_water_below` are dimensionless",
     "multipliers of the Baseline Daily Budget (B): State compares Trajectory Variance (V) against",
@@ -25,7 +24,7 @@
     "T(j-1) for the rest of the Period in that case, never dipping below it.",
     "Every expected value here was computed independently in exact rational arithmetic (Python's",
     "fractions.Fraction) and cross-checked against Python's decimal module with ROUND_FLOOR /",
-    "ROUND_HALF_UP, not derived from either backend's implementation."
+    "ROUND_HALF_UP, not derived from the backend's implementation."
   ],
   "parameters": {
     "warm_up_days": 3,

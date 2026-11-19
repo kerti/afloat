@@ -4,8 +4,8 @@
 # another host. Safe methods pass untouched. The guard answers before any
 # handler runs, so a refused login burns no backoff.
 #
-# Host is set explicitly where Origin is compared, because each backend
-# listens on its own port and the case must mean the same thing on both.
+# Host is set explicitly where Origin is compared, so the case means the same
+# thing whichever port the server listens on.
 
 - name: csrf - cross-site login is blocked
   request:

@@ -20,8 +20,7 @@ Attack in this order:
    concept or dependency is guilty until proven required.
 4. **Open questions** — does the plan silently pick an answer to one of `PRD.md` §11's `Q-nn`, without
    naming that it's doing so?
-5. **Contract and parity** — if the change touches behaviour, does it say what happens to
-   `contract/openapi.yaml` and to *both* backends? A plan that only mentions Go is a plan with a
-   Kotlin gap it hasn't noticed yet.
+5. **Contract** — if the change touches behaviour, does it say what happens to
+   `contract/openapi.yaml` and the frontend that reads it?
 6. **Reversibility** — Bootstrap decisions (`BOOTSTRAP.md`) are flagged as such because they're
    expensive to change later. Is this plan quietly making one of those calls under a smaller heading?

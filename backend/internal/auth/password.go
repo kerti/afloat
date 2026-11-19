@@ -16,8 +16,7 @@ import (
 )
 
 // Argon2id parameters, fixed by BOOTSTRAP.md §5.1 and identical to Balances, so
-// a household running both apps gets the same password handling — and a hash
-// written by either backend verifies in the other.
+// a household running both apps gets the same password handling.
 //
 // The values are encoded into every PHC string stored, so they can be retuned
 // later with no migration and old hashes keep verifying against their own
@@ -157,22 +156,20 @@ type argonParams struct {
 	threads uint8
 }
 
-// phcShape is the one PHC spelling both backends accept (contract/testdata/
-// argon2.json, #16): argon2id, version 19, the three parameters in that order,
-// unpadded standard base64, a hash of at least 4 bytes. Anything looser
-// verified in one backend and not the other: Sscanf read "v=19x" as 19 and
-// ignored text after the parameters, Atoi read "v=019" as 19, and Spring's
-// decoder ignores a sixth field and accepts base64 padding.
+// phcShape is the one PHC spelling accepted (contract/testdata/argon2.json,
+// #16): argon2id, version 19, the three parameters in that order, unpadded
+// standard base64, a hash of at least 4 bytes. Anything looser verified
+// strings that do not say what they mean: Sscanf read "v=19x" as 19 and
+// ignored text after the parameters, and Atoi read "v=019" as 19.
 // argonMaxMemory and argonMaxTime are the accepted ceiling for a STORED
 // hash's m and t parameters (#68, BOOTSTRAP.md §5.1) - headroom over the
-// operating cost (m=19456, t=2), not BouncyCastle's own 2^24 KiB ceiling or
-// the absence of one in x/crypto. A cost increase past either ceiling means
+// operating cost (m=19456, t=2), not the absence of one in x/crypto. A cost increase past either ceiling means
 // raising the ceiling first, deliberately, rather than silently accepting
 // whatever a stored string names: an unbounded m or t lets a single verify
 // allocate or spend as much as the string says, worse once #33's concurrency
 // cap admits several such verifies at once.
 const (
-	argonMaxMemory = 65536 // KiB; 64 MiB, matching Kotlin's PasswordService.
+	argonMaxMemory = 65536 // KiB; 64 MiB.
 	argonMaxTime   = 10
 )
 
@@ -188,10 +185,9 @@ func parsePHC(phc string) (argonParams, []byte, []byte, error) {
 	threads, errP := strconv.ParseUint(m[3], 10, 8)
 	// argon2.IDKey panics on zero iterations or zero parallelism, so a
 	// malformed stored string would crash a login into the recoverer's 500
-	// where Kotlin answers "does not verify". Below 8 KiB per lane both
-	// libraries quietly raise memory to that floor, so the string no longer
-	// states the work done, and at m=0 only Spring refuses. Spring reads
-	// iterations as an int, well within the #68 ceiling below.
+	// rather than answer "does not verify". Below 8 KiB per lane the library
+	// quietly raises memory to that floor, so the string no longer states the
+	// work done.
 	if err := errors.Join(errM, errT, errP); err != nil ||
 		iterations < 1 || iterations > argonMaxTime ||
 		threads < 1 || memory < 8*threads || memory > argonMaxMemory {

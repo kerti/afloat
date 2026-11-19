@@ -1,7 +1,7 @@
 # SDLC
 
 Afloat is pre-scaffold: `BOOTSTRAP.md` §11 "Scaffold order" is the current spine, and it supersedes
-anything below until the repo skeleton, both backends, and the frontend exist. Follow it in order;
+anything below until the repo skeleton, the backend, and the frontend exist. Follow it in order;
 don't skip ahead to a domain feature before its prerequisite step is green.
 
 Once the scaffold is in place, the shape per change is:
@@ -14,8 +14,8 @@ review → merge**
 - **grill** — for anything reshaping the trajectory calculation, money handling, auth, or
   `contract/openapi.yaml`: stress-test the plan with the `grill` agent / `grill-with-docs` skill before
   writing code. Skip this step for mechanical changes with an already-known shape.
-- **draft ADR or PRD edit** — cross-backend calls go in `BOOTSTRAP.md`; backend-specific ones in
-  `docs/adr/{go,kotlin}/` (see that directory's `README.md` for the `draft` convention); scope changes
+- **draft ADR or PRD edit** — scaffold-wide calls go in `BOOTSTRAP.md`; backend-specific ones in
+  `docs/adr/go/` (see that directory's `README.md` for the `draft` convention); scope changes
   go in `PRD.md`, dated in its change log.
 - **issue** — once there's an issue tracker (not yet decided — see `docs/agents/issue-tracker.md` once
   it exists), break the plan into vertical slices with `to-issues`.

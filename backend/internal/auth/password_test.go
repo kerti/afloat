@@ -17,9 +17,8 @@ func TestHashPasswordProducesPHCWithPinnedParameters(t *testing.T) {
 		t.Fatalf("HashPassword: %v", err)
 	}
 
-	// The exact prefix matters: BOOTSTRAP.md §5.1 requires a hash written here
-	// to verify in the Kotlin backend, which reads these parameters out of the
-	// string. A silent retune would break that across backends.
+	// The exact prefix matters: BOOTSTRAP.md §5.1 pins the operating cost, and
+	// a silent retune would change what every stored hash costs to verify.
 	wantPrefix := "$argon2id$v=19$m=19456,t=2,p=1$"
 	if !strings.HasPrefix(phc, wantPrefix) {
 		t.Errorf("hash = %q, want prefix %q", phc, wantPrefix)

@@ -30,9 +30,9 @@ type Querier interface {
 	// one: expires_at is the sliding window, created_at the absolute cap that stops
 	// a stolen cookie living forever on repeated use (BOOTSTRAP.md §5.1).
 	GetLiveSession(ctx context.Context, arg GetLiveSessionParams) (Session, error)
-	// Login backoff lives in the database, not process memory, because there are
-	// two backends and an in-memory limiter would diverge where contract
-	// conformance cannot see it (BOOTSTRAP.md §5.1).
+	// Login backoff lives in the database, not process memory, so it survives a
+	// restart and is shared by every process serving the instance (BOOTSTRAP.md
+	// §5.1).
 	//
 	// Returns the remaining seconds, computed by the database's own clock, not a
 	// raw timestamp for Go to subtract against its own clock: any instant the

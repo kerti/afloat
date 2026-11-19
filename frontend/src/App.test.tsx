@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { delay, http, HttpResponse } from "msw";
 import { alice, defaultHandlers, envelope, server } from "@/test/server";
 import { renderApp } from "@/test/render";
+import { ApiError } from "@/api/client";
 import { i18n } from "@/i18n";
 
 describe("session flow", () => {
@@ -128,6 +129,75 @@ describe("session flow", () => {
 
     expect(client.getQueryData(["household", "expenses"])).toBeUndefined();
     expect(client.getQueryData(["me"])).toBeNull();
+  });
+
+  it("leaves nothing of the last user in the cache when a request answers 401", async () => {
+    server.use(
+      http.get("/api/household/expenses", () =>
+        HttpResponse.json(envelope("UNAUTHORIZED"), { status: 401 }),
+      ),
+      ...defaultHandlers({ signedIn: true, me: { ...alice, locale: "id-ID" } }),
+    );
+    const { client } = renderApp("/");
+    await screen.findByText("Masuk sebagai Alice");
+    client.setQueryData(["household", "cached"], [{ id: "x" }]);
+
+    // The session ended server-side; some other request finds out first.
+    await client
+      .fetchQuery({
+        queryKey: ["household", "expenses"],
+        queryFn: async () => {
+          const res = await fetch("/api/household/expenses");
+          throw new ApiError(res.status, "UNAUTHORIZED");
+        },
+      })
+      .catch(() => undefined);
+
+    await screen.findByRole("heading", { name: "Sign in" });
+    expect(client.getQueryData(["household", "cached"])).toBeUndefined();
+    expect(client.getQueryData(["household", "expenses"])).toBeUndefined();
+    expect(client.getQueryData(["me"])).toBeNull();
+    expect(i18n.language).toBe("en-GB");
+  });
+
+  it("leaves nothing of the last user in the cache when /me turns into null", async () => {
+    const state = { signedIn: true, me: alice };
+    server.use(...defaultHandlers(state));
+    const { client } = renderApp("/");
+    await screen.findByText("Signed in as Alice");
+    client.setQueryData(["household", "expenses"], [{ id: "x" }]);
+
+    state.signedIn = false;
+    await client.invalidateQueries({ queryKey: ["me"] });
+
+    await screen.findByRole("heading", { name: "Sign in" });
+    await waitFor(() => expect(client.getQueryData(["household", "expenses"])).toBeUndefined());
+    expect(client.getQueryData(["me"])).toBeNull();
+    // The clear does not refetch /me into a loop.
+    let probes = 0;
+    server.use(
+      http.get("/api/me", () => {
+        probes++;
+        return HttpResponse.json(envelope("UNAUTHORIZED"), { status: 401 });
+      }),
+    );
+    await new Promise((r) => setTimeout(r, 200));
+    expect(probes).toBe(0);
+  });
+
+  it("does not clear the cache on a wrong password", async () => {
+    server.use(...defaultHandlers());
+    const user = userEvent.setup();
+    const { client } = renderApp("/login");
+    await user.type(await screen.findByLabelText("Email"), "alice@example.com");
+    client.setQueryData(["household", "expenses"], [{ id: "x" }]);
+
+    await user.type(screen.getByLabelText("Password"), "wrong");
+    await user.click(screen.getByRole("button", { name: "Sign in" }));
+    await screen.findByRole("alert");
+
+    expect(client.getQueryData(["household", "expenses"])).toEqual([{ id: "x" }]);
+    expect(client.getQueryData(["auth", "methods"])).toBeDefined();
   });
 
   it("does not let a /me answer still in flight sign the last user back in", async () => {

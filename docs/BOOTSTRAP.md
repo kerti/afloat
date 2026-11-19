@@ -375,7 +375,9 @@ the first failing field only.
   `application/json` (another `+json` type included), a non-object root, a wrong type (no scalar
   coercion: `5` is not a string), a `null`, and a property the schema does not declare.
 - The media type is matched case-insensitively (ASCII letters only), whitespace around it ignored
-  (RFC 9110 §8.3.1). A body is read as UTF-8 whatever `charset` its `Content-Type` claims, a name
+  (RFC 9110 §8.3.1). One that is not `token/token` at all — a non-ASCII letter included — counts as no
+  `Content-Type`, so a body is refused as undeclared whatever the validator's own folding would make
+  of it. A body is read as UTF-8 whatever `charset` its `Content-Type` claims, a name
   no decoder knows included: `application/json` has no such parameter (RFC 8259 §11). Every other
   parameter is ignored too, an unparseable one included.
 - Otherwise every failing field competes, an absent required one (`rule: required`) included. The

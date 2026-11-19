@@ -9,8 +9,8 @@ describe("errorMessage", () => {
 
   it("names the failing field in the user's language (VALIDATION carries {field, rule})", () => {
     const err = new ApiError(400, "VALIDATION", { field: "password", rule: "max" });
-    expect(errorMessage(t, err)).toBe("Check the Password field.");
-    expect(errorMessage(tID, err)).toBe("Periksa kolom Kata sandi.");
+    expect(errorMessage(t, err)).toBe("Check the password field.");
+    expect(errorMessage(tID, err)).toBe("Periksa kolom kata sandi.");
   });
 
   it("falls back to the raw field name for a field the catalogue does not know yet", () => {

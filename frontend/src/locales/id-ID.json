@@ -8,6 +8,10 @@
     "email": "Email",
     "password": "Kata sandi"
   },
+  "fieldNames": {
+    "email": "email",
+    "password": "kata sandi"
+  },
   "login": {
     "title": "Masuk",
     "submit": "Masuk",
@@ -30,11 +34,11 @@
     "INVALID_JSON_BODY": "Afloat tidak dapat membaca permintaan itu. Muat ulang halaman lalu coba lagi.",
     "INVALID_CREDENTIALS": "Email dan kata sandi tidak cocok.",
     "TOO_MANY_ATTEMPTS_other": "Terlalu banyak percobaan. Coba lagi dalam {{count}} detik.",
-    "TOO_MANY_ATTEMPTS_soon": "Terlalu banyak percobaan. Coba lagi sebentar lagi.",
+    "TOO_MANY_ATTEMPTS_soon": "Terlalu banyak percobaan. Coba beberapa saat lagi.",
     "UNAUTHORIZED": "Sesi Anda telah berakhir. Silakan masuk lagi.",
     "CROSS_SITE_REQUEST_BLOCKED": "Permintaan itu diblokir karena berasal dari situs lain. Muat ulang Afloat lalu coba lagi.",
-    "INTERNAL": "Afloat tidak dapat menyelesaikannya. Coba lagi sebentar lagi.",
+    "INTERNAL": "Afloat tidak dapat menyelesaikannya. Coba beberapa saat lagi.",
     "NETWORK": "Tidak dapat menghubungi Afloat. Periksa koneksi Anda lalu coba lagi.",
-    "UNKNOWN": "Terjadi kesalahan. Coba lagi sebentar lagi."
+    "UNKNOWN": "Terjadi kesalahan. Coba beberapa saat lagi."
   }
 }

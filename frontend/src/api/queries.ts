@@ -39,7 +39,10 @@ export function useLogout() {
   const qc = useQueryClient();
   return useMutation<void, ApiError>({
     mutationFn: logout,
-    onSuccess: () => {
+    onSuccess: async () => {
+      // A fetch still in flight would land after the clear below and put the
+      // last User's answer back in the cache.
+      await qc.cancelQueries();
       // The next person at this device is not the last User: back to the
       // browser's language until someone signs in.
       void i18n.changeLanguage(browserLocale());

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { http, HttpResponse } from "msw";
+import { delay, http, HttpResponse } from "msw";
 import { alice, defaultHandlers, envelope, server } from "@/test/server";
 import { renderApp } from "@/test/render";
 import { i18n } from "@/i18n";
@@ -113,6 +113,45 @@ describe("session flow", () => {
     // jsdom's navigator.languages is en-US, so the browser's choice is en-GB.
     expect(await screen.findByRole("heading", { name: "Sign in" })).toBeInTheDocument();
     expect(i18n.language).toBe("en-GB");
+  });
+
+  it("leaves nothing of the last user in the cache on sign-out", async () => {
+    server.use(...defaultHandlers({ signedIn: true, me: alice }));
+    const user = userEvent.setup();
+    const { client } = renderApp("/");
+    await screen.findByText("Signed in as Alice");
+    // Stands in for the Household data later steps will cache.
+    client.setQueryData(["household", "expenses"], [{ id: "x" }]);
+
+    await user.click(screen.getByRole("button", { name: "Sign out" }));
+    await screen.findByRole("heading", { name: "Sign in" });
+
+    expect(client.getQueryData(["household", "expenses"])).toBeUndefined();
+    expect(client.getQueryData(["me"])).toBeNull();
+  });
+
+  it("does not let a /me answer still in flight sign the last user back in", async () => {
+    let slow = false;
+    server.use(
+      http.get("/api/me", async () => {
+        // Answered as of before sign-out, arriving after it.
+        if (slow) await delay(150);
+        return HttpResponse.json(alice);
+      }),
+      ...defaultHandlers(),
+    );
+    const user = userEvent.setup();
+    const { client } = renderApp("/");
+    await screen.findByText("Signed in as Alice");
+
+    slow = true;
+    void client.invalidateQueries({ queryKey: ["me"] });
+    await user.click(screen.getByRole("button", { name: "Sign out" }));
+    await screen.findByRole("heading", { name: "Sign in" });
+
+    await new Promise((r) => setTimeout(r, 300));
+    expect(client.getQueryData(["me"])).toBeNull();
+    expect(screen.getByRole("heading", { name: "Sign in" })).toBeInTheDocument();
   });
 
   it("offers a retry when /me fails, and recovers", async () => {

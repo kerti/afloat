@@ -8,6 +8,10 @@
     "email": "Email",
     "password": "Password"
   },
+  "fieldNames": {
+    "email": "email",
+    "password": "password"
+  },
   "login": {
     "title": "Sign in",
     "submit": "Sign in",

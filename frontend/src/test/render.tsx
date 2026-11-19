@@ -5,11 +5,12 @@ import { App } from "@/App";
 
 export function renderApp(path = "/") {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(
+  const view = render(
     <QueryClientProvider client={client}>
       <MemoryRouter initialEntries={[path]}>
         <App />
       </MemoryRouter>
     </QueryClientProvider>,
   );
+  return { ...view, client };
 }

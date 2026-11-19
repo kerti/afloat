@@ -7,7 +7,9 @@ export function errorMessage(t: TFunction, err: ApiError): string {
   switch (err.code) {
     case "VALIDATION": {
       const field = typeof err.args.field === "string" ? err.args.field : "";
-      return t("errors.VALIDATION", { field: t(`fields.${field}`, { defaultValue: field }) });
+      // fieldNames, not fields: fields are the form's capitalised labels, and
+      // this name sits mid-sentence.
+      return t("errors.VALIDATION", { field: t(`fieldNames.${field}`, { defaultValue: field }) });
     }
     case "TOO_MANY_ATTEMPTS":
       // Retry-After: 0 means "now", which no sentence about a wait reads well.

@@ -26,8 +26,10 @@ const pwa = VitePWA({
     start_url: "/",
     scope: "/",
     display: "standalone",
-    // Neutral until the brand session (PRD §9); kept in step with the
-    // --background token in src/styles/theme.css.
+    // Neutral until the brand session (PRD §9); kept in step with the light
+    // --background token in src/styles/theme.css. A manifest takes one value,
+    // so the install splash stays light in dark mode; the running app's bar
+    // follows the scheme through the theme-color metas in index.html.
     background_color: "#ffffff",
     theme_color: "#ffffff",
     // Placeholder until the brand session; PNG sizes for iOS come with it.

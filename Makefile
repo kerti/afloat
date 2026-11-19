@@ -38,7 +38,7 @@ help:
 	@echo "  test-migrations         apply the migrations with goose to a throwaway Postgres and assert"
 	@echo "  check                   pre-push gate: pass/fail per surface"
 	@echo "  check-go                lint and test the Go backend"
-	@echo "  check-frontend          typecheck, lint, format-check and test the frontend"
+	@echo "  check-frontend          typecheck, lint, format-check, test and build the frontend"
 	@echo "  conformance             boot the backend and run the conformance suite against it"
 	@echo "  lint-install            install the pinned golangci-lint (the version CI uses)"
 	@echo ""
@@ -208,6 +208,9 @@ check-frontend:
 	@if [ ! -d frontend/node_modules ]; then \
 	  echo 'FAIL frontend/node_modules is missing - run make frontend-install'; exit 1; fi
 	@cd frontend && npm run -s typecheck && npm run -s lint && npm run -s format:check && npm run -s test:coverage
+	@# The production build too: tests never run vite or the PWA plugin, so a
+	@# bump that breaks them would otherwise stay green until someone ships.
+	@cd frontend && npm run -s build -- --logLevel warn
 
 # Boot the backend from source and run the black-box conformance suite against
 # it (issue #28). Needs docker and live servers, and is deliberately NOT part of

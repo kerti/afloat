@@ -124,8 +124,8 @@ func TestLoadRejectsBadEnums(t *testing.T) {
 }
 
 // The backoff defaults are the parameters contract/testdata/login_backoff.json
-// computes its curve from (#16). Kotlin's AppConfigSpec holds its defaults to
-// the same file, so a default changed in one backend fails there.
+// computes its curve from (#16), so a default changed without the fixture
+// fails here.
 func TestBackoffDefaultsMatchTheSharedFixture(t *testing.T) {
 	raw, err := os.ReadFile("../../../contract/testdata/login_backoff.json")
 	if err != nil {

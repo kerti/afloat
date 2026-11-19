@@ -35,7 +35,7 @@ Afloat takes strict handlers:
   responses — an undeclared status is a compile error, not a conformance-test failure later.
 - **It pushes the money rule into the type system.** `DECIMAL(20,4)` as a string on the wire
   (`BOOTSTRAP.md` §4) is generated as a `string` field; a handler cannot accidentally emit a JSON
-  number, which is the exact failure the Kotlin side has to be configured out of.
+  number.
 - **Request binding stops being hand-written.** JSON decode, path and query parameters, and the
   `INVALID_JSON_BODY` path are the generator's problem, uniformly, rather than a block copied into
   every handler.
@@ -49,8 +49,12 @@ cookie, and strict handlers expose response headers for exactly that.
 - `backend/internal/httpserver` owns the chi router, the middleware stack and the mount points.
   Handlers live with their domain (`internal/auth`, later `internal/expenses`), not in one package.
 - Generated code lands in `backend/internal/api`, is committed, and is never hand-edited
-  (`BOOTSTRAP.md` §6). `make check` regenerates and diffs, like the goose migrations.
+  (`BOOTSTRAP.md` §6). `make check` regenerates and diffs.
 - Middleware is written as `func(http.Handler) http.Handler` and must stay free of chi types, so the
   stdlib exit stays cheap.
-- The Kotlin track's equivalent choice is Spring's own, and is not bound by this ADR. Only the
-  contract binds both.
+
+## Amendments
+
+- **2026-11-19** — The Kotlin learning track was dropped (`PRD.md` change log); statements about the
+  Kotlin side, and about migrations generated from Flyway-format files, were removed or corrected.
+  The decision itself is unchanged.

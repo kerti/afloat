@@ -1,17 +1,14 @@
 # The fixed response header set (#26, BOOTSTRAP.md §5.2), asserted by value.
-# Parity alone would not pin it: it only proves the two backends agree, so both
-# dropping Cache-Control would pass. Go writes these in its own middleware and
-# Kotlin gets them from Spring Security, so each kind of answer that takes a
-# different path out of either backend gets its own case: a handler's 200, an
-# envelope from a handler, an envelope from a guard that answers before any
-# handler runs, and the framework's own 404.
+# Each kind of answer that takes a different path out of the backend gets its
+# own case: a handler's 200, an envelope from a handler, an envelope from a
+# guard that answers before any handler runs, and the framework's own 404.
 #
-# Strict-Transport-Security is absent from both, and parity would catch it if
-# one started sending it: it is not in the permitted list.
+# Strict-Transport-Security must be absent, so the shared header set asserts
+# it empty (an absent header reads as "").
 #
-# X-Request-Id IS on that list, globally, and a permit exempts the header's
-# presence as well as its value. So each request sends a clean id and expects
-# it echoed: that pins the header on every path here, not just on /health.
+# A minted X-Request-Id is random, so each request sends a clean id and
+# expects it echoed: that pins the header on every path here, not just on
+# /health.
 
 - name: security headers on a handler's 200
   issue: "26"
@@ -30,6 +27,7 @@
       Expires: "0"
       X-XSS-Protection: "0"
       X-Request-Id: conformance-probe
+      Strict-Transport-Security: ""
     body_json:
       status: ok
       version: dev
@@ -63,13 +61,15 @@
     headers: *security-headers
     body_json:
       code: CROSS_SITE_REQUEST_BLOCKED
+    rows:
+      - sql: SELECT (SELECT count(*) FROM sessions)::int AS sessions, (SELECT count(*) FROM login_attempts)::int AS attempts
+        rows: [{sessions: 0, attempts: 0}]
 
-# Each backend's own unregistered-path 404, which no Afloat code writes. The
-# body differs by ruling (#24), so it is pinned the way that ruling's cases pin
-# it: against the same backend's answer for a second unregistered path.
+# The router's own unregistered-path 404, which no Afloat code writes. The
+# body is no envelope by ruling (#24), so it is pinned the way that ruling's
+# cases pin it: against the answer for a second unregistered path.
 - name: security headers on an unregistered-path 404
   issue: "26"
-  permit: [unmatched-path-404]
   request:
     method: GET
     path: /no-such-route

@@ -1,13 +1,13 @@
 # Generates typed query methods from hand-written SQL (docs/adr/go/0002).
 #
-# The schema source is db/migrations — the CANONICAL Flyway-native files, not
-# the generated goose ones (BOOTSTRAP.md §7). One schema source, and the
+# The schema source is the canonical goose migrations (BOOTSTRAP.md §7); sqlc
+# reads their Up sections and ignores Down. One schema source, and the
 # generator reads it, so a column rename is a generation error rather than a
 # runtime surprise.
 version: "2"
 sql:
   - engine: postgresql
-    schema: "../db/migrations"
+    schema: "internal/migrations"
     queries: "queries"
     gen:
       go:

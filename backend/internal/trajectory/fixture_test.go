@@ -10,10 +10,9 @@ import (
 	"github.com/kerti/afloat/backend/internal/trajectory"
 )
 
-// The trajectory calculation both backends must implement alike
-// (contract/testdata/trajectory.json, BOOTSTRAP.md §11 step 8, issue #73).
-// Kotlin's equivalent spec reads the same file. Neither suite keeps a copy of
-// the numbers: every expected value below is decoded from the fixture.
+// The trajectory calculation as pinned by contract/testdata/trajectory.json
+// (BOOTSTRAP.md §11 step 8, issue #73). The suite keeps no copy of the
+// numbers: every expected value below is decoded from the fixture.
 type fixture struct {
 	Parameters struct {
 		WarmUpDays         int    `json:"warm_up_days"`

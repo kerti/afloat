@@ -28,30 +28,26 @@ building anything that isn't obviously capture, dashboard, or setup.
 - `CONTEXT.md` — domain vocabulary and the calculation spec. Authoritative for arithmetic; one word
   per concept, no synonyms.
 - `BOOTSTRAP.md` — the ratified scaffold sheet: naming, stack, auth, schema conventions, migrations,
-  contract tooling. Read it before writing code that touches either backend.
-- `docs/adr/go/`, `docs/adr/kotlin/` — backend-specific technical decisions once they exist.
-  Cross-backend decisions belong in `BOOTSTRAP.md`, not an ADR.
+  contract tooling. Read it before writing backend code.
+- `docs/adr/go/` — backend-specific technical decisions. Scaffold-wide decisions belong in
+  `BOOTSTRAP.md`, not an ADR.
 
-## Two backends, one contract
+## One backend, one contract
 
-Afloat ships a Go backend (canonical) and a Kotlin backend (learning track) against one hand-written
-`contract/openapi.yaml`. This is the thing most likely to go wrong by omission:
+Afloat ships a Go backend against one hand-written `contract/openapi.yaml`.
 
-- **State which backend(s) a task touches.** A brief that says "implement expense capture" without
-  naming Go, Kotlin, or both will get silently duplicated into one and skipped in the other, or copied
-  without adapting to the target backend's idioms.
 - **The contract leads.** Never hand-edit generated server interfaces/types; edit
   `contract/openapi.yaml` and regenerate (`BOOTSTRAP.md` §6).
-- **Trajectory is computed server-side, in both backends**, from the same
-  `contract/testdata/trajectory.json` fixture (`BOOTSTRAP.md` §6, PRD N5a). A change to the trajectory
-  formula that updates one backend's tests and not the other's is incomplete.
+- **Trajectory is computed server-side**, tested against `contract/testdata/trajectory.json`
+  (`BOOTSTRAP.md` §6, PRD N5a). A change to the trajectory formula updates the fixture and the tests
+  together.
 
 ## Non-negotiable engineering rules
 
 Full detail in `BOOTSTRAP.md` §4; the ones most likely to be violated by a plausible-looking diff:
 
-1. **Money:** `DECIMAL(20,4)`, serialised as **strings** on the wire in both backends. A JSON number or
-   scientific notation from Spring is a bug, not a formatting quirk.
+1. **Money:** `DECIMAL(20,4)`, serialised as **strings** on the wire. A JSON number or scientific
+   notation is a bug, not a formatting quirk.
 2. **Primary keys:** UUIDv7, **client-generated**. `POST` is idempotent on the client-supplied id
    (`INSERT ... ON CONFLICT (id) DO NOTHING` + read-back) — this is the offline-write contract, live in
    MVP even though the queue isn't.
@@ -69,13 +65,10 @@ Full detail in `BOOTSTRAP.md` §4; the ones most likely to be violated by a plau
 
 ```
 afloat/
-├── backend/                 # Go — canonical implementation
-├── backend-kotlin/          # Kotlin — learning track, opened separately in IntelliJ
-├── frontend/                # shared, backend-agnostic React app
-├── contract/                # openapi.yaml (source of truth) + shared test fixtures
-├── shared/                  # cross-backend runtime data; copies generated, never hand-edited
-├── db/                      # canonical Flyway migrations + goose-source undo files
-├── docs/{adr/{go,kotlin},brand,qa}/
+├── backend/                 # Go backend; canonical migrations in internal/migrations/
+├── frontend/                # React app
+├── contract/                # openapi.yaml (source of truth), test fixtures, conformance harness
+├── docs/{adr/go,brand,qa}/
 ├── docker-compose.yml
 └── Makefile
 ```

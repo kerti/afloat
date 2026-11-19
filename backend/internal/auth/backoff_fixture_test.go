@@ -18,9 +18,8 @@ import (
 	"github.com/kerti/afloat/backend/internal/db"
 )
 
-// The login backoff both backends must implement alike
-// (contract/testdata/login_backoff.json, issue #16). Kotlin's
-// LoginBackoffFixtureSpec reads the same file.
+// The login backoff as pinned by contract/testdata/login_backoff.json (issue
+// #16).
 type backoffFixture struct {
 	Parameters struct {
 		FirstBackoff string `json:"first_backoff"`

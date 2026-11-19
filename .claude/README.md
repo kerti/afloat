@@ -16,7 +16,7 @@ The rules the agents follow are in [`CLAUDE.md`](../CLAUDE.md).
 | `agents/*.md` | On delegation | One role per file; `model` and `effort` in the frontmatter are the only thing that actually binds those choices |
 | `hooks/session-start.sh` | Session start | Orients; fast-forwards `main` only when already on `main` and clean |
 | `hooks/pre-push-gate.sh` | Before every Bash call | Denies `git push` when `make check` fails |
-| `hooks/format-file.sh` | After Edit/Write | Formats what was just written (gofmt / prettier+eslint / ktlint, whichever tool exists) |
+| `hooks/format-file.sh` | After Edit/Write | Formats what was just written (gofmt / prettier+eslint, whichever tool exists) |
 
 No `agent-gate.sh` yet — hold off wiring a permission prompt on every subagent spawn until the
 role split above is actually in daily use; add it (mirroring uruni's) if delegation volume makes that
@@ -33,8 +33,8 @@ Six agents in `agents/`, split by risk and deliverable shape rather than by back
 - `reviewer` (high, read-only) — checks a finished diff against the non-negotiables.
 - `researcher` (medium, read-only) — answers "where does X live / how does Y work".
 
-A brief to `builder` or `builder-deep` must say which backend(s) it touches — see `CLAUDE.md`
-"Two backends, one contract". Nothing in the role split enforces that; it's brief discipline.
+A brief to `builder` or `builder-deep` must say whether it changes `contract/openapi.yaml` — see
+`CLAUDE.md` "One backend, one contract". Nothing in the role split enforces that; it's brief discipline.
 
 ## Overriding the pinned defaults
 

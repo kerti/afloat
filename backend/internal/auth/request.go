@@ -38,24 +38,20 @@ func RequestContextMiddleware(next http.Handler) http.Handler {
 // maxUserAgentCodePoints bounds what sessions.user_agent stores. Unicode code
 // points, like every other length limit in this codebase (BOOTSTRAP.md §5.1) -
 // never bytes, never UTF-16 units - so a User-Agent that happens to carry
-// multibyte characters is not penalised for encoding wider, and so Go and
-// Kotlin cut at the same character regardless of how many bytes or UTF-16
-// units it took to get there.
+// multibyte characters is not penalised for encoding wider.
 const maxUserAgentCodePoints = 512
 
 // sanitizeUserAgent applies the storage rule for sessions.user_agent, in
 // order (#70, on top of #32 item 4's original empty-is-NULL rule):
 //
-//  1. Fold HTAB to SP, then trim SP/HTAB from both ends. The two connectors
+//  1. Fold HTAB to SP, then trim SP/HTAB from both ends. Servers and proxies
 //     unfold an obsolete header fold (RFC 7230 §3.2.4's obs-fold) differently
-//     - Go collapses "CRLF 1*(SP/HTAB)" to a single SP; Tomcat drops only the
-//     CRLF and keeps the fold's own whitespace verbatim, tab included - so
-//     "abc\r\n\tdef" reaches this function as "abc def" from Go but
-//     "abc\tdef" from Kotlin. Folding HTAB to SP and trimming both ends
-//     converges every case the review measured (an internal tab, a leading fold with
-//     nothing before it, a trailing fold with nothing after) to the same
-//     stored string on both backends, without either connector's own
-//     unfolding needing to agree in the first place. A real inline tab a
+//     - Go collapses "CRLF 1*(SP/HTAB)" to a single SP; others drop only the
+//     CRLF and keep the fold's own whitespace verbatim, tab included. Folding
+//     HTAB to SP and trimming both ends converges every case the review
+//     measured (an internal tab, a leading fold with nothing before it, a
+//     trailing fold with nothing after) to one stored string, whichever hop
+//     did the unfolding. A real inline tab a
 //     client meant literally is stored as a space; nothing here can tell it
 //     apart from a fold's byte, because past this rewrite there is no
 //     difference to tell apart.

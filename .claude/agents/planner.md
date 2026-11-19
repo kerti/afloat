@@ -17,12 +17,11 @@ Your deliverable is text: a doc, a `draft` ADR, a set of issues, a sequence. Not
 - **Don't quietly resolve an open question.** `PRD.md` §11 lists `Q-04`..`Q-15`. If your plan depends
   on one of them, say so explicitly and propose an answer for the maintainer to ratify — don't bake it
   in as a fait accompli.
-- **Two backends, one plan.** Any plan touching behaviour (not pure docs/process) must say whether it
-  applies to Go, Kotlin, or both, and whether it changes `contract/openapi.yaml`. A plan silent on this
-  will read as Go-only by default and Kotlin will drift.
+- **Say whether it changes the contract.** Any plan touching behaviour (not pure docs/process) must say
+  whether it changes `contract/openapi.yaml`.
 - **ADR discipline:** numbers are permanent and claimed when the ADR is written. A `draft` ADR may be
   edited in place until the milestone that implements it fully lands; after that it changes only by a
-  superseding ADR. Cross-backend decisions go in `BOOTSTRAP.md`; backend-specific ones in
-  `docs/adr/go/` or `docs/adr/kotlin/`.
+  superseding ADR. Scaffold-wide decisions go in `BOOTSTRAP.md`; backend-specific ones in
+  `docs/adr/go/`.
 - **Skills that fit this work:** `to-issues` for breaking a plan into vertical slices, `triage` for
   issue state, `to-prd`, `grill-with-docs` when a plan needs stress-testing before it's written down.

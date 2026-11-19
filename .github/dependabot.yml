@@ -1,10 +1,10 @@
-# Weekly dependency updates for the three ecosystems this repo has. The
-# frontend joins as a fourth (npm, /frontend) at BOOTSTRAP.md §11 step 7.
+# Weekly dependency updates for the two ecosystems this repo has. The
+# frontend joins as a third (npm, /frontend) at BOOTSTRAP.md §11 step 7.
 #
 # GROUPED, and this is the point of the file rather than a tidiness preference:
-# ungrouped, Spring Boot's BOM alone opens a dozen pull requests and every one
-# of them burns a full 269-spec Testcontainers run in ci.yml. Majors stay
-# ungrouped - a major deserves its own PR and its own read.
+# ungrouped, a week's bumps open a dozen pull requests and every one of them
+# burns a full CI run. Majors stay ungrouped - a major deserves its own PR and
+# its own read.
 version: 2
 updates:
   - package-ecosystem: gomod
@@ -14,16 +14,6 @@ updates:
     labels: [dependencies]
     groups:
       go-minor-and-patch:
-        patterns: ["*"]
-        update-types: ["minor", "patch"]
-
-  - package-ecosystem: gradle
-    directory: "/backend-kotlin"
-    schedule:
-      interval: weekly
-    labels: [dependencies]
-    groups:
-      kotlin-minor-and-patch:
         patterns: ["*"]
         update-types: ["minor", "patch"]
 

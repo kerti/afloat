@@ -6,8 +6,7 @@
 #
 # The ip key is the harness's own loopback address, which is 127.0.0.1 or ::1
 # depending on how localhost resolves. The row queries fold it to `ip:*`: the
-# address is the machine's, not either backend's, and parity still compares the
-# real value in the snapshot.
+# address is the machine's, not the backend's.
 
 - name: login succeeds and issues a session cookie
   request:
@@ -64,7 +63,7 @@
 
 # No User-Agent is NULL. The runner sends no header at all when a case sets it
 # empty: net/http cannot send an empty User-Agent, so #32 item 4 - an empty
-# header stored as '' on Kotlin - is pinned in each backend's own suite.
+# header is NULL too - is pinned in the backend's own suite.
 - name: login with no user agent stores NULL
   request:
     method: POST
@@ -221,6 +220,13 @@
       Retry-After: "1"
     body_json: {code: TOO_MANY_ATTEMPTS}
     cookies: {}
+    rows:
+      - sql: SELECT regexp_replace(key, '^ip:.*', 'ip:*') AS key, failure_count FROM login_attempts ORDER BY 1
+        rows:
+          - {key: "email:nobody@example.com", failure_count: 1}
+          - {key: "ip:*", failure_count: 1}
+      - sql: SELECT count(*)::int AS n FROM sessions
+        rows: [{n: 0}]
 
 # The window doubles per failure. The given SQL ends the first window rather
 # than the case sleeping through it.

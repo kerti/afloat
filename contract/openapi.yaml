@@ -1,12 +1,11 @@
 openapi: 3.0.3
 
 # Hand-written and authoritative (BOOTSTRAP.md §6, PRD N6/N7a). The Go server
-# interfaces, the Kotlin interfaces and the frontend's TypeScript types are all
-# generated from this file; never hand-edit generated output.
+# interfaces and the frontend's TypeScript types are both generated from this
+# file; never hand-edit generated output.
 #
-# 3.0.3 rather than 3.1 deliberately: oapi-codegen and the kotlin-spring
-# generator both have mature 3.0 support, and 3.1's JSON-Schema alignment buys
-# nothing this contract needs.
+# 3.0.3 rather than 3.1 deliberately: oapi-codegen has mature 3.0 support, and
+# 3.1's JSON-Schema alignment buys nothing this contract needs.
 #
 # Auth and session semantics deliberately mirror Balances (its ADR-0017,
 # ADR-0027, ADR-0039), so a household running both apps meets the same login,
@@ -21,7 +20,7 @@ info:
     Household spending-trajectory API.
 
     Scaffold step 2 (BOOTSTRAP.md §11): health check and authentication only —
-    enough to prove the generator chain across Go, Kotlin and TypeScript.
+    enough to prove the generator chain across Go and TypeScript.
     Household founding, invitation acceptance and every domain resource land in
     step 9 and are deliberately absent here.
   license:
@@ -300,7 +299,7 @@ components:
     Error:
       type: object
       description: |
-        The one error envelope both backends emit (PRD N7), identical in shape
+        The one error envelope the API emits (PRD N7), identical in shape
         to Balances ADR-0027. It carries **codes, not messages** — the frontend
         looks `code` up in its i18n catalogue and interpolates `args`. There is
         deliberately no `message` field: shipping English beside the code invites

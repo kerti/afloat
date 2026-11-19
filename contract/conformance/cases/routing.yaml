@@ -1,18 +1,15 @@
-# Path shapes and the body cap (#56). Found by a raw-socket probe of both
-# backends in #51's sixth review; ruled 25 Sep:
+# Path shapes and the body cap (#56). Found by a raw-socket probe in #51's
+# sixth review; ruled 25 Sep:
 #
 # 1. A percent-encoded path names the same resource as its decoded form
-#    (RFC 3986 §6.2.2.2), so both backends route on the decoded path. An
+#    (RFC 3986 §6.2.2.2), so the backend routes on the decoded path. An
 #    encoded slash is the exception: it never becomes a separator.
-# 2. A path the Spring firewall refuses - `;`, `//`, `/./`, an encoded slash
-#    or percent - is a path that does not exist: each backend's own
-#    unregistered-path 404, no envelope, no new ErrorCode.
+# 2. A path parameter, `//`, `/./`, an encoded slash or percent is a path that
+#    does not exist: the unregistered-path 404, no envelope, no new ErrorCode.
 # 3. The 1 MiB body cap applies to the bytes a handler reads, not to a
 #    declared Content-Length, so a route that reads no body ignores one.
-# 4. A literal backslash, an encoded NUL, or invalid UTF-8 in the path is a
-#    permitted difference (#64): Tomcat's connector refuses each with its own
-#    HTML 400 before Kotlin's own routing runs, where Go's router simply finds
-#    no route and answers its bare 404.
+# 4. A literal backslash, an encoded NUL, or invalid UTF-8 in the path (#64)
+#    finds no route either, and answers the same bare 404.
 
 - name: routing - a percent-encoded path is the decoded route
   issue: "56"
@@ -34,6 +31,9 @@
         secure: false
         same_site: Lax
         expires: max-age
+    rows:
+      - sql: SELECT (SELECT count(*) FROM sessions)::int AS sessions, (SELECT count(*) FROM login_attempts)::int AS attempts
+        rows: [{sessions: 1, attempts: 0}]
 
 - name: routing - a percent-encoded path on a GET
   issue: "56"
@@ -46,7 +46,6 @@
 
 - name: routing - an encoded slash is not a separator
   issue: "56"
-  permit: [unmatched-path-404]
   request:
     method: POST
     path: /auth%2Flocal/login
@@ -67,7 +66,6 @@
 
 - name: routing - a path parameter is a path that does not exist
   issue: "56"
-  permit: [unmatched-path-404]
   request:
     method: GET
     path: /health;x=1
@@ -79,7 +77,6 @@
 
 - name: routing - a double slash is a path that does not exist
   issue: "56"
-  permit: [unmatched-path-404]
   request:
     method: GET
     path: //health
@@ -89,7 +86,6 @@
 
 - name: routing - a dot segment is a path that does not exist
   issue: "56"
-  permit: [unmatched-path-404]
   request:
     method: GET
     path: /./health
@@ -99,7 +95,6 @@
 
 - name: routing - an encoded percent is a path that does not exist
   issue: "56"
-  permit: [unmatched-path-404]
   request:
     method: GET
     path: /h%25ealth
@@ -109,7 +104,6 @@
 
 - name: routing - an encoded backslash is a path that does not exist
   issue: "56"
-  permit: [unmatched-path-404]
   request:
     method: GET
     path: /health%5C
@@ -119,54 +113,46 @@
 
 # raw_target, not path: a Path-based request necessarily goes through Go's
 # own url.Parse/http.NewRequest, which silently percent-encodes an unescaped
-# backslash to %5C before it ever reaches either server - the ALREADY-handled
+# backslash to %5C before it ever reaches the server - the ALREADY-handled
 # #56 case above, not this one. raw_target sends the byte itself.
-- name: routing - a literal backslash is a permitted connector-vs-router difference
+- name: routing - a literal backslash answers like an unregistered path
   issue: "64"
-  permit: [malformed-path-connector-400]
   request:
     method: GET
     raw_target: /health\
   expect:
-    status_by_backend: {go: 404, kotlin: 400}
-    same_as_for:
-      go: *no-such-get
+    status: 404
+    same_as: *no-such-get
 
-- name: routing - a literal NUL is a permitted connector-vs-router difference
+- name: routing - a literal NUL answers like an unregistered path
   issue: "64"
-  permit: [malformed-path-connector-400]
   request:
     method: GET
     path: /health%00
   expect:
-    status_by_backend: {go: 404, kotlin: 400}
-    same_as_for:
-      go: *no-such-get
+    status: 404
+    same_as: *no-such-get
 
-- name: routing - invalid UTF-8 is a permitted connector-vs-router difference
+- name: routing - invalid UTF-8 answers like an unregistered path
   issue: "64"
-  permit: [malformed-path-connector-400]
   request:
     method: GET
     path: /health%FF
   expect:
-    status_by_backend: {go: 404, kotlin: 400}
-    same_as_for:
-      go: *no-such-get
+    status: 404
+    same_as: *no-such-get
 
 # #64's second review: %C0%AF is an overlong encoding of "/" - two bytes standing in for one
 # ASCII character, invalid UTF-8 (RFC 3629 forbids overlong forms), and
 # exactly the second shape #64's own ruling comment names.
-- name: routing - an overlong-encoded solidus is a permitted connector-vs-router difference
+- name: routing - an overlong-encoded solidus answers like an unregistered path
   issue: "64"
-  permit: [malformed-path-connector-400]
   request:
     method: GET
     path: /health%C0%AF
   expect:
-    status_by_backend: {go: 404, kotlin: 400}
-    same_as_for:
-      go: *no-such-get
+    status: 404
+    same_as: *no-such-get
 
 # #64's second review: a raw, unencoded non-ASCII byte sequence in the path - not percent-encoded,
 # so it is not RFC 3986 pchar at all, only reachable via raw_target the same
@@ -176,16 +162,14 @@
 # U+00A9, encoded as four bytes on the wire, not this one two-byte character),
 # so go.yaml.in/yaml decodes it to a Go string whose bytes are exactly 0xC3
 # 0xA9 - "é" as raw UTF-8, unescaped, straight in the request line.
-- name: routing - a raw non-ASCII byte sequence in the path is a permitted connector-vs-router difference
+- name: routing - a raw non-ASCII byte sequence in the path answers like an unregistered path
   issue: "64"
-  permit: [malformed-path-connector-400]
   request:
     method: GET
     raw_target: /healthé
   expect:
-    status_by_backend: {go: 404, kotlin: 400}
-    same_as_for:
-      go: *no-such-get
+    status: 404
+    same_as: *no-such-get
 
 # A body on a route that reads none is never read, so the cap never meets it.
 - name: routing - an oversize body on a route that reads none is ignored
@@ -218,6 +202,9 @@
         secure: false
         same_site: Lax
         expires: past
+    rows:
+      - sql: SELECT (SELECT count(*) FROM sessions)::int AS sessions, (SELECT count(*) FROM login_attempts)::int AS attempts
+        rows: [{sessions: 0, attempts: 0}]
 
 # Signed in, too: /me reads no body. Go's spec validator read it anyway,
 # inside its security check, and answered a signed-in /me with 401.

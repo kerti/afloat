@@ -1,32 +1,13 @@
-.PHONY: help setup hooks-install claude-install doctor check gen-goose-migrations test-migrations \
-        db-up db-down db-reset test-migration-runners gen-oapi gen-sqlc gen check-go check-kotlin clean-kotlin conformance \
-        lint-install sync-kotlin-migrations sync-denylist
+.PHONY: help setup hooks-install claude-install doctor check test-migrations \
+        db-up db-down db-reset gen-oapi gen-sqlc gen check-go conformance lint-install
 
 # `make` with no target prints help.
 .DEFAULT_GOAL := help
 
-# The three surfaces `check` gates on, by the file whose existence means the
-# surface has been scaffolded (BOOTSTRAP.md §11 steps 5-7).
-SURFACES := backend/go.mod backend-kotlin/build.gradle.kts frontend/package.json
-
-# Where sync-kotlin-migrations writes. The Kotlin backend carries its
-# migrations inside the jar, so the canonical db/migrations are COPIED here and
-# committed. Generated output - never hand-edited (BOOTSTRAP.md §7, §12).
-KOTLIN_MIGRATIONS := backend-kotlin/src/main/resources/db/migration
-
-# Where gen-goose-migrations writes. Generated, committed, //go:embed-ed by the
-# Go backend once it exists (BOOTSTRAP.md §7) - never hand-edited.
-GOOSE_DIR := backend/internal/migrations
-
-# Where gen-goose-migrations actually writes. Overridden by check, which
-# generates into a scratch directory and compares, so the gate reports drift
-# instead of silently repairing it.
-GOOSE_OUT ?= $(GOOSE_DIR)
-
 # One version for the lint gate, so a local pass and a CI pass mean the same
 # thing. .github/workflows/ci.yml installs exactly this via `make lint-install`;
 # bump it here and CI follows.
-GOLANGCI_VERSION := v2.13.2
+GOLANGCI_VERSION := v2.14.0
 
 # Where check-go writes its coverage profile, relative to backend/. Produced on
 # every run rather than behind a flag: CI uploads the profile from the same job
@@ -44,24 +25,19 @@ help:
 	@echo "  doctor                  report what's installed and what's missing"
 	@echo ""
 	@echo "Database:"
-	@echo "  db-up                   start Postgres (one instance, two databases)"
+	@echo "  db-up                   start Postgres"
 	@echo "  db-down                 stop Postgres, keeping its data"
-	@echo "  db-reset                destroy and recreate both databases from scratch"
+	@echo "  db-reset                destroy and recreate the database from scratch"
 	@echo ""
 	@echo "Workflow:"
-	@echo "  gen                     run every generator (contract, sqlc, goose)"
+	@echo "  gen                     run every generator (contract, sqlc)"
 	@echo "  gen-oapi                regenerate Go server interfaces from contract/openapi.yaml"
-	@echo "  gen-sqlc                regenerate typed queries from db/migrations + backend/queries"
-	@echo "  gen-goose-migrations    regenerate the Go backend's embedded goose migrations"
-	@echo "  sync-kotlin-migrations  copy db/migrations into the Kotlin backend's resources"
-	@echo "  test-migrations         apply db/migrations to a throwaway Postgres and assert"
-	@echo "  test-migration-runners  run Flyway and goose for real and compare the two schemas"
+	@echo "  gen-sqlc                regenerate typed queries from the migrations + backend/queries"
+	@echo "  test-migrations         apply the migrations with goose to a throwaway Postgres and assert"
 	@echo "  check                   pre-push gate: pass/fail per surface"
-	@echo "  check-kotlin            build, lint and test the Kotlin backend"
-	@echo "  clean-kotlin            the same, from a clean build (two Gradle invocations)"
-	@echo "  conformance             boot both backends and run the cross-backend suite"
+	@echo "  check-go                lint and test the Go backend"
+	@echo "  conformance             boot the backend and run the conformance suite against it"
 	@echo "  lint-install            install the pinned golangci-lint (the version CI uses)"
-	@echo "  sync-denylist           copy shared/common_passwords.txt into both backends"
 
 # ---- first run -------------------------------------------------------------
 # Idempotent - safe to re-run, and worth re-running after a pull that touches
@@ -110,7 +86,6 @@ doctor:
 	  v=$$(node --version); want=$$(cat .nvmrc); \
 	  case "$$v" in v$$want.*) echo "$$v";; *) echo "$$v - .nvmrc pins $$want (nvm use)";; esac; \
 	else echo "MISSING (Node $$(cat .nvmrc))"; fi
-	@printf '%-16s' 'java';         /usr/libexec/java_home -v 21 >/dev/null 2>&1 || java -version 2>&1 | grep -q '"21' && echo 'ok (21)' || echo 'MISSING (Temurin 21 via SDKMAN)'
 	@printf '%-16s' 'docker';       command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1 && echo 'ok' || echo 'MISSING (docker compose)'
 	@printf '%-16s' 'golangci-lint'; command -v golangci-lint >/dev/null 2>&1 && echo 'ok' || echo 'MISSING (brew install golangci-lint)'
 	@printf '%-16s' 'jq';           command -v jq     >/dev/null 2>&1 && echo 'ok'                   || echo 'MISSING (Claude Code hooks need it)'
@@ -120,31 +95,8 @@ doctor:
 	@printf '%-16s' 'claude hooks'; [ -x .claude/hooks/session-start.sh ] && echo 'executable'       || echo 'NOT executable - run make claude-install'
 
 # ---- codegen ---------------------------------------------------------------
-# db/migrations/V####__name.sql is canonical and Flyway-native; db/undo/U####__
-# name.sql is the Down source. Neither is consumable by goose as-is, so the
-# script concatenates each pair into the file the Go binary //go:embeds
-# (BOOTSTRAP.md §7). GOOSE_OUT lets check generate somewhere else and compare.
-gen-goose-migrations:
-	@./scripts/gen-goose-migrations.sh $(GOOSE_OUT)
-
-# db/migrations is canonical and already Flyway-native, so unlike the goose
-# files this is a copy rather than a generator. The Kotlin backend needs its
-# migrations INSIDE the jar: a filesystem: location pointing at ../db/migrations
-# works in tests and breaks the moment it runs from a jar or a container.
-# check regenerates into a scratch directory and diffs, so drift is reported
-# rather than silently repaired.
-sync-kotlin-migrations:
-	@./scripts/sync-kotlin-migrations.sh $(KOTLIN_MIGRATIONS)
-
-# shared/common_passwords.txt is owned by neither backend, and neither can read
-# it where it lives: Go's //go:embed cannot reach a parent directory, and the
-# Kotlin backend needs the file inside the jar for the same reason as the
-# migrations above. Both copies are generated and diffed by check.
-sync-denylist:
-	@./scripts/sync-denylist.sh
-
 # The contract leads (BOOTSTRAP.md §6): these read contract/openapi.yaml and
-# db/migrations, never the other way round. Output is committed and never
+# the migrations, never the other way round. Output is committed and never
 # hand-edited; check regenerates and diffs.
 gen-oapi:
 	@cd backend && go tool oapi-codegen -config oapi-codegen.yaml ../contract/openapi.yaml
@@ -154,24 +106,17 @@ gen-sqlc:
 	@cd backend && go tool sqlc generate
 	@echo 'ok backend/internal/db'
 
-gen: gen-oapi gen-sqlc gen-goose-migrations
+gen: gen-oapi gen-sqlc
 
-# Schema behaviour against a real Postgres: defaults, CHECKs, the soft-delete
-# aware indexes, cascade behaviour, and that the undo drops what the migration
-# created. Needs docker; not part of check for that reason.
+# Schema behaviour against a real Postgres, applied through goose: defaults,
+# CHECKs, the soft-delete aware indexes, cascade behaviour, the §7.1 in-place
+# edit hazard, and that Down drops what Up created. Needs docker; not part of
+# check for that reason.
 test-migrations:
 	@./scripts/test-migrations.sh
 
-# Runs the RUNNERS, not the SQL: proves Flyway and goose agree on the schema,
-# which test-migrations cannot catch (a generator that drops a statement, or a
-# runner that disagrees about what is applied). Needs db-up first.
-test-migration-runners:
-	@./scripts/test-migration-runners.sh
-
 # ---- database --------------------------------------------------------------
-# One Postgres instance, two databases (BOOTSTRAP.md §3). The backends live
-# behind the `go` and `kotlin` compose profiles and do not exist yet, so a plain
-# `up` starts Postgres alone.
+# One Postgres instance, one database (BOOTSTRAP.md §3).
 db-up:
 	@docker compose up -d
 	@printf 'waiting for postgres'
@@ -186,13 +131,13 @@ db-down:
 	@echo 'ok postgres stopped (data kept - use db-reset to destroy it)'
 
 # The other half of the in-place migration policy (BOOTSTRAP.md §7.1). Editing
-# V0001 in place leaves Flyway refusing to start and goose silently skipping, so
-# the edit is only safe paired with throwing both databases away. This is that
-# command, and the reason the policy is safe to follow.
+# an applied migration in place leaves goose silently skipping it, so the edit
+# is only safe paired with throwing the database away. This is that command,
+# and the reason the policy is safe to follow.
 db-reset:
 	@docker compose down -v
 	@$(MAKE) --no-print-directory db-up
-	@echo 'ok both databases recreated empty - re-run your migrations'
+	@echo 'ok database recreated empty - re-run your migrations'
 
 # ---- workflow --------------------------------------------------------------
 # Pre-push gate: .claude/hooks/pre-push-gate.sh runs this before every
@@ -224,50 +169,16 @@ check-go:
 	@cd backend && go build ./... && \
 	  go test -race -covermode=atomic -coverprofile=$(GO_COVERAGE) ./...
 
-# Build, lint and test the Kotlin backend. Gradle's own `check` lifecycle task
-# is deliberately the entry point rather than `test`: it already depends on
-# compilation and on every verification task registered in the build, so adding
-# ktlint or detekt later wires itself into this gate with no Makefile change.
-#
-# The wrapper is required, not optional. A build that runs on whatever Gradle
-# happens to be on PATH is not the build CI runs.
-check-kotlin:
-	@if [ ! -x backend-kotlin/gradlew ]; then \
-	  echo 'FAIL backend-kotlin/gradlew is missing or not executable - commit the Gradle wrapper'; \
-	  exit 1; \
-	fi
-	@cd backend-kotlin && ./gradlew --quiet --console=plain check
-
-# A clean Kotlin build, as two Gradle invocations. `clean` declares no ordering
-# against anything, and build/generated/openapi is both its target and an input
-# to the main source set - so `./gradlew clean check` is a race that
-# occasionally compiles the tests against a main output clean has already
-# removed. Deliberately not folded into check-kotlin: `make check` calls that on
-# every push, and recompiling from scratch plus re-running the Testcontainers
-# suite would cost minutes per commit to buy freshness nobody asked for.
-clean-kotlin:
-	@cd backend-kotlin && ./gradlew --quiet --console=plain clean
-	@cd backend-kotlin && ./gradlew --quiet --console=plain check
-
-# Boot both backends from source, against their own databases, and assert they
-# answer identically (issue #28). Needs docker, two builds and two processes,
-# and is deliberately NOT part of check: that gate is the pre-push one and stays
-# fast. check compiles this module and validates the case files; only this
-# target runs the suite against live servers.
+# Boot the backend from source and run the black-box conformance suite against
+# it (issue #28). Needs docker and live servers, and is deliberately NOT part of
+# check: that gate is the pre-push one and stays fast. check compiles this
+# module and validates the case files; only this target runs the suite against
+# live servers.
 conformance:
 	@./scripts/conformance.sh
 
 check:
 	@fail=0; \
-	printf '%-32s' 'goose migrations'; \
-	if ! ls db/migrations/V*.sql >/dev/null 2>&1; then echo '- skipped (no migrations yet)'; \
-	else \
-	  tmp=$$(mktemp -d); \
-	  if ./scripts/gen-goose-migrations.sh "$$tmp" >/dev/null 2>&1 \
-	     && diff -rq -x '*.go' "$$tmp" $(GOOSE_DIR) >/dev/null 2>&1; then echo 'in sync'; \
-	  else echo 'FAIL - stale or hand-edited; run make gen-goose-migrations'; fail=1; fi; \
-	  rm -rf "$$tmp"; \
-	fi; \
 	printf '%-32s' 'generated code'; \
 	if [ ! -e backend/go.mod ]; then echo '- skipped (not scaffolded yet)'; \
 	elif ./scripts/check-generated.sh >/dev/null 2>&1; then echo 'in sync'; \
@@ -276,34 +187,9 @@ check:
 	if [ ! -e backend/go.mod ]; then echo '- skipped (not scaffolded yet)'; \
 	elif $(MAKE) --no-print-directory check-go >/dev/null 2>&1; then echo 'ok'; \
 	else echo 'FAIL - see: make check-go'; fail=1; fi; \
-	printf '%-32s' 'kotlin migration copy'; \
-	if [ ! -e backend-kotlin/build.gradle.kts ]; then echo '- skipped (not scaffolded yet)'; \
-	else \
-	  tmp=$$(mktemp -d); \
-	  if ./scripts/sync-kotlin-migrations.sh "$$tmp" >/dev/null 2>&1 \
-	     && diff -rq "$$tmp" $(KOTLIN_MIGRATIONS) >/dev/null 2>&1; then echo 'in sync'; \
-	  else echo 'FAIL - stale or hand-edited; run make sync-kotlin-migrations'; fail=1; fi; \
-	  rm -rf "$$tmp"; \
-	fi; \
-	printf '%-32s' 'denylist copies'; \
-	if [ ! -e shared/common_passwords.txt ]; then echo '- skipped (no denylist)'; \
-	else \
-	  tmp=$$(mktemp -d); \
-	  if ./scripts/sync-denylist.sh "$$tmp" >/dev/null 2>&1 \
-	     && diff -q "$$tmp/backend/internal/auth/common_passwords.txt" backend/internal/auth/common_passwords.txt >/dev/null 2>&1 \
-	     && { [ ! -e backend-kotlin/build.gradle.kts ] \
-	          || diff -q "$$tmp/backend-kotlin/src/main/resources/common_passwords.txt" backend-kotlin/src/main/resources/common_passwords.txt >/dev/null 2>&1; }; \
-	  then echo 'in sync'; \
-	  else echo 'FAIL - stale or hand-edited; run make sync-denylist'; fail=1; fi; \
-	  rm -rf "$$tmp"; \
-	fi; \
-	printf '%-32s' 'env var parity'; \
-	if ./scripts/check-env-parity.sh >/dev/null 2>&1; then echo 'in sync'; \
-	else echo 'FAIL - see: ./scripts/check-env-parity.sh'; fail=1; fi; \
-	printf '%-32s' 'backend-kotlin/build.gradle.kts'; \
-	if [ ! -e backend-kotlin/build.gradle.kts ]; then echo '- skipped (not scaffolded yet)'; \
-	elif $(MAKE) --no-print-directory check-kotlin >/dev/null 2>&1; then echo 'ok'; \
-	else echo 'FAIL - see: make check-kotlin'; fail=1; fi; \
+	printf '%-32s' 'env var docs'; \
+	if ./scripts/check-env-docs.sh >/dev/null 2>&1; then echo 'in sync'; \
+	else echo 'FAIL - see: ./scripts/check-env-docs.sh'; fail=1; fi; \
 	printf '%-32s' 'conformance harness'; \
 	if [ ! -e contract/conformance/go.mod ]; then echo '- skipped (not scaffolded yet)'; \
 	elif (cd contract/conformance && go build ./... && go vet ./... && go test -short ./...) >/dev/null 2>&1; then echo 'ok'; \

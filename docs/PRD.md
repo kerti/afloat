@@ -1,6 +1,6 @@
 # Afloat — Product Requirements
 
-> **Status:** **Draft 1** — 13 September 2026. Implementation-agnostic; applies to both backends.
+> **Status:** **Draft 1** — 13 September 2026. Implementation-agnostic.
 >
 > **Companions:** [`BOOTSTRAP.md`](BOOTSTRAP.md) — the ratified scaffold sheet: naming, stack, auth,
 > schema conventions, migrations, contract tooling. Read it before writing code.
@@ -176,8 +176,8 @@ number from thin air produces confident nonsense downstream. Onboarding must the
 - **S12.** On the first day of a new Budget Period, the Household's Budget, Categories and
   allocations carry forward from the previous Period unchanged, unless a recurring default is set.
 - **S13.** Rollover is silent, and **lazily materialised on first read of a Period** — never a
-  scheduled job. That keeps a scheduler out of both backends, avoids leader election if more than one
-  instance ever runs, and keeps the parity matrix purely HTTP instead of growing a hand-maintained
+  scheduled job. That keeps a scheduler out of the backend, avoids leader election if more than one
+  instance ever runs, and keeps the conformance suite purely HTTP instead of growing a hand-maintained
   background-jobs section. **Q-09 resolved (2026-09-13).**
 
 ## 6. Expense capture
@@ -241,30 +241,27 @@ The first screen answers the core question with no navigation.
 - **N4.** Soft-delete everywhere. Hard delete is not exposed.
 - **N5.** No stored aggregates or derived snapshots in MVP. Every figure recomputes on read.
   **[ASSUMED]** — acceptable at single-Household data volumes; revisit if it stops being true.
-- **N5a.** **Trajectory is computed server-side, in both backends.** The client formats and floors for
-  display but derives nothing. One source of truth, real domain logic in the Kotlin track rather than
-  a CRUD shell, and a parity gate that verifies something. `contract/testdata/trajectory.json` carries
-  the `CONTEXT.md` reference rows as a fixture both backends' unit tests read.
+- **N5a.** **Trajectory is computed server-side.** The client formats and floors for display but
+  derives nothing. One source of truth. `contract/testdata/trajectory.json` carries the `CONTEXT.md`
+  reference rows as a fixture the backend's unit tests read.
 
 ### 8.2 Contract
 
-- **N6.** `contract/openapi.yaml` is the single source of truth; both backends satisfy it and the
+- **N6.** `contract/openapi.yaml` is the single source of truth; the backend satisfies it and the
   frontend generates its types from it.
-- **N7.** A single shared error envelope across both backends, following the Balances ADR-0027 shape.
+- **N7.** A single error envelope, following the Balances ADR-0027 shape.
   It carries **codes, not messages**; the frontend owns every user-facing string.
-- **N7a.** The contract is **hand-written and authoritative**; the Go, Kotlin and TypeScript artefacts
-  are generated from it and CI checks they are in sync. This is contract-first, unlike Balances, which
+- **N7a.** The contract is **hand-written and authoritative**; the Go and TypeScript artefacts are
+  generated from it and CI checks they are in sync. This is contract-first, unlike Balances, which
   is code-first — that tooling cannot be lifted across.
-- **N8.** `db/migrations/` is canonical and Flyway-native, and the source from which the Go side's
-  goose files are **generated and committed**. The Decisions draft's plan of one directory consumed
-  directly by both tools does not work; see `BOOTSTRAP.md` §7.
-- **N8a.** One Postgres instance, **two databases**. Never one shared schema — two migration ledgers
-  over one schema is a corruption path.
+- **N8.** `backend/internal/migrations/` is canonical: hand-written goose files, embedded in the binary
+  and applied on boot; see `BOOTSTRAP.md` §7.
+- **N8a.** One Postgres instance, one database, `afloat`.
 
 ### 8.3 Offline readiness
 
 The offline write queue is **out of MVP**. The contract that makes it cheap to add is **in MVP**,
-because retrofitting it is a cross-backend contract change plus a migration, and adding it later on
+because retrofitting it is a contract change plus a migration, and adding it later on
 top of these four rules is a frontend-only change:
 
 - **N9.** Client-generated UUIDv7 Expense ids (E9).
@@ -357,6 +354,7 @@ two-bucket split. Multi-currency UI. An "Underwater" fourth State for an exhaust
 
 | Date | Change |
 |---|---|
+| 2026-11-19 | The Kotlin learning track is dropped; Afloat is Go-only. The Kotlin backend, the cross-backend parity requirement and the Flyway migration format are removed: migrations are hand-written goose files in `backend/internal/migrations/`, the database is `afloat`, and the conformance harness tests the one backend against its cases. N5a, N6–N8a updated to match. |
 | 2026-09-26 | Trajectory fixture and Go calculation (issue #73, BOOTSTRAP.md §11 step 8 part A). Rulings R1–R4: R1, allowance figures (Baseline Daily Budget, Today's Allowance, Left to Spend Today, Forward Daily Rate) floor at 4dp on the server, toward −∞; R2, Trajectory Variance and Buffer Days go on the wire half-up (half away from zero) at 4dp, and State is decided from exact, unrounded values with no division; R3, the warm-up floor and the two State thresholds are arguments to the calculation, carried as fixture defaults with per-row overrides — Q-05 stays open; R4, the Q-04 display cap and the Q-06 fully-committed presentation stay out of scope, while the mid-period Budget change's clamp *arithmetic* is in scope. |
 | 2026-09-13 | Draft 2 — technical-gate session. Resolved Q-01, Q-02, Q-03, Q-07, Q-09, Q-11, Q-12. Added §4.1 Planned and committed; N5a server-side trajectory; N7a contract-first; N8/N8a migration scheme and two databases; N12a i18n from day one. `BOOTSTRAP.md` added as the scaffold sheet. |
 | 2026-09-13 | Draft 1. Synthesised from the two scratch drafts and a grill session. Decisions taken: Household-first tenancy mirroring Balances; two-bucket Commitment split in MVP; configurable `period_start_day`; `expected_monthly_income` as the sole inbound integration; "Taking on water" replacing "Sinking"; no mascot; hero figure reframed from *remaining daily allowance* to *left to spend today*; variance settled-through-yesterday; offline queue deferred but its contract locked. |

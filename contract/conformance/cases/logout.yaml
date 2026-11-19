@@ -39,6 +39,9 @@
     body_empty: true
     cookies:
       afloat_session: *cleared-cookie
+    rows:
+      - sql: SELECT (SELECT count(*) FROM sessions)::int AS sessions, (SELECT count(*) FROM login_attempts)::int AS attempts
+        rows: [{sessions: 0, attempts: 0}]
 
 - name: logout with an unknown token is still a success
   request:
@@ -51,6 +54,9 @@
     body_empty: true
     cookies:
       afloat_session: *cleared-cookie
+    rows:
+      - sql: SELECT (SELECT count(*) FROM sessions)::int AS sessions, (SELECT count(*) FROM login_attempts)::int AS attempts
+        rows: [{sessions: 0, attempts: 0}]
 
 # The second login's cookie replaces the first in the jar; the first session
 # lives on, as another device's would. Logout ends only the one presented.

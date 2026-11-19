@@ -144,7 +144,7 @@ func TestMalformedBodyIsTheEnvelope(t *testing.T) {
 	}
 }
 
-// assertEnvelope checks the one shape both backends emit: application/json,
+// assertEnvelope checks the one error shape the API emits: application/json,
 // a `code`, and no `message` anywhere.
 func assertEnvelope(t *testing.T, rec *httptest.ResponseRecorder, wantCode string) {
 	t.Helper()
@@ -187,7 +187,7 @@ type panicQuerier struct{ db.Querier }
 func (panicQuerier) Ping(context.Context) (int32, error) { panic("boom") }
 
 // The full pinned set (#26), asserted on a representative response. Not
-// Strict-Transport-Security, in either backend: whatever terminates TLS owns
+// Strict-Transport-Security: whatever terminates TLS owns
 // it (BOOTSTRAP.md §5.2).
 func TestSecurityHeadersOnHealth(t *testing.T) {
 	srv := newTestServer()
@@ -209,13 +209,13 @@ func TestSecurityHeadersOnHealth(t *testing.T) {
 		}
 	}
 	if got := rec.Header().Get("Strict-Transport-Security"); got != "" {
-		t.Errorf("Strict-Transport-Security = %q, want unset — the TLS terminator owns HSTS, not either backend", got)
+		t.Errorf("Strict-Transport-Security = %q, want unset — the TLS terminator owns HSTS, not the backend", got)
 	}
 }
 
 var mintedRequestID = regexp.MustCompile(`^[0-9a-f]{16}$`)
 
-// The inbound rule Kotlin's RequestLogFilter applies, byte for byte: keep
+// The inbound rule (BOOTSTRAP.md §5.2): keep
 // ASCII letters, digits, '-' and '_', cut to 64, mint if nothing survives.
 func TestRequestIDFromInbound(t *testing.T) {
 	cases := []struct {

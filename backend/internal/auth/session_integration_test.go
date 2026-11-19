@@ -145,10 +145,8 @@ func TestSessionCookieAttributes(t *testing.T) {
 }
 
 // Max-Age is the attribute a browser prefers over Expires, so it is the one
-// that decides how long a session survives on a client with a skewed clock —
-// and it is the one the Kotlin backend must spell identically
-// (SessionCookieFactory). Nothing asserted its VALUE until this test, so the
-// two backends were free to round it differently.
+// that decides how long a session survives on a client with a skewed clock.
+// This pins its VALUE, so a rounding change cannot shorten a session unseen.
 //
 // The clock is fixed and in the past: computed against time.Now() rather than
 // h.now(), the whole TTL would already have elapsed and this would read 1.
@@ -171,11 +169,10 @@ func TestSessionCookieMaxAgeIsTheFullTTL(t *testing.T) {
 	}
 }
 
-// The cleared cookie is the one both backends must agree on most literally: a
-// browser that does not delete its copy keeps presenting a token the server
-// can never honour. Go renders MaxAge < 0 as `Max-Age=0`, which is what
-// Spring's ResponseCookie.maxAge(0) emits (LogoutSpec asserts the same value),
-// and Spring adds the epoch as Expires beside it (#32 item 2).
+// The cleared cookie has to be spelled exactly: a browser that does not delete
+// its copy keeps presenting a token the server can never honour. Go renders
+// MaxAge < 0 as `Max-Age=0`, and the epoch rides beside it as Expires (#32
+// item 2).
 func TestClearedSessionCookieDeletesTheClientsCopy(t *testing.T) {
 	h := newHarness(t, time.Now)
 
@@ -191,7 +188,7 @@ func TestClearedSessionCookieDeletesTheClientsCopy(t *testing.T) {
 		t.Errorf("Set-Cookie = %q, want it to carry Max-Age=0", got)
 	}
 	if got := cookie.String(); !strings.Contains(got, "; Expires=Thu, 01 Jan 1970 00:00:00 GMT;") {
-		t.Errorf("Set-Cookie = %q, want it to carry the epoch as Expires, as Spring's does", got)
+		t.Errorf("Set-Cookie = %q, want it to carry the epoch as Expires", got)
 	}
 }
 

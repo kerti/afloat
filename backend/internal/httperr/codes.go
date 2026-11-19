@@ -1,4 +1,4 @@
-// Package httperr writes the one error envelope both backends emit:
+// Package httperr writes the one error envelope the API emits:
 // `{"code": "<CODE>", "args": {...}}`, identical in shape to Balances ADR-0027
 // and declared in contract/openapi.yaml.
 //
@@ -14,7 +14,7 @@ type Code string
 
 const (
 	// CodeValidation carries {field, rule} in args and reports the FIRST
-	// failing field only, matching the contract and the Kotlin side.
+	// failing field only, matching the contract.
 	CodeValidation Code = "VALIDATION"
 
 	// CodeInvalidJSONBody is a body that did not decode at all.

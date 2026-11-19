@@ -1,18 +1,15 @@
 # Afloat — Architecture Decision Records
 
-One file per decision, split by backend track: [`go/`](go/) and [`kotlin/`](kotlin/). A decision that
-both backends must agree on is **not** an ADR here — it belongs in [`../BOOTSTRAP.md`](../BOOTSTRAP.md),
-which is the cross-cutting scaffold sheet. Only put an ADR in `go/` or `kotlin/` when it's a choice
-specific to that backend's implementation (a library, a framework idiom, an internal package shape).
-
-The `go/` track opens at step 5; the `kotlin/` track opens at step 6.
+One file per decision, under [`go/`](go/). A decision that spans the whole scaffold is **not** an ADR
+here — it belongs in [`../BOOTSTRAP.md`](../BOOTSTRAP.md), the scaffold sheet. Only put an ADR in
+`go/` when it's a choice specific to the backend's implementation (a library, a framework idiom, an
+internal package shape).
 
 ## How an ADR changes
 
 Adopted from the sibling Uruni project's ADR convention (`docs/ADR/README.md` there):
 
-**Numbers are permanent within their track** — never reused, never renumbered. `go/0001-...` and
-`kotlin/0001-...` are independent sequences; a number in one track says nothing about the other.
+**Numbers are permanent** — never reused, never renumbered.
 
 **Text depends on the tag:**
 
@@ -48,9 +45,3 @@ change log.
 | [0002](go/0002-pgx-and-sqlc-for-typed-postgres-access.md) | pgx and sqlc for typed Postgres access | implemented |
 | [0003](go/0003-config-logging-and-validation.md) | Config, logging and validation | implemented |
 | [0004](go/0004-testing-strategy.md) | Testing strategy | implemented |
-
-### `kotlin/`
-
-| # | Decision | Stage |
-|---|---|---|
-| [0001](kotlin/0001-spring-data-jpa-conventions.md) | Spring Data JPA conventions | draft |

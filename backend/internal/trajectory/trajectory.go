@@ -199,7 +199,7 @@ func floorAt4dp(r *big.Rat) decimal.Decimal {
 }
 
 // halfUpAt4dp rounds r to 4 decimal places, half away from zero (ruling R2),
-// matching shopspring's own Round and Kotlin's RoundingMode.HALF_UP. It
+// matching shopspring's own Round. It
 // covers Trajectory Variance and Buffer Days.
 func halfUpAt4dp(r *big.Rat) decimal.Decimal {
 	scaled := new(big.Rat).Mul(r, new(big.Rat).SetInt(scale4))

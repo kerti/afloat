@@ -1,17 +1,14 @@
 # AUTH_LOCAL_ENABLED=false (#24): the local login route answers exactly like a
 # path that was never registered, on every method, so a prober cannot tell it
-# exists. Run against the local-disabled pair scripts/conformance.sh boots.
+# exists. Run against the local-disabled server scripts/conformance.sh boots.
 #
-# What "exactly like" means is a relation, not bytes: each backend keeps its
-# own unregistered-path 404 (the `unmatched-path-404` entry in
-# permitted-differences.yaml), so the body and Content-Type are pinned by
-# `same_as` against that backend's own answer for /no-such-route rather than by
-# a byte assertion one of them would fail.
+# What "exactly like" means is a relation, not bytes: the body and
+# Content-Type are pinned by `same_as` against the server's own answer for
+# /no-such-route, so the frontend acts on a non-envelope 404's status alone.
 
 - name: local login disabled - POST is an unregistered-path 404
   issue: "24"
   profile: local-disabled
-  permit: [unmatched-path-404]
   request:
     method: POST
     path: /auth/local/login
@@ -26,6 +23,9 @@
       headers:
         Content-Type: application/json
       body: '{"email":"nobody@example.com","password":"correct horse battery staple"}'
+    rows:
+      - sql: SELECT (SELECT count(*) FROM sessions)::int AS sessions, (SELECT count(*) FROM login_attempts)::int AS attempts
+        rows: [{sessions: 0, attempts: 0}]
 
 # The 405 case. A gate keyed on POST leaves the router to answer GET with 405
 # Method Not Allowed, which says the route exists - the disclosure the 404 is
@@ -33,7 +33,6 @@
 - name: local login disabled - GET is an unregistered-path 404, not a 405
   issue: "24"
   profile: local-disabled
-  permit: [unmatched-path-404]
   request:
     method: GET
     path: /auth/local/login
@@ -60,15 +59,14 @@
       google: true
 
 # #56 made a percent-encoded path its decoded route, so an encoded spelling of
-# the login path IS the login path, and the gate must hold on every spelling.
-# Kotlin's gate compared the still-encoded request URI while Spring routed on
-# the decoded one: with local login off, POST /api/auth/local/%6Cogin signed a
-# user in. The seeded password is correct, so any answer but the 404 means the
+# the login path IS the login path, and the gate must hold on every spelling:
+# a gate that compared the still-encoded request URI while the router used the
+# decoded one would let POST /api/auth/local/%6Cogin sign a user in with local
+# login off. The seeded password is correct, so any answer but the 404 means the
 # gate did not hold; the rows prove no session was written.
 - name: local login disabled - an encoded spelling of the path is gated too
   issue: "56"
   profile: local-disabled
-  permit: [unmatched-path-404]
   request:
     method: POST
     path: /auth/local/%6Cogin
@@ -90,7 +88,6 @@
 - name: local login disabled - an encoded letter anywhere in the path is gated
   issue: "56"
   profile: local-disabled
-  permit: [unmatched-path-404]
   request:
     method: POST
     path: /auth/local/l%6Fgin

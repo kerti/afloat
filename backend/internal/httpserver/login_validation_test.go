@@ -32,8 +32,7 @@ import (
 // handler, which is exactly the gap #18 names in login_integration_test.go:36
 // (decode, bind and validation all sit upstream of that call).
 // additionalProperties: false is not here: an unknown property is an
-// undecodable body, not a constraint (the test below). Kotlin's LoginSpec
-// drives the same bodies ("answers each body exactly as Go does").
+// undecodable body, not a constraint (the test below).
 //
 // fakeQuerier is enough for every case here: a request that fails validation
 // never reaches the handler, so nothing calls the database at all.
@@ -156,10 +155,9 @@ func TestLoginRequestValidation(t *testing.T) {
 
 // A body the JSON decoder can parse but that is not an instance of the
 // declared shape is not a field failing a constraint: it is the same "did not
-// decode as what the contract declares" bucket as malformed JSON, and the
-// bucket Kotlin's Jackson decode puts every one of these in (LoginSpec). It
-// wins over a constraint failure elsewhere in the body, because in Kotlin the
-// decode fails before Bean Validation ever runs.
+// decode as what the contract declares" bucket as malformed JSON. It wins over
+// a constraint failure elsewhere in the body: a body that is not the declared
+// shape has no fields to fail a constraint.
 func TestLoginRequestValidationUndecodableBodyIsInvalidJSONBody(t *testing.T) {
 	srv := newTestServer()
 
@@ -171,7 +169,6 @@ func TestLoginRequestValidationUndecodableBodyIsInvalidJSONBody(t *testing.T) {
 	}{
 		{name: "empty body", body: ``},
 		{name: "only whitespace", body: " \n\t"},
-		// Jackson reads null, and Spring then refuses a required body that is null.
 		{name: "root is null", body: `null`},
 		{name: "root is not an object", body: `["not","an","object"]`},
 		{name: "field of the wrong type", body: `{"email":5,"password":"a valid password"}`},
@@ -182,7 +179,7 @@ func TestLoginRequestValidationUndecodableBodyIsInvalidJSONBody(t *testing.T) {
 		{name: "null beside an absent field", body: `{"password":null}`},
 		{name: "boolean where a string belongs", body: `{"email":"a@example.com","password":true}`},
 		// kin-openapi validates only the last value; the generated decode
-		// (requestErrorHandler) and Jackson type-check every one.
+		// (requestErrorHandler) type-checks every one.
 		{name: "duplicate key, the earlier of the wrong type", body: `{"email":"a@example.com","password":5,"password":"a valid password"}`},
 		{name: "malformed JSON", body: `{"email": `},
 		{name: "data after the JSON value", body: `{"email":"a@example.com","password":"a valid password"} x`},
@@ -198,11 +195,10 @@ func TestLoginRequestValidationUndecodableBodyIsInvalidJSONBody(t *testing.T) {
 		{name: "not UTF-8, declared as Latin-1", body: `{"email":"a@example.com","password":"a valid ` + "\xff" + `password"}`, contentType: "application/json; charset=ISO-8859-1"},
 		{name: "not declared as JSON", body: `{"email":"a@example.com","password":"a valid password"}`, contentType: "text/plain"},
 		{name: "not declared at all", body: `{"email":"a@example.com","password":"a valid password"}`, noContentType: true},
-		// Only ASCII letters fold: U+0130 lowercases to "i" in Unicode, and
-		// Spring refuses it as a token.
+		// Only ASCII letters fold: U+0130 lowercases to "i" in Unicode, but a
+		// token is ASCII.
 		{name: "declared with a non-ASCII letter", body: `{"email":"a@example.com","password":"a valid password"}`, contentType: "appl\u0130cation/json"},
-		// Spring's JSON converter reads any +json type; the contract declares
-		// application/json alone.
+		// The contract declares application/json alone, not any +json type.
 		{name: "declared as another JSON type", body: `{"email":"a@example.com","password":"a valid password"}`, contentType: "application/vnd.api+json"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -227,9 +223,8 @@ func TestLoginRequestValidationUndecodableBodyIsInvalidJSONBody(t *testing.T) {
 
 // A media type is case-insensitive and may have whitespace around it (RFC 9110
 // §8.3.1), and a body is UTF-8 whatever charset is claimed, even one no
-// decoder knows. Every other parameter is ignored, even one Spring could not
-// parse: each of these is JSON, read and validated, as Kotlin reads it
-// (LoginSpec "reads every spelling of the JSON media type as Go does").
+// decoder knows. Every other parameter is ignored, even an unparseable one:
+// each of these is JSON, read and validated.
 func TestLoginReadsEverySpellingOfTheJSONMediaType(t *testing.T) {
 	srv := newTestServer()
 
@@ -259,8 +254,8 @@ func TestLoginReadsEverySpellingOfTheJSONMediaType(t *testing.T) {
 	}
 }
 
-// utf16LE encodes an ASCII string as UTF-16LE, which Jackson would detect
-// and decode if Kotlin let it.
+// utf16LE encodes an ASCII string as UTF-16LE, which a lenient decoder would
+// detect and decode.
 func utf16LE(ascii string) string {
 	var b strings.Builder
 	for i := range len(ascii) {
@@ -337,8 +332,7 @@ func TestWriteOpenAPIValidationErrorUnreachedPaths(t *testing.T) {
 			wantRule:   "max",
 		},
 		{
-			// Kotlin's field for a date-time is an OffsetDateTime, which a bad
-			// value fails to decode into.
+			// A bad date-time is a value of the wrong type, not a constraint.
 			name:       "format other than email",
 			err:        &openapi3filter.RequestError{RequestBody: &openapi3.RequestBody{}, Err: dateTimeFormatError(t)},
 			wantStatus: http.StatusBadRequest,
@@ -393,8 +387,8 @@ func dateTimeFormatError(t *testing.T) error {
 	return err
 }
 
-// `format: email` answers every address in the shared fixture exactly as
-// Kotlin's TrimmedEmailValidator does (TrimmedEmailValidatorSpec).
+// `format: email` answers every address in contract/testdata/email.json as the
+// fixture says.
 func TestEmailFormatMatchesTheSharedFixture(t *testing.T) {
 	raw, err := os.ReadFile("../../../contract/testdata/email.json")
 	if err != nil {
@@ -489,8 +483,7 @@ func TestLoginDoesNotHashAnOversizePassword(t *testing.T) {
 
 // maxLength counts characters as JSON Schema does, one per code point, not one
 // per UTF-16 unit: kin-openapi's loop counts runes, whatever its comment says,
-// and Kotlin's @Size is re-bound to count the same way (LoginSpec "rejects an
-// over-long email or password"). An upgrade that starts counting UTF-16 units
+// and that is the rule (BOOTSTRAP.md §5.1). An upgrade that starts counting UTF-16 units
 // fails the first case.
 func TestLoginCountsPasswordLengthInCodePoints(t *testing.T) {
 	const emoji = "\U0001F600" // two UTF-16 units, four UTF-8 bytes
@@ -511,8 +504,7 @@ func TestLoginCountsPasswordLengthInCodePoints(t *testing.T) {
 }
 
 // Of a duplicate key, the last value is the one read: an earlier value that is
-// not an address does not stop the login. Kotlin's LoginSpec "reads the last
-// value of a duplicate key, as Go does" logs in with the same shape of body.
+// not an address does not stop the login.
 func TestLoginReadsTheLastOfADuplicateKey(t *testing.T) {
 	rec, called := postLoginToSpy(`{"email":"not-an-email","password":"a valid password","email":"a@example.com"}`)
 	if !called {
@@ -521,8 +513,7 @@ func TestLoginReadsTheLastOfADuplicateKey(t *testing.T) {
 }
 
 // A body declared as Latin-1 is still read as UTF-8, so 4096 "é" are 4096
-// characters, not the 8192 a Latin-1 reading makes of their bytes (Kotlin's
-// Utf8CharsetFilter; LoginSpec "rejects an over-long email or password").
+// characters, not the 8192 a Latin-1 reading makes of their bytes.
 func TestLoginReadsABodyDeclaredLatin1AsUTF8(t *testing.T) {
 	rec, called := postLoginToSpyAs("application/json; charset=ISO-8859-1",
 		`{"email":"a@example.com","password":"`+strings.Repeat("é", 4096)+`"}`)

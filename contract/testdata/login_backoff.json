@@ -1,15 +1,15 @@
 {
   "_comment": [
-    "The login backoff both backends must implement alike (BOOTSTRAP.md §5.1, issue #16).",
-    "`parameters` are the §12 defaults, LOGIN_FIRST_BACKOFF and LOGIN_MAX_BACKOFF; each backend's config",
-    "test holds its own defaults to them, so a default that drifts fails there.",
+    "The login backoff as pinned (BOOTSTRAP.md §5.1, issue #16).",
+    "`parameters` are the §12 defaults, LOGIN_FIRST_BACKOFF and LOGIN_MAX_BACKOFF; the config test holds",
+    "the defaults to them, so a default that drifts fails there.",
     "`curve`: the window after the nth consecutive failure on one key, in seconds. Rows ascend but need not be",
     "adjacent: each suite drives the query up to each row's count. The rows past 40 hold the cap where an unclamped",
     "doubling overflows interval (failure 45 at 1s), which stopped the key from ever being throttled again.",
     "`keys`: the keys one failed login writes. `ip` is the client address as its connection carries it, in",
-    "canonical form; each suite presents it the way its own server would (Go's RemoteAddr host:port, Tomcat's",
-    "expanded IPv6) and expects this spelling back.",
-    "Both suites read this file; neither keeps a copy of the numbers."
+    "canonical form; the suite presents it the way the server would (Go's RemoteAddr host:port) and expects",
+    "this spelling back.",
+    "The suite reads this file and keeps no copy of the numbers."
   ],
   "parameters": {
     "first_backoff": "1s",

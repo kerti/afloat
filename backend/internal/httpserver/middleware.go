@@ -87,14 +87,13 @@ func disabledLocalLogin404(enabled bool) func(http.Handler) http.Handler {
 
 // routeOnDecodedPath makes chi route on the decoded path. chi prefers
 // r.URL.RawPath whenever the URL parser kept one, which it does for any
-// percent-encoding other than its own - so /api/auth/local/%6Cogin was a 404
-// here and the login route on Kotlin, though RFC 3986 §6.2.2.2 makes %6C and l
-// the same resource (#56). Clearing RawPath on a copy of the request leaves
+// percent-encoding other than its own - so /api/auth/local/%6Cogin was a 404,
+// though RFC 3986 §6.2.2.2 makes %6C and l the same resource (#56). Clearing RawPath on a copy of the request leaves
 // chi only the decoded Path.
 //
 // Except for an encoded slash: decoded, %2F would become a separator and
-// /api/auth%2Flocal/login would reach login. Spring's firewall refuses that
-// path, and so does chi, which routes it raw and finds nothing.
+// /api/auth%2Flocal/login would reach login. chi routes it raw instead and
+// finds nothing.
 func routeOnDecodedPath(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.RawPath == "" || strings.Contains(strings.ToLower(r.URL.RawPath), "%2f") {
@@ -136,9 +135,8 @@ func maxBodyBytes(n int64) func(http.Handler) http.Handler {
 // rest: status and every header GET sets are unchanged. On a real server,
 // net/http itself then omits Content-Length from a HEAD answer where GET's
 // carries one (chunked instead, since the handler never told it a length up
-// front) - a difference RFC 9110 §9.1 explicitly allows, and Content-Length
-// is already a global permitted difference (permitted-differences.yaml),
-// framing rather than content. Not something to chase into matching: the
+// front) - a difference RFC 9110 §9.1 explicitly allows: framing rather
+// than content. Not something to chase into matching: the
 // point is the same status and the same declared headers, not identical
 // bytes on the wire.
 //
@@ -208,8 +206,7 @@ type requestIDKey struct{}
 // with nothing in front, and it lands in every log line — and mints ids of
 // the form host/prefix-000001, which leak the hostname and count requests.
 //
-// Matches Kotlin's RequestLogFilter byte for byte (BOOTSTRAP.md §5.2, #26):
-// an inbound id keeps only ASCII letters, digits, '-' and '_', is then cut to
+// The rule (BOOTSTRAP.md §5.2, #26): an inbound id keeps only ASCII letters, digits, '-' and '_', is then cut to
 // 64 bytes, and is minted afresh if nothing survives. A minted id is 8 random
 // bytes as 16 lowercase hex characters.
 func requestID(next http.Handler) http.Handler {
@@ -245,11 +242,11 @@ func requestIDFrom(ctx context.Context) string {
 	return id
 }
 
-// securityHeaders writes the fixed set BOOTSTRAP.md §5.2 pins, matching what
-// Kotlin sends via Spring Security's defaults (issue #26). The values never
+// securityHeaders writes the fixed set BOOTSTRAP.md §5.2 pins (issue #26).
+// The values never
 // depend on the request, so every response carries the same six.
 //
-// Strict-Transport-Security is not among them, in either backend: HSTS is
+// Strict-Transport-Security is not among them: HSTS is
 // policy about the operator's domain, and whatever terminates TLS owns it.
 func securityHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

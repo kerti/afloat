@@ -58,7 +58,7 @@ func Write(w http.ResponseWriter, status int, code Code, args map[string]any) {
 
 // WriteValidation maps a validator failure to VALIDATION with {field, rule}.
 // Only the first failure is reported: the envelope stays flat, and a form that
-// fixes one field at a time is the behaviour both backends must share.
+// fixes one field at a time is the behaviour the frontend is built for.
 func WriteValidation(w http.ResponseWriter, err error) {
 	// errors.As, not a type assertion: a handler that wraps the failure with
 	// context would otherwise fall through to a bare VALIDATION with no field

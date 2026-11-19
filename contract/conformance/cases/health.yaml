@@ -1,6 +1,6 @@
 # GET /api/health - the first case, and the one that proves the harness works
 # rather than proving anything about the product. Unauthenticated, no request
-# body, no persisted state, identical answer from both backends: if this cannot
+# body, no persisted state: if this cannot
 # be made to pass, nothing harder is worth writing yet.
 #
 # `version` is asserted as `dev` because that is the documented default of the

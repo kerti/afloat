@@ -91,43 +91,6 @@ profile.cov
 # /vendor/
 
 # ---------------------------------------------------------------------------
-# Java / Kotlin backend
-# ---------------------------------------------------------------------------
-*.class
-*.jar
-*.war
-*.ear
-*.nar
-*.zip
-*.tar.gz
-hs_err_pid*
-replay_pid*
-
-# Build output
-/build/
-/out/
-/target/
-**/target/
-**/build/
-!src/**/build/
-
-# Keep Gradle wrapper jar tracked
-!gradle/wrapper/gradle-wrapper.jar
-
-# Gradle
-.gradle/
-**/.gradle/
-/out/
-*.hprof
-
-# Maven
-.mvn/timing.properties
-.mvn/wrapper/maven-wrapper.jar
-
-# Kotlin
-.kotlin/
-
-# ---------------------------------------------------------------------------
 # JavaScript / TypeScript (React frontend)
 # ---------------------------------------------------------------------------
 node_modules/

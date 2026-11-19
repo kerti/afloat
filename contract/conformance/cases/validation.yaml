@@ -3,10 +3,9 @@
 # INVALID_JSON_BODY with no args, whatever else is wrong with it; otherwise the
 # first failure by (field, rule) order is VALIDATION with {field, rule}.
 #
-# A sample, not the whole table: each backend's own suite carries every row
-# (Go login_validation_test.go, Kotlin LoginSpec). What the harness adds is the
-# real server in front of each - Tomcat and net/http, not MockMvc and
-# httptest - and the rows. No refusal here burns backoff: a body that never
+# A sample, not the whole table: the backend's own suite carries every row
+# (login_validation_test.go). What the harness adds is the real server in
+# front - net/http, not httptest - and the rows. No refusal here burns backoff: a body that never
 # named a credential is not a failed login.
 
 - name: validation - email absent is email/required

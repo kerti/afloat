@@ -1,16 +1,15 @@
--- The rows every case starts from, on both backends. The runner truncates
+-- The rows every case starts from. The runner truncates
 -- every Afloat table and applies this file before each case, so no case
 -- depends on what ran before it.
 --
 -- Fixed UUIDv7s rather than generated ones, because /me echoes them and a case
 -- asserts its body by value. Column defaults are left to the schema - a
 -- Household's reporting_currency, a User's locale - so /me also pins that
--- both backends read the defaults the same way.
+-- the backend reads the defaults as the schema sets them.
 --
 -- Every seeded password is `conformance-correct-horse`. The hash is Argon2id
--- at the §5.1 cost (m=19456, t=2, p=1), minted once by the Go backend's
--- HashPassword. Both backends verify a PHC string by the parameters inside
--- it, so one hash serves both.
+-- at the §5.1 cost (m=19456, t=2, p=1), minted once by the backend's
+-- HashPassword, which verifies a PHC string by the parameters inside it.
 
 INSERT INTO households (id, display_name) VALUES
     ('0192f0a0-0000-7000-8000-000000000001', 'Conformance Household');

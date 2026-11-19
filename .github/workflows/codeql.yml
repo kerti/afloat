@@ -1,4 +1,4 @@
-# Static analysis for both backends. Separate from ci.yml on purpose: ci.yml's
+# Static analysis for the Go backend. Separate from ci.yml on purpose: ci.yml's
 # `check` job mirrors `make check` step for step and nothing else belongs in it.
 #
 # Every action is pinned to a commit SHA; the trailing `# vX.Y.Z` comment is
@@ -25,58 +25,30 @@ concurrency:
 
 jobs:
   analyze:
-    name: Analyze (${{ matrix.language }})
+    name: Analyze (go)
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - language: go
-          - language: java-kotlin
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      # Both toolchains are set up conditionally rather than unconditionally:
-      # each matrix job builds exactly one surface, and a JDK installed for the
-      # Go job is a minute of nothing.
-      - if: matrix.language == 'go'
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: backend/go.mod
           cache-dependency-path: backend/go.sum
-
-      - if: matrix.language == 'java-kotlin'
-        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
-        with:
-          distribution: temurin
-          java-version: '21'
-
-      - if: matrix.language == 'java-kotlin'
-        uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
-        with:
-          cache-read-only: ${{ github.ref != 'refs/heads/main' }}
 
       # All three codeql-action entry points resolve to the same commit - one
       # repo, three actions.
       - uses: github/codeql-action/init@1c5b675653bb5c22dbe9b12b556ec555138e09fd # v4.38.1
         with:
-          languages: ${{ matrix.language }}
+          languages: go
           # Manual, not autobuild: autobuild looks for a build file at the
-          # repository root and finds neither backend, because both live one
+          # repository root and finds no backend, because it lives one
           # directory down. It would report "no build detected" rather than
           # fail, which is a green run that analysed nothing.
           build-mode: manual
 
-      - if: matrix.language == 'go'
-        run: cd backend && go build ./...
-
-      # `classes` and not `build`: the analysis needs compiled main output, and
-      # `build` would additionally run the 269-spec Testcontainers suite that
-      # ci.yml already runs.
-      - if: matrix.language == 'java-kotlin'
-        run: cd backend-kotlin && ./gradlew --console=plain classes
+      - run: cd backend && go build ./...
 
       - uses: github/codeql-action/analyze@1c5b675653bb5c22dbe9b12b556ec555138e09fd # v4.38.1
         with:
-          category: /language:${{ matrix.language }}
+          category: /language:go

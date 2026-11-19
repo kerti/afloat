@@ -4,17 +4,14 @@ Closes #
 
 ## Why
 
-## Backends touched
+## Surfaces touched
 
-<!-- Name them. A brief that says "implement X" without naming Go, Kotlin or
-     both is the failure mode CLAUDE.md calls out: it gets done in one and
-     silently skipped in the other. Delete the rows that don't apply. -->
+<!-- Delete the rows that don't apply. -->
 
-- [ ] Go (`backend/`)
-- [ ] Kotlin (`backend-kotlin/`)
+- [ ] Backend (`backend/`)
 - [ ] Frontend (`frontend/`)
 - [ ] Contract (`contract/openapi.yaml`) — regenerated, not hand-edited
-- [ ] Neither backend (docs, tooling, CI)
+- [ ] Neither (docs, tooling, CI)
 
 ## Checklist
 
@@ -27,5 +24,4 @@ Closes #
 - [ ] Soft delete only — no hard-delete path
 - [ ] Errors carry codes, not messages; user-facing strings live in the frontend (`en-GB` + `id-ID`)
 - [ ] No telemetry of any kind
-- [ ] A change to one backend's behaviour has its counterpart in the other, or a filed issue saying why not
 - [ ] No real names, real figures, or absolute local paths in the diff

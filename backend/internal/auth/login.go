@@ -81,7 +81,7 @@ func (h *Handlers) LocalLogin(ctx context.Context, request api.LocalLoginRequest
 	// on the request's own ctx the hash would run past it and the failure
 	// write then fail: a checked guess answered 401 with nothing recorded, the
 	// backoff never growing (#33). From here on it has the handler timeout
-	// again, as each Kotlin statement after the wait has HTTP_WRITE_TIMEOUT.
+	// again.
 	ctx, cancel := afterPermit(ctx, budget, hasBudget)
 	defer cancel()
 

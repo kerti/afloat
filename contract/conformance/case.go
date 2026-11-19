@@ -1,5 +1,5 @@
-// Package conformance drives both Afloat backends over HTTP and asserts that
-// they answer identically.
+// Package conformance drives the Afloat backend over HTTP, as a black box, and
+// asserts that it answers each case as written.
 //
 // It is a test-only package: the runner lives in conformance_test.go. The types
 // here describe the case-file format, which is the vocabulary the whole harness
@@ -7,6 +7,7 @@
 package conformance
 
 import (
+	"bytes"
 	"encoding/hex"
 	"fmt"
 	"os"
@@ -20,7 +21,7 @@ import (
 	yaml "go.yaml.in/yaml/v3"
 )
 
-// Case is one request and the answer both backends must give.
+// Case is one request and the answer the backend must give.
 //
 // Deliberately not generated from contract/openapi.yaml. The spec says what a
 // response may look like; a case says what it IS, including the parts the spec
@@ -37,15 +38,10 @@ type Case struct {
 
 	// Profile names the server configuration the case runs against; empty
 	// means ProfileDefault. A case runs against its own profile only, so a
-	// login case is never also run against a pair where login is off.
+	// login case is never also run against a server where login is off.
 	Profile string `yaml:"profile"`
 
-	// Permit cites case-scoped entries in permitted-differences.yaml by name.
-	// A difference that is legitimate on one answer - Go's and Spring's own
-	// unregistered-path 404 - must not become invisible on every other.
-	Permit []string `yaml:"permit"`
-
-	// Given runs before Request, on the same backend and the same cookie jar,
+	// Given runs before Request, on the same server and the same cookie jar,
 	// after the database is reset to the seed. It is how a case reaches a
 	// state - signed in, throttled, a session near its expiry - without
 	// asserting on the way there, beyond each request step's status.
@@ -60,16 +56,16 @@ type Case struct {
 
 type Request struct {
 	Method string `yaml:"method"`
-	// Path is relative to each backend's base URL, so it excludes /api.
+	// Path is relative to the backend's base URL, so it excludes /api.
 	Path string `yaml:"path"`
 	// RawTarget is Path's alternative for a case that needs bytes on the wire
 	// url.Parse would otherwise normalise out of existence - a literal
 	// backslash, say, which Go's own http.Client silently percent-encodes to
 	// %5C before RawTarget existed, so a case naming one never actually
-	// reached either backend's router (#64). Sent verbatim as the request
-	// line's target, via URL.Opaque, after the base path: never escaped,
-	// never re-parsed. Relative to each backend's base URL, so it excludes
-	// /api, same as Path, and takes its leading slash the same way.
+	// reached the router (#64). Sent verbatim as the request line's target,
+	// via URL.Opaque, after the base path: never escaped, never re-parsed.
+	// Relative to the backend's base URL, so it excludes /api, same as Path,
+	// and takes its leading slash the same way.
 	RawTarget string            `yaml:"raw_target"`
 	Headers   map[string]string `yaml:"headers"`
 	// HeadersHex is Headers' alternative for a value that is not valid UTF-8 -
@@ -106,8 +102,8 @@ func (r Request) SentBody() string {
 	return strings.Replace(r.Body, padToken, strings.Repeat(r.Pad.With, r.Pad.Count), 1)
 }
 
-// Step is one thing Given does: a request whose status must match, or SQL run
-// against that backend's own database. Exactly one of the two.
+// Step is one thing Given does: a request whose status must match, SQL run
+// against the backend's database, or an outage. Exactly one of the three.
 type Step struct {
 	Request *Request `yaml:"request"`
 	// Status is required on a request step: a setup login that silently
@@ -121,28 +117,15 @@ type Step struct {
 
 	// Outage takes the backend's database away - every connection it holds
 	// terminated, every new one refused - until the case's request has been
-	// answered. It is how a case reaches #23 and #27: what a backend says
+	// answered. It is how a case reaches #23 and #27: what the backend says
 	// when the database, not the caller, is the problem.
 	Outage bool `yaml:"outage"`
 }
 
-// Expect is the asserted answer. Anything NOT named here is still compared
-// between the two backends - that is failure mode 2, the one that catches the
-// divergence nobody thought to assert.
+// Expect is the asserted answer. Anything not named here is not checked, so a
+// case says everything about the answer that matters.
 type Expect struct {
 	Status int `yaml:"status"`
-
-	// StatusByBackend overrides Status per backend ("go"/"kotlin"), for a case
-	// whose two backends are permitted to answer different statuses outright
-	// (#64: Tomcat's connector-level 400 on a malformed path Go's router
-	// simply has no route for). Never to paper over a bug: a case that sets
-	// this must also cite, under `permit`, a case-scoped entry with
-	// `status: true` - CheckPermits enforces the pairing, the same way a
-	// body-permitting entry requires a body assertion. Exactly one of Status
-	// or StatusByBackend is set, and the map must name every backend the
-	// case's profile runs, or one backend's expectation goes unstated by
-	// omission.
-	StatusByBackend map[string]int `yaml:"status_by_backend"`
 
 	// Headers are compared exactly, by value, case-insensitively on the name.
 	Headers map[string]string `yaml:"headers"`
@@ -156,51 +139,21 @@ type Expect struct {
 	// assertion" and is what every 204 in this contract requires.
 	BodyEmpty bool `yaml:"body_empty"`
 
-	// SameAs is a second request, sent to the same backend, whose whole answer
+	// SameAs is a second request, sent to the same server, whose whole answer
 	// this one must equal. It asserts a relation rather than bytes: "answers
-	// exactly like an unregistered path" (#24) holds on each backend even where
-	// the two backends' unregistered-path answers are permitted to differ.
+	// exactly like an unregistered path" (#24) holds whatever that path's
+	// answer happens to be.
 	SameAs *Request `yaml:"same_as"`
-
-	// SameAsFor is SameAs restricted to one backend ("go"/"kotlin"), for a
-	// case whose two backends are permitted to differ so much (a
-	// status_by_backend case, #64) that the relation SameAs asserts holds on
-	// one backend and not the other: Go's malformed-path answer IS its own
-	// unregistered-path 404, but Kotlin's connector-level 400 (or OPTIONS *'s
-	// 200) is not that backend's own 404. Keyed the same as StatusByBackend.
-	// A case may set SameAs, SameAsFor, both (for different backends), or
-	// neither.
-	SameAsFor map[string]*Request `yaml:"same_as_for"`
 
 	// Cookies asserts every Set-Cookie on the answer, by cookie name. A nil map
 	// asserts nothing; an empty one (`cookies: {}`) asserts that no cookie is
 	// set at all, and any cookie not named is a failure.
 	Cookies map[string]CookieExpect `yaml:"cookies"`
 
-	// Rows are queries run against the backend's own database after the
-	// request, each with the rows it must return. Persisted state is axis 2
-	// of the milestone: a response can be right while the row behind it is
-	// not.
+	// Rows are queries run against the backend's database after the request,
+	// each with the rows it must return: a response can be right while the
+	// row behind it is not.
 	Rows []RowsExpect `yaml:"rows"`
-}
-
-// StatusFor is the status one backend's answer must have: StatusByBackend's
-// entry when the case sets one, else the shared Status.
-func (e Expect) StatusFor(backend string) int {
-	if e.StatusByBackend != nil {
-		return e.StatusByBackend[backend]
-	}
-	return e.Status
-}
-
-// SameAsRequest is the same_as request one backend's answer must equal, if
-// any: SameAsFor's entry for backend when the case sets one, else the shared
-// SameAs, else nil (a case need not use either).
-func (e Expect) SameAsRequest(backend string) *Request {
-	if r, ok := e.SameAsFor[backend]; ok {
-		return r
-	}
-	return e.SameAs
 }
 
 // CookieExpect is one Set-Cookie, attribute by attribute. Every field but
@@ -247,7 +200,7 @@ const (
 	ProfileLocalDisabled = "local-disabled"
 )
 
-// Profiles is every configuration scripts/conformance.sh boots a pair for.
+// Profiles is every configuration scripts/conformance.sh boots a server for.
 var Profiles = []string{ProfileDefault, ProfileLocalDisabled}
 
 // ProfileOf is the profile a case runs against.
@@ -277,8 +230,12 @@ func Load(dir string) ([]Case, error) {
 		if err != nil {
 			return nil, err
 		}
+		// KnownFields: a misspelt or retired key would otherwise be dropped
+		// without a word, and the assertion it meant to make with it.
 		var cases []Case
-		if err := yaml.Unmarshal(b, &cases); err != nil {
+		dec := yaml.NewDecoder(bytes.NewReader(b))
+		dec.KnownFields(true)
+		if err := dec.Decode(&cases); err != nil {
 			return nil, fmt.Errorf("%s: %w", p, err)
 		}
 		for i := range cases {
@@ -307,34 +264,8 @@ func (c *Case) validate() error {
 	if err := c.Request.validate(c.Name, "request"); err != nil {
 		return err
 	}
-	switch {
-	case c.Expect.Status != 0 && c.Expect.StatusByBackend != nil:
-		return fmt.Errorf("%s: expect.status and expect.status_by_backend are mutually exclusive", c.Name)
-	case c.Expect.Status == 0 && c.Expect.StatusByBackend == nil:
-		return fmt.Errorf("%s: expect.status is required (or expect.status_by_backend, for a case whose backends differ by ruling)", c.Name)
-	case c.Expect.StatusByBackend != nil:
-		for k := range c.Expect.StatusByBackend {
-			if k != "go" && k != "kotlin" {
-				return fmt.Errorf("%s: expect.status_by_backend has an unknown backend %q, want go or kotlin", c.Name, k)
-			}
-		}
-		for _, backend := range []string{"go", "kotlin"} {
-			if c.Expect.StatusByBackend[backend] == 0 {
-				return fmt.Errorf("%s: expect.status_by_backend is missing %q", c.Name, backend)
-			}
-		}
-		if c.Expect.StatusByBackend["go"] == c.Expect.StatusByBackend["kotlin"] {
-			return fmt.Errorf("%s: expect.status_by_backend has the same status for both backends (%d); "+
-				"use expect.status instead", c.Name, c.Expect.StatusByBackend["go"])
-		}
-		if len(c.Permit) == 0 {
-			return fmt.Errorf("%s: expect.status_by_backend needs a case-scoped permit entry with `status: true`", c.Name)
-		}
-	}
-	for k := range c.Expect.SameAsFor {
-		if k != "go" && k != "kotlin" {
-			return fmt.Errorf("%s: expect.same_as_for has an unknown backend %q, want go or kotlin", c.Name, k)
-		}
+	if c.Expect.Status == 0 {
+		return fmt.Errorf("%s: expect.status is required", c.Name)
 	}
 	if c.Expect.BodyJSON != nil && c.Expect.BodyRaw != "" {
 		return fmt.Errorf("%s: expect.body_json and expect.body_raw are mutually exclusive", c.Name)
@@ -352,15 +283,6 @@ func (c *Case) validate() error {
 		if reflect.DeepEqual(*s, c.Request) {
 			return fmt.Errorf("%s: expect.same_as is identical to request; it would only ever compare an answer "+
 				"to itself, which asserts nothing", c.Name)
-		}
-	}
-	for backend, s := range c.Expect.SameAsFor {
-		if err := s.validate(c.Name, "expect.same_as_for."+backend); err != nil {
-			return err
-		}
-		if reflect.DeepEqual(*s, c.Request) {
-			return fmt.Errorf("%s: expect.same_as_for.%s is identical to request; it would only ever compare an "+
-				"answer to itself, which asserts nothing", c.Name, backend)
 		}
 	}
 	for i, g := range c.Given {

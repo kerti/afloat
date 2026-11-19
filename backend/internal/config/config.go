@@ -25,8 +25,9 @@ type Config struct {
 	LogLevel  string `env:"LOG_LEVEL" envDefault:"info"`
 
 	// Applied by the binary on boot, mirroring Balances. Disable only to run a
-	// server against a database migrated by something else — the Kotlin backend
-	// against afloat_go, say, which is a debugging move and not a deployment.
+	// server against a database migrated by something else — a second process
+	// on an already-migrated database, say, which is a debugging move and not a
+	// deployment.
 	AutoMigrate bool `env:"AUTO_MIGRATE" envDefault:"true"`
 
 	// ReadTimeout bounds a slow request body, WriteTimeout a slow reader, and
@@ -111,7 +112,7 @@ func (c Config) validate() error {
 	}
 	// A zero or sub-millisecond first window is not a backoff a caller could
 	// ever observe (#69): time.Duration can express nanoseconds, but nothing
-	// in either backend's login path resolves that finely, so a value that
+	// in the login path resolves that finely, so a value that
 	// small is indistinguishable from no backoff at all. A cap below the
 	// floor would also make the second failure's window shorter than the
 	// first's.
@@ -124,7 +125,7 @@ func (c Config) validate() error {
 	}
 	// http.Server reads 0 as "no timeout", but the same value also feeds
 	// middleware.Timeout (#30), where 0 is a deadline already passed: every
-	// request would be cancelled on arrival. Refused at boot, in both backends.
+	// request would be cancelled on arrival. Refused at boot.
 	if c.WriteTimeout <= 0 {
 		return fmt.Errorf("HTTP_WRITE_TIMEOUT (%s) must be positive", c.WriteTimeout)
 	}

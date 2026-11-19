@@ -203,14 +203,14 @@ func (h *Handlers) CommitOnboardingChoice(ctx context.Context, request api.Commi
 		return internalError[api.CommitOnboardingChoiceResponseObject]()
 	}
 
-	session, err := h.IssueSession(ctx, userID, userAgentFrom(ctx))
+	token, expiresAt, err := h.createSession(ctx, userID, userAgentFrom(ctx))
 	if err != nil {
 		// The account exists and the handshake is spent, so there is nothing to
 		// retry here: the person signs in with the password they just chose.
 		slog.Error("onboarding choice: issue session", "err", err)
 		return internalError[api.CommitOnboardingChoiceResponseObject]()
 	}
-	return commitSucceeded{session: session, handshake: h.ClearedOnboardingCookie()}, nil
+	return commitSucceeded{h: h, token: token, expires: expiresAt}, nil
 }
 
 // found runs the whole commit in one transaction and returns the new User's id.
@@ -296,14 +296,19 @@ func invalidChoiceField(field, rule string) api.CommitOnboardingChoiceResponseOb
 // writes it with Header().Set, so a second Set-Cookie line would replace the
 // first. It satisfies the generated response interface, so the handler still
 // cannot return a status the contract does not declare.
+//
+// Both cookies are built here, where they are written, rather than carried in
+// as *http.Cookie fields: CodeQL cannot follow a cookie through a struct field
+// into this interface method, and flagged HttpOnly and Secure as unset (#109).
 type commitSucceeded struct {
-	session   *http.Cookie
-	handshake *http.Cookie
+	h       *Handlers
+	token   string
+	expires time.Time
 }
 
 func (r commitSucceeded) VisitCommitOnboardingChoiceResponse(w http.ResponseWriter) error {
-	http.SetCookie(w, r.session)
-	http.SetCookie(w, r.handshake)
+	http.SetCookie(w, r.h.sessionCookie(r.token, r.expires))
+	http.SetCookie(w, r.h.ClearedOnboardingCookie())
 	w.WriteHeader(http.StatusNoContent)
 	return nil
 }

@@ -192,8 +192,9 @@ func TestCommitFoundsTheHouseholdAndIssuesTheSession(t *testing.T) {
 	if session == nil || session.Value == "" || !session.HttpOnly || !session.Secure || session.SameSite != http.SameSiteLaxMode || session.MaxAge <= 0 {
 		t.Errorf("session cookie = %+v, want a live HttpOnly Secure Lax session cookie", session)
 	}
-	if cleared == nil || cleared.Value != "" || cleared.MaxAge >= 0 || !cleared.Expires.Before(time.Now()) {
-		t.Errorf("handshake cookie = %+v, want it expired", cleared)
+	if cleared == nil || cleared.Value != "" || cleared.MaxAge >= 0 || !cleared.Expires.Before(time.Now()) ||
+		!cleared.HttpOnly || !cleared.Secure || cleared.SameSite != http.SameSiteLaxMode || cleared.Path != "/" {
+		t.Errorf("handshake cookie = %+v, want it expired, HttpOnly Secure Lax on /", cleared)
 	}
 
 	if got := h.foundingTables(t); got != "1/1/1/1/0" {

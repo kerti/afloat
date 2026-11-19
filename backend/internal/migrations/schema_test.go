@@ -78,6 +78,14 @@ func TestSchemaRefuses(t *testing.T) {
 			uniqueViolation, "users_email_idx"},
 		{"household must exist", `INSERT INTO users (id, household_id, email, display_name) VALUES (gen_random_uuid(), gen_random_uuid(), 'z@example.com', 'x')`,
 			fkViolation, "users_household_id_fkey"},
+		{"session for a user that doesn't exist", `INSERT INTO sessions (id, user_id, expires_at) VALUES (repeat('a', 64), gen_random_uuid(), now())`,
+			fkViolation, "sessions_user_id_fkey"},
+		{"invitation into a household that doesn't exist", `INSERT INTO invitations (id, household_id, invited_email, token_hash, created_by, expires_at)
+			VALUES (gen_random_uuid(), gen_random_uuid(), 's@example.com', repeat('b', 64), '` + u1 + `', now())`,
+			fkViolation, "invitations_household_id_fkey"},
+		{"invitation from a user that doesn't exist", `INSERT INTO invitations (id, household_id, invited_email, token_hash, created_by, expires_at)
+			VALUES (gen_random_uuid(), '` + hh + `', 's@example.com', repeat('b', 64), gen_random_uuid(), now())`,
+			fkViolation, "invitations_created_by_fkey"},
 		{"second credential for one user", `INSERT INTO credentials (user_id, password_hash) VALUES ('` + u1 + `', 'y')`,
 			uniqueViolation, "credentials_pkey"},
 		{"negative failure_count", `INSERT INTO login_attempts (key, failure_count) VALUES ('email:x@example.com', -1)`,

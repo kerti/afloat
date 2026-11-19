@@ -137,8 +137,9 @@ jobs:
           fi
           psql --version
 
-      # The SQL through goose: defaults, CHECKs, soft-delete indexes, cascades,
-      # the §7.1 in-place edit, Down. A throwaway container of its own.
+      # The goose CLI at go.mod's version: Up, the §7.1 in-place edit, Down. A
+      # throwaway container of its own. The schema's rules are Go tests in
+      # `check` (backend/internal/migrations/schema_test.go).
       - run: make test-migrations
 
   # The conformance harness (#28): the backend built and booted from this

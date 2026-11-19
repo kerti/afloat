@@ -133,3 +133,10 @@ coverage/
 backend/.oapi-check.yaml
 backend/.sqlc-check.yaml
 backend/.sqlc-check-out/
+
+# The frontend build the Go binary embeds (BOOTSTRAP.md §8), copied in by
+# `make frontend-build`. Build output: only the .gitkeep that keeps the
+# //go:embed pattern valid is tracked.
+!backend/internal/web/dist/
+backend/internal/web/dist/*
+!backend/internal/web/dist/.gitkeep

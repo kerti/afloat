@@ -9,10 +9,10 @@ file grows as real targets land.
   `.pii-patterns`) + `claude-install` (hook executable bits, seeds `.claude/settings.local.json`).
 - `make doctor` — toolchain readout against `BOOTSTRAP.md` §3. Never fails.
 - `make check` — the pre-push gate `pre-push-gate.sh` runs. `backend/` is wired (lint, build,
-  `go test -race`, coverage), as are generated-code drift, the env-var docs gate and the conformance
-  case files; `frontend/` still skips. A surface that exists but has no steps in `check` **fails** —
-  so the scaffold step that creates the frontend must also wire its lint/test steps into `check`, and
-  into `.github/workflows/ci.yml` in the same commit (the two mirror step for step).
+  `go test -race`, coverage), `frontend/` is wired (`check-frontend`), as are generated-code drift
+  (Go and TypeScript), the env-var docs gate and the conformance case files. A new surface must be
+  wired into `check` and into `.github/workflows/ci.yml` in the same commit that creates it (the two
+  mirror step for step).
 - `make conformance` — boots the backend from source and runs the black-box conformance suite against
   it (`contract/conformance/`, issue #28). Needs docker and a Go toolchain, so it is **not** in
   `make check`. `make check` compiles the module and runs `go test -short` there, which validates the
@@ -21,6 +21,14 @@ file grows as real targets land.
   An existing local volume from before the database was renamed to `afloat` needs `make db-reset`
   (destroys local data). **It empties the `afloat` database**: every case truncates every table and applies
   `contract/conformance/fixtures/seed.sql`, so anything a local run left in it is gone afterwards.
+- **Frontend** (`frontend/`, React + Vite, BOOTSTRAP §3): `make frontend-install` (`npm ci`),
+  `make frontend-dev` (Vite on 5181, `/api` proxied to the backend on 5182), `make check-frontend`
+  (typecheck, ESLint, Prettier check, Vitest with coverage; part of `make check`), `make gen-ts`
+  (regenerates `src/api/schema.gen.ts` from the contract; drift fails `make check`), and
+  `make frontend-build`, which builds and copies `dist` into `backend/internal/web/dist` so the
+  next `go build` embeds it (BOOTSTRAP §8). Bare copy in JSX is a lint **error**: every string lives
+  in `src/locales/en-GB.json` and `id-ID.json`, and a test fails if the two key sets differ or a
+  contract `ErrorCode` has no wording. The palette is one file, `src/styles/theme.css`.
 - `make test-migrations` — applies `backend/internal/migrations/` with goose to a throwaway Postgres
   container and asserts the schema behaves, the §7.1 in-place-edit hazard, and that Down drops what Up
   created. Needs docker, so it is **not** in `make check`.
@@ -57,10 +65,9 @@ file grows as real targets land.
 
 **Expected later, per `BOOTSTRAP.md`:**
 
-- Running the backend and the frontend locally against the one Postgres.
-- Regenerating the OpenAPI-derived client artefacts for the frontend.
-- Lint and test commands for the frontend (Vitest, Playwright), and which of them `make check`
-  actually runs versus which are opt-in.
+- Playwright end-to-end tests against a real backend, once there is a flow worth driving: opt-in
+  locally, a CI job of its own like `conformance`.
+- The Caddyfile and deploy (§11 step 10).
 
 Don't invent targets — if a task needs a dev command `make help` doesn't list, add it to the `Makefile`
 (and here) rather than assuming one from Balances-v2 or Uruni carries over unchanged.

@@ -1,5 +1,6 @@
 .PHONY: help setup hooks-install claude-install doctor check test-migrations \
-        db-up db-down db-reset gen-oapi gen-sqlc gen check-go conformance lint-install
+        db-up db-down db-reset gen-oapi gen-sqlc gen-ts gen check-go conformance lint-install \
+        frontend-install frontend-dev frontend-build check-frontend
 
 # `make` with no target prints help.
 .DEFAULT_GOAL := help
@@ -30,20 +31,27 @@ help:
 	@echo "  db-reset                destroy and recreate the database from scratch"
 	@echo ""
 	@echo "Workflow:"
-	@echo "  gen                     run every generator (contract, sqlc)"
+	@echo "  gen                     run every generator (contract, sqlc, TypeScript types)"
 	@echo "  gen-oapi                regenerate Go server interfaces from contract/openapi.yaml"
 	@echo "  gen-sqlc                regenerate typed queries from the migrations + backend/queries"
+	@echo "  gen-ts                  regenerate frontend/src/api/schema.gen.ts from contract/openapi.yaml"
 	@echo "  test-migrations         apply the migrations with goose to a throwaway Postgres and assert"
 	@echo "  check                   pre-push gate: pass/fail per surface"
 	@echo "  check-go                lint and test the Go backend"
+	@echo "  check-frontend          typecheck, lint, format-check, test and build the frontend"
 	@echo "  conformance             boot the backend and run the conformance suite against it"
 	@echo "  lint-install            install the pinned golangci-lint (the version CI uses)"
+	@echo ""
+	@echo "Frontend:"
+	@echo "  frontend-install        npm ci in frontend/"
+	@echo "  frontend-dev            Vite dev server on 5181, /api proxied to the backend on 5182"
+	@echo "  frontend-build          build frontend/ and copy it into the Go binary's embed dir"
 
 # ---- first run -------------------------------------------------------------
 # Idempotent - safe to re-run, and worth re-running after a pull that touches
 # .claude/ or .githooks/ (both need a chmod that git alone won't reapply on some
 # clones). Grows backend/frontend install steps as those surfaces land.
-setup: hooks-install claude-install
+setup: hooks-install claude-install frontend-install
 	@echo "ok setup complete - run 'make doctor' to see what's still missing"
 
 # Point git at the repo's own hooks directory and seed the local, gitignored
@@ -106,7 +114,12 @@ gen-sqlc:
 	@cd backend && go tool sqlc generate
 	@echo 'ok backend/internal/db'
 
-gen: gen-oapi gen-sqlc
+# The frontend's types come from the same contract (BOOTSTRAP.md §6).
+gen-ts:
+	@cd frontend && npm run -s gen:api
+	@echo 'ok frontend/src/api/schema.gen.ts'
+
+gen: gen-oapi gen-sqlc gen-ts
 
 # Schema behaviour against a real Postgres, applied through goose: defaults,
 # CHECKs, the soft-delete aware indexes, cascade behaviour, the §7.1 in-place
@@ -144,10 +157,10 @@ db-reset:
 # `git push`. .github/workflows/ci.yml mirrors it step for step, so green
 # locally ~ green in CI - a surface wired into one is wired into both.
 #
-# Nothing is scaffolded yet, so every surface skips. A surface that exists but
-# has no steps here FAILS rather than skipping: otherwise the step that
-# scaffolds a backend would ship an ungated one and this would stay green.
-# Replace a surface's FAIL branch with its real lint/test steps as it lands.
+# A surface that does not exist yet skips; one that exists runs its real
+# steps. A surface added without steps here would ship ungated, so wire it
+# into check (and ci.yml) in the same commit that creates it.
+
 # Install the pinned linter into $(go env GOPATH)/bin. Optional locally (brew's
 # copy is fine if it matches); CI calls it so the gate is reproducible.
 lint-install:
@@ -168,6 +181,36 @@ check-go:
 	       go vet ./...; fi
 	@cd backend && go build ./... && \
 	  go test -race -covermode=atomic -coverprofile=$(GO_COVERAGE) ./...
+
+# ---- frontend --------------------------------------------------------------
+# npm ci, not install: the lockfile is the dependency set, as go.sum is.
+frontend-install:
+	@cd frontend && npm ci --no-audit --no-fund
+
+frontend-dev:
+	@cd frontend && npm run dev
+
+# The Go binary embeds the built frontend (BOOTSTRAP.md §8), and //go:embed
+# cannot reach a parent directory, so the build is copied into the package
+# that embeds it. Run before `go build` for a binary that serves the app;
+# without it the binary serves the API alone. The copy is build output and
+# gitignored, apart from the .gitkeep that keeps the embed pattern valid.
+WEB_DIST := backend/internal/web/dist
+frontend-build:
+	@cd frontend && npm run -s build
+	@find $(WEB_DIST) -mindepth 1 ! -name .gitkeep -exec rm -rf {} +
+	@cp -R frontend/dist/. $(WEB_DIST)/
+	@echo 'ok frontend built and copied into $(WEB_DIST)'
+
+# Typecheck, lint, formatting and the Vitest suite, with coverage (CI uploads
+# frontend/coverage/lcov.info from the same run, as it does Go's profile).
+check-frontend:
+	@if [ ! -d frontend/node_modules ]; then \
+	  echo 'FAIL frontend/node_modules is missing - run make frontend-install'; exit 1; fi
+	@cd frontend && npm run -s typecheck && npm run -s lint && npm run -s format:check && npm run -s test:coverage
+	@# The production build too: tests never run vite or the PWA plugin, so a
+	@# bump that breaks them would otherwise stay green until someone ships.
+	@cd frontend && npm run -s build -- --logLevel warn
 
 # Boot the backend from source and run the black-box conformance suite against
 # it (issue #28). Needs docker and live servers, and is deliberately NOT part of
@@ -195,6 +238,7 @@ check:
 	elif (cd contract/conformance && go build ./... && go vet ./... && go test -short ./...) >/dev/null 2>&1; then echo 'ok'; \
 	else echo 'FAIL - see: cd contract/conformance && go vet ./... && go test -short ./...'; fail=1; fi; \
 	printf '%-32s' 'frontend/package.json'; \
-	if [ -e frontend/package.json ]; then echo 'FAIL - exists, but check has no steps for it'; fail=1; \
-	else echo '- skipped (not scaffolded yet)'; fi; \
+	if [ ! -e frontend/package.json ]; then echo '- skipped (not scaffolded yet)'; \
+	elif $(MAKE) --no-print-directory check-frontend >/dev/null 2>&1; then echo 'ok'; \
+	else echo 'FAIL - see: make check-frontend'; fail=1; fi; \
 	if [ $$fail -eq 0 ]; then echo 'all green'; else echo 'FAILED - wire the surface(s) above into check'; exit 1; fi

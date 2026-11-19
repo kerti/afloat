@@ -61,4 +61,18 @@ else
   report "backend/internal/db (sqlc)" "stale or hand-edited; run make gen-sqlc"
 fi
 
+# --- contract -> frontend TypeScript types ------------------------------------
+# Same contract, other surface (BOOTSTRAP.md §6). Skipped until the frontend's
+# dependencies are installed: the generator lives in its node_modules.
+if [ -d frontend/node_modules ]; then
+  (cd frontend && npx --no-install openapi-typescript ../contract/openapi.yaml -o "$tmp/schema.gen.ts" >/dev/null 2>&1)
+  if diff -q "$tmp/schema.gen.ts" frontend/src/api/schema.gen.ts >/dev/null 2>&1; then
+    report "frontend/src/api/schema.gen.ts (openapi-typescript)" ok
+  else
+    report "frontend/src/api/schema.gen.ts (openapi-typescript)" "stale or hand-edited; run make gen-ts"
+  fi
+elif [ -e frontend/package.json ]; then
+  report "frontend/src/api/schema.gen.ts (openapi-typescript)" "frontend/node_modules missing; run make frontend-install"
+fi
+
 exit $status

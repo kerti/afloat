@@ -1,0 +1,27 @@
+import path from "node:path";
+import { defineConfig } from "vitest/config";
+
+// virtual:pwa-register/react exists only once vite-plugin-pwa builds the
+// worker; tests get a stub so a component that uses it can render.
+const alias = {
+  "@": path.resolve(import.meta.dirname, "./src"),
+  "virtual:pwa-register/react": path.resolve(
+    import.meta.dirname,
+    "./src/test/pwa-register-stub.ts",
+  ),
+};
+
+export default defineConfig({
+  resolve: { alias },
+  test: {
+    environment: "jsdom",
+    include: ["src/**/*.test.{ts,tsx}"],
+    setupFiles: ["./src/test/setup.ts"],
+    coverage: {
+      provider: "v8",
+      reporter: ["text", "lcov"],
+      include: ["src/**/*.{ts,tsx}"],
+      exclude: ["src/**/*.test.{ts,tsx}", "src/test/**", "src/api/schema.gen.ts", "src/main.tsx"],
+    },
+  },
+});

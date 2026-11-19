@@ -1,0 +1,45 @@
+{
+  "app": {
+    "name": "Afloat",
+    "loading": "Loading…",
+    "retry": "Try again"
+  },
+  "fields": {
+    "email": "Email",
+    "password": "Password"
+  },
+  "fieldNames": {
+    "email": "email",
+    "password": "password"
+  },
+  "login": {
+    "title": "Sign in",
+    "submit": "Sign in",
+    "submitting": "Signing in…",
+    "unavailable": "Password sign-in is turned off on this instance. Ask whoever runs it to turn it on."
+  },
+  "home": {
+    "signedInAs": "Signed in as {{name}}",
+    "household": "Household: {{name}}",
+    "comingSoon": "Your dashboard will appear here.",
+    "signOut": "Sign out"
+  },
+  "pwa": {
+    "updateReady": "A new version of Afloat is ready.",
+    "reload": "Reload",
+    "later": "Later"
+  },
+  "errors": {
+    "VALIDATION": "Check the {{field}} field.",
+    "INVALID_JSON_BODY": "Afloat couldn't read that request. Reload the page and try again.",
+    "INVALID_CREDENTIALS": "That email and password don't match.",
+    "TOO_MANY_ATTEMPTS_one": "Too many attempts. Try again in {{count}} second.",
+    "TOO_MANY_ATTEMPTS_other": "Too many attempts. Try again in {{count}} seconds.",
+    "TOO_MANY_ATTEMPTS_soon": "Too many attempts. Try again shortly.",
+    "UNAUTHORIZED": "Your session has ended. Sign in again.",
+    "CROSS_SITE_REQUEST_BLOCKED": "That request was blocked because it came from another site. Reload Afloat and try again.",
+    "INTERNAL": "Afloat couldn't complete that. Try again in a moment.",
+    "NETWORK": "Can't reach Afloat. Check your connection and try again.",
+    "UNKNOWN": "Something went wrong. Try again in a moment."
+  }
+}

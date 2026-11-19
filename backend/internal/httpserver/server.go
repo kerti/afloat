@@ -30,6 +30,11 @@ type Deps struct {
 	System *system.Handlers
 	Auth   *auth.Handlers
 
+	// Web serves the built frontend (web.Handler, BOOTSTRAP.md §8) on every
+	// GET and HEAD outside the API. Nil in a binary built without one: the
+	// server is then the API alone, as in tests and the conformance suite.
+	Web http.Handler
+
 	// HandlerTimeout bounds how long a handler may run before middleware.Timeout
 	// cuts it off. It is config.Config.WriteTimeout (HTTP_WRITE_TIMEOUT) — issue
 	// #30 folded the two rather than inventing a second variable that would
@@ -86,9 +91,26 @@ func New(d Deps) http.Handler {
 	r.Use(recoverer)
 	r.Use(requestLogger)
 	// Every OPTIONS request is answered before it reaches routing at all,
-	// including the disabled-login gate below and chi's own method-not-allowed
-	// handling — see optionsRefused (#66).
+	// and so before chi's own method-not-allowed handling and the API group's
+	// disabled-login gate - see optionsRefused (#66).
 	r.Use(optionsRefused)
+
+	// Everything below is the API's alone. A static file needs no body cap,
+	// CSRF guard or session lookup - and a session lookup per asset would be a
+	// database round trip per file on every cold load.
+	r.Group(func(r chi.Router) {
+		mountAPI(r, srv, d)
+	})
+
+	if d.Web != nil {
+		r.Get("/*", d.Web.ServeHTTP)
+		r.Head("/*", d.Web.ServeHTTP)
+	}
+
+	return r
+}
+
+func mountAPI(r chi.Router, srv *Server, d Deps) {
 	// oapi-codegen's generated HandlerWithOptions (api.gen.go) mounts every
 	// operation unconditionally — one r.Post/r.Get call per route, inlined
 	// in a function we don't own — with no per-operation option to skip
@@ -98,6 +120,10 @@ func New(d Deps) http.Handler {
 	// is gated ahead of the generated mux instead: any request whose path
 	// matches is answered before CSRF or session middleware ever run, so a
 	// disabled login gives chi's ordinary 404 with no session row written.
+	// Being in the API group, it runs once chi has routed the request to the
+	// /api mount: a method chi does not know at all (BREW) never gets that
+	// far and answers chi's 405 - exactly what an unregistered /api path
+	// answers to it, so the gate stays indistinguishable on every method.
 	// Enabled comes from d.System.LocalEnabled() — the same value
 	// GetAuthMethods reports — so the gate cannot drift from what
 	// /auth/methods tells the client.
@@ -146,6 +172,4 @@ func New(d Deps) http.Handler {
 		// matched a request to a route the contract declares (openapi_validate.go).
 		Middlewares: []api.MiddlewareFunc{openapiRequestValidator()},
 	}))
-
-	return r
 }

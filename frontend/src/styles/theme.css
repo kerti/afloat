@@ -1,0 +1,40 @@
+/*
+ * The one theme file. Every colour the app uses is a token here; components
+ * use the Tailwind names mapped in index.css, never a literal colour. Neutral
+ * until the brand session (PRD §9) picks a palette: swapping it is this file.
+ */
+:root {
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.21 0.006 285.9);
+  --muted: oklch(0.967 0.001 286.4);
+  --muted-foreground: oklch(0.552 0.016 285.9);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.21 0.006 285.9);
+  --border: oklch(0.92 0.004 286.3);
+  --input: oklch(0.92 0.004 286.3);
+  --ring: oklch(0.705 0.015 286.1);
+  --primary: oklch(0.274 0.006 286);
+  --primary-foreground: oklch(0.985 0 0);
+  --destructive: oklch(0.577 0.245 27.3);
+  --destructive-foreground: oklch(0.985 0 0);
+  --radius: 0.625rem;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: oklch(0.141 0.005 285.8);
+    --foreground: oklch(0.985 0 0);
+    --muted: oklch(0.274 0.006 286);
+    --muted-foreground: oklch(0.705 0.015 286.1);
+    --card: oklch(0.21 0.006 285.9);
+    --card-foreground: oklch(0.985 0 0);
+    --border: oklch(1 0 0 / 10%);
+    --input: oklch(1 0 0 / 15%);
+    --ring: oklch(0.552 0.016 285.9);
+    --primary: oklch(0.92 0.004 286.3);
+    --primary-foreground: oklch(0.21 0.006 285.9);
+    --destructive: oklch(0.704 0.191 22.2);
+    --destructive-foreground: oklch(0.985 0 0);
+    color-scheme: dark;
+  }
+}

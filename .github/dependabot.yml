@@ -1,5 +1,4 @@
-# Weekly dependency updates for the two ecosystems this repo has. The
-# frontend joins as a third (npm, /frontend) at BOOTSTRAP.md §11 step 7.
+# Weekly dependency updates for the three ecosystems this repo has.
 #
 # GROUPED, and this is the point of the file rather than a tidiness preference:
 # ungrouped, a week's bumps open a dozen pull requests and every one of them
@@ -14,6 +13,16 @@ updates:
     labels: [dependencies]
     groups:
       go-minor-and-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: npm
+    directory: "/frontend"
+    schedule:
+      interval: weekly
+    labels: [dependencies]
+    groups:
+      frontend-minor-and-patch:
         patterns: ["*"]
         update-types: ["minor", "patch"]
 

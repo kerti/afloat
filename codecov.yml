@@ -1,5 +1,5 @@
-# Coverage policy for the Go backend. Uploaded from ci.yml's single `check`
-# job, from the profile `make check-go` already produces - a second job
+# Coverage policy for the Go backend and the frontend. Uploaded from ci.yml's
+# single `check` job, from the profiles `make check` already produces - a second job
 # re-running the suite would break the invariant that `check` mirrors
 # `make check` step for step.
 #
@@ -28,6 +28,8 @@ ignore:
   # backend's suite executes it. Measuring it would drag the number down with a
   # file nobody's tests are supposed to cover.
   - "contract/conformance/**"
+  # openapi-typescript's output, like the Go generators' above.
+  - "frontend/src/api/schema.gen.ts"
 
 # The project status asks one question: is the codebase still well covered? A
 # fixed floor answers it. `auto` answers a different one - is this PR at least
@@ -59,6 +61,9 @@ flags:
   backend-go:
     paths:
       - "backend/"
+  frontend:
+    paths:
+      - "frontend/"
 
 # Per-flag floors are INFORMATIONAL for the same reason as the project status
 # above, and stay that way until the flag clears the line on main. As measured

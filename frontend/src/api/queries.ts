@@ -13,9 +13,9 @@ import {
   type OnboardingChoiceRequest,
   type OnboardingOptions,
 } from "./client";
-import { browserLocale, i18n } from "@/i18n";
+import { clearSession, meKey } from "./queryClient";
 
-export const meKey = ["me"] as const;
+export { meKey };
 
 // The session probe (contract: "A 401 means show the login screen"). A 401 is
 // an answer, not a failure, so it resolves to null instead of throwing.
@@ -62,6 +62,7 @@ export function useOnboardingOptions() {
   return useQuery<OnboardingOptions, ApiError>({
     queryKey: onboardingKey,
     queryFn: getOnboardingOptions,
+    meta: { handshake: true },
     retry: false,
     staleTime: 0,
     gcTime: 0,
@@ -72,6 +73,7 @@ export function useCommitChoice() {
   const qc = useQueryClient();
   return useMutation<void, ApiError, OnboardingChoiceRequest>({
     mutationFn: commitOnboardingChoice,
+    meta: { handshake: true },
     // The commit answers 204 with a session cookie and no body; /me is the
     // follow-up, as after a login. Invalidated, not just refetched: the probe
     // on /onboarding has long since cached "signed out".
@@ -83,15 +85,6 @@ export function useLogout() {
   const qc = useQueryClient();
   return useMutation<void, ApiError>({
     mutationFn: logout,
-    onSuccess: async () => {
-      // A fetch still in flight would land after the clear below and put the
-      // last User's answer back in the cache.
-      await qc.cancelQueries();
-      // The next person at this device is not the last User: back to the
-      // browser's language until someone signs in.
-      void i18n.changeLanguage(browserLocale());
-      qc.setQueryData(meKey, null);
-      qc.removeQueries({ predicate: (q) => q.queryKey[0] !== meKey[0] });
-    },
+    onSuccess: () => clearSession(qc),
   });
 }

@@ -1,7 +1,7 @@
 -- Baseline: identity and authentication only (BOOTSTRAP.md §11 step 3).
 -- Households, Users, credentials, sessions, onboarding handshakes, invitations,
--- login backoff. No
--- domain table (pockets, categories, budgets, expenses) lands until step 9.
+-- login backoff. No domain table (pockets, categories, budgets, expenses) lands
+-- until step 9.
 --
 -- Canonical and hand-written: the binary embeds it, goose applies it, and sqlc
 -- reads its Up section as the schema (BOOTSTRAP.md §7).

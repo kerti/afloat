@@ -88,12 +88,14 @@ default_env() {
   echo "AUTO_MIGRATE=true"
   echo "AUTH_LOCAL_ENABLED=true"
   echo "AUTH_GOOGLE_ENABLED=false"
+  echo "FOUNDING_DISABLED=false"
 }
 
 local_disabled_env() {
   echo "AUTO_MIGRATE=false"
   echo "AUTH_LOCAL_ENABLED=false"
   echo "AUTH_GOOGLE_ENABLED=true"
+  echo "FOUNDING_DISABLED=false"
 }
 
 # Local auth stays on, so a person can register and reach the gate, which is

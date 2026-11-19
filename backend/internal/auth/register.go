@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
@@ -43,9 +44,9 @@ func (h *Handlers) LocalRegister(ctx context.Context, request api.LocalRegisterR
 		return weakPassword(err), nil
 	}
 
-	displayName, ok := registrationDisplayName(body.DisplayName, email)
-	if !ok {
-		return invalidRegistrationField("display_name", "pattern"), nil
+	displayName, rule := registrationDisplayName(body.DisplayName, email)
+	if rule != "" {
+		return invalidRegistrationField("display_name", rule), nil
 	}
 	locale := resolveLocale(body.Locale)
 
@@ -193,9 +194,10 @@ func (h *Handlers) openHandshake(ctx context.Context, email, displayName, locale
 }
 
 // registrationDisplayName is the trimmed name, or the email's local part when
-// there is none. ok is false for a name Postgres cannot store.
-func registrationDisplayName(supplied *string, email string) (string, bool) {
-	name := ""
+// there is none. rule is the VALIDATION rule the name breaks, or "" when it is
+// fine: `pattern` for one Postgres cannot store, `required` for one with
+// nothing visible in it (blank, as the Household name's blank rule is).
+func registrationDisplayName(supplied *string, email string) (name, rule string) {
 	if supplied != nil {
 		name = strings.TrimSpace(*supplied)
 	}
@@ -203,7 +205,22 @@ func registrationDisplayName(supplied *string, email string) (string, bool) {
 		local, _, _ := strings.Cut(email, "@")
 		name = truncateCodePoints(local, maxDisplayNameCodePoints)
 	}
-	return name, storable(name)
+	switch {
+	case !storable(name):
+		return name, "pattern"
+	case invisible(name):
+		return name, "required"
+	}
+	return name, ""
+}
+
+// invisible is true for a string with nothing to see in it: only whitespace and
+// format characters (Unicode category Cf: zero-width space and joiners, word
+// joiner, BOM). TrimSpace leaves Cf alone, so a name of U+200B passes it and
+// reads as blank on screen. It only judges: a visible name keeps its Cf
+// characters, bidi controls included (Balances parity).
+func invisible(s string) bool {
+	return strings.TrimFunc(s, func(r rune) bool { return unicode.IsSpace(r) || unicode.Is(unicode.Cf, r) }) == ""
 }
 
 // storable is false for a string Postgres refuses: a TEXT column holds no NUL,
@@ -232,19 +249,14 @@ func resolveLocale(supplied *string) string {
 	return localeFallback
 }
 
-// weakPassword maps the policy's refusal onto the envelope. min and breached
-// are the two reasons the contract names; too long is the contract's own max
-// rule, which the schema already enforces before a handler runs, so this is the
-// backstop for the policy drifting from it.
+// weakPassword maps the policy's refusal onto the envelope: min and breached are
+// the two reasons the contract names. ErrPasswordTooLong has no branch because
+// it cannot arrive: the contract's maxLength (1024, the policy's own cap, both
+// in code points) is enforced before any handler runs.
 func weakPassword(err error) api.LocalRegisterResponseObject {
-	var reason string
-	switch {
-	case errors.Is(err, ErrPasswordTooShort):
-		reason = "min"
-	case errors.Is(err, ErrPasswordCommon):
+	reason := "min"
+	if errors.Is(err, ErrPasswordCommon) {
 		reason = "breached"
-	default:
-		return invalidRegistrationField("password", "max")
 	}
 	return api.LocalRegister400JSONResponse{
 		BadRequestJSONResponse: api.BadRequestJSONResponse{

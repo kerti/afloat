@@ -400,6 +400,8 @@ func TestCommitRefusesAnythingButAFoundChoiceWithoutSpendingTheHandshake(t *test
 		{"61 code points of 4 bytes", true, strings.Repeat("\U0001F6F6", 61), "household_name", "max"},
 		{"61 code points once padded", true, " " + strings.Repeat("a", 61) + " ", "household_name", "max"},
 		{"NUL", true, "Ru\x00mah", "household_name", "pattern"},
+		{"zero-width characters only", true, "\u200b\u200c\u200d", "household_name", "required"},
+		{"word joiner and BOM among spaces", true, " \u2060 \ufeff ", "household_name", "required"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			rec := assertCommitCode(t, h.commit(ctx, t, tc.found, tc.input), http.StatusBadRequest, api.VALIDATION)
@@ -429,6 +431,25 @@ func TestCommitAcceptsAHouseholdNameOfExactlySixtyCodePoints(t *testing.T) {
 	}
 	if got != name {
 		t.Errorf("household name = %q, want the 60 code points trimmed", got)
+	}
+}
+
+// An invisible character is not stripped from a name that has visible ones, and
+// a bidi control inside a visible name stays (Balances parity).
+func TestCommitKeepsInvisibleCharactersInAVisibleName(t *testing.T) {
+	h := newHarness(t, time.Now)
+	ctx, _ := h.atTheGate(t, "198.51.100.72", "a@example.com")
+	name := "Rumah\u200b \u202e Dewi"
+
+	if rec := visit(t, h.commit(ctx, t, true, name)); rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d (%s), want 204", rec.Code, rec.Body.String())
+	}
+	var got string
+	if err := h.tdb.Pool.QueryRow(context.Background(), `SELECT display_name FROM households`).Scan(&got); err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if got != name {
+		t.Errorf("household name = %q, want %q unchanged", got, name)
 	}
 }
 

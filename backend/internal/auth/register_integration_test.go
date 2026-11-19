@@ -209,13 +209,13 @@ func TestRegisterDisplayNameAndLocale(t *testing.T) {
 	h := newHarness(t, time.Now)
 
 	for i, tc := range []struct {
-		name         string
-		displayName  *string
-		locale       *string
-		email        string
-		wantName     string
-		wantLocale   string
-		wantRefusing bool
+		name        string
+		displayName *string
+		locale      *string
+		email       string
+		wantName    string
+		wantLocale  string
+		wantRule    string // non-empty: refused as VALIDATION on display_name with this rule
 	}{
 		{name: "defaults to the local part", email: "dewi.putri+tag@example.com", wantName: "dewi.putri+tag", wantLocale: "en-GB"},
 		{name: "blank defaults to the local part", displayName: ptr("   \t "), email: "bayu@example.com", wantName: "bayu", wantLocale: "en-GB"},
@@ -229,13 +229,20 @@ func TestRegisterDisplayNameAndLocale(t *testing.T) {
 		{name: "a long local part is cut at 255 code points", email: strings.Repeat("a", 300) + "@example.com",
 			wantName: strings.Repeat("a", 255), wantLocale: "en-GB"},
 		// Postgres TEXT holds no NUL: refused here rather than a 500 at the insert.
-		{name: "NUL in a display name", displayName: ptr("Dewi\x00"), email: "k@example.com", wantRefusing: true},
+		{name: "NUL in a display name", displayName: ptr("Dewi\x00"), email: "k@example.com", wantRule: "pattern"},
+		// Only invisible characters (category Cf: zero-width space and joiners, word
+		// joiner, BOM) is a name nobody can see: blank, not a default.
+		{name: "zero-width characters only", displayName: ptr("\u200b\u200c\u200d"), email: "l@example.com", wantRule: "required"},
+		{name: "word joiner and BOM among spaces", displayName: ptr(" \u2060 \ufeff "), email: "m@example.com", wantRule: "required"},
+		// Not stripped from a visible name, and a bidi control inside one stays (Balances parity).
+		{name: "a visible name keeps its zero-width character", displayName: ptr("Dewi\u200b"), email: "n@example.com", wantName: "Dewi\u200b", wantLocale: "en-GB"},
+		{name: "a bidi control inside a visible name is accepted", displayName: ptr("Dewi \u202e Putri"), email: "o@example.com", wantName: "Dewi \u202e Putri", wantLocale: "en-GB"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := ipContext("203.0.113." + string(rune('a'+i)))
 			resp := h.register(ctx, t, registration{email: tc.email, password: registerPassword, displayName: tc.displayName, locale: tc.locale})
-			if tc.wantRefusing {
-				assertBadRequest(t, resp, api.VALIDATION, map[string]any{"field": "display_name", "rule": "pattern"})
+			if tc.wantRule != "" {
+				assertBadRequest(t, resp, api.VALIDATION, map[string]any{"field": "display_name", "rule": tc.wantRule})
 				return
 			}
 			handshakeCookie(t, resp)

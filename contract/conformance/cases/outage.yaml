@@ -96,3 +96,74 @@
     rows:
       - sql: SELECT count(*)::int AS n FROM sessions
         rows: [{n: 1}]
+
+# Registration and the onboarding gate (#108). Like login, an outage is not a
+# statement about the caller: 500, no cookie set or cleared, nothing recorded.
+# The handshake cookie is the gate's credential, so a cleared one here would
+# strand a person mid-onboarding for the length of the outage.
+- name: outage - register is 500 and burns no backoff
+  issue: "108"
+  given:
+    - outage: true
+  request:
+    method: POST
+    path: /auth/local/register
+    headers:
+      Content-Type: application/json
+    body: '{"email":"new@example.com","password":"kucing oranye di atap"}'
+  expect:
+    status: 500
+    body_json: {code: INTERNAL}
+    cookies: {}
+    rows:
+      - sql: SELECT (SELECT count(*) FROM onboarding_handshakes)::int AS handshakes, (SELECT count(*) FROM login_attempts)::int AS attempts
+        rows: [{handshakes: 0, attempts: 0}]
+
+- name: outage - onboarding options is 500 and keeps the handshake cookie
+  issue: "108"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/register
+        headers:
+          Content-Type: application/json
+        body: '{"email":"new@example.com","password":"kucing oranye di atap"}'
+      status: 204
+    - outage: true
+  request:
+    method: GET
+    path: /onboarding/options
+  expect:
+    status: 500
+    body_json: {code: INTERNAL}
+    cookies: {}
+    rows:
+      - sql: SELECT count(*)::int AS n FROM onboarding_handshakes
+        rows: [{n: 1}]
+
+- name: outage - onboarding choice is 500, keeps the handshake cookie and creates nothing
+  issue: "108"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/register
+        headers:
+          Content-Type: application/json
+        body: '{"email":"new@example.com","password":"kucing oranye di atap"}'
+      status: 204
+    - outage: true
+  request:
+    method: POST
+    path: /onboarding/choice
+    headers:
+      Content-Type: application/json
+    body: '{"found":true,"household_name":"Rumah"}'
+  expect:
+    status: 500
+    body_json: {code: INTERNAL}
+    cookies: {}
+    rows:
+      - sql: |
+          SELECT (SELECT count(*) FROM households)::int AS households, (SELECT count(*) FROM users)::int AS users,
+                 (SELECT count(*) FROM sessions)::int AS sessions, (SELECT count(*) FROM onboarding_handshakes)::int AS handshakes
+        rows: [{households: 1, users: 3, sessions: 0, handshakes: 1}]

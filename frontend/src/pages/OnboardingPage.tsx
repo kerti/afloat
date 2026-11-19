@@ -78,6 +78,7 @@ export function OnboardingPage() {
             <Input
               id="household-name"
               required
+              maxLength={60}
               value={householdName}
               onChange={(e) => setEdited(e.target.value)}
               aria-invalid={commit.error?.code === "VALIDATION" || undefined}

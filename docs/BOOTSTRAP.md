@@ -381,7 +381,9 @@ founding_open}`; no invitations field yet, and adding one later is additive. `PO
 takes `{found: true, household_name}` and nothing else (`additionalProperties: false`): a later join
 choice adds properties, not a different shape. Anything that is not a found choice is `400 VALIDATION`.
 No live handshake is `401 UNAUTHORIZED`, and a stale cookie is cleared; `FOUNDING_DISABLED` is `403`,
-checked after the handshake so a stranger learns nothing of the instance's posture from it.
+checked after the handshake. That ordering hides nothing: `GET /auth/methods` is public and reports
+`founding_open`, so anyone can read the instance's posture without a handshake. The commit enforces
+`FOUNDING_DISABLED`; `founding_open` only tells the client what to show.
 
 **The commit is one transaction, and Balances' is not — a departure.** The handshake is claimed with
 `DELETE ... RETURNING`; the Household, the User and the credential are inserted; the transaction
@@ -399,7 +401,11 @@ catalogue (en-GB `{{name}}'s Household`, id-ID `Rumah Tangga {{name}}`) and the 
 server stores what was submitted, trimmed, not blank, at most **60 code points** (Balances' cap):
 `VALIDATION` with `rule: required` or `max`. Balances builds an English suggestion on the server; here
 the frontend owns every string (§9). A `U+0000` in a name is refused as `VALIDATION` (`pattern`)
-rather than reaching Postgres, which cannot store it.
+rather than reaching Postgres, which cannot store it. A `display_name` or `household_name` made only
+of whitespace and format characters (Unicode category Cf: zero-width space and joiners, word joiner,
+BOM) is `VALIDATION` with `rule: required`, blank to the eye though not to `TrimSpace`; such
+characters are never stripped from an otherwise visible name, and a bidi control inside one is
+accepted (Balances parity).
 
 **Server-generated ids at founding — an exception to §4.** See §4: the Household's and the User's
 UUIDv7s are minted in Go.
@@ -431,6 +437,20 @@ counts every request that reaches the hash (a registration is an attempt whether
 account), with the same curve (`LOGIN_FIRST_BACKOFF`, doubling, `LOGIN_MAX_BACKOFF`), and nothing clears
 it: a person who registered several accounts from one address waits up to the cap between them.
 Requests refused before the hash (policy, `EMAIL_TAKEN`, validation) record nothing.
+
+**Known limitations of that limiter** (ruled to document rather than change; follow-up #110):
+
+- **The key is the connection's own address (`RemoteAddr`), as login's is** (§5.1, never
+  `X-Forwarded-For`). Behind a reverse proxy every visitor therefore shares one `register-ip:` key.
+  Login shares that limitation, but a successful login clears its keys; registration never does.
+- **`failure_count` never clears or decays.** The window doubles per attempt from
+  `LOGIN_FIRST_BACKOFF` to the cap, so after about ten lifetime registrations through one address
+  every registration is followed by a `LOGIN_MAX_BACKOFF` (5m by default) window: any two within
+  five minutes are a `429`.
+- **So one party registering every five minutes keeps registration closed to everyone else on that
+  key, the instance's own founder included.** That is the cost of having a limiter at all on an
+  unauthenticated, hashing endpoint; it denies registration, never sign-in (login's keys are
+  separate), and `FOUNDING_DISABLED` makes it moot once the operator has founded their Household.
 
 **With the local provider off, register is a path that does not exist.** It is gated with login (§5.2)
 by one middleware matching on path alone: a bare 404 on every method, the same bytes and framing as an
@@ -728,7 +748,7 @@ it: a name read but not documented, documented but not read, or a default that d
 | `SHUTDOWN_TIMEOUT` | `10s` | |
 | `AUTH_LOCAL_ENABLED` | `true` | |
 | `AUTH_GOOGLE_ENABLED` | `false` | Planned, not built (PRD §4.1). |
-| `FOUNDING_DISABLED` | `false` | Refuses to found a new Household: the commit at the onboarding gate answers `403 FOUNDING_DISABLED`, and `GET /api/auth/methods` reports `founding_open: false` so the sign-in screen hides "Create account". It stops founding, not sign-in. **Registration is open to anyone who reaches the instance until this is set**, and the first person through the gate founds a Household, so found your own before exposing the instance, then set this to `true`. An operator who skips that step has handed their instance to whoever finds it first. Balances' code behaves the same way (its self-hosting notes say further accounts become invite-only once a Household exists; the code has no such rule). §5.1. |
+| `FOUNDING_DISABLED` | `false` | Refuses to found a new Household: the commit at the onboarding gate answers `403 FOUNDING_DISABLED`, and `GET /api/auth/methods` reports `founding_open: false` so the sign-in screen hides "Create account". It stops founding, not sign-in. **Registration is open to anyone who reaches the instance until this is set**, and the first person through the gate founds a Household, so found your own before exposing the instance, then set this to `true`. An operator who skips that step has handed their instance to whoever finds it first. Balances' code behaves the same way (its self-hosting notes say further accounts become invite-only once a Household exists; the code has no such rule). Registration's per-IP backoff keys on the connection's address, so behind a reverse proxy every visitor shares one key, and it never decays: one party registering every five minutes can keep registration closed to everyone, you included, until you set this (§5.1.1, #110). §5.1. |
 | `SESSION_TTL` | `720h` | The sliding window (§5.1). |
 | `SESSION_MAX_LIFETIME` | `2160h` | The absolute cap from `created_at` (§5.1). |
 | `LOGIN_FIRST_BACKOFF` | `1s` | The login backoff after the first failure; doubles per failure (§5.1). Must be at least 1ms (#69) — a boundary `validate()` names in its startup error. |

@@ -172,6 +172,9 @@ func (h *Handlers) CommitOnboardingChoice(ctx context.Context, request api.Commi
 		return invalidChoiceField("household_name", "max"), nil
 	case !storable(householdName):
 		return invalidChoiceField("household_name", "pattern"), nil
+	case invisible(householdName):
+		// Only zero-width or other format characters: blank to the eye.
+		return invalidChoiceField("household_name", "required"), nil
 	}
 
 	// A person who commits gets an account even if their client then goes away:

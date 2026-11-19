@@ -95,9 +95,10 @@ func disabledLocalLogin404(enabled bool) func(http.Handler) http.Handler {
 // /api/auth%2Flocal/login would reach login. chi routes it raw instead and
 // finds nothing.
 //
-// Path parameters stay decoded once either way: generated code binds a value
-// as-is when RawPath is empty and decodes it itself when it is not (#65,
-// path_param_test.go).
+// Path parameters are decoded once with or without this middleware: chi
+// routes on RawPath exactly when it is set, and generated code decodes a
+// value itself exactly then (#65, path_param_test.go). This only decides
+// which static segments match.
 func routeOnDecodedPath(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.RawPath == "" || strings.Contains(strings.ToLower(r.URL.RawPath), "%2f") {

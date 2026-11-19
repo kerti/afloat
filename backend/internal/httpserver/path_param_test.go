@@ -14,10 +14,11 @@ import (
 // The contract has no path parameter yet, so this binds the way generated code
 // does. The call below is oapi-codegen v2.8.0's chi-middleware.tmpl, verbatim
 // but for the names: ValueIsUnescaped tells the runtime that chi already
-// decoded the value, which it did whenever RawPath is empty - and
-// routeOnDecodedPath empties it on every path but one with an encoded slash.
-// Before runtime v1.9.0 (#89) the binder decoded unconditionally, a second
-// time. Step 9's first {id} route takes over with conformance cases.
+// decoded the value, which it did whenever RawPath is empty, since chi routes
+// on RawPath when there is one. Before runtime v1.9.0 (#89) the binder decoded
+// unconditionally, a second time. routeOnDecodedPath is mounted as in New, but
+// the invariant does not depend on it. Step 9's first {id} route takes over
+// with conformance cases (#106).
 func TestPathParametersAreDecodedOnce(t *testing.T) {
 	api := chi.NewRouter()
 	api.Get("/things/{id}", func(w http.ResponseWriter, r *http.Request) {

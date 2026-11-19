@@ -26,6 +26,16 @@ func TestCanonicalMediaType(t *testing.T) {
 		{"/json", ""},
 		{"application json", ""},
 		{"application/json/x", ""},
+		{"   ", ""},
+		{"application/json;", "application/json;"},
+		// Every RFC 9110 §5.6.2 tchar punctuation byte is kept...
+		{"a!#$%&'*+-.^_`|~/b", "a!#$%&'*+-.^_`|~/b"},
+		// ...and ASCII punctuation outside tchar is not.
+		{"applic(ation/json", ""},
+		{"application/js@on", ""},
+		{"application/json,text/plain", ""},
+		{`"application/json"`, ""},
+		{"application/js\x7fon", ""},
 	} {
 		h := http.Header{"Content-Type": {tc.in}}
 		canonicalMediaType(h)

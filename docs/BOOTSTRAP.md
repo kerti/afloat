@@ -377,8 +377,8 @@ the first failing field only.
 - The media type is matched case-insensitively (ASCII letters only), whitespace around it ignored
   (RFC 9110 §8.3.1). One that is not `token/token` at all — a non-ASCII letter included — counts as no
   `Content-Type`, so a body is refused as undeclared whatever the validator's own folding would make
-  of it. A body is read as UTF-8 whatever `charset` its `Content-Type` claims, a name
-  no decoder knows included: `application/json` has no such parameter (RFC 8259 §11). Every other
+  of it. A body is read as UTF-8 whatever `charset` its `Content-Type` claims, a name no decoder
+  knows included: `application/json` has no such parameter (RFC 8259 §11). Every other
   parameter is ignored too, an unparseable one included.
 - Otherwise every failing field competes, an absent required one (`rule: required`) included. The
   reported one is the least by wire field name, then by rule.
@@ -393,8 +393,8 @@ the first failing field only.
 
 This comes from the spec-validating middleware (`httpserver/openapi_validate.go`). The generated
 models carry `format: email` as a plain `string` (`oapi-codegen.yaml`), so the decode does not check
-the address a second time, and it lowercases the media type, which kin-openapi compares byte for
-byte.
+the address a second time, and it canonicalises the media type itself rather than relying on
+kin-openapi's matching, whose case-folding changed between releases (#89).
 
 **Paths and the body cap (#56).** Three rules, each a case in `contract/conformance/cases/routing.yaml`:
 

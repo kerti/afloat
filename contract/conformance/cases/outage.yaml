@@ -30,7 +30,7 @@
     path: /auth/methods
   expect:
     status: 200
-    body_json: {local: true, google: false}
+    body_json: {local: true, google: false, founding_open: true}
     cookies: {}
 
 - name: outage - login is 500 and burns no backoff

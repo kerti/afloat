@@ -198,10 +198,13 @@ const (
 	// ProfileLocalDisabled is AUTH_LOCAL_ENABLED=false with Google on, since a
 	// backend refuses to boot with no provider at all.
 	ProfileLocalDisabled = "local-disabled"
+	// ProfileFoundingDisabled is FOUNDING_DISABLED=true with local auth on: a
+	// person can still register and reach the gate, which refuses to found.
+	ProfileFoundingDisabled = "founding-disabled"
 )
 
 // Profiles is every configuration scripts/conformance.sh boots a server for.
-var Profiles = []string{ProfileDefault, ProfileLocalDisabled}
+var Profiles = []string{ProfileDefault, ProfileLocalDisabled, ProfileFoundingDisabled}
 
 // ProfileOf is the profile a case runs against.
 func (c *Case) ProfileOf() string {

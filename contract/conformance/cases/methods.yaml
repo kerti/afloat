@@ -10,4 +10,5 @@
     body_json:
       local: true
       google: false
+      founding_open: true
     cookies: {}

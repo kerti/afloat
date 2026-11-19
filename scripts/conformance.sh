@@ -22,8 +22,13 @@ SERVER_PORT=${AFLOAT_PORT:-5182}
 # with AUTH_LOCAL_ENABLED=false, for the cases that declare
 # `profile: local-disabled`.
 LOCAL_DISABLED_PORT=${AFLOAT_LOCAL_DISABLED_PORT:-5186}
+# The founding-disabled profile's server: FOUNDING_DISABLED=true, for the cases
+# that declare `profile: founding-disabled`.
+FOUNDING_DISABLED_PORT=${AFLOAT_FOUNDING_DISABLED_PORT:-5187}
 
-# Both servers share the one database: the local-disabled cases write nothing.
+# Every server shares the one database. The local-disabled cases write nothing;
+# the founding-disabled ones write handshakes, like the default's, and the runner
+# resets the database before each case.
 DATABASE_URL="postgres://${DB_USER}:${DB_PASSWORD}@${DB_HOST}:${DB_PORT}/afloat"
 
 LOG_DIR=$(mktemp -d)
@@ -91,6 +96,15 @@ local_disabled_env() {
   echo "AUTH_GOOGLE_ENABLED=true"
 }
 
+# Local auth stays on, so a person can register and reach the gate, which is
+# what refuses to found. Like local-disabled, it must not migrate again.
+founding_disabled_env() {
+  echo "AUTO_MIGRATE=false"
+  echo "AUTH_LOCAL_ENABLED=true"
+  echo "AUTH_GOOGLE_ENABLED=false"
+  echo "FOUNDING_DISABLED=true"
+}
+
 # start NAME PORT DATABASE_URL PROFILE_ENV_FN CMD...
 start() {
   local name=$1 port=$2 db=$3 profile=$4
@@ -142,10 +156,15 @@ echo '==> starting the local-disabled server'
 start local-disabled "$LOCAL_DISABLED_PORT" "$DATABASE_URL" local_disabled_env "$LOG_DIR/afloat"
 wait_ready local-disabled "$LOCAL_DISABLED_PORT" "$(pid_of local-disabled)"
 
+echo '==> starting the founding-disabled server'
+start founding-disabled "$FOUNDING_DISABLED_PORT" "$DATABASE_URL" founding_disabled_env "$LOG_DIR/afloat"
+wait_ready founding-disabled "$FOUNDING_DISABLED_PORT" "$(pid_of founding-disabled)"
+
 echo '==> conformance'
 cd contract/conformance
 AFLOAT_REQUIRE_CONFORMANCE=1 \
 AFLOAT_BASE_URL="http://localhost:${SERVER_PORT}/api" \
 AFLOAT_LOCAL_DISABLED_BASE_URL="http://localhost:${LOCAL_DISABLED_PORT}/api" \
+AFLOAT_FOUNDING_DISABLED_BASE_URL="http://localhost:${FOUNDING_DISABLED_PORT}/api" \
 AFLOAT_DATABASE_URL="$DATABASE_URL" \
   go test -count=1 -v ./...

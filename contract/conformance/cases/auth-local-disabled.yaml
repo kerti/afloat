@@ -57,6 +57,7 @@
     body_json:
       local: false
       google: true
+      founding_open: true
 
 # #56 made a percent-encoded path its decoded route, so an encoded spelling of
 # the login path IS the login path, and the gate must hold on every spelling:
@@ -114,3 +115,101 @@
       method: BREW
       path: /no-such-route
     rows: *no-session
+
+# Registration is the local provider's second route (#108), behind the same gate:
+# with local off, a person cannot open a handshake, so the onboarding gate has
+# nothing to honour. Each case writes nothing - no handshake, no backoff row.
+- name: local register disabled - POST is an unregistered-path 404
+  issue: "108"
+  profile: local-disabled
+  request:
+    method: POST
+    path: /auth/local/register
+    headers:
+      Content-Type: application/json
+    body: '{"email":"new@example.com","password":"kucing oranye di atap"}'
+  expect:
+    status: 404
+    same_as:
+      method: POST
+      path: /no-such-route
+      headers:
+        Content-Type: application/json
+      body: '{"email":"new@example.com","password":"kucing oranye di atap"}'
+    cookies: {}
+    rows: &nothing-opened
+      - sql: SELECT (SELECT count(*) FROM onboarding_handshakes)::int AS handshakes, (SELECT count(*) FROM login_attempts)::int AS attempts
+        rows: [{handshakes: 0, attempts: 0}]
+
+- name: local register disabled - GET is an unregistered-path 404, not a 405
+  issue: "108"
+  profile: local-disabled
+  request:
+    method: GET
+    path: /auth/local/register
+  expect:
+    status: 404
+    same_as:
+      method: GET
+      path: /no-such-route
+
+- name: local register disabled - an encoded spelling of the path is gated too
+  issue: "108"
+  profile: local-disabled
+  request:
+    method: POST
+    path: /auth/local/r%65gister
+    headers:
+      Content-Type: application/json
+    body: '{"email":"new@example.com","password":"kucing oranye di atap"}'
+  expect:
+    status: 404
+    same_as:
+      method: POST
+      path: /no-such-route
+      headers:
+        Content-Type: application/json
+      body: '{"email":"new@example.com","password":"kucing oranye di atap"}'
+    rows: *nothing-opened
+
+# HEAD's framing is decided after the handler returns, so a ResponseRecorder
+# cannot show it: the gate's 404 once carried a Content-Length that an
+# unregistered path's lacks. The harness is a live client.
+- name: local register disabled - HEAD is an unregistered-path 404
+  issue: "108"
+  profile: local-disabled
+  request:
+    method: HEAD
+    path: /auth/local/register
+  expect:
+    status: 404
+    same_as:
+      method: HEAD
+      path: /no-such-route
+
+- name: local register disabled - an unknown method answers like an unregistered path
+  issue: "108"
+  profile: local-disabled
+  request:
+    method: BREW
+    path: /auth/local/register
+  expect:
+    status: 405
+    same_as:
+      method: BREW
+      path: /no-such-route
+    rows: *nothing-opened
+
+# The gate holds nothing else back: with local off the onboarding routes still
+# exist (a later provider arrives at them) and answer a request with no
+# handshake as they always do.
+- name: local register disabled - the onboarding gate still exists and answers 401
+  issue: "108"
+  profile: local-disabled
+  request:
+    method: GET
+    path: /onboarding/options
+  expect:
+    status: 401
+    body_json: {code: UNAUTHORIZED}
+    cookies: {}

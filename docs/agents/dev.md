@@ -29,9 +29,12 @@ file grows as real targets land.
   next `go build` embeds it (BOOTSTRAP §8). Bare copy in JSX is a lint **error**: every string lives
   in `src/locales/en-GB.json` and `id-ID.json`, and a test fails if the two key sets differ or a
   contract `ErrorCode` has no wording. The palette is one file, `src/styles/theme.css`.
-- `make test-migrations` — applies `backend/internal/migrations/` with goose to a throwaway Postgres
-  container and asserts the schema behaves, the §7.1 in-place-edit hazard, and that Down drops what Up
-  created. Needs docker, so it is **not** in `make check`.
+- `make test-migrations` — applies `backend/internal/migrations/` with the goose CLI to a throwaway
+  Postgres container: Up applies, the §7.1 in-place-edit hazard, and Down drops what Up created. Needs
+  docker, so it is **not** in `make check`. The schema's own rules (CHECKs, indexes, foreign keys,
+  defaults) are Go tests in `backend/internal/migrations/schema_test.go`, which `make check` runs —
+  but like every integration test they **skip** when docker is down, and `make check` still reports
+  green. Run it as `AFLOAT_REQUIRE_TEST_DB=1 make check` to make a missing docker fail instead.
 - **Environment variables are documented in `BOOTSTRAP.md` §12**, and `scripts/check-env-docs.sh`
   (in `make check`) treats that table as the source of truth: it fails when the backend reads a name
   the table lacks, lacks one it lists, or defaults differently — including a duration spelled with a

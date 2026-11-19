@@ -16,6 +16,11 @@ export function errorMessage(t: TFunction, err: ApiError): string {
       return err.retryAfterSeconds === undefined || err.retryAfterSeconds === 0
         ? t("errors.TOO_MANY_ATTEMPTS_soon")
         : t("errors.TOO_MANY_ATTEMPTS", { count: err.retryAfterSeconds });
+    case "WEAK_PASSWORD": {
+      // The reason rides in args: `min` or `breached` (contract).
+      const reason = err.args.reason === "breached" ? "breached" : "min";
+      return t(`errors.WEAK_PASSWORD.${reason}`);
+    }
     default:
       return t(`errors.${err.code}`);
   }

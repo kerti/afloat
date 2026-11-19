@@ -6,17 +6,22 @@
   },
   "fields": {
     "email": "Email",
-    "password": "Kata sandi"
+    "password": "Kata sandi",
+    "displayName": "Nama Anda (opsional)",
+    "householdName": "Nama rumah tangga"
   },
   "fieldNames": {
     "email": "email",
-    "password": "kata sandi"
+    "password": "kata sandi",
+    "display_name": "nama",
+    "household_name": "nama rumah tangga"
   },
   "login": {
     "title": "Masuk",
     "submit": "Masuk",
     "submitting": "Sedang masuk…",
-    "unavailable": "Masuk dengan kata sandi dinonaktifkan di instans ini. Minta pengelolanya untuk mengaktifkannya."
+    "unavailable": "Masuk dengan kata sandi dinonaktifkan di instans ini. Minta pengelolanya untuk mengaktifkannya.",
+    "createAccount": "Buat akun"
   },
   "home": {
     "signedInAs": "Masuk sebagai {{name}}",
@@ -39,6 +44,31 @@
     "CROSS_SITE_REQUEST_BLOCKED": "Permintaan itu diblokir karena berasal dari situs lain. Muat ulang Afloat lalu coba lagi.",
     "INTERNAL": "Afloat tidak dapat menyelesaikannya. Coba beberapa saat lagi.",
     "NETWORK": "Tidak dapat menghubungi Afloat. Periksa koneksi Anda lalu coba lagi.",
-    "UNKNOWN": "Terjadi kesalahan. Coba beberapa saat lagi."
+    "UNKNOWN": "Terjadi kesalahan. Coba beberapa saat lagi.",
+    "EMAIL_TAKEN": "Sudah ada akun dengan email itu. Silakan masuk.",
+    "WEAK_PASSWORD": {
+      "min": "Gunakan minimal 10 karakter.",
+      "breached": "Kata sandi itu terlalu umum. Pilih yang lain."
+    },
+    "FOUNDING_DISABLED": "Instans ini tidak menerima rumah tangga baru. Tanyakan kepada pengelolanya."
+  },
+  "register": {
+    "title": "Buat akun Anda",
+    "passwordHint": "Minimal 10 karakter. Beberapa kata yang dirangkai biasanya cukup baik.",
+    "submit": "Lanjut",
+    "submitting": "Melanjutkan…",
+    "haveAccount": "Sudah punya akun?",
+    "signIn": "Masuk",
+    "closed": "Instans ini tidak menerima akun baru. Tanyakan kepada pengelolanya, atau masuk.",
+    "unavailable": "Membuat akun memerlukan masuk dengan kata sandi, yang dinonaktifkan di instans ini. Minta pengelolanya untuk mengaktifkannya."
+  },
+  "onboarding": {
+    "title": "Siapkan rumah tangga Anda",
+    "intro": "Anda mendaftar sebagai {{email}}. Satu langkah terakhir: beri nama rumah tangga Anda, atau pakai saran di bawah.",
+    "householdNameDefault": "Rumah Tangga {{name}}",
+    "submit": "Buat rumah tangga",
+    "submitting": "Membuat…",
+    "closed": "Instans ini sedang tidak menerima rumah tangga baru. Minta pengelolanya untuk membukanya, atau masuk ke akun yang sudah ada.",
+    "backToSignIn": "Kembali ke halaman masuk"
   }
 }

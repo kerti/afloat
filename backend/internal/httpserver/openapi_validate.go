@@ -186,22 +186,57 @@ func withoutSecurityRequirements(spec *openapi3.T) {
 //
 // ASCII letters only: a token is ASCII (RFC 9110 §5.6.2), and strings.ToLower
 // also folds U+0130 to "i", which would make "applİcation/json" JSON.
+//
+// A media type that is not token "/" token at all - "applİcation/json"
+// included - is no media type, and the header is dropped: a route with a body
+// then refuses it exactly as it refuses a missing Content-Type, and a route
+// without one never looked. Done here rather than left to kin-openapi, whose
+// own matching folds Unicode from v0.150.0 on and would read that spelling as
+// application/json (#89).
 func canonicalMediaType(h http.Header) {
 	contentType := h.Get("Content-Type")
 	if contentType == "" {
 		return
 	}
 	mediaType, params, hasParams := strings.Cut(contentType, ";")
+	mediaType = strings.Trim(mediaType, " \t")
+	if !isTokenSlashToken(mediaType) {
+		h.Del("Content-Type")
+		return
+	}
 	canonical := strings.Map(func(r rune) rune {
 		if 'A' <= r && r <= 'Z' {
 			return r + 'a' - 'A'
 		}
 		return r
-	}, strings.Trim(mediaType, " \t"))
+	}, mediaType)
 	if hasParams {
 		canonical += ";" + params
 	}
 	h.Set("Content-Type", canonical)
+}
+
+// isTokenSlashToken reports whether s is RFC 9110 §8.3.1's type "/" subtype,
+// each a non-empty token of tchar (§5.6.2) - ASCII only.
+func isTokenSlashToken(s string) bool {
+	typ, sub, ok := strings.Cut(s, "/")
+	return ok && isToken(typ) && isToken(sub)
+}
+
+func isToken(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case 'a' <= c && c <= 'z', 'A' <= c && c <= 'Z', '0' <= c && c <= '9':
+		case strings.IndexByte("!#$%&'*+-.^_`|~", c) >= 0:
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // writeOpenAPIValidationError translates the middleware's error into the

@@ -406,6 +406,10 @@ byte.
   disabled-login gate compares the decoded path, so no spelling of the login path escapes it. An
   unknown method (`FOO`, `PROPFIND`) answers 405 — chi's own method-not-allowed handling, on every path
   including an unregistered one (#71).
+- **The request line and headers are capped at 8 KiB (#92)**, `MaxHeaderBytes` in `cmd/afloat/main.go`,
+  not `net/http`'s 1 MiB default: self-hosting means there may be no proxy in front to cap them. A
+  fixed constant, not a §12 variable. `net/http` allows about 4 KiB of slack on top, then answers
+  `431` itself, before any handler runs — so no `ErrorCode` for it.
 - **Header values are unrestricted (#67)**, a UTF-8 byte in the 0x80–0xFF range included. Header
   *names* stay strict: `net/http` refuses an invalid name outright — verified with `X-\xe9: 1` and a
   DEL or HTAB byte in the name, each a bare `400 Bad Request` — and refuses a genuine control character

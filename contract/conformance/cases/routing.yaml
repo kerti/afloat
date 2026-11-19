@@ -31,6 +31,9 @@
         secure: false
         same_site: Lax
         expires: max-age
+    rows:
+      - sql: SELECT (SELECT count(*) FROM sessions)::int AS sessions, (SELECT count(*) FROM login_attempts)::int AS attempts
+        rows: [{sessions: 1, attempts: 0}]
 
 - name: routing - a percent-encoded path on a GET
   issue: "56"
@@ -199,6 +202,9 @@
         secure: false
         same_site: Lax
         expires: past
+    rows:
+      - sql: SELECT (SELECT count(*) FROM sessions)::int AS sessions, (SELECT count(*) FROM login_attempts)::int AS attempts
+        rows: [{sessions: 0, attempts: 0}]
 
 # Signed in, too: /me reads no body. Go's spec validator read it anyway,
 # inside its security check, and answered a signed-in /me with 401.

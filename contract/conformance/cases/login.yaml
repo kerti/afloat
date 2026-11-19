@@ -220,6 +220,13 @@
       Retry-After: "1"
     body_json: {code: TOO_MANY_ATTEMPTS}
     cookies: {}
+    rows:
+      - sql: SELECT regexp_replace(key, '^ip:.*', 'ip:*') AS key, failure_count FROM login_attempts ORDER BY 1
+        rows:
+          - {key: "email:nobody@example.com", failure_count: 1}
+          - {key: "ip:*", failure_count: 1}
+      - sql: SELECT count(*)::int AS n FROM sessions
+        rows: [{n: 0}]
 
 # The window doubles per failure. The given SQL ends the first window rather
 # than the case sleeping through it.

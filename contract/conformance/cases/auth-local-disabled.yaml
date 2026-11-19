@@ -23,6 +23,9 @@
       headers:
         Content-Type: application/json
       body: '{"email":"nobody@example.com","password":"correct horse battery staple"}'
+    rows:
+      - sql: SELECT (SELECT count(*) FROM sessions)::int AS sessions, (SELECT count(*) FROM login_attempts)::int AS attempts
+        rows: [{sessions: 0, attempts: 0}]
 
 # The 405 case. A gate keyed on POST leaves the router to answer GET with 405
 # Method Not Allowed, which says the route exists - the disclosure the 404 is

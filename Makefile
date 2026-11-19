@@ -7,7 +7,7 @@
 # One version for the lint gate, so a local pass and a CI pass mean the same
 # thing. .github/workflows/ci.yml installs exactly this via `make lint-install`;
 # bump it here and CI follows.
-GOLANGCI_VERSION := v2.13.2
+GOLANGCI_VERSION := v2.14.0
 
 # Where check-go writes its coverage profile, relative to backend/. Produced on
 # every run rather than behind a flag: CI uploads the profile from the same job

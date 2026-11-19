@@ -58,3 +58,6 @@
     status: 403
     body_json: {code: CROSS_SITE_REQUEST_BLOCKED}
     cookies: {}
+    rows:
+      - sql: SELECT (SELECT count(*) FROM sessions)::int AS sessions, (SELECT count(*) FROM login_attempts)::int AS attempts
+        rows: [{sessions: 0, attempts: 0}]

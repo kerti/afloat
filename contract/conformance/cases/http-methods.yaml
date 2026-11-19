@@ -279,6 +279,9 @@
     same_as:
       method: POST
       path: /no-such-route
+    rows:
+      - sql: SELECT (SELECT count(*) FROM sessions)::int AS sessions, (SELECT count(*) FROM login_attempts)::int AS attempts
+        rows: [{sessions: 0, attempts: 0}]
 
 - name: http methods - TRACE star answers like an unregistered path
   issue: "64"
@@ -331,3 +334,6 @@
   expect:
     status: 405
     body_empty: true
+    rows:
+      - sql: SELECT (SELECT count(*) FROM sessions)::int AS sessions, (SELECT count(*) FROM login_attempts)::int AS attempts
+        rows: [{sessions: 0, attempts: 0}]

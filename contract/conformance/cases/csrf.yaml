@@ -35,6 +35,9 @@
     status: 403
     body_json: {code: CROSS_SITE_REQUEST_BLOCKED}
     cookies: {}
+    rows:
+      - sql: SELECT (SELECT count(*) FROM sessions)::int AS sessions, (SELECT count(*) FROM login_attempts)::int AS attempts
+        rows: [{sessions: 0, attempts: 0}]
 
 - name: csrf - same-origin login passes
   request:
@@ -56,6 +59,9 @@
         secure: false
         same_site: Lax
         expires: max-age
+    rows:
+      - sql: SELECT (SELECT count(*) FROM sessions)::int AS sessions, (SELECT count(*) FROM login_attempts)::int AS attempts
+        rows: [{sessions: 1, attempts: 0}]
 
 # A user typing the URL, or a bookmark.
 - name: csrf - Sec-Fetch-Site none passes
@@ -71,6 +77,9 @@
     body_empty: true
     cookies:
       afloat_session: *session-cookie
+    rows:
+      - sql: SELECT (SELECT count(*) FROM sessions)::int AS sessions, (SELECT count(*) FROM login_attempts)::int AS attempts
+        rows: [{sessions: 1, attempts: 0}]
 
 # Sec-Fetch-Site wins where both are sent: a browser that sends it knows.
 - name: csrf - Sec-Fetch-Site same-origin wins over a foreign Origin
@@ -87,6 +96,9 @@
     body_empty: true
     cookies:
       afloat_session: *session-cookie
+    rows:
+      - sql: SELECT (SELECT count(*) FROM sessions)::int AS sessions, (SELECT count(*) FROM login_attempts)::int AS attempts
+        rows: [{sessions: 1, attempts: 0}]
 
 - name: csrf - a foreign Origin with no Sec-Fetch-Site is blocked
   request:
@@ -101,6 +113,9 @@
     status: 403
     body_json: {code: CROSS_SITE_REQUEST_BLOCKED}
     cookies: {}
+    rows:
+      - sql: SELECT (SELECT count(*) FROM sessions)::int AS sessions, (SELECT count(*) FROM login_attempts)::int AS attempts
+        rows: [{sessions: 0, attempts: 0}]
 
 - name: csrf - a matching Origin with no Sec-Fetch-Site passes
   request:
@@ -116,6 +131,9 @@
     body_empty: true
     cookies:
       afloat_session: *session-cookie
+    rows:
+      - sql: SELECT (SELECT count(*) FROM sessions)::int AS sessions, (SELECT count(*) FROM login_attempts)::int AS attempts
+        rows: [{sessions: 1, attempts: 0}]
 
 # Logout is a POST too: a cross-site page must not be able to sign a user out.
 - name: csrf - cross-site logout is blocked and the session survives

@@ -94,6 +94,10 @@ func disabledLocalLogin404(enabled bool) func(http.Handler) http.Handler {
 // Except for an encoded slash: decoded, %2F would become a separator and
 // /api/auth%2Flocal/login would reach login. chi routes it raw instead and
 // finds nothing.
+//
+// Path parameters stay decoded once either way: generated code binds a value
+// as-is when RawPath is empty and decodes it itself when it is not (#65,
+// path_param_test.go).
 func routeOnDecodedPath(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.RawPath == "" || strings.Contains(strings.ToLower(r.URL.RawPath), "%2f") {

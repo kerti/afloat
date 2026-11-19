@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!-- Placeholder until the brand session (PRD §9): a neutral disc and a waterline. -->
+  <rect width="512" height="512" rx="112" fill="#f4f4f5"/>
+  <path d="M96 300c40 0 40-24 80-24s40 24 80 24 40-24 80-24 40 24 80 24" fill="none" stroke="#3f3f46" stroke-width="28" stroke-linecap="round"/>
+  <circle cx="256" cy="200" r="56" fill="#3f3f46"/>
+</svg>

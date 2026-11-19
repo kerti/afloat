@@ -30,6 +30,11 @@ type Deps struct {
 	System *system.Handlers
 	Auth   *auth.Handlers
 
+	// Web serves the built frontend (web.Handler, BOOTSTRAP.md §8) on every
+	// GET and HEAD outside the API. Nil in a binary built without one: the
+	// server is then the API alone, as in tests and the conformance suite.
+	Web http.Handler
+
 	// HandlerTimeout bounds how long a handler may run before middleware.Timeout
 	// cuts it off. It is config.Config.WriteTimeout (HTTP_WRITE_TIMEOUT) — issue
 	// #30 folded the two rather than inventing a second variable that would
@@ -89,6 +94,23 @@ func New(d Deps) http.Handler {
 	// including the disabled-login gate below and chi's own method-not-allowed
 	// handling — see optionsRefused (#66).
 	r.Use(optionsRefused)
+
+	// Everything below is the API's alone. A static file needs no body cap,
+	// CSRF guard or session lookup - and a session lookup per asset would be a
+	// database round trip per file on every cold load.
+	r.Group(func(r chi.Router) {
+		mountAPI(r, srv, d)
+	})
+
+	if d.Web != nil {
+		r.Get("/*", d.Web.ServeHTTP)
+		r.Head("/*", d.Web.ServeHTTP)
+	}
+
+	return r
+}
+
+func mountAPI(r chi.Router, srv *Server, d Deps) {
 	// oapi-codegen's generated HandlerWithOptions (api.gen.go) mounts every
 	// operation unconditionally — one r.Post/r.Get call per route, inlined
 	// in a function we don't own — with no per-operation option to skip
@@ -146,6 +168,4 @@ func New(d Deps) http.Handler {
 		// matched a request to a route the contract declares (openapi_validate.go).
 		Middlewares: []api.MiddlewareFunc{openapiRequestValidator()},
 	}))
-
-	return r
 }

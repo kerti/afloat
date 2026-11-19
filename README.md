@@ -30,11 +30,15 @@ See [`docs/VISION.md`](docs/VISION.md).
 ## Getting started
 
 ```sh
-make setup    # git hooks (pii-guard) + Claude Code hooks
+make setup    # git hooks (pii-guard) + Claude Code hooks + frontend npm ci
 make doctor   # what's installed, what's missing
 make db-up    # Postgres, database `afloat`
 make help     # every target
 ```
+
+To run the app: `make db-up`, start the backend (`cd backend && go run ./cmd/afloat` with a `.env`
+from `.env.example`), then `make frontend-dev` and open http://localhost:5181. For a single binary
+that serves both, `make frontend-build` before `go build`.
 
 Until a release exists, a schema change **edits `backend/internal/migrations/00001_baseline.sql` in
 place** rather than adding a `00002` — and always alongside `make db-reset`, because goose silently

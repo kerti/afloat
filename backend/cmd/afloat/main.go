@@ -21,6 +21,7 @@ import (
 	"github.com/kerti/afloat/backend/internal/httpserver"
 	"github.com/kerti/afloat/backend/internal/postgres"
 	"github.com/kerti/afloat/backend/internal/system"
+	"github.com/kerti/afloat/backend/internal/web"
 )
 
 // Short and fixed: no legitimate client needs longer to send its headers, and
@@ -82,6 +83,12 @@ func run() error {
 
 	queries := db.New(pool)
 
+	// nil when the binary was built without `make frontend-build`.
+	frontend := web.Handler()
+	if frontend == nil {
+		slog.Warn("no frontend embedded; serving the API only (run make frontend-build before go build)")
+	}
+
 	handler := httpserver.New(httpserver.Deps{
 		Auth: auth.New(auth.Deps{
 			Querier:            queries,
@@ -102,6 +109,7 @@ func run() error {
 		// bound on how long a handler may run, not a second literal that could
 		// drift from it (#30).
 		HandlerTimeout: cfg.WriteTimeout,
+		Web:            frontend,
 	})
 
 	srv := newHTTPServer(cfg, handler)

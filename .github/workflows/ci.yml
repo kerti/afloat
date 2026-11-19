@@ -42,6 +42,18 @@ jobs:
           go-version-file: backend/go.mod
           cache-dependency-path: backend/go.sum
 
+      # The frontend surface of `make check` (check-frontend). .nvmrc is the one
+      # Node version, as backend/go.mod is the one Go version.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      # check-frontend fails rather than installs when node_modules is missing,
+      # so the install is a step of its own, as it is locally.
+      - run: make frontend-install
+
       # The pinned version from the Makefile, so the lint gate is the same one
       # twice. check-go falls back to gofmt+vet when the binary is absent rather
       # than failing, so prove it is really on PATH before trusting the gate.
@@ -53,10 +65,10 @@ jobs:
 
       - run: make check
 
-      # The profile is produced BY `make check` (make check-go writes
-      # backend/coverage.out), so this step uploads what the gate already
-      # measured rather than re-running the suite - the mirror stays one run,
-      # not two.
+      # Both profiles are produced BY `make check` (check-go writes
+      # backend/coverage.out, check-frontend frontend/coverage/lcov.info), so
+      # these steps upload what the gate already measured rather than
+      # re-running a suite - the mirror stays one run, not two.
       #
       # The token is an input, not step env: the action builds its own CLI
       # invocation and passes `-t` only from the input. fail_ci_if_error is on
@@ -84,6 +96,16 @@ jobs:
           fail_ci_if_error: true
           token: ${{ secrets.CODECOV_TOKEN }}
 
+      - name: Upload frontend coverage
+        if: github.actor != 'dependabot[bot]'
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
+        with:
+          files: frontend/coverage/lcov.info
+          disable_search: true
+          flags: frontend
+          fail_ci_if_error: true
+          token: ${{ secrets.CODECOV_TOKEN }}
+
       # make check reports one line per surface and swallows the detail. On a
       # failure, re-run the parts that can fail, verbosely, so the log says what
       # broke instead of which target to run locally.
@@ -93,6 +115,7 @@ jobs:
           ./scripts/check-generated.sh || true
           ./scripts/check-env-docs.sh || true
           make check-go || true
+          make check-frontend || true
 
   migrations:
     name: migrations (goose, real schema)

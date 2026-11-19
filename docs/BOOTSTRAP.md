@@ -543,9 +543,26 @@ section fails rather than quietly becoming wrong.
 
 ## 8. Frontend delivery
 
-The backend embeds `frontend/dist` via `//go:embed`, with SPA fallback: unknown path → `index.html`,
-but never for `/api/*` and never for the service worker file, which must be served at root scope with
-correct cache headers or the PWA silently stops updating.
+The backend embeds the built frontend via `//go:embed` (`backend/internal/web`). `//go:embed` cannot
+reach a parent directory, so `make frontend-build` builds `frontend/` and copies `dist` into
+`backend/internal/web/dist`, as the migrations live in the package that embeds them. That copy is
+build output and gitignored apart from a `.gitkeep`. A binary built without it serves the API alone,
+which is what `make check` and the conformance suite exercise.
+
+Served on `GET`/`HEAD` outside `/api`, after the global middleware (request id, security headers,
+logging) but outside the API-only group, so a static file never pays for a session lookup:
+
+- a file that exists is served as itself;
+- an extensionless path with no file is a client route and gets `index.html` (SPA fallback); never
+  for `/api/*`, and never for a missing path with an extension, so a stale `/assets/*.js` is a 404,
+  not HTML served as JavaScript;
+- `index.html`, `sw.js` and the manifest are `Cache-Control: no-cache`, or an installed PWA keeps
+  running the old shell; content-hashed `/assets/*` are cached for a year;
+- the service worker is served at root scope, precaches the shell only (no runtime caching of
+  `/api`), never answers a navigation to `/api/*`, and waits for the user to accept an update
+  (`registerType: 'prompt'`).
+
+In development, Vite serves the frontend on 5181 and proxies `/api` to the backend on 5182.
 
 ## 9. Internationalisation
 

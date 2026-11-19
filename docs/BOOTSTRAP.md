@@ -394,7 +394,8 @@ models carry `format: email` as a plain `string` (`oapi-codegen.yaml`), so the d
 the address a second time, and it lowercases the media type, which kin-openapi compares byte for
 byte.
 
-**Paths and the body cap (#56).** Three rules, each a case in `contract/conformance/cases/routing.yaml`:
+**Paths, headers and the body cap (#56, #67, #92).** The path and body-cap rules are cases in
+`contract/conformance/cases/routing.yaml`; the header rules are pinned in the backend's own tests:
 
 - **A percent-encoded path is its decoded route** (RFC 3986 §6.2.2.2): `/api/auth/local/%6Cogin` is
   login. `routeOnDecodedPath` clears `RawPath` so chi routes on the decoded path. **An encoded slash
@@ -408,8 +409,10 @@ byte.
   including an unregistered one (#71).
 - **The request line and headers are capped at 8 KiB (#92)**, `MaxHeaderBytes` in `cmd/afloat/main.go`,
   not `net/http`'s 1 MiB default: self-hosting means there may be no proxy in front to cap them. A
-  fixed constant, not a §12 variable. `net/http` allows about 4 KiB of slack on top, then answers
-  `431` itself, before any handler runs — so no `ErrorCode` for it.
+  fixed constant, not a §12 variable. `net/http` reads up to 4 KiB of slop past it — up to 8 KiB is
+  always accepted, past 12 KiB always refused — then answers `431` itself, before any handler runs:
+  a bare plain-text answer, outside the fixed response-header set and the access log, like the
+  connector-level 400s. No `ErrorCode` for it.
 - **Header values are unrestricted (#67)**, a UTF-8 byte in the 0x80–0xFF range included. Header
   *names* stay strict: `net/http` refuses an invalid name outright — verified with `X-\xe9: 1` and a
   DEL or HTAB byte in the name, each a bare `400 Bad Request` — and refuses a genuine control character

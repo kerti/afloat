@@ -41,9 +41,10 @@ const writeTimeoutGrace = 5 * time.Second
 // to cap them. 8 KiB is the common proxy and server default, and nothing
 // Afloat reads comes close - the session cookie is 58 bytes, a stored
 // User-Agent at most 512 code points. A fixed constant, not a §12 variable,
-// like the Argon2 cap. net/http allows about 4 KiB of read-buffer slack on top,
-// so this is a floor on what is refused, not an exact cut-off. Past it the
-// server answers 431 itself, before any handler runs.
+// like the Argon2 cap. net/http reads up to 4 KiB past it (read-buffer slop),
+// so a request line plus headers up to 8 KiB is always accepted and anything
+// past 12 KiB is refused; in between passes. The 431 is net/http's own,
+// before any handler runs.
 const maxHeaderBytes = 8 << 10
 
 func main() {

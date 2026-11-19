@@ -107,11 +107,11 @@ func TestOptionsStarReachesTheHandler(t *testing.T) {
 }
 
 // #92: the header section is capped at maxHeaderBytes, not net/http's 1 MiB
-// default. Only a real server can show it - the cap lives in Server.Serve's
-// reader, which httptest.NewRecorder never touches. Fixed sizes, not ones
-// derived from the constant, so raising the cap back toward 1 MiB fails here:
-// 7 KiB must pass, and 32 KiB - past the cap plus net/http's ~4 KiB slack -
-// must be refused.
+// default. Only a real server can show it - the cap is conn.readRequest's read
+// limit, which httptest.NewRecorder never touches. Fixed sizes, not ones
+// derived from the constant: 7 KiB must pass, and 16 KiB - past the cap plus
+// net/http's 4 KiB slop - must be refused, so raising the cap past about 12 KiB
+// fails here.
 func TestOversizeHeadersAreRefused(t *testing.T) {
 	q := db.Querier(nil)
 	cfg := config.Config{WriteTimeout: time.Second}
@@ -151,7 +151,7 @@ func TestOversizeHeadersAreRefused(t *testing.T) {
 	if got := statusFor(7 << 10); !strings.Contains(got, "404") {
 		t.Errorf("a 7 KiB header section answered %q, want the route's 404", got)
 	}
-	if got := statusFor(32 << 10); got != "HTTP/1.1 431 Request Header Fields Too Large" {
-		t.Errorf("a 32 KiB header section answered %q, want 431 - is MaxHeaderBytes still set?", got)
+	if got := statusFor(16 << 10); got != "HTTP/1.1 431 Request Header Fields Too Large" {
+		t.Errorf("a 16 KiB header section answered %q, want 431 - is MaxHeaderBytes still 8 KiB?", got)
 	}
 }

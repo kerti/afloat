@@ -36,6 +36,17 @@ const readHeaderTimeout = 5 * time.Second
 // grace is the time that answer has to reach the client.
 const writeTimeoutGrace = 5 * time.Second
 
+// maxHeaderBytes caps the request line plus headers (#92), well below
+// net/http's 1 MiB default: self-hosting means there may be no proxy in front
+// to cap them. 8 KiB is the common proxy and server default, and nothing
+// Afloat reads comes close - the session cookie is 58 bytes, a stored
+// User-Agent at most 512 code points. A fixed constant, not a §12 variable,
+// like the Argon2 cap. net/http reads up to 4 KiB past it (read-buffer slop),
+// so a request line plus headers up to 8 KiB is always accepted and anything
+// past 12 KiB is refused; in between passes. The 431 is net/http's own,
+// before any handler runs.
+const maxHeaderBytes = 8 << 10
+
 func main() {
 	if err := run(); err != nil {
 		slog.Error("fatal", "err", err)
@@ -127,6 +138,7 @@ func newHTTPServer(cfg config.Config, handler http.Handler) *http.Server {
 		// Separate from ReadTimeout: this one bounds a client that opens a
 		// connection and dribbles headers, which ReadTimeout does not cover.
 		ReadHeaderTimeout: readHeaderTimeout,
+		MaxHeaderBytes:    maxHeaderBytes,
 		ReadTimeout:       cfg.ReadTimeout,
 		WriteTimeout:      cfg.WriteTimeout + writeTimeoutGrace,
 		IdleTimeout:       cfg.IdleTimeout,

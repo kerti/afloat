@@ -105,3 +105,53 @@ func TestOptionsStarReachesTheHandler(t *testing.T) {
 		t.Errorf("OPTIONS * answer carries an Allow header, which optionsRefused never sends: %q", answer)
 	}
 }
+
+// #92: the header section is capped at maxHeaderBytes, not net/http's 1 MiB
+// default. Only a real server can show it - the cap is conn.readRequest's read
+// limit, which httptest.NewRecorder never touches. Fixed sizes, not ones
+// derived from the constant: 7 KiB must pass, and 16 KiB - past the cap plus
+// net/http's 4 KiB slop - must be refused, so raising the cap past about 12 KiB
+// fails here.
+func TestOversizeHeadersAreRefused(t *testing.T) {
+	q := db.Querier(nil)
+	cfg := config.Config{WriteTimeout: time.Second}
+	srv := newHTTPServer(cfg, httpserver.New(httpserver.Deps{
+		System:         system.New(system.Deps{Querier: q, Version: "test", LocalEnabled: true}),
+		Auth:           auth.New(auth.Deps{Querier: q}),
+		HandlerTimeout: cfg.WriteTimeout,
+	}))
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() { _ = srv.Serve(ln) }()
+	t.Cleanup(func() { _ = srv.Close() })
+
+	statusFor := func(headerBytes int) string {
+		t.Helper()
+		conn, err := net.Dial("tcp", ln.Addr().String())
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = conn.Close() }()
+		if err := conn.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
+			t.Fatal(err)
+		}
+		req := "GET /api/no-such-route HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n" +
+			"X-Padding: " + strings.Repeat("a", headerBytes) + "\r\n\r\n"
+		// The write may fail part-way: a server that has already answered 431
+		// closes the connection. The answer is still there to read.
+		_, _ = conn.Write([]byte(req))
+		raw, _ := io.ReadAll(conn)
+		statusLine, _, _ := strings.Cut(string(raw), "\r\n")
+		return statusLine
+	}
+
+	if got := statusFor(7 << 10); !strings.Contains(got, "404") {
+		t.Errorf("a 7 KiB header section answered %q, want the route's 404", got)
+	}
+	if got := statusFor(16 << 10); got != "HTTP/1.1 431 Request Header Fields Too Large" {
+		t.Errorf("a 16 KiB header section answered %q, want 431 - is MaxHeaderBytes still 8 KiB?", got)
+	}
+}

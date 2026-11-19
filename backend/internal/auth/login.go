@@ -241,7 +241,8 @@ func (h *Handlers) backoffRemaining(ctx context.Context, keys []string) (time.Du
 // separate rate limiters, so one failing to write (a transient DB error) must
 // not stop the other from being recorded — that is exactly when the per-IP
 // limiter matters most. Logs and continues rather than returning on the first
-// error (#32 item 3).
+// error (#32 item 3). Registration records its attempts here too, under its
+// own key (register.go).
 func (h *Handlers) recordFailure(ctx context.Context, keys []string) {
 	for _, key := range keys {
 		if err := h.q.RecordLoginFailure(ctx, db.RecordLoginFailureParams{
@@ -249,7 +250,7 @@ func (h *Handlers) recordFailure(ctx context.Context, keys []string) {
 			FirstBackoff: intervalFrom(h.firstBackoff),
 			MaxBackoff:   intervalFrom(h.maxBackoff),
 		}); err != nil {
-			slog.Error("login: record failure", "key", key, "err", err)
+			slog.Error("record backoff failure", "key", key, "err", err)
 		}
 	}
 }

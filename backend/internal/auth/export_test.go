@@ -19,6 +19,22 @@ func ContextForTest(ctx context.Context, ip, userAgent, sessionToken string) con
 	return ctx
 }
 
+// WithOnboardingTokenForTest adds the handshake cookie's value to a context
+// built by ContextForTest, as RequestContextMiddleware would.
+func WithOnboardingTokenForTest(ctx context.Context, token string) context.Context {
+	return context.WithValue(ctx, onboardingTokenKey{}, token)
+}
+
+// VerifyForTest checks a password against a stored PHC string, taking the
+// Argon2 permit verifyHoldingPermit requires.
+func VerifyForTest(password, phc string) bool {
+	if err := acquireArgonPermit(context.Background()); err != nil {
+		return false
+	}
+	defer releaseArgonPermit()
+	return verifyHoldingPermit(password, phc)
+}
+
 // ArgonConcurrencyCapForTest reports the fixed cap.
 func ArgonConcurrencyCapForTest() int32 {
 	return argonConcurrencyCap

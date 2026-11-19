@@ -47,6 +47,16 @@ type LoginAttempt struct {
 	UpdatedAt    pgtype.Timestamptz
 }
 
+type OnboardingHandshake struct {
+	ID           string
+	Email        string
+	DisplayName  string
+	Locale       string
+	PasswordHash *string
+	CreatedAt    pgtype.Timestamptz
+	ExpiresAt    pgtype.Timestamptz
+}
+
 type Session struct {
 	ID         string
 	UserID     pgtype.UUID

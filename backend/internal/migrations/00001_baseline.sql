@@ -1,5 +1,6 @@
 -- Baseline: identity and authentication only (BOOTSTRAP.md §11 step 3).
--- Households, Users, credentials, sessions, invitations, login backoff. No
+-- Households, Users, credentials, sessions, onboarding handshakes, invitations,
+-- login backoff. No
 -- domain table (pockets, categories, budgets, expenses) lands until step 9.
 --
 -- Canonical and hand-written: the binary embeds it, goose applies it, and sqlc
@@ -11,7 +12,8 @@
 --     missing client id pass silently.
 --   * Money is DECIMAL(20,4).
 --   * Soft delete on Household-scoped domain data. Instance-local auth state
---     (credentials, sessions, invitations, login_attempts) hard-deletes:
+--     (credentials, sessions, onboarding_handshakes, invitations,
+--     login_attempts) hard-deletes:
 --     revocation IS the row delete.
 
 -- +goose Up
@@ -141,6 +143,40 @@ CREATE INDEX sessions_user_id_idx ON sessions (user_id);
 CREATE INDEX sessions_expires_at_idx ON sessions (expires_at);
 
 -- ---------------------------------------------------------------------------
+-- onboarding_handshakes
+-- ---------------------------------------------------------------------------
+
+-- The gap between registering a credential and having an account (BOOTSTRAP.md
+-- §5.1). Registration validates and hashes, then parks the would-be credential
+-- here; the User, the Household and the credentials row are created together
+-- when the person commits at the gate, in one transaction that claims this row
+-- with DELETE ... RETURNING. So there is no household_id: nothing exists yet to
+-- point at, and a later join choice will add its own columns, not reshape these.
+--
+-- Instance-local auth state, so it hard-deletes like sessions. Liveness is
+-- decided by expires_at against the database's own clock, never the app's.
+CREATE TABLE onboarding_handshakes (
+    -- SHA-256 hex of the cookie's token, like sessions.id: the row carries a
+    -- password hash, so a database leak must not yield a presentable token.
+    id            text PRIMARY KEY,
+    -- Already trimmed and lower-cased by the registration handler.
+    email         text NOT NULL,
+    display_name  text NOT NULL,
+    locale        text NOT NULL,
+    -- Argon2id PHC string. Nullable for the day a Google identity opens a
+    -- handshake with no password to hash.
+    password_hash text,
+    created_at    timestamptz NOT NULL DEFAULT now(),
+    expires_at    timestamptz NOT NULL,
+
+    CONSTRAINT onboarding_handshakes_locale_known
+        CHECK (locale IN ('en-GB', 'id-ID'))
+);
+
+-- Supports the expired-handshake sweep.
+CREATE INDEX onboarding_handshakes_expires_at_idx ON onboarding_handshakes (expires_at);
+
+-- ---------------------------------------------------------------------------
 -- invitations
 -- ---------------------------------------------------------------------------
 
@@ -201,6 +237,7 @@ CREATE INDEX login_attempts_backoff_until_idx
 
 DROP TABLE IF EXISTS login_attempts;
 DROP TABLE IF EXISTS invitations;
+DROP TABLE IF EXISTS onboarding_handshakes;
 DROP TABLE IF EXISTS sessions;
 DROP TABLE IF EXISTS credentials;
 DROP TABLE IF EXISTS users;

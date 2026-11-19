@@ -12,13 +12,14 @@ import (
 // request-scoped facts authentication needs are put there by
 // RequestContextMiddleware rather than reaching for globals.
 type (
-	clientIPKey     struct{}
-	userAgentKey    struct{}
-	sessionTokenKey struct{}
+	clientIPKey        struct{}
+	userAgentKey       struct{}
+	sessionTokenKey    struct{}
+	onboardingTokenKey struct{}
 )
 
 // RequestContextMiddleware carries the client IP, the User-Agent and the
-// presented session token into the handler context. The User-Agent is
+// presented session and onboarding-handshake tokens into the handler context. The User-Agent is
 // sanitised for storage here (sanitizeUserAgent), not left as the raw header:
 // an invalid one reaching Postgres unsanitised failed the whole login with a
 // 500 ("invalid byte sequence for encoding \"UTF8\": 0x85"), and userAgentFrom
@@ -30,6 +31,9 @@ func RequestContextMiddleware(next http.Handler) http.Handler {
 		ctx = context.WithValue(ctx, userAgentKey{}, sanitizeUserAgent(r.UserAgent()))
 		if cookie, err := r.Cookie(SessionCookieName); err == nil {
 			ctx = context.WithValue(ctx, sessionTokenKey{}, cookie.Value)
+		}
+		if cookie, err := r.Cookie(OnboardingCookieName); err == nil {
+			ctx = context.WithValue(ctx, onboardingTokenKey{}, cookie.Value)
 		}
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
@@ -96,6 +100,11 @@ func userAgentFrom(ctx context.Context) string {
 
 func sessionTokenFrom(ctx context.Context) string {
 	token, _ := ctx.Value(sessionTokenKey{}).(string)
+	return token
+}
+
+func onboardingTokenFrom(ctx context.Context) string {
+	token, _ := ctx.Value(onboardingTokenKey{}).(string)
 	return token
 }
 

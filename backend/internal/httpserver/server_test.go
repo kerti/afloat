@@ -321,7 +321,7 @@ func TestHandlerTimeoutReadsConfig(t *testing.T) {
 }
 
 // spyQuerier's every unstubbed method panics (db.Querier is embedded nil),
-// which is deliberate: if disabledLocalLogin404 ever let a request through
+// which is deliberate: if disabledLocalAuth404 ever let a request through
 // to the handler, the test fails loudly on that panic rather than passing by
 // accident. CreateSession is the one method it does stub, so a session issued
 // in spite of the gate is a recorded fact, not a guess.

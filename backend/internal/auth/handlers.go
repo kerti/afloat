@@ -17,6 +17,10 @@ type Handlers struct {
 	sessionMaxLifetime time.Duration
 	cookieSecure       bool
 
+	// foundingDisabled is FOUNDING_DISABLED (BOOTSTRAP.md §12): the commit at
+	// the onboarding gate refuses to found a Household while it is set.
+	foundingDisabled bool
+
 	// The backoff for failed logins: firstBackoff after the first, doubling per
 	// failure after it, capped at maxBackoff. Backoff, never a hard lockout - a
 	// lockout on a self-hosted household app locks the household out of its own
@@ -40,6 +44,7 @@ type Deps struct {
 	SessionTTL         time.Duration
 	SessionMaxLifetime time.Duration
 	CookieSecure       bool
+	FoundingDisabled   bool
 	FirstBackoff       time.Duration
 	MaxBackoff         time.Duration
 	Now                func() time.Time
@@ -56,6 +61,7 @@ func New(d Deps) *Handlers {
 		sessionTTL:         d.SessionTTL,
 		sessionMaxLifetime: d.SessionMaxLifetime,
 		cookieSecure:       d.CookieSecure,
+		foundingDisabled:   d.FoundingDisabled,
 		firstBackoff:       d.FirstBackoff,
 		maxBackoff:         d.MaxBackoff,
 		now:                now,

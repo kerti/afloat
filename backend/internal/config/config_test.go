@@ -16,7 +16,7 @@ func setEnv(t *testing.T, kv map[string]string) {
 	for _, k := range []string{
 		"DATABASE_URL", "PORT", "LOG_FORMAT", "LOG_LEVEL", "AUTO_MIGRATE",
 		"AUTH_LOCAL_ENABLED", "AUTH_GOOGLE_ENABLED", "COOKIE_SECURE", "VERSION",
-		"HTTP_WRITE_TIMEOUT", "LOGIN_FIRST_BACKOFF", "LOGIN_MAX_BACKOFF",
+		"HTTP_WRITE_TIMEOUT", "LOGIN_FIRST_BACKOFF", "LOGIN_MAX_BACKOFF", "FOUNDING_DISABLED",
 	} {
 		if old, ok := os.LookupEnv(k); ok {
 			t.Cleanup(func() { _ = os.Setenv(k, old) })
@@ -54,6 +54,23 @@ func TestLoadDefaults(t *testing.T) {
 	}
 	if !cfg.AutoMigrate {
 		t.Error("AutoMigrate = false, want true")
+	}
+	// Open by default (ruling on #108); an operator closes it after founding
+	// their own Household.
+	if cfg.FoundingDisabled {
+		t.Error("FoundingDisabled = true, want false by default")
+	}
+}
+
+func TestLoadReadsFoundingDisabled(t *testing.T) {
+	setEnv(t, map[string]string{"DATABASE_URL": "postgres://x/y", "FOUNDING_DISABLED": "true"})
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !cfg.FoundingDisabled {
+		t.Error("FoundingDisabled = false with FOUNDING_DISABLED=true")
 	}
 }
 

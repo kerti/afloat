@@ -117,14 +117,22 @@ func ValidatePasswordPolicy(password string) error {
 // HashPassword returns a PHC string: $argon2id$v=19$m=...,t=...,p=...$salt$hash.
 // It waits for an Argon2 permit under ctx.
 func HashPassword(ctx context.Context, password string) (string, error) {
-	salt := make([]byte, argonSaltLen)
-	if _, err := rand.Read(salt); err != nil {
-		return "", fmt.Errorf("generate salt: %w", err)
-	}
 	if err := acquireArgonPermit(ctx); err != nil {
 		return "", fmt.Errorf("wait for argon2 permit: %w", err)
 	}
 	defer releaseArgonPermit()
+	return hashHoldingPermit(password)
+}
+
+// hashHoldingPermit is HashPassword for a caller that already holds an Argon2
+// permit and means to go on holding it past the hash: registration keeps its
+// permit until its backoff attempt is recorded (register.go), as login does
+// (verifyHoldingPermit). Never call it without one.
+func hashHoldingPermit(password string) (string, error) {
+	salt := make([]byte, argonSaltLen)
+	if _, err := rand.Read(salt); err != nil {
+		return "", fmt.Errorf("generate salt: %w", err)
+	}
 	sum := argon2.IDKey([]byte(password), salt, argonTime, argonMemoryKiB, argonThreads, argonKeyLen)
 	return buildPHC(argonMemoryKiB, argonTime, argonThreads, salt, sum), nil
 }

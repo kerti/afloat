@@ -35,7 +35,7 @@ help:
 	@echo "  gen-oapi                regenerate Go server interfaces from contract/openapi.yaml"
 	@echo "  gen-sqlc                regenerate typed queries from the migrations + backend/queries"
 	@echo "  gen-ts                  regenerate frontend/src/api/schema.gen.ts from contract/openapi.yaml"
-	@echo "  test-migrations         apply the migrations with goose to a throwaway Postgres and assert"
+	@echo "  test-migrations         goose up, in-place edit and down against a throwaway Postgres"
 	@echo "  check                   pre-push gate: pass/fail per surface"
 	@echo "  check-go                lint and test the Go backend"
 	@echo "  check-frontend          typecheck, lint, format-check, test and build the frontend"

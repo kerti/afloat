@@ -501,11 +501,15 @@ embeds them). Each file carries `-- +goose Up` and `-- +goose Down` together, as
 | `backend/internal/migrations/00001_name.sql` | **Canonical.** Up and Down in one file. `//go:embed`ed and applied on boot. |
 
 - sqlc reads the same files as its schema (their Up sections), so there is one schema source.
-- `make test-migrations` (`scripts/test-migrations.sh`) applies the migrations **through goose** to a
-  throwaway Postgres and asserts the schema behaves — defaults, every `CHECK`, the soft-delete-aware
-  indexes, cascade behaviour, the §7.1 in-place-edit hazard, and that Down drops what Up created.
-  Through goose rather than `psql`, because `psql` would run each file's Up *and* Down, and because the
-  runner is what production uses. It needs docker, which is why `check` does not gate on it; CI runs it.
+- What the schema enforces — defaults, every `CHECK`, the soft-delete-aware indexes, foreign keys and
+  cascades — is asserted in Go (`backend/internal/migrations/schema_test.go`) on the test container,
+  so it runs in `make check`. Every refusal names the SQLSTATE **and** the constraint it expects: a
+  typo in the test's own SQL errors too, and must fail rather than pass.
+- `make test-migrations` (`scripts/test-migrations.sh`) applies the migrations **through the goose
+  CLI** to a throwaway Postgres: Up applies, the §7.1 in-place-edit hazard holds, and Down drops what
+  Up created. Through goose rather than `psql`, because `psql` would run each file's Up *and* Down,
+  and because the runner is what production uses. It needs docker, which is why `check` does not gate
+  on it; CI runs it.
 - `make gen` runs every generator; `make check` calls `scripts/check-generated.sh`, which regenerates
   into a scratch directory and compares rather than regenerating in place and running `git diff`.
   That obvious version is wrong twice: it repairs a hand-edit instead of reporting it, and `git diff`

@@ -3,6 +3,7 @@ package httpserver
 import (
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -104,9 +105,11 @@ func TestWebMount(t *testing.T) {
 		if rec.Code != 405 || strings.Contains(rec.Body.String(), "<title>") {
 			t.Fatalf("status %d, body %q", rec.Code, rec.Body.String())
 		}
-		// chi sends one Allow header per method.
-		if got := strings.Join(rec.Header().Values("Allow"), ", "); got != "GET, HEAD" {
-			t.Errorf("Allow = %q, want \"GET, HEAD\"", got)
+		// chi sends one Allow header per method, in map order: compare as a set.
+		allow := rec.Header().Values("Allow")
+		slices.Sort(allow)
+		if got := strings.Join(allow, ", "); got != "GET, HEAD" {
+			t.Errorf("Allow = %q, want GET and HEAD", got)
 		}
 	})
 

@@ -1,5 +1,5 @@
-// Command afloat is the Go backend: the canonical implementation of
-// contract/openapi.yaml (BOOTSTRAP.md §2).
+// Command afloat is the backend: the implementation of contract/openapi.yaml
+// (BOOTSTRAP.md §2).
 package main
 
 import (

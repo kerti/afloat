@@ -69,7 +69,7 @@ func TestCheckCookieCatchesEachAttribute(t *testing.T) {
 	}
 }
 
-// Spring writes an unpadded day of the month; RFC 1123 allows it.
+// An unpadded day of the month is RFC 1123-valid, so it must parse too.
 func TestCheckCookieReadsBothSpellingsOfTheEpoch(t *testing.T) {
 	want := conformance.CookieExpect{
 		Value: new(""), Path: new("/"), MaxAge: new(0), HttpOnly: new(true), Secure: new(false),

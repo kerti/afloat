@@ -171,6 +171,11 @@ edited=$(mktemp -d)
 cp backend/internal/migrations/*.sql "$edited"/
 awk '/^-- \+goose Down$/ { print "ALTER TABLE households ADD COLUMN edit_probe text;"; print "" } { print }' \
   backend/internal/migrations/00001_baseline.sql >"$edited"/00001_baseline.sql
+# Without this guard a reformatted Down marker leaves the copy unedited, and
+# both assertions below would pass on a probe that never happened.
+if ! grep -q '^ALTER TABLE households ADD COLUMN edit_probe' "$edited"/00001_baseline.sql; then
+  echo "  FAIL  the probe edit did not land - is the '-- +goose Down' marker still there?"; ((fail++))
+fi
 edit_out=$(goose "$edited" up)
 if grep -q "no migrations to run" <<<"$edit_out"; then
   echo "  PASS  goose reports nothing to do"; ((pass++))

@@ -58,8 +58,8 @@ func expiresRelation(c SetCookie, date time.Time) (class string, ahead time.Dura
 	}
 	at, err := http.ParseTime(raw)
 	if err != nil {
-		// Spring writes the day of the month unpadded ("Thu, 1 Jan 1970"),
-		// which RFC 1123 allows and http.TimeFormat does not.
+		// A day of the month written unpadded ("Thu, 1 Jan 1970") is what
+		// RFC 1123 allows and http.TimeFormat does not.
 		at, err = time.Parse("Mon, 2 Jan 2006 15:04:05 GMT", raw)
 	}
 	if err != nil {

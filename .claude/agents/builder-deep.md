@@ -10,9 +10,8 @@ color: red
 You are here because this code is Afloat's trust core or because nobody yet knows why it breaks.
 Everything in `builder`'s brief applies, plus:
 
-- **Trajectory is computed server-side, in both backends, from one fixture.** Any change to the
-  calculation must update `contract/testdata/trajectory.json` and make both backends' unit tests read
-  it and pass — a change that only touches one backend's numbers is not done (`BOOTSTRAP.md` §6,
+- **Trajectory is computed server-side, from one fixture.** Any change to the calculation must update
+  `contract/testdata/trajectory.json` and the unit tests that read it, together (`BOOTSTRAP.md` §6,
   PRD N5a). Never let the client derive a figure the server should own.
 - **Tests first on money and trajectory.** Cover the boundaries named in `CONTEXT.md`'s worked check:
   zero, negatives (refunds — valid, `CHECK (amount <> 0)` only forbids zero), mid-period budget

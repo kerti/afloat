@@ -86,7 +86,7 @@ func (d *DB) tables(ctx context.Context) ([]string, error) {
 }
 
 // Reset empties every Afloat table and applies the seed, so each case starts
-// from the same rows on both backends whatever ran before it. Tables are
+// from the same rows whatever ran before it. Tables are
 // discovered rather than listed, so a migration that adds one cannot leave it
 // holding the previous case's rows.
 func (d *DB) Reset(ctx context.Context, seedFile string) error {

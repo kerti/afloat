@@ -64,7 +64,9 @@ documented_default_for() {
 
 # --- Go ----------------------------------------------------------------------
 if [ ! -e "$go_config" ]; then
-  report "go env names" skip
+  # The only surface this gate checks: a missing file is a failure, not a skip,
+  # or a move would turn the whole gate into a silent pass.
+  report "go env names" "$go_config does not exist - has it moved?"
 else
   go_names=$(grep -o 'env:"[A-Z0-9_]*' "$go_config" | cut -d'"' -f2 | sort -u)
 

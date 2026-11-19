@@ -9,7 +9,7 @@ a real socket, and the rows it leaves behind, case by case, as written from
 `contract/openapi.yaml` and the rulings behind it.
 
 Covered: every endpoint, every reachable `ErrorCode`, the session cookie
-attribute by attribute, the rows each call leaves behind, and the path shapes
+attribute by attribute, the rows the stateful calls leave behind (where a case asserts `rows`), and the path shapes
 and body cap ruled in #56. CI runs it as the `conformance` job in
 `.github/workflows/ci.yml`.
 

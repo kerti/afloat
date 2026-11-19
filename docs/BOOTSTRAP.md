@@ -482,7 +482,7 @@ backend serves the contract's *shape*; only this proves it computes the right *n
 
 ## 7. Migrations — correction to the Decisions draft
 
-The Decisions draft's plan of one `db/migrations/` shared by two migration tools is replaced: the
+The Decisions draft's plan of a top-level `db/migrations/` is replaced: the
 migrations are **goose files, canonical and hand-written, in `backend/internal/migrations/`**, where
 the binary embeds them (`//go:embed` cannot reach a parent directory, so they live in the package that
 embeds them). Each file carries `-- +goose Up` and `-- +goose Down` together, as Balances' do.

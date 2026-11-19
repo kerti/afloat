@@ -53,5 +53,3 @@ body:
       options:
         - label: This bug involves an amount, the Monthly Budget, or a trajectory figure being wrong.
           required: false
-        - label: The two backends disagree about it.
-          required: false

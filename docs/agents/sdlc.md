@@ -20,10 +20,10 @@ review → merge**
 - **issue** — once there's an issue tracker (not yet decided — see `docs/agents/issue-tracker.md` once
   it exists), break the plan into vertical slices with `to-issues`.
 - **build** — `builder` for mechanical work, `builder-deep` for the trust core (trajectory, money,
-  auth, the contract itself). State which backend(s) in the brief — see `CLAUDE.md` "Two backends, one
-  contract".
-- **review** — `reviewer` checks the diff against the non-negotiables and backend parity before it
-  goes to the maintainer.
+  auth, the contract itself). Say in the brief whether it changes the contract — see `CLAUDE.md` "One
+  backend, one contract".
+- **review** — `reviewer` checks the diff against the non-negotiables before it goes to the
+  maintainer.
 
 How far up this chain a change needs to start scales with how much it commits the project to a shape:
 a copy fix doesn't need a grill session; a change to how the State model reads pace does.

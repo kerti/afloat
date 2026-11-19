@@ -18,7 +18,8 @@ file grows as real targets land.
   `make check`. `make check` compiles the module and runs `go test -short` there, which validates the
   committed case files without needing a live backend. Read `contract/conformance/README.md` before
   adding a case — in particular, a case for a decision that has not landed pins today's accident.
-  **It empties the `afloat` database**: every case truncates every table and applies
+  An existing local volume from before the database was renamed to `afloat` needs `make db-reset`
+  (destroys local data). **It empties the `afloat` database**: every case truncates every table and applies
   `contract/conformance/fixtures/seed.sql`, so anything a local run left in it is gone afterwards.
 - `make test-migrations` — applies `backend/internal/migrations/` with goose to a throwaway Postgres
   container and asserts the schema behaves, the §7.1 in-place-edit hazard, and that Down drops what Up

@@ -7,9 +7,9 @@
     "adjacent: each suite drives the query up to each row's count. The rows past 40 hold the cap where an unclamped",
     "doubling overflows interval (failure 45 at 1s), which stopped the key from ever being throttled again.",
     "`keys`: the keys one failed login writes. `ip` is the client address as its connection carries it, in",
-    "canonical form; each suite presents it the way its own server would (Go's RemoteAddr host:port, Tomcat's",
-    "expanded IPv6) and expects this spelling back.",
-    "Both suites read this file; neither keeps a copy of the numbers."
+    "canonical form; the suite presents it the way the server would (Go's RemoteAddr host:port) and expects",
+    "this spelling back.",
+    "The suite reads this file and keeps no copy of the numbers."
   ],
   "parameters": {
     "first_backoff": "1s",

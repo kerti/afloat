@@ -23,7 +23,7 @@ Hand-written `pgx` means writing the SQL *and* the scan. `sqlc` reads the same s
 produce and generates typed methods from the queries, so:
 
 - **A query that does not match the schema fails at generation**, not at runtime on a Tuesday. Given
-  `V0001` is editable in place until the first real database (`BOOTSTRAP.md` §7.1), a column rename
+  `00001_baseline.sql` is editable in place until the first real database (`BOOTSTRAP.md` §7.1), a column rename
   turning into a build error is the property worth paying for.
 - **`DECIMAL(20,4)` lands as a typed decimal**, consistently, rather than per-call-site handling.
 - **It is the shape Balances arrived at** (its ADR-0018), so the auth port in step 5b is mechanical.

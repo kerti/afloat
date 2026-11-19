@@ -23,9 +23,15 @@ function contractErrorCodes(): string[] {
   return [...enumPart.matchAll(/^ {8}- ([A-Z_]+)$/gm)].map((m) => m[1]!);
 }
 
+// i18next picks a plural form by the language's own rules: English needs
+// _one and _other, Indonesian has only _other. Compared without the suffix.
+const pluralSuffix = /_(zero|one|two|few|many|other)$/;
+const stems = (obj: object) =>
+  [...new Set(keys(obj).map((k) => k.replace(pluralSuffix, "")))].sort();
+
 describe("locale catalogues", () => {
   it("en-GB and id-ID carry exactly the same keys (PRD N12a)", () => {
-    expect(keys(idID).sort()).toEqual(keys(enGB).sort());
+    expect(stems(idID)).toEqual(stems(enGB));
   });
 
   it("the client knows every contract ErrorCode, and both locales word each one", () => {
@@ -33,8 +39,10 @@ describe("locale catalogues", () => {
     expect(codes.length).toBeGreaterThan(0);
     expect([...errorCodes].sort()).toEqual([...codes].sort());
     for (const code of codes) {
-      expect(enGB.errors).toHaveProperty(code);
-      expect(idID.errors).toHaveProperty(code);
+      for (const catalogue of [enGB.errors, idID.errors]) {
+        const worded = Object.keys(catalogue).some((k) => k.replace(pluralSuffix, "") === code);
+        expect(worded, code).toBe(true);
+      }
     }
   });
 });

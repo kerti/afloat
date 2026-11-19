@@ -1,7 +1,8 @@
 {
   "app": {
     "name": "Afloat",
-    "loading": "Loading…"
+    "loading": "Loading…",
+    "retry": "Try again"
   },
   "fields": {
     "email": "Email",
@@ -28,7 +29,8 @@
     "VALIDATION": "Check the {{field}} field.",
     "INVALID_JSON_BODY": "Afloat couldn't read that request. Reload the page and try again.",
     "INVALID_CREDENTIALS": "That email and password don't match.",
-    "TOO_MANY_ATTEMPTS": "Too many attempts. Try again in {{seconds}} seconds.",
+    "TOO_MANY_ATTEMPTS_one": "Too many attempts. Try again in {{count}} second.",
+    "TOO_MANY_ATTEMPTS_other": "Too many attempts. Try again in {{count}} seconds.",
     "TOO_MANY_ATTEMPTS_soon": "Too many attempts. Try again shortly.",
     "UNAUTHORIZED": "Your session has ended. Sign in again.",
     "CROSS_SITE_REQUEST_BLOCKED": "That request was blocked because it came from another site. Reload Afloat and try again.",

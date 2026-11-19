@@ -50,6 +50,8 @@ func TestSPAServing(t *testing.T) {
 		{"/api is never the shell", "GET", "/api", 404, "", "", ""},
 		{"a path under /api is never the shell", "GET", "/api/no-such-route", 404, "", "", ""},
 		{"a dot segment cannot climb out", "GET", "/../index.html", 200, "<!doctype html><title>Afloat</title>", "no-cache", "text/html; charset=utf-8"},
+		{"a directory is the shell, never a listing", "GET", "/assets", 200, "<!doctype html><title>Afloat</title>", "no-cache", "text/html; charset=utf-8"},
+		{"a directory with a slash is the shell too", "GET", "/assets/", 200, "<!doctype html><title>Afloat</title>", "no-cache", "text/html; charset=utf-8"},
 		{"HEAD answers like GET with no body", "HEAD", "/login", 200, "", "no-cache", "text/html; charset=utf-8"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

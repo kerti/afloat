@@ -98,11 +98,37 @@ describe("session flow", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("Afloat couldn't complete that.");
   });
 
-  it("switches to the signed-in user's own locale", async () => {
+  it("switches to the signed-in user's own locale, <html lang> included", async () => {
     server.use(...defaultHandlers({ signedIn: true, me: { ...alice, locale: "id-ID" } }));
     renderApp("/");
     expect(await screen.findByText("Masuk sebagai Alice")).toBeInTheDocument();
-    await i18n.changeLanguage("en-GB");
+    expect(document.documentElement.lang).toBe("id-ID");
+  });
+
+  it("drops the last user's locale on sign-out", async () => {
+    server.use(...defaultHandlers({ signedIn: true, me: { ...alice, locale: "id-ID" } }));
+    const user = userEvent.setup();
+    renderApp("/");
+    await user.click(await screen.findByRole("button", { name: "Keluar" }));
+    // jsdom's navigator.languages is en-US, so the browser's choice is en-GB.
+    expect(await screen.findByRole("heading", { name: "Sign in" })).toBeInTheDocument();
+    expect(i18n.language).toBe("en-GB");
+  });
+
+  it("offers a retry when /me fails, and recovers", async () => {
+    let fail = true;
+    server.use(
+      http.get("/api/me", () =>
+        fail ? HttpResponse.json(envelope("INTERNAL"), { status: 500 }) : HttpResponse.json(alice),
+      ),
+      ...defaultHandlers(),
+    );
+    const user = userEvent.setup();
+    renderApp("/");
+    await screen.findByRole("alert");
+    fail = false;
+    await user.click(screen.getByRole("button", { name: "Try again" }));
+    expect(await screen.findByText("Signed in as Alice")).toBeInTheDocument();
   });
 
   it("leaves the login screen for home when already signed in", async () => {

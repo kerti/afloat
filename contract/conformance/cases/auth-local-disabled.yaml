@@ -98,3 +98,19 @@
     status: 404
     same_as: *no-such-login-post
     rows: *no-session
+
+# "On every method" includes one chi has never heard of: it answers chi's own
+# 405, which is also what an unregistered path answers to it, so the gate
+# still cannot be told apart from a missing route.
+- name: local login disabled - an unknown method answers like an unregistered path
+  issue: "24"
+  profile: local-disabled
+  request:
+    method: BREW
+    path: /auth/local/login
+  expect:
+    status: 405
+    same_as:
+      method: BREW
+      path: /no-such-route
+    rows: *no-session

@@ -10,12 +10,10 @@ export function errorMessage(t: TFunction, err: ApiError): string {
       return t("errors.VALIDATION", { field: t(`fields.${field}`, { defaultValue: field }) });
     }
     case "TOO_MANY_ATTEMPTS":
-      return err.retryAfterSeconds === undefined
+      // Retry-After: 0 means "now", which no sentence about a wait reads well.
+      return err.retryAfterSeconds === undefined || err.retryAfterSeconds === 0
         ? t("errors.TOO_MANY_ATTEMPTS_soon")
-        : t("errors.TOO_MANY_ATTEMPTS", {
-            seconds: err.retryAfterSeconds,
-            count: err.retryAfterSeconds,
-          });
+        : t("errors.TOO_MANY_ATTEMPTS", { count: err.retryAfterSeconds });
     default:
       return t(`errors.${err.code}`);
   }

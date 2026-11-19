@@ -19,6 +19,14 @@ describe("errorMessage", () => {
     ).toBe("Check the amount field.");
   });
 
+  it("pluralises the backoff window by the language's own rules", () => {
+    const wait = (s: number) => new ApiError(429, "TOO_MANY_ATTEMPTS", {}, s);
+    expect(errorMessage(t, wait(1))).toBe("Too many attempts. Try again in 1 second.");
+    expect(errorMessage(t, wait(4))).toBe("Too many attempts. Try again in 4 seconds.");
+    expect(errorMessage(tID, wait(1))).toBe("Terlalu banyak percobaan. Coba lagi dalam 1 detik.");
+    expect(errorMessage(t, wait(0))).toBe("Too many attempts. Try again shortly.");
+  });
+
   it("words a 429 without Retry-After without inventing a number", () => {
     expect(errorMessage(t, new ApiError(429, "TOO_MANY_ATTEMPTS"))).toBe(
       "Too many attempts. Try again shortly.",

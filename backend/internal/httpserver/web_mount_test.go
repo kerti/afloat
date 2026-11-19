@@ -84,6 +84,32 @@ func TestWebMount(t *testing.T) {
 		}
 	})
 
+	t.Run("/api itself is never the shell", func(t *testing.T) {
+		for _, target := range []string{"/api", "/api/"} {
+			if rec := serve("GET", target, ""); rec.Code != 404 || strings.Contains(rec.Body.String(), "<title>") {
+				t.Errorf("%s answered %d with %q", target, rec.Code, rec.Body.String())
+			}
+		}
+	})
+
+	// Outside /api only GET and HEAD are routed, so a write there is chi's
+	// 405 naming exactly those two - never the shell, and never reaching the
+	// API's CSRF guard or session lookup (fakeQuerier would panic).
+	t.Run("a write outside /api is a 405, not the shell", func(t *testing.T) {
+		req := httptest.NewRequest("POST", "/login", strings.NewReader("x"))
+		req.Header.Set("Sec-Fetch-Site", "cross-site")
+		req.Header.Set("Cookie", "afloat_session=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+		rec := httptest.NewRecorder()
+		srv.ServeHTTP(rec, req)
+		if rec.Code != 405 || strings.Contains(rec.Body.String(), "<title>") {
+			t.Fatalf("status %d, body %q", rec.Code, rec.Body.String())
+		}
+		// chi sends one Allow header per method.
+		if got := strings.Join(rec.Header().Values("Allow"), ", "); got != "GET, HEAD" {
+			t.Errorf("Allow = %q, want \"GET, HEAD\"", got)
+		}
+	})
+
 	t.Run("OPTIONS stays the flat 405 outside the API too", func(t *testing.T) {
 		if rec := serve("OPTIONS", "/login", ""); rec.Code != 405 {
 			t.Fatalf("status %d, want 405", rec.Code)

@@ -1,7 +1,8 @@
 {
   "app": {
     "name": "Afloat",
-    "loading": "Memuat…"
+    "loading": "Memuat…",
+    "retry": "Coba lagi"
   },
   "fields": {
     "email": "Email",
@@ -28,7 +29,7 @@
     "VALIDATION": "Periksa kolom {{field}}.",
     "INVALID_JSON_BODY": "Afloat tidak dapat membaca permintaan itu. Muat ulang halaman lalu coba lagi.",
     "INVALID_CREDENTIALS": "Email dan kata sandi tidak cocok.",
-    "TOO_MANY_ATTEMPTS": "Terlalu banyak percobaan. Coba lagi dalam {{seconds}} detik.",
+    "TOO_MANY_ATTEMPTS_other": "Terlalu banyak percobaan. Coba lagi dalam {{count}} detik.",
     "TOO_MANY_ATTEMPTS_soon": "Terlalu banyak percobaan. Coba lagi sebentar lagi.",
     "UNAUTHORIZED": "Sesi Anda telah berakhir. Silakan masuk lagi.",
     "CROSS_SITE_REQUEST_BLOCKED": "Permintaan itu diblokir karena berasal dari situs lain. Muat ulang Afloat lalu coba lagi.",

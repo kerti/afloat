@@ -91,8 +91,8 @@ func New(d Deps) http.Handler {
 	r.Use(recoverer)
 	r.Use(requestLogger)
 	// Every OPTIONS request is answered before it reaches routing at all,
-	// including the disabled-login gate below and chi's own method-not-allowed
-	// handling — see optionsRefused (#66).
+	// and so before chi's own method-not-allowed handling and the API group's
+	// disabled-login gate - see optionsRefused (#66).
 	r.Use(optionsRefused)
 
 	// Everything below is the API's alone. A static file needs no body cap,
@@ -120,6 +120,10 @@ func mountAPI(r chi.Router, srv *Server, d Deps) {
 	// is gated ahead of the generated mux instead: any request whose path
 	// matches is answered before CSRF or session middleware ever run, so a
 	// disabled login gives chi's ordinary 404 with no session row written.
+	// Being in the API group, it runs once chi has routed the request to the
+	// /api mount: a method chi does not know at all (BREW) never gets that
+	// far and answers chi's 405 - exactly what an unregistered /api path
+	// answers to it, so the gate stays indistinguishable on every method.
 	// Enabled comes from d.System.LocalEnabled() — the same value
 	// GetAuthMethods reports — so the gate cannot drift from what
 	// /auth/methods tells the client.

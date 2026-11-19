@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ApiError, getAuthMethods, getMe, localLogin, logout, type Me } from "./client";
+import { browserLocale, i18n } from "@/i18n";
 
 export const meKey = ["me"] as const;
 
@@ -39,6 +40,9 @@ export function useLogout() {
   return useMutation<void, ApiError>({
     mutationFn: logout,
     onSuccess: () => {
+      // The next person at this device is not the last User: back to the
+      // browser's language until someone signs in.
+      void i18n.changeLanguage(browserLocale());
       qc.setQueryData(meKey, null);
       qc.removeQueries({ predicate: (q) => q.queryKey[0] !== meKey[0] });
     },

@@ -22,6 +22,11 @@ export function browserLocale(languages: readonly string[] = navigator.languages
 }
 
 export function initI18n(lng: Locale = browserLocale()) {
+  // <html lang> follows the active locale, so a screen reader pronounces
+  // id-ID copy as Indonesian rather than with en-GB rules.
+  i18n.on("languageChanged", (next) => {
+    document.documentElement.lang = next;
+  });
   void i18n.use(initReactI18next).init({
     resources: {
       "en-GB": { translation: enGB },

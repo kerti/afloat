@@ -39,7 +39,10 @@ func Handler() http.Handler {
 //     index.html - except under /api, which the API owns, so a typo there
 //     never comes back as an HTML page with status 200;
 //   - a missing path WITH an extension (a stale /assets/old.js, a missing
-//     /sw.js) is a 404, never index.html served as JavaScript;
+//     /sw.js) is a 404, never index.html served as JavaScript - so a client
+//     route must not end in a dotted segment (/budgets/2026.11 would 404 on
+//     a hard refresh);
+//   - a directory is never listed: it is a client route like any other;
 //   - index.html, the service worker and the manifest are revalidated on
 //     every load, or an installed PWA keeps running the old shell; the
 //     content-hashed files under /assets are cached for a year.

@@ -30,14 +30,18 @@ const pwa = VitePWA({
     // --background token in src/styles/theme.css.
     background_color: "#ffffff",
     theme_color: "#ffffff",
-    icons: [{ src: "/icon.svg", sizes: "any", type: "image/svg+xml", purpose: "any maskable" }],
+    // Placeholder until the brand session; PNG sizes for iOS come with it.
+    icons: [
+      { src: "/icon.svg", sizes: "any", type: "image/svg+xml", purpose: "any" },
+      { src: "/icon.svg", sizes: "any", type: "image/svg+xml", purpose: "maskable" },
+    ],
   },
   workbox: {
     globPatterns: ["**/*.{js,css,html,svg,woff2}"],
     navigateFallback: "/index.html",
     // The Go binary owns /api; an installed worker must never answer a
     // navigation there with the cached shell.
-    navigateFallbackDenylist: [/^\/api\//],
+    navigateFallbackDenylist: [/^\/api(\/|$)/],
   },
 });
 

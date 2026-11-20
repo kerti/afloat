@@ -54,6 +54,18 @@ func (s *Server) LocalLogin(ctx context.Context, r api.LocalLoginRequestObject) 
 	return s.auth.LocalLogin(ctx, r)
 }
 
+func (s *Server) LocalRegister(ctx context.Context, r api.LocalRegisterRequestObject) (api.LocalRegisterResponseObject, error) {
+	return s.auth.LocalRegister(ctx, r)
+}
+
+func (s *Server) GetOnboardingOptions(ctx context.Context, r api.GetOnboardingOptionsRequestObject) (api.GetOnboardingOptionsResponseObject, error) {
+	return s.auth.GetOnboardingOptions(ctx, r)
+}
+
+func (s *Server) CommitOnboardingChoice(ctx context.Context, r api.CommitOnboardingChoiceRequestObject) (api.CommitOnboardingChoiceResponseObject, error) {
+	return s.auth.CommitOnboardingChoice(ctx, r)
+}
+
 func (s *Server) Logout(ctx context.Context, r api.LogoutRequestObject) (api.LogoutResponseObject, error) {
 	return s.auth.Logout(ctx, r)
 }
@@ -116,10 +128,11 @@ func mountAPI(r chi.Router, srv *Server, d Deps) {
 	// in a function we don't own — with no per-operation option to skip
 	// mounting and no per-route middleware hook (ChiServerOptions.Middlewares
 	// applies to every operation alike). Hand-editing that file is out
-	// (BOOTSTRAP.md §6; CI regenerates and diffs it away). So this one route
-	// is gated ahead of the generated mux instead: any request whose path
-	// matches is answered before CSRF or session middleware ever run, so a
-	// disabled login gives chi's ordinary 404 with no session row written.
+	// (BOOTSTRAP.md §6; CI regenerates and diffs it away). So the local
+	// provider's two routes, login and register, are gated ahead of the
+	// generated mux instead: any request whose path matches is answered before
+	// CSRF or session middleware ever run, so a disabled provider gives chi's
+	// ordinary 404 with no session, handshake or backoff row written.
 	// Being in the API group, it runs once chi has routed the request to the
 	// /api mount: a method chi does not know at all (BREW) never gets that
 	// far and answers chi's 405 - exactly what an unregistered /api path
@@ -127,7 +140,7 @@ func mountAPI(r chi.Router, srv *Server, d Deps) {
 	// Enabled comes from d.System.LocalEnabled() — the same value
 	// GetAuthMethods reports — so the gate cannot drift from what
 	// /auth/methods tells the client.
-	r.Use(disabledLocalLogin404(d.System.LocalEnabled()))
+	r.Use(disabledLocalAuth404(d.System.LocalEnabled()))
 	// A body limit on every JSON route. Balances caps only its file uploads,
 	// which leaves an unbounded decode everywhere else.
 	r.Use(maxBodyBytes(1 << 20))

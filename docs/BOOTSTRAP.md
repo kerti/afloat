@@ -43,6 +43,7 @@ is needed; never in a Postgres identifier, where it would have to be double-quot
 | Postgres | `5184` |
 | Postgres, throwaway test container | `5185` |
 | Backend, conformance `local-disabled` server | `5186` |
+| Backend, conformance `founding-disabled` server | `5187` |
 
 Chosen against three constraints, which matter more than the specific numbers:
 
@@ -109,7 +110,11 @@ Balances.
 
 ## 4. Cross-cutting data conventions
 
-- **Primary keys:** UUIDv7, **client-generated**. Column type `uuid`.
+- **Primary keys:** UUIDv7, **client-generated**. Column type `uuid`. *One exception: founding.*
+  The Household and the User that `POST /onboarding/choice` creates get **server-generated** UUIDv7s
+  (minted in Go). Founding is an online authentication flow, not an offline-capable write: there is
+  no queue to replay, and the handshake's single-use claim is what makes a double submit safe
+  (§5.1.1). The rule above stands for every domain `POST`.
 - **Idempotent create:** `POST` accepts the client-supplied id; a replay returns **200** with the
   existing resource, a first write returns **201**. Implemented as `INSERT ... ON CONFLICT (id) DO
   NOTHING` plus a read-back.
@@ -351,6 +356,108 @@ delete the user's sessions inside the same transaction before minting the new on
 
 **`Secure` on the session cookie is configurable only so local dev over HTTP works.** It defaults to
 true; no deployment document suggests otherwise.
+
+### 5.1.1 Registration, the handshake and the founding gate
+
+Settled with Rad on 19 Nov 2026 (issue #108) against Balances' code (its `auth/local.go`,
+`auth/onboarding.go`, ADR-0038 and ADR-0039), so a household running both apps meets the same sign-up
+in each. The departures, and the reason for each, are below.
+
+**Registration creates no account.** `POST /auth/local/register` validates, hashes and stores the
+would-be credential in an **onboarding handshake**; the User, the Household and the credential are
+created only when the person commits at the gate (`POST /onboarding/choice`). The handshake is the
+`onboarding_handshakes` table: `id` (the opaque token, minted like a session id and **hashed at rest**
+the same way, so a leaked row is not a presentable cookie), `email`, `display_name`, `locale`,
+`password_hash` (nullable, for the day a Google identity opens one), `created_at`, `expires_at`. TTL
+**15 minutes**, fixed, not a §12 variable. There is no `household_id`: nothing exists yet to point at,
+and a later join choice adds columns rather than reshaping these. It is instance-local auth state, so
+it hard-deletes like `sessions` (§4); liveness is `expires_at > now()` in SQL on the database's clock
+(above), never the application's, and registration sweeps expired rows on the way in. The handshake
+cookie is `afloat_onboarding`: host-only, `HttpOnly`, `SameSite=Lax`, `Secure` per `COOKIE_SECURE`,
+expiring with the handshake. No session is issued until the commit.
+
+**The gate offers "found" only, for now.** `GET /onboarding/options` answers `{email, display_name,
+founding_open}`; no invitations field yet, and adding one later is additive. `POST /onboarding/choice`
+takes `{found: true, household_name}` and nothing else (`additionalProperties: false`): a later join
+choice adds properties, not a different shape. Anything that is not a found choice is `400 VALIDATION`.
+No live handshake is `401 UNAUTHORIZED`, and a stale cookie is cleared; `FOUNDING_DISABLED` is `403`,
+checked after the handshake. That ordering hides nothing: `GET /auth/methods` is public and reports
+`founding_open`, so anyone can read the instance's posture without a handshake. The commit enforces
+`FOUNDING_DISABLED`; `founding_open` only tells the client what to show.
+
+**The commit is one transaction, and Balances' is not — a departure.** The handshake is claimed with
+`DELETE ... RETURNING`; the Household, the User and the credential are inserted; the transaction
+commits; only then is the session issued through the ordinary session path. Two concurrent commits on
+one handshake serialise on its row: the second finds it gone and answers `401`, having written nothing.
+Balances runs these as separate statements, so a double submit there leaves an orphan Household. The
+address can be taken between register and commit: the unique violation on `users_email_idx` is
+`409 EMAIL_TAKEN` and the whole transaction rolls back, the Household included. The commit runs on a
+context detached from the request's cancellation (bounded by the handler timeout again), so a client
+that goes away does not turn "created or rolled back" into a coin flip. Requests that need no claim
+(a body that is not a found choice, a bad name) are answered without spending the handshake.
+
+**The Household name is the client's string — a departure.** The SPA pre-fills it from its own
+catalogue (en-GB `{{name}}'s Household`, id-ID `Rumah Tangga {{name}}`) and the person edits it. The
+server stores what was submitted, trimmed, not blank, at most **60 code points** (Balances' cap):
+`VALIDATION` with `rule: required` or `max`. Balances builds an English suggestion on the server; here
+the frontend owns every string (§9). A `U+0000` in a name is refused as `VALIDATION` (`pattern`)
+rather than reaching Postgres, which cannot store it. A `display_name` or `household_name` made only
+of whitespace and format characters (Unicode category Cf: zero-width space and joiners, word joiner,
+BOM) is `VALIDATION` with `rule: required`, blank to the eye though not to `TrimSpace`; such
+characters are never stripped from an otherwise visible name, and a bidi control inside one is
+accepted (Balances parity).
+
+**Server-generated ids at founding — an exception to §4.** See §4: the Household's and the User's
+UUIDv7s are minted in Go.
+
+**Password policy: Balances' exactly.** At least 10 code points (counted as runes), not in the embedded
+common-password list (§5.1, compared case-insensitively). A failure is `400 WEAK_PASSWORD` with
+`args.reason` of `min` or `breached`, checked **before any hashing** and after the email's shape (the
+contract's own validation runs first, so a malformed email is `VALIDATION` whatever the password).
+**Login is unchanged** and accepts any non-empty password, so a credential created under an older or
+looser rule still signs in. The list is `common_passwords.txt`: Afloat's own plus the 10-rune-and-longer
+entries of Balances' that it lacked, origin noted in the file.
+
+**`EMAIL_TAKEN` enumerates, on purpose.** A registration whose address a live (not soft-deleted) User
+holds, whether or not it has a credential, is `409 EMAIL_TAKEN`. Registration is the one place that has
+to say so, as in Balances; **login stays non-enumerating** and is unchanged. Registering an address
+that is free and one that is taken therefore differ in answer, and in cost (a taken one is not hashed).
+The register backoff below limits only requests that reach the hash, so address enumeration through
+`EMAIL_TAKEN` runs at database speed: accepted, with the rest of this trade.
+
+**Registration is rate limited like login, with its own key.** It runs Argon2 on unauthenticated
+input, the exposure #33 capped. It shares login's concurrency permit (the bound is on total Argon2 work
+whatever its source) and its discipline: the per-IP backoff is read before queueing, **read again under
+the permit**, and the attempt recorded before the permit passes on, on a context detached from the
+request, for the reasons in §5.1 above. The key is `register-ip:<addr>` in `login_attempts`, never
+login's `ip:<addr>`, so a run of registrations cannot lock an address out of signing in nor a run of
+failed logins out of registering. Per IP only: an address key would let anyone throttle a known
+address's registration, and what is limited is hashing work, which the address does not change. It
+counts every request that reaches the hash (a registration is an attempt whether or not it ends in an
+account), with the same curve (`LOGIN_FIRST_BACKOFF`, doubling, `LOGIN_MAX_BACKOFF`), and nothing clears
+it: a person who registered several accounts from one address waits up to the cap between them.
+Requests refused before the hash (policy, `EMAIL_TAKEN`, validation) record nothing.
+
+**Known limitations of that limiter** (ruled to document rather than change; follow-up #110):
+
+- **The key is the connection's own address (`RemoteAddr`), as login's is** (§5.1, never
+  `X-Forwarded-For`). Behind a reverse proxy every visitor therefore shares one `register-ip:` key.
+  Login shares that limitation, but a successful login clears its keys; registration never does.
+- **`failure_count` never clears or decays.** The window doubles per attempt from
+  `LOGIN_FIRST_BACKOFF` to the cap, so after about ten lifetime registrations through one address
+  every registration is followed by a `LOGIN_MAX_BACKOFF` (5m by default) window: any two within
+  five minutes are a `429`.
+- **So one party registering every five minutes keeps registration closed to everyone else on that
+  key, the instance's own founder included.** That is the cost of having a limiter at all on an
+  unauthenticated, hashing endpoint; it denies registration, never sign-in (login's keys are
+  separate), and `FOUNDING_DISABLED` makes it moot once the operator has founded their Household.
+
+**With the local provider off, register is a path that does not exist.** It is gated with login (§5.2)
+by one middleware matching on path alone: a bare 404 on every method, the same bytes and framing as an
+unregistered path (`HEAD` included, whose `Content-Length` once differed on a live server: the
+`headAsGet` stripping the unregistered path gets had to be applied to the gate too). The onboarding
+routes are not gated: the gate is shared with providers still to come, and with no registration it has
+no handshake to honour and answers `401` to everyone.
 
 ### 5.2 Wire shape
 
@@ -641,6 +748,7 @@ it: a name read but not documented, documented but not read, or a default that d
 | `SHUTDOWN_TIMEOUT` | `10s` | |
 | `AUTH_LOCAL_ENABLED` | `true` | |
 | `AUTH_GOOGLE_ENABLED` | `false` | Planned, not built (PRD §4.1). |
+| `FOUNDING_DISABLED` | `false` | Refuses to found a new Household: the commit at the onboarding gate answers `403 FOUNDING_DISABLED`, and `GET /api/auth/methods` reports `founding_open: false` so the sign-in screen hides "Create account". It stops founding, not sign-in. **Registration is open to anyone who reaches the instance until this is set**, and the first person through the gate founds a Household, so found your own before exposing the instance, then set this to `true`. An operator who skips that step has handed their instance to whoever finds it first. Balances' code behaves the same way (its self-hosting notes say further accounts become invite-only once a Household exists; the code has no such rule). Registration's per-IP backoff keys on the connection's address, so behind a reverse proxy every visitor shares one key, and it never decays: one party registering every five minutes can keep registration closed to everyone, you included, until you set this (§5.1.1, #110). §5.1. |
 | `SESSION_TTL` | `720h` | The sliding window (§5.1). |
 | `SESSION_MAX_LIFETIME` | `2160h` | The absolute cap from `created_at` (§5.1). |
 | `LOGIN_FIRST_BACKOFF` | `1s` | The login backoff after the first failure; doubles per failure (§5.1). Must be at least 1ms (#69) — a boundary `validate()` names in its startup error. |

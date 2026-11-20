@@ -6,17 +6,22 @@
   },
   "fields": {
     "email": "Email",
-    "password": "Password"
+    "password": "Password",
+    "displayName": "Your name (optional)",
+    "householdName": "Household name"
   },
   "fieldNames": {
     "email": "email",
-    "password": "password"
+    "password": "password",
+    "display_name": "name",
+    "household_name": "household name"
   },
   "login": {
     "title": "Sign in",
     "submit": "Sign in",
     "submitting": "Signing in…",
-    "unavailable": "Password sign-in is turned off on this instance. Ask whoever runs it to turn it on."
+    "unavailable": "Password sign-in is turned off on this instance. Ask whoever runs it to turn it on.",
+    "createAccount": "Create account"
   },
   "home": {
     "signedInAs": "Signed in as {{name}}",
@@ -40,6 +45,31 @@
     "CROSS_SITE_REQUEST_BLOCKED": "That request was blocked because it came from another site. Reload Afloat and try again.",
     "INTERNAL": "Afloat couldn't complete that. Try again in a moment.",
     "NETWORK": "Can't reach Afloat. Check your connection and try again.",
-    "UNKNOWN": "Something went wrong. Try again in a moment."
+    "UNKNOWN": "Something went wrong. Try again in a moment.",
+    "EMAIL_TAKEN": "An account with that email already exists. Sign in instead.",
+    "WEAK_PASSWORD": {
+      "min": "Use at least 10 characters.",
+      "breached": "That password is too common. Pick another."
+    },
+    "FOUNDING_DISABLED": "This instance isn't accepting new Households. Ask whoever runs it."
+  },
+  "register": {
+    "title": "Create your account",
+    "passwordHint": "At least 10 characters. A few words strung together works well.",
+    "submit": "Continue",
+    "submitting": "Continuing…",
+    "haveAccount": "Already have an account?",
+    "signIn": "Sign in",
+    "closed": "This instance isn't accepting new accounts. Ask whoever runs it, or sign in.",
+    "unavailable": "Creating accounts needs password sign-in, which is turned off on this instance. Ask whoever runs it to turn it on."
+  },
+  "onboarding": {
+    "title": "Set up your Household",
+    "intro": "You're registering as {{email}}. One last step: name your Household, or keep the suggestion.",
+    "householdNameDefault": "{{name}}'s Household",
+    "submit": "Create Household",
+    "submitting": "Creating…",
+    "closed": "This instance isn't accepting new Households right now. Ask whoever runs it to open it, or sign in to an existing account.",
+    "backToSignIn": "Back to sign in"
   }
 }

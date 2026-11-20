@@ -1,0 +1,347 @@
+# POST /auth/local/register (contract: localRegister). Registration validates,
+# hashes and parks the credential in an onboarding handshake: it creates no
+# User, no Household and no session, so the seed's one Household, three Users and
+# two credentials are all there is afterwards (#108).
+#
+# Validation order: the contract's own checks first (the email's shape,
+# additionalProperties), then the password policy, then whether the address is
+# held. The ip key is the harness's own loopback address; the row queries fold
+# it to `register-ip:*`, as login.yaml does for `ip:*`.
+
+- name: register opens a handshake and creates no account
+  issue: "108"
+  request:
+    method: POST
+    path: /auth/local/register
+    headers:
+      Content-Type: application/json
+    body: '{"email":"new@example.com","password":"kucing oranye di atap","display_name":"Dewi Putri","locale":"id-ID"}'
+  expect:
+    status: 204
+    body_empty: true
+    cookies:
+      afloat_onboarding: &handshake-cookie
+        value_pattern: '[A-Za-z0-9_-]{43}'
+        path: /
+        max_age: 900
+        http_only: true
+        secure: false   # COOKIE_SECURE=false in the harness, which speaks plain HTTP
+        same_site: Lax
+        expires: max-age
+    rows:
+      - sql: |
+          SELECT email, display_name, locale,
+                 round(extract(epoch FROM expires_at - created_at))::int AS ttl_seconds,
+                 left(password_hash, 31) AS hash_prefix,
+                 length(id) AS id_length
+          FROM onboarding_handshakes
+        rows:
+          - email: new@example.com
+            display_name: Dewi Putri
+            locale: id-ID
+            ttl_seconds: 900
+            hash_prefix: "$argon2id$v=19$m=19456,t=2,p=1$"
+            # The SHA-256 hex of the cookie's token, never the token (43 chars).
+            id_length: 64
+      # Nothing but the seed exists: no Household, User, credential or session.
+      - sql: |
+          SELECT (SELECT count(*) FROM households)::int AS households, (SELECT count(*) FROM users)::int AS users,
+                 (SELECT count(*) FROM credentials)::int AS credentials, (SELECT count(*) FROM sessions)::int AS sessions
+        rows: [{households: 1, users: 3, credentials: 2, sessions: 0}]
+      # One attempt, under its own key and not login's `ip:`.
+      - sql: |
+          SELECT regexp_replace(key, '^register-ip:.*', 'register-ip:*') AS key, failure_count,
+                 round(extract(epoch FROM backoff_until - updated_at))::int AS window_seconds
+          FROM login_attempts
+        rows: [{key: "register-ip:*", failure_count: 1, window_seconds: 1}]
+
+- name: register trims and case-folds the email, and defaults the display name and locale
+  issue: "108"
+  request:
+    method: POST
+    path: /auth/local/register
+    headers:
+      Content-Type: application/json
+    body: '{"email":"  Dewi.Putri@Example.COM ","password":"kucing oranye di atap","display_name":"   ","locale":"fr-FR"}'
+  expect:
+    status: 204
+    body_empty: true
+    cookies:
+      afloat_onboarding: *handshake-cookie
+    rows:
+      - sql: SELECT email, display_name, locale FROM onboarding_handshakes
+        rows: [{email: dewi.putri@example.com, display_name: dewi.putri, locale: en-GB}]
+
+# Not an enum in the contract: an unsupported locale is a fallback, not a failure.
+- name: register with no locale falls back to en-GB
+  issue: "108"
+  request:
+    method: POST
+    path: /auth/local/register
+    headers:
+      Content-Type: application/json
+    body: '{"email":"new@example.com","password":"kucing oranye di atap"}'
+  expect:
+    status: 204
+    body_empty: true
+    cookies:
+      afloat_onboarding: *handshake-cookie
+    rows:
+      - sql: SELECT locale FROM onboarding_handshakes
+        rows: [{locale: en-GB}]
+
+- name: register - an email that is not an address is VALIDATION, whatever the password
+  issue: "108"
+  request:
+    method: POST
+    path: /auth/local/register
+    headers:
+      Content-Type: application/json
+    body: '{"email":"not-an-address","password":"short"}'
+  expect:
+    status: 400
+    body_json: {code: VALIDATION, args: {field: email, rule: email}}
+    cookies: {}
+    rows: &nothing-opened
+      - sql: SELECT (SELECT count(*) FROM onboarding_handshakes)::int AS handshakes, (SELECT count(*) FROM login_attempts)::int AS attempts
+        rows: [{handshakes: 0, attempts: 0}]
+
+- name: register - a missing password is VALIDATION required
+  issue: "108"
+  request:
+    method: POST
+    path: /auth/local/register
+    headers:
+      Content-Type: application/json
+    body: '{"email":"new@example.com"}'
+  expect:
+    status: 400
+    body_json: {code: VALIDATION, args: {field: password, rule: required}}
+    cookies: {}
+    rows: *nothing-opened
+
+- name: register - a property the contract does not declare is INVALID_JSON_BODY
+  issue: "108"
+  request:
+    method: POST
+    path: /auth/local/register
+    headers:
+      Content-Type: application/json
+    body: '{"email":"new@example.com","password":"kucing oranye di atap","household_name":"x"}'
+  expect:
+    status: 400
+    body_json: {code: INVALID_JSON_BODY}
+    cookies: {}
+    rows: *nothing-opened
+
+- name: register - a password under ten code points is WEAK_PASSWORD min
+  issue: "108"
+  request:
+    method: POST
+    path: /auth/local/register
+    headers:
+      Content-Type: application/json
+    body: '{"email":"new@example.com","password":"abcdefghi"}'
+  expect:
+    status: 400
+    body_json: {code: WEAK_PASSWORD, args: {reason: min}}
+    cookies: {}
+    rows: *nothing-opened
+
+# Counted in code points, not bytes: ten two-byte characters (20 bytes) clear
+# the floor of ten, and nine (18 bytes) do not.
+- name: register - the length floor counts code points, not bytes
+  issue: "108"
+  request:
+    method: POST
+    path: /auth/local/register
+    headers:
+      Content-Type: application/json
+    body: '{"email":"new@example.com","password":"éééééééééé"}'
+  expect:
+    status: 204
+    body_empty: true
+    cookies:
+      afloat_onboarding: *handshake-cookie
+
+- name: register - nine two-byte characters are still under the floor
+  issue: "108"
+  request:
+    method: POST
+    path: /auth/local/register
+    headers:
+      Content-Type: application/json
+    body: '{"email":"new@example.com","password":"ééééééééé"}'
+  expect:
+    status: 400
+    body_json: {code: WEAK_PASSWORD, args: {reason: min}}
+    cookies: {}
+    rows: *nothing-opened
+
+- name: register - a password in the common list is WEAK_PASSWORD breached, in any case
+  issue: "108"
+  request:
+    method: POST
+    path: /auth/local/register
+    headers:
+      Content-Type: application/json
+    body: '{"email":"new@example.com","password":"PassWord1234"}'
+  expect:
+    status: 400
+    body_json: {code: WEAK_PASSWORD, args: {reason: breached}}
+    cookies: {}
+    rows: *nothing-opened
+
+- name: register - 1024 code points is the longest password
+  issue: "108"
+  request:
+    method: POST
+    path: /auth/local/register
+    headers:
+      Content-Type: application/json
+    body: '{"email":"new@example.com","password":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}'
+  expect:
+    status: 204
+    body_empty: true
+    cookies:
+      afloat_onboarding: *handshake-cookie
+
+- name: register - 1025 code points is VALIDATION max
+  issue: "108"
+  request:
+    method: POST
+    path: /auth/local/register
+    headers:
+      Content-Type: application/json
+    body: '{"email":"new@example.com","password":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}'
+  expect:
+    status: 400
+    body_json: {code: VALIDATION, args: {field: password, rule: max}}
+    cookies: {}
+    rows: *nothing-opened
+
+# Registration enumerates by design (ruling on #108); login never does. A live
+# User holds the address whether or not it has a credential (bob has none), in
+# any case; a soft-deleted User's address is free again (carol).
+- name: register - an address held by a live User is EMAIL_TAKEN
+  issue: "108"
+  request:
+    method: POST
+    path: /auth/local/register
+    headers:
+      Content-Type: application/json
+    body: '{"email":"ALICE@example.com","password":"kucing oranye di atap"}'
+  expect:
+    status: 409
+    body_json: {code: EMAIL_TAKEN}
+    cookies: {}
+    rows: *nothing-opened
+
+- name: register - an address held by a User with no credential is EMAIL_TAKEN
+  issue: "108"
+  request:
+    method: POST
+    path: /auth/local/register
+    headers:
+      Content-Type: application/json
+    body: '{"email":"bob@example.com","password":"kucing oranye di atap"}'
+  expect:
+    status: 409
+    body_json: {code: EMAIL_TAKEN}
+    cookies: {}
+    rows: *nothing-opened
+
+- name: register - a soft-deleted User's address is free
+  issue: "108"
+  request:
+    method: POST
+    path: /auth/local/register
+    headers:
+      Content-Type: application/json
+    body: '{"email":"carol@example.com","password":"kucing oranye di atap"}'
+  expect:
+    status: 204
+    body_empty: true
+    cookies:
+      afloat_onboarding: *handshake-cookie
+
+# The per-IP backoff: a request that reaches the hash arms a window for its
+# address, and one inside it is a 429 answered without a hash.
+- name: register - a second registration inside the window is TOO_MANY_ATTEMPTS
+  issue: "108"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/register
+        headers:
+          Content-Type: application/json
+        body: '{"email":"one@example.com","password":"kucing oranye di atap"}'
+      status: 204
+  request:
+    method: POST
+    path: /auth/local/register
+    headers:
+      Content-Type: application/json
+    body: '{"email":"two@example.com","password":"kucing oranye di atap"}'
+  expect:
+    status: 429
+    headers:
+      Retry-After: "1"
+    body_json: {code: TOO_MANY_ATTEMPTS}
+    cookies: {}
+    rows:
+      - sql: SELECT email FROM onboarding_handshakes
+        rows: [{email: one@example.com}]
+
+# Its own key: a registration does not throttle a login from the same address.
+- name: register does not arm the login backoff
+  issue: "108"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/register
+        headers:
+          Content-Type: application/json
+        body: '{"email":"one@example.com","password":"kucing oranye di atap"}'
+      status: 204
+  request:
+    method: POST
+    path: /auth/local/login
+    headers:
+      Content-Type: application/json
+    body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+  expect:
+    status: 204
+    body_empty: true
+    cookies:
+      afloat_session:
+        value_pattern: '[A-Za-z0-9_-]{43}'
+        path: /
+        max_age: 2592000
+        http_only: true
+        secure: false
+        same_site: Lax
+        expires: max-age
+
+- name: register - a cross-site request is blocked before it hashes
+  issue: "108"
+  request:
+    method: POST
+    path: /auth/local/register
+    headers:
+      Content-Type: application/json
+      Sec-Fetch-Site: cross-site
+    body: '{"email":"new@example.com","password":"kucing oranye di atap"}'
+  expect:
+    status: 403
+    body_json: {code: CROSS_SITE_REQUEST_BLOCKED}
+    cookies: {}
+    rows: *nothing-opened
+
+- name: register - GET is method not allowed
+  issue: "108"
+  request:
+    method: GET
+    path: /auth/local/register
+  expect:
+    status: 405

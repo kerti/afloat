@@ -11,6 +11,30 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const claimOnboardingHandshake = `-- name: ClaimOnboardingHandshake :one
+DELETE FROM onboarding_handshakes
+WHERE id = $1 AND expires_at > now()
+RETURNING id, email, display_name, locale, password_hash, created_at, expires_at
+`
+
+// The commit's claim. Run inside the founding transaction: a second concurrent
+// commit on the same handshake blocks on this row's lock until the first
+// commits, then finds it gone and gets no row, so only one of them can found.
+func (q *Queries) ClaimOnboardingHandshake(ctx context.Context, id string) (OnboardingHandshake, error) {
+	row := q.db.QueryRow(ctx, claimOnboardingHandshake, id)
+	var i OnboardingHandshake
+	err := row.Scan(
+		&i.ID,
+		&i.Email,
+		&i.DisplayName,
+		&i.Locale,
+		&i.PasswordHash,
+		&i.CreatedAt,
+		&i.ExpiresAt,
+	)
+	return i, err
+}
+
 const clearLoginAttempts = `-- name: ClearLoginAttempts :exec
 DELETE FROM login_attempts WHERE key = ANY($1::text[])
 `
@@ -18,6 +42,101 @@ DELETE FROM login_attempts WHERE key = ANY($1::text[])
 func (q *Queries) ClearLoginAttempts(ctx context.Context, keys []string) error {
 	_, err := q.db.Exec(ctx, clearLoginAttempts, keys)
 	return err
+}
+
+const createCredential = `-- name: CreateCredential :exec
+INSERT INTO credentials (user_id, password_hash)
+VALUES ($1, $2)
+`
+
+type CreateCredentialParams struct {
+	UserID       pgtype.UUID
+	PasswordHash string
+}
+
+// Plain INSERT, not UpsertCredential: a founding never overwrites one.
+func (q *Queries) CreateCredential(ctx context.Context, arg CreateCredentialParams) error {
+	_, err := q.db.Exec(ctx, createCredential, arg.UserID, arg.PasswordHash)
+	return err
+}
+
+const createHousehold = `-- name: CreateHousehold :one
+INSERT INTO households (id, display_name)
+VALUES ($1, $2)
+RETURNING id, display_name, reporting_currency, period_start_day, day_starts_at, expected_monthly_income, allowance_mode, created_at, updated_at, deleted_at
+`
+
+type CreateHouseholdParams struct {
+	ID          pgtype.UUID
+	DisplayName string
+}
+
+// Founding. Ids are minted by the server, UUIDv7 (BOOTSTRAP.md §4): founding is
+// an online auth flow, not an offline-capable write. Defaults the schema owns
+// (currency, period start, time zone) are left to it.
+func (q *Queries) CreateHousehold(ctx context.Context, arg CreateHouseholdParams) (Household, error) {
+	row := q.db.QueryRow(ctx, createHousehold, arg.ID, arg.DisplayName)
+	var i Household
+	err := row.Scan(
+		&i.ID,
+		&i.DisplayName,
+		&i.ReportingCurrency,
+		&i.PeriodStartDay,
+		&i.DayStartsAt,
+		&i.ExpectedMonthlyIncome,
+		&i.AllowanceMode,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.DeletedAt,
+	)
+	return i, err
+}
+
+const createOnboardingHandshake = `-- name: CreateOnboardingHandshake :one
+
+INSERT INTO onboarding_handshakes (id, email, display_name, locale, password_hash, expires_at)
+VALUES (
+    $1, $2, $3, $4,
+    $5, now() + $6::interval
+)
+RETURNING id, email, display_name, locale, password_hash, created_at, expires_at
+`
+
+type CreateOnboardingHandshakeParams struct {
+	ID           string
+	Email        string
+	DisplayName  string
+	Locale       string
+	PasswordHash *string
+	Ttl          pgtype.Interval
+}
+
+// Onboarding handshakes (BOOTSTRAP.md §5.1): the gap between registering a
+// credential and having an account. Instance-local auth state, so it
+// hard-deletes. id is the SHA-256 of the cookie's token, like sessions.id.
+// The expiry is the database's own now() plus the TTL, and every read below
+// tests it against the same clock (BOOTSTRAP.md §5.1: an instant the database
+// evaluates comes from the database).
+func (q *Queries) CreateOnboardingHandshake(ctx context.Context, arg CreateOnboardingHandshakeParams) (OnboardingHandshake, error) {
+	row := q.db.QueryRow(ctx, createOnboardingHandshake,
+		arg.ID,
+		arg.Email,
+		arg.DisplayName,
+		arg.Locale,
+		arg.PasswordHash,
+		arg.Ttl,
+	)
+	var i OnboardingHandshake
+	err := row.Scan(
+		&i.ID,
+		&i.Email,
+		&i.DisplayName,
+		&i.Locale,
+		&i.PasswordHash,
+		&i.CreatedAt,
+		&i.ExpiresAt,
+	)
+	return i, err
 }
 
 const createSession = `-- name: CreateSession :one
@@ -50,6 +169,52 @@ func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) (S
 		&i.UserAgent,
 	)
 	return i, err
+}
+
+const createUser = `-- name: CreateUser :one
+INSERT INTO users (id, household_id, email, display_name, locale)
+VALUES ($1, $2, $3, $4, $5)
+RETURNING id, household_id, email, display_name, locale, time_zone, created_at, updated_at, deleted_at
+`
+
+type CreateUserParams struct {
+	ID          pgtype.UUID
+	HouseholdID pgtype.UUID
+	Email       string
+	DisplayName string
+	Locale      string
+}
+
+func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (User, error) {
+	row := q.db.QueryRow(ctx, createUser,
+		arg.ID,
+		arg.HouseholdID,
+		arg.Email,
+		arg.DisplayName,
+		arg.Locale,
+	)
+	var i User
+	err := row.Scan(
+		&i.ID,
+		&i.HouseholdID,
+		&i.Email,
+		&i.DisplayName,
+		&i.Locale,
+		&i.TimeZone,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.DeletedAt,
+	)
+	return i, err
+}
+
+const deleteExpiredOnboardingHandshakes = `-- name: DeleteExpiredOnboardingHandshakes :exec
+DELETE FROM onboarding_handshakes WHERE expires_at <= now()
+`
+
+func (q *Queries) DeleteExpiredOnboardingHandshakes(ctx context.Context) error {
+	_, err := q.db.Exec(ctx, deleteExpiredOnboardingHandshakes)
+	return err
 }
 
 const deleteExpiredSessions = `-- name: DeleteExpiredSessions :exec
@@ -119,6 +284,28 @@ func (q *Queries) GetHouseholdByID(ctx context.Context, id pgtype.UUID) (Househo
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.DeletedAt,
+	)
+	return i, err
+}
+
+const getLiveOnboardingHandshake = `-- name: GetLiveOnboardingHandshake :one
+SELECT id, email, display_name, locale, password_hash, created_at, expires_at FROM onboarding_handshakes
+WHERE id = $1 AND expires_at > now()
+`
+
+// A read, not a claim: it lets a request be refused (400, 403) without
+// spending the handshake. The commit's own claim is ClaimOnboardingHandshake.
+func (q *Queries) GetLiveOnboardingHandshake(ctx context.Context, id string) (OnboardingHandshake, error) {
+	row := q.db.QueryRow(ctx, getLiveOnboardingHandshake, id)
+	var i OnboardingHandshake
+	err := row.Scan(
+		&i.ID,
+		&i.Email,
+		&i.DisplayName,
+		&i.Locale,
+		&i.PasswordHash,
+		&i.CreatedAt,
+		&i.ExpiresAt,
 	)
 	return i, err
 }

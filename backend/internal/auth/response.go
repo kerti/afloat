@@ -32,6 +32,18 @@ func internalError[T any]() (T, error) {
 		resp = api.Logout500JSONResponse{
 			InternalErrorJSONResponse: api.InternalErrorJSONResponse{Code: api.INTERNAL},
 		}
+	case *api.LocalRegisterResponseObject:
+		resp = api.LocalRegister500JSONResponse{
+			InternalErrorJSONResponse: api.InternalErrorJSONResponse{Code: api.INTERNAL},
+		}
+	case *api.GetOnboardingOptionsResponseObject:
+		resp = api.GetOnboardingOptions500JSONResponse{
+			InternalErrorJSONResponse: api.InternalErrorJSONResponse{Code: api.INTERNAL},
+		}
+	case *api.CommitOnboardingChoiceResponseObject:
+		resp = api.CommitOnboardingChoice500JSONResponse{
+			InternalErrorJSONResponse: api.InternalErrorJSONResponse{Code: api.INTERNAL},
+		}
 	default:
 		panic(fmt.Sprintf("auth: no 500 response for %T", &zero))
 	}

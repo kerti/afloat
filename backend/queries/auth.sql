@@ -96,3 +96,53 @@ ON CONFLICT (key) DO UPDATE SET
 
 -- name: ClearLoginAttempts :exec
 DELETE FROM login_attempts WHERE key = ANY(sqlc.arg(keys)::text[]);
+
+-- Onboarding handshakes (BOOTSTRAP.md §5.1): the gap between registering a
+-- credential and having an account. Instance-local auth state, so it
+-- hard-deletes. id is the SHA-256 of the cookie's token, like sessions.id.
+
+-- The expiry is the database's own now() plus the TTL, and every read below
+-- tests it against the same clock (BOOTSTRAP.md §5.1: an instant the database
+-- evaluates comes from the database).
+-- name: CreateOnboardingHandshake :one
+INSERT INTO onboarding_handshakes (id, email, display_name, locale, password_hash, expires_at)
+VALUES (
+    sqlc.arg(id), sqlc.arg(email), sqlc.arg(display_name), sqlc.arg(locale),
+    sqlc.arg(password_hash), now() + sqlc.arg(ttl)::interval
+)
+RETURNING *;
+
+-- A read, not a claim: it lets a request be refused (400, 403) without
+-- spending the handshake. The commit's own claim is ClaimOnboardingHandshake.
+-- name: GetLiveOnboardingHandshake :one
+SELECT * FROM onboarding_handshakes
+WHERE id = $1 AND expires_at > now();
+
+-- The commit's claim. Run inside the founding transaction: a second concurrent
+-- commit on the same handshake blocks on this row's lock until the first
+-- commits, then finds it gone and gets no row, so only one of them can found.
+-- name: ClaimOnboardingHandshake :one
+DELETE FROM onboarding_handshakes
+WHERE id = $1 AND expires_at > now()
+RETURNING *;
+
+-- name: DeleteExpiredOnboardingHandshakes :exec
+DELETE FROM onboarding_handshakes WHERE expires_at <= now();
+
+-- Founding. Ids are minted by the server, UUIDv7 (BOOTSTRAP.md §4): founding is
+-- an online auth flow, not an offline-capable write. Defaults the schema owns
+-- (currency, period start, time zone) are left to it.
+-- name: CreateHousehold :one
+INSERT INTO households (id, display_name)
+VALUES ($1, $2)
+RETURNING *;
+
+-- name: CreateUser :one
+INSERT INTO users (id, household_id, email, display_name, locale)
+VALUES ($1, $2, $3, $4, $5)
+RETURNING *;
+
+-- Plain INSERT, not UpsertCredential: a founding never overwrites one.
+-- name: CreateCredential :exec
+INSERT INTO credentials (user_id, password_hash)
+VALUES ($1, $2);

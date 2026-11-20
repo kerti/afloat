@@ -121,8 +121,10 @@ must not be foreclosed.
 
 ### 5.1 Identity and onboarding
 
-- **S1.** A new verified identity resolves, once, to either founding a Household or joining one by
-  invitation. The binding is irreversible; a User belongs to exactly one Household. Mirrors Balances.
+- **S1.** A new identity resolves, once, to either founding a Household or joining one by
+  invitation, at an **onboarding gate** it reaches only through a short-lived handshake (S2b). The
+  binding is irreversible; a User belongs to exactly one Household. Mirrors Balances. Until
+  invitations land the gate offers founding only.
 - **S2.** All Users in a Household have equal, full read/write access. No roles, no permission tiers.
 - **S3.** Household settings: `display_name`, `reporting_currency` (default IDR), `period_start_day`
   (default 1), `day_starts_at` (default 04:00), `expected_monthly_income` (nullable),
@@ -134,8 +136,16 @@ must not be foreclosed.
   cookie. **Users carry no credential column** — credentials live in their own table, so an
   OAuth-only user is representable and Google OAuth later is an additive filter chain rather than a
   migration of the user model.
-- **S2b.** Invitations are a one-time link generated and shown in the UI; password reset is a CLI
-  command on the instance. Both are replaced by email later.
+- **S2b.** **Registration is open, and founding is gated.** Anyone who reaches the instance can
+  register while local auth is on, but registering creates no account: it parks the credential in a
+  15-minute onboarding handshake, and the User, the Household and the credential are created together
+  only when the person commits at the gate. An operator sets `FOUNDING_DISABLED=true` to stop any
+  further Household being founded (`BOOTSTRAP.md` §12). Operators found their own Household *before*
+  exposing the instance and then set it: until they do, the first person through the gate founds one.
+  Passwords are at least 10 code points and not in a common-password list; a registered address is
+  answered `EMAIL_TAKEN` (registration enumerates, login does not). Invitations are a one-time link
+  generated and shown in the UI and will add a join choice to the same gate; password reset is a CLI
+  command on the instance. Both are replaced by email later. Mechanics in `BOOTSTRAP.md` §5.1.1.
 
 > **Q-02 resolved (2026-09-13).** Rationale and cookie attributes in `BOOTSTRAP.md` §5.
 
@@ -354,6 +364,7 @@ two-bucket split. Multi-currency UI. An "Underwater" fourth State for an exhaust
 
 | Date | Change |
 |---|---|
+| 2026-11-19 | Founding: self-registration and the onboarding gate (issue #108, found-only). Rulings from Rad: open registration with founding gated by `FOUNDING_DISABLED`, following Balances' code rather than its self-hosting notes; register creates no account, only a 15-minute handshake; the gate offers "found" only until invitations land; a registered address is `409 EMAIL_TAKEN` (enumeration accepted on register, login unchanged); Balances' password policy exactly; Household and User ids server-generated at founding (an exception to client-generated keys, which stand for domain POSTs); the Household name is pre-filled by the frontend from i18n and capped at 60 code points. S1 and S2b updated. |
 | 2026-11-19 | The Kotlin learning track is dropped; Afloat is Go-only. The Kotlin backend, the cross-backend parity requirement and the Flyway migration format are removed: migrations are hand-written goose files in `backend/internal/migrations/`, the database is `afloat`, and the conformance harness tests the one backend against its cases. N5a, N6–N8a updated to match. |
 | 2026-09-26 | Trajectory fixture and Go calculation (issue #73, BOOTSTRAP.md §11 step 8 part A). Rulings R1–R4: R1, allowance figures (Baseline Daily Budget, Today's Allowance, Left to Spend Today, Forward Daily Rate) floor at 4dp on the server, toward −∞; R2, Trajectory Variance and Buffer Days go on the wire half-up (half away from zero) at 4dp, and State is decided from exact, unrounded values with no division; R3, the warm-up floor and the two State thresholds are arguments to the calculation, carried as fixture defaults with per-row overrides — Q-05 stays open; R4, the Q-04 display cap and the Q-06 fully-committed presentation stay out of scope, while the mid-period Budget change's clamp *arithmetic* is in scope. |
 | 2026-09-13 | Draft 2 — technical-gate session. Resolved Q-01, Q-02, Q-03, Q-07, Q-09, Q-11, Q-12. Added §4.1 Planned and committed; N5a server-side trajectory; N7a contract-first; N8/N8a migration scheme and two databases; N12a i18n from day one. `BOOTSTRAP.md` added as the scaffold sheet. |

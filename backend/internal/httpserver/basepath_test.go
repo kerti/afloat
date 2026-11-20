@@ -58,4 +58,7 @@ func TestBasePathIsTheContracts(t *testing.T) {
 	if localLoginPath != basePath+"/auth/local/login" {
 		t.Errorf("localLoginPath = %q, not under basePath %q", localLoginPath, basePath)
 	}
+	if localRegisterPath != basePath+"/auth/local/register" {
+		t.Errorf("localRegisterPath = %q, not under basePath %q", localRegisterPath, basePath)
+	}
 }

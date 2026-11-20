@@ -86,6 +86,10 @@ func TestSchemaRefuses(t *testing.T) {
 		{"invitation from a user that doesn't exist", `INSERT INTO invitations (id, household_id, invited_email, token_hash, created_by, expires_at)
 			VALUES (gen_random_uuid(), '` + hh + `', 's@example.com', repeat('b', 64), gen_random_uuid(), now())`,
 			fkViolation, "invitations_created_by_fkey"},
+		{"handshake with an unknown locale", `INSERT INTO onboarding_handshakes (id, email, display_name, locale, expires_at) VALUES (repeat('c', 64), 'h@example.com', 'H', 'fr-FR', now())`,
+			checkViolation, "onboarding_handshakes_locale_known"},
+		{"second handshake under one token", `INSERT INTO onboarding_handshakes (id, email, display_name, locale, expires_at) VALUES (repeat('c', 64), 'h@example.com', 'H', 'en-GB', now()), (repeat('c', 64), 'i@example.com', 'I', 'en-GB', now())`,
+			uniqueViolation, "onboarding_handshakes_pkey"},
 		{"second credential for one user", `INSERT INTO credentials (user_id, password_hash) VALUES ('` + u1 + `', 'y')`,
 			uniqueViolation, "credentials_pkey"},
 		{"negative failure_count", `INSERT INTO login_attempts (key, failure_count) VALUES ('email:x@example.com', -1)`,
@@ -126,6 +130,8 @@ func TestSchemaAccepts(t *testing.T) {
 		{"period_start_day 28", `INSERT INTO households (id, display_name, period_start_day) VALUES (gen_random_uuid(), 'x', 28)`},
 		{"zero expected income", `INSERT INTO households (id, display_name, expected_monthly_income) VALUES (gen_random_uuid(), 'x', 0)`},
 		{"session", `INSERT INTO sessions (id, user_id, expires_at) VALUES (repeat('a', 64), '` + u1 + `', now() + interval '30 days')`},
+		// No password: the handshake a Google identity will open.
+		{"handshake without a password hash", `INSERT INTO onboarding_handshakes (id, email, display_name, locale, expires_at) VALUES (repeat('c', 64), 'h@example.com', 'H', 'id-ID', now() + interval '15 minutes')`},
 		{"login_attempts row", `INSERT INTO login_attempts (key, failure_count, backoff_until) VALUES ('ip:203.0.113.7', 3, now() + interval '4 seconds')`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

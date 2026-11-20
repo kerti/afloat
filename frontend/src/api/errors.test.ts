@@ -33,6 +33,23 @@ describe("errorMessage", () => {
     );
   });
 
+  it("words each WEAK_PASSWORD reason, and EMAIL_TAKEN and FOUNDING_DISABLED, in both languages", () => {
+    const weak = (reason: string) => new ApiError(400, "WEAK_PASSWORD", { reason });
+    expect(errorMessage(t, weak("min"))).toBe("Use at least 10 characters.");
+    expect(errorMessage(t, weak("breached"))).toBe("That password is too common. Pick another.");
+    expect(errorMessage(tID, weak("min"))).toBe("Gunakan minimal 10 karakter.");
+    expect(errorMessage(tID, weak("breached"))).toBe(
+      "Kata sandi itu terlalu umum. Pilih yang lain.",
+    );
+    // A reason the client does not know reads as the floor, never as a raw key.
+    expect(errorMessage(t, weak("future-reason"))).toBe("Use at least 10 characters.");
+
+    expect(errorMessage(t, new ApiError(409, "EMAIL_TAKEN"))).toContain("already exists");
+    expect(errorMessage(tID, new ApiError(409, "EMAIL_TAKEN"))).toContain("Sudah ada akun");
+    expect(errorMessage(t, new ApiError(403, "FOUNDING_DISABLED"))).toContain("isn't accepting");
+    expect(errorMessage(tID, new ApiError(403, "FOUNDING_DISABLED"))).toContain("tidak menerima");
+  });
+
   it("never shows a code for an answer without the envelope", () => {
     expect(errorMessage(t, new ApiError(502, "UNKNOWN"))).toBe(
       "Something went wrong. Try again in a moment.",

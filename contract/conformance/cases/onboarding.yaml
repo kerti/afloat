@@ -1,0 +1,474 @@
+# GET /onboarding/options and POST /onboarding/choice (contract: the onboarding
+# tag), the gate between a registered credential and an account (#108). The
+# handshake cookie is the credential; no session is involved until the commit.
+#
+# Every case that needs a handshake registers for one in `given`, through the
+# cookie jar, so the cookie the server set is the cookie the gate is shown.
+# The founding itself is asserted in rows: what was created, in which tables,
+# and that nothing was left behind by a refusal.
+#
+# The seed holds one Household (…0001), three Users and two credentials.
+
+- name: onboarding options of a live handshake
+  issue: "108"
+  given:
+    - request: &register-dewi
+        method: POST
+        path: /auth/local/register
+        headers:
+          Content-Type: application/json
+        body: '{"email":"Dewi@Example.com","password":"kucing oranye di atap","display_name":"Dewi Putri","locale":"id-ID"}'
+      status: 204
+  request:
+    method: GET
+    path: /onboarding/options
+  expect:
+    status: 200
+    body_json: {email: dewi@example.com, display_name: Dewi Putri, founding_open: true}
+    cookies: {}
+
+- name: onboarding options with no handshake is UNAUTHORIZED and sets no cookie
+  issue: "108"
+  request:
+    method: GET
+    path: /onboarding/options
+  expect:
+    status: 401
+    body_json: {code: UNAUTHORIZED}
+    cookies: {}
+
+- name: onboarding options with an unknown handshake is UNAUTHORIZED and clears the cookie
+  issue: "108"
+  request:
+    method: GET
+    path: /onboarding/options
+    headers:
+      Cookie: afloat_onboarding=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+  expect:
+    status: 401
+    body_json: {code: UNAUTHORIZED}
+    cookies:
+      afloat_onboarding: &cleared-handshake
+        value: ""
+        path: /
+        max_age: 0
+        http_only: true
+        secure: false
+        same_site: Lax
+        expires: past
+
+# The expiry is the database's: moved into the past in SQL, the handshake is
+# dead to the very next read.
+- name: onboarding options with an expired handshake is UNAUTHORIZED and clears the cookie
+  issue: "108"
+  given:
+    - request: *register-dewi
+      status: 204
+    - sql: UPDATE onboarding_handshakes SET expires_at = now() - interval '1 second'
+  request:
+    method: GET
+    path: /onboarding/options
+  expect:
+    status: 401
+    body_json: {code: UNAUTHORIZED}
+    cookies:
+      afloat_onboarding: *cleared-handshake
+
+- name: onboarding choice founds the Household, creates the User and issues the session
+  issue: "108"
+  given:
+    - request: *register-dewi
+      status: 204
+  request:
+    method: POST
+    path: /onboarding/choice
+    headers:
+      Content-Type: application/json
+      User-Agent: conformance/1.0
+    body: '{"found":true,"household_name":"  Rumah Tangga Dewi  "}'
+  expect:
+    status: 204
+    body_empty: true
+    cookies:
+      afloat_session:
+        value_pattern: '[A-Za-z0-9_-]{43}'
+        path: /
+        max_age: 2592000
+        http_only: true
+        secure: false
+        same_site: Lax
+        expires: max-age
+      afloat_onboarding: *cleared-handshake
+    rows:
+      # The name stored trimmed; the schema's defaults for everything else.
+      - sql: |
+          SELECT display_name, reporting_currency, period_start_day, to_char(day_starts_at, 'HH24:MI') AS day_starts_at,
+                 allowance_mode, substr(id::text, 15, 1) AS id_version
+          FROM households WHERE id <> '0192f0a0-0000-7000-8000-000000000001'
+        rows:
+          - {display_name: Rumah Tangga Dewi, reporting_currency: IDR, period_start_day: 1, day_starts_at: "04:00",
+             allowance_mode: adaptive, id_version: "7"}
+      # The handshake's email, display_name and locale; time_zone is the default.
+      - sql: |
+          SELECT email, display_name, locale, time_zone, substr(id::text, 15, 1) AS id_version,
+                 household_id <> '0192f0a0-0000-7000-8000-000000000001' AS own_household
+          FROM users WHERE email = 'dewi@example.com'
+        rows:
+          - {email: dewi@example.com, display_name: Dewi Putri, locale: id-ID, time_zone: Asia/Jakarta, id_version: "7", own_household: true}
+      # The credential is the registered one's hash, and the session is the new
+      # User's. Nothing is left at the gate.
+      - sql: |
+          SELECT (SELECT count(*) FROM credentials)::int AS credentials,
+                 (SELECT count(*) FROM credentials c JOIN users u ON u.id = c.user_id
+                   WHERE u.email = 'dewi@example.com' AND left(c.password_hash, 10) = '$argon2id$')::int AS new_credentials,
+                 (SELECT count(*) FROM sessions s JOIN users u ON u.id = s.user_id WHERE u.email = 'dewi@example.com')::int AS sessions,
+                 (SELECT count(*) FROM onboarding_handshakes)::int AS handshakes,
+                 (SELECT user_agent FROM sessions) AS user_agent
+        rows: [{credentials: 3, new_credentials: 1, sessions: 1, handshakes: 0, user_agent: conformance/1.0}]
+
+# What the commit's session is for: the next call is GET /me, as after a login.
+- name: the session a commit issues opens /me
+  issue: "108"
+  given:
+    - request: *register-dewi
+      status: 204
+    - request:
+        method: POST
+        path: /onboarding/choice
+        headers:
+          Content-Type: application/json
+        body: '{"found":true,"household_name":"Rumah Tangga Dewi"}'
+      status: 204
+  request:
+    method: GET
+    path: /me
+  expect:
+    status: 200
+
+# Registered with the password, so the credential the commit wrote signs in.
+- name: the founded account signs in with the registered password
+  issue: "108"
+  given:
+    - request: *register-dewi
+      status: 204
+    - request:
+        method: POST
+        path: /onboarding/choice
+        headers:
+          Content-Type: application/json
+        body: '{"found":true,"household_name":"Rumah Tangga Dewi"}'
+      status: 204
+    - request:
+        method: POST
+        path: /auth/logout
+      status: 204
+  request:
+    method: POST
+    path: /auth/local/login
+    headers:
+      Content-Type: application/json
+    body: '{"email":"DEWI@example.com","password":"kucing oranye di atap"}'
+  expect:
+    status: 204
+    body_empty: true
+    cookies:
+      afloat_session:
+        value_pattern: '[A-Za-z0-9_-]{43}'
+        path: /
+        max_age: 2592000
+        http_only: true
+        secure: false
+        same_site: Lax
+        expires: max-age
+
+- name: onboarding choice with no handshake is UNAUTHORIZED
+  issue: "108"
+  request:
+    method: POST
+    path: /onboarding/choice
+    headers:
+      Content-Type: application/json
+    body: '{"found":true,"household_name":"Rumah"}'
+  expect:
+    status: 401
+    body_json: {code: UNAUTHORIZED}
+    cookies: {}
+    rows: &nothing-founded
+      - sql: |
+          SELECT (SELECT count(*) FROM households)::int AS households, (SELECT count(*) FROM users)::int AS users,
+                 (SELECT count(*) FROM credentials)::int AS credentials, (SELECT count(*) FROM sessions)::int AS sessions
+        rows: [{households: 1, users: 3, credentials: 2, sessions: 0}]
+
+- name: onboarding choice with an unknown handshake is UNAUTHORIZED and clears the cookie
+  issue: "108"
+  request:
+    method: POST
+    path: /onboarding/choice
+    headers:
+      Content-Type: application/json
+      Cookie: afloat_onboarding=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+    body: '{"found":true,"household_name":"Rumah"}'
+  expect:
+    status: 401
+    body_json: {code: UNAUTHORIZED}
+    cookies:
+      afloat_onboarding: *cleared-handshake
+    rows: *nothing-founded
+
+# The claim carries the expiry test, so an expired handshake founds nothing, and
+# is not consumed either: the sweep is registration's.
+- name: onboarding choice with an expired handshake is UNAUTHORIZED and founds nothing
+  issue: "108"
+  given:
+    - request: *register-dewi
+      status: 204
+    - sql: UPDATE onboarding_handshakes SET expires_at = now() - interval '1 second'
+  request:
+    method: POST
+    path: /onboarding/choice
+    headers:
+      Content-Type: application/json
+    body: '{"found":true,"household_name":"Rumah"}'
+  expect:
+    status: 401
+    body_json: {code: UNAUTHORIZED}
+    cookies:
+      afloat_onboarding: *cleared-handshake
+    rows: *nothing-founded
+
+# Anything but a found choice is VALIDATION, and spends nothing: the person
+# fixes the form and commits again.
+- name: onboarding choice that is not a found choice is VALIDATION
+  issue: "108"
+  given:
+    - request: *register-dewi
+      status: 204
+  request:
+    method: POST
+    path: /onboarding/choice
+    headers:
+      Content-Type: application/json
+    body: '{"found":false,"household_name":"Rumah"}'
+  expect:
+    status: 400
+    body_json: {code: VALIDATION, args: {field: found, rule: required}}
+    cookies: {}
+    rows: &handshake-kept
+      - sql: |
+          SELECT (SELECT count(*) FROM households)::int AS households, (SELECT count(*) FROM onboarding_handshakes)::int AS handshakes
+        rows: [{households: 1, handshakes: 1}]
+
+- name: onboarding choice with a blank Household name is VALIDATION required
+  issue: "108"
+  given:
+    - request: *register-dewi
+      status: 204
+  request:
+    method: POST
+    path: /onboarding/choice
+    headers:
+      Content-Type: application/json
+    body: '{"found":true,"household_name":"   "}'
+  expect:
+    status: 400
+    body_json: {code: VALIDATION, args: {field: household_name, rule: required}}
+    cookies: {}
+    rows: *handshake-kept
+
+- name: onboarding choice with no Household name is VALIDATION required
+  issue: "108"
+  given:
+    - request: *register-dewi
+      status: 204
+  request:
+    method: POST
+    path: /onboarding/choice
+    headers:
+      Content-Type: application/json
+    body: '{"found":true}'
+  expect:
+    status: 400
+    body_json: {code: VALIDATION, args: {field: household_name, rule: required}}
+    cookies: {}
+    rows: *handshake-kept
+
+- name: onboarding choice with a Household name of 61 code points is VALIDATION max
+  issue: "108"
+  given:
+    - request: *register-dewi
+      status: 204
+  request:
+    method: POST
+    path: /onboarding/choice
+    headers:
+      Content-Type: application/json
+    body: '{"found":true,"household_name":"ééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé"}'
+  expect:
+    status: 400
+    body_json: {code: VALIDATION, args: {field: household_name, rule: max}}
+    cookies: {}
+    rows: *handshake-kept
+
+- name: onboarding choice with a Household name of exactly 60 code points founds
+  issue: "108"
+  given:
+    - request: *register-dewi
+      status: 204
+  request:
+    method: POST
+    path: /onboarding/choice
+    headers:
+      Content-Type: application/json
+    body: '{"found":true,"household_name":"éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé"}'
+  expect:
+    status: 204
+    body_empty: true
+    cookies:
+      afloat_session:
+        value_pattern: '[A-Za-z0-9_-]{43}'
+        path: /
+        max_age: 2592000
+        http_only: true
+        secure: false
+        same_site: Lax
+        expires: max-age
+      afloat_onboarding: *cleared-handshake
+
+# `found` is a boolean and the body declares nothing else: a later join choice
+# adds properties to the contract, not a different shape.
+- name: onboarding choice with a non-boolean found is INVALID_JSON_BODY
+  issue: "108"
+  given:
+    - request: *register-dewi
+      status: 204
+  request:
+    method: POST
+    path: /onboarding/choice
+    headers:
+      Content-Type: application/json
+    body: '{"found":"true","household_name":"Rumah"}'
+  expect:
+    status: 400
+    body_json: {code: INVALID_JSON_BODY}
+    cookies: {}
+    rows: *handshake-kept
+
+- name: onboarding choice naming a join is INVALID_JSON_BODY, invitations being a later slice
+  issue: "108"
+  given:
+    - request: *register-dewi
+      status: 204
+  request:
+    method: POST
+    path: /onboarding/choice
+    headers:
+      Content-Type: application/json
+    body: '{"join":true,"invitation_id":"0192f0a0-0000-7000-8000-0000000000e1"}'
+  expect:
+    status: 400
+    body_json: {code: INVALID_JSON_BODY}
+    cookies: {}
+    rows: *handshake-kept
+
+# Taken between register and commit. The Household inserted ahead of the failing
+# User must not survive: the whole founding rolled back, and the handshake with it.
+- name: onboarding choice with the address taken since registering is EMAIL_TAKEN and creates nothing
+  issue: "108"
+  given:
+    - request: *register-dewi
+      status: 204
+    - sql: |
+        INSERT INTO users (id, household_id, email, display_name)
+        VALUES ('0192f0a0-0000-7000-8000-0000000000d1', '0192f0a0-0000-7000-8000-000000000001', 'DEWI@example.com', 'Raced')
+  request:
+    method: POST
+    path: /onboarding/choice
+    headers:
+      Content-Type: application/json
+    body: '{"found":true,"household_name":"Rumah"}'
+  expect:
+    status: 409
+    body_json: {code: EMAIL_TAKEN}
+    cookies: {}
+    rows:
+      - sql: |
+          SELECT (SELECT count(*) FROM households)::int AS households, (SELECT count(*) FROM users)::int AS users,
+                 (SELECT count(*) FROM credentials)::int AS credentials, (SELECT count(*) FROM sessions)::int AS sessions,
+                 (SELECT count(*) FROM onboarding_handshakes)::int AS handshakes
+        rows: [{households: 1, users: 4, credentials: 2, sessions: 0, handshakes: 1}]
+
+- name: onboarding choice - a cross-site request is blocked
+  issue: "108"
+  given:
+    - request: *register-dewi
+      status: 204
+  request:
+    method: POST
+    path: /onboarding/choice
+    headers:
+      Content-Type: application/json
+      Sec-Fetch-Site: cross-site
+    body: '{"found":true,"household_name":"Rumah"}'
+  expect:
+    status: 403
+    body_json: {code: CROSS_SITE_REQUEST_BLOCKED}
+    cookies: {}
+    rows: *handshake-kept
+
+# FOUNDING_DISABLED: registration and the gate still work, the founding does not.
+- name: founding disabled - auth methods reports founding closed
+  issue: "108"
+  profile: founding-disabled
+  request:
+    method: GET
+    path: /auth/methods
+  expect:
+    status: 200
+    body_json: {local: true, google: false, founding_open: false}
+
+- name: founding disabled - the gate reports founding closed
+  issue: "108"
+  profile: founding-disabled
+  given:
+    - request: *register-dewi
+      status: 204
+  request:
+    method: GET
+    path: /onboarding/options
+  expect:
+    status: 200
+    body_json: {email: dewi@example.com, display_name: Dewi Putri, founding_open: false}
+
+- name: founding disabled - the commit is FOUNDING_DISABLED and spends nothing
+  issue: "108"
+  profile: founding-disabled
+  given:
+    - request: *register-dewi
+      status: 204
+  request:
+    method: POST
+    path: /onboarding/choice
+    headers:
+      Content-Type: application/json
+    body: '{"found":true,"household_name":"Rumah"}'
+  expect:
+    status: 403
+    body_json: {code: FOUNDING_DISABLED}
+    cookies: {}
+    rows: *handshake-kept
+
+# An absent handshake is answered first, so a stranger learns nothing of the
+# instance's posture from a 403.
+- name: founding disabled - the commit with no handshake is still UNAUTHORIZED
+  issue: "108"
+  profile: founding-disabled
+  request:
+    method: POST
+    path: /onboarding/choice
+    headers:
+      Content-Type: application/json
+    body: '{"found":true,"household_name":"Rumah"}'
+  expect:
+    status: 401
+    body_json: {code: UNAUTHORIZED}
+    cookies: {}

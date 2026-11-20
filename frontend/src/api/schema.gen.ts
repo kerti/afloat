@@ -74,6 +74,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/auth/local/register": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Register a credential and open an onboarding handshake.
+         * @description Creates no User, no Household and no session. It validates, hashes the
+         *     password and stores the credential in a short-lived onboarding
+         *     handshake; the account is born only when the person commits at the
+         *     gate (`POST /onboarding/choice`). On success the response carries the
+         *     handshake cookie (host-only, `HttpOnly`, `SameSite=Lax`, `Secure` per
+         *     deployment) and the client navigates to the gate.
+         *
+         *     Validation runs in this order: the email's shape, then the password
+         *     policy (before any hashing), then whether a live User already holds the
+         *     address. A `400` with `WEAK_PASSWORD` carries `args.reason`, `min` (under
+         *     10 code points) or `breached` (in the embedded common-password list,
+         *     compared case-insensitively). A `409 EMAIL_TAKEN` names a held address:
+         *     registration enumerates by design, where login never does.
+         *
+         *     Registration hashes on unauthenticated input, so it shares login's
+         *     Argon2 concurrency cap and has its own per-IP backoff: a request that
+         *     reaches the hash arms a window for its IP, and a request inside one is
+         *     a `429`.
+         *
+         *     With the local provider off, this route answers exactly as a path that
+         *     was never registered.
+         */
+        post: operations["localRegister"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/auth/logout": {
         parameters: {
             query?: never;
@@ -117,6 +157,56 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/onboarding/options": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * What the gate offers the holder of a handshake.
+         * @description Authenticated by the handshake cookie alone. Today the gate offers
+         *     founding a Household; invitations arrive later as an additive field.
+         */
+        get: operations["getOnboardingOptions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/onboarding/choice": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Commit the gate's choice, creating the account.
+         * @description One transaction claims the handshake, creates the Household, the User
+         *     and the credential, and commits; only then is the session issued. Two
+         *     concurrent commits on one handshake cannot both found: the loser
+         *     answers `401`.
+         *
+         *     Founding disabled (`FOUNDING_DISABLED`) answers `403`; the address
+         *     having been taken since registration answers `409 EMAIL_TAKEN` and
+         *     creates nothing. The server mints the Household's and the User's ids,
+         *     UUIDv7 (BOOTSTRAP.md §5.1): founding is an online flow, not an
+         *     offline-capable write.
+         */
+        post: operations["commitOnboardingChoice"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -135,12 +225,59 @@ export interface components {
             local: boolean;
             /** @description Always false in MVP; planned, not built (PRD §4.1). */
             google: boolean;
+            /**
+             * @description True unless the operator set `FOUNDING_DISABLED`. Display only: the
+             *     sign-in screen offers "Create account" from it, and the commit at
+             *     the gate is what enforces it.
+             */
+            founding_open: boolean;
         };
         LocalLoginRequest: {
             /** Format: email */
             email: string;
             /** Format: password */
             password: string;
+        };
+        LocalRegisterRequest: {
+            /** Format: email */
+            email: string;
+            /** Format: password */
+            password: string;
+            /** @description Defaults to the email's local part when absent or blank. */
+            display_name?: string;
+            /**
+             * @description `en-GB` or `id-ID`. Deliberately not an enum: anything else falls
+             *     back to `en-GB` rather than failing registration.
+             */
+            locale?: string;
+        };
+        OnboardingOptions: {
+            /** Format: email */
+            email: string;
+            display_name: string;
+            /**
+             * @description False when the operator set `FOUNDING_DISABLED`; the gate then has
+             *     nothing to offer a stranger.
+             */
+            founding_open: boolean;
+        };
+        /**
+         * @description A found choice, the only one today. A later slice adds a join choice to
+         *     this same body, additively.
+         */
+        OnboardingChoiceRequest: {
+            /**
+             * @description Must be `true`. Any other body is not a found choice and answers
+             *     `VALIDATION`.
+             */
+            found: boolean;
+            /**
+             * @description The Household's display name, pre-filled by the client from its own
+             *     catalogue and editable. The server stores it trimmed; blank after
+             *     the trim is `VALIDATION` (`required`), and more than 60 code points
+             *     is `VALIDATION` (`max`).
+             */
+            household_name: string;
         };
         /**
          * @description The User's own fields (PRD S4) plus the Household settings the client
@@ -225,13 +362,17 @@ export interface components {
          *     falls back to the client's generic string.
          *
          *     `VALIDATION` carries `{field, rule}` in `args` and reports only the
-         *     first failing field, as in Balances.
+         *     first failing field, as in Balances. `WEAK_PASSWORD` carries
+         *     `{reason}`, `min` or `breached`.
          * @enum {string}
          */
-        ErrorCode: "VALIDATION" | "INVALID_JSON_BODY" | "INVALID_CREDENTIALS" | "TOO_MANY_ATTEMPTS" | "UNAUTHORIZED" | "CROSS_SITE_REQUEST_BLOCKED" | "INTERNAL";
+        ErrorCode: "VALIDATION" | "INVALID_JSON_BODY" | "INVALID_CREDENTIALS" | "TOO_MANY_ATTEMPTS" | "UNAUTHORIZED" | "CROSS_SITE_REQUEST_BLOCKED" | "EMAIL_TAKEN" | "WEAK_PASSWORD" | "FOUNDING_DISABLED" | "INTERNAL";
     };
     responses: {
-        /** @description Malformed body, or a field that failed validation. */
+        /**
+         * @description Malformed body, a field that failed validation, or (registration only)
+         *     a password the policy refuses: `WEAK_PASSWORD`.
+         */
         BadRequest: {
             headers: {
                 [name: string]: unknown;
@@ -250,7 +391,45 @@ export interface components {
             };
         };
         /**
-         * @description Login backoff (per-IP and per-email). `Retry-After` carries the wait in
+         * @description No handshake, or an expired or unknown one. A stale handshake cookie is
+         *     cleared, so the client stops presenting it.
+         */
+        OnboardingUnauthorized: {
+            headers: {
+                /** @description The handshake cookie, expired. Present when one was sent. */
+                "Set-Cookie"?: string;
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /**
+         * @description `FOUNDING_DISABLED`: the operator has closed this instance to new
+         *     Households.
+         */
+        Forbidden: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /**
+         * @description `EMAIL_TAKEN`: a live User already holds the address, at registration or
+         *     at the commit.
+         */
+        Conflict: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /**
+         * @description Login backoff (per-IP and per-email), or registration's per-IP backoff. `Retry-After` carries the wait in
          *     seconds. Backoff, never a hard lockout — a hard lock is a self-host
          *     footgun.
          */
@@ -358,6 +537,34 @@ export interface operations {
             500: components["responses"]["InternalError"];
         };
     };
+    localRegister: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LocalRegisterRequest"];
+            };
+        };
+        responses: {
+            /** @description A handshake is open. The handshake cookie is set. */
+            204: {
+                headers: {
+                    /** @description The onboarding handshake cookie. */
+                    "Set-Cookie"?: string;
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
     logout: {
         parameters: {
             query?: never;
@@ -398,6 +605,64 @@ export interface operations {
                 };
             };
             401: components["responses"]["Unauthorized"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getOnboardingOptions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The handshake is live. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OnboardingOptions"];
+                };
+            };
+            401: components["responses"]["OnboardingUnauthorized"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    commitOnboardingChoice: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OnboardingChoiceRequest"];
+            };
+        };
+        responses: {
+            /**
+             * @description The account exists. The handshake cookie is cleared and the session
+             *     cookie is set.
+             */
+            204: {
+                headers: {
+                    /**
+                     * @description The session cookie (attributes per BOOTSTRAP.md §5), then a
+                     *     second `Set-Cookie` line expiring the handshake cookie. Two
+                     *     lines, though OpenAPI 3.0 can describe one header value only.
+                     */
+                    "Set-Cookie"?: string;
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["OnboardingUnauthorized"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
             500: components["responses"]["InternalError"];
         };
     };

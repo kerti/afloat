@@ -11,8 +11,27 @@ import (
 )
 
 type Querier interface {
+	// The commit's claim. Run inside the founding transaction: a second concurrent
+	// commit on the same handshake blocks on this row's lock until the first
+	// commits, then finds it gone and gets no row, so only one of them can found.
+	ClaimOnboardingHandshake(ctx context.Context, id string) (OnboardingHandshake, error)
 	ClearLoginAttempts(ctx context.Context, keys []string) error
+	// Plain INSERT, not UpsertCredential: a founding never overwrites one.
+	CreateCredential(ctx context.Context, arg CreateCredentialParams) error
+	// Founding. Ids are minted by the server, UUIDv7 (BOOTSTRAP.md §4): founding is
+	// an online auth flow, not an offline-capable write. Defaults the schema owns
+	// (currency, period start, time zone) are left to it.
+	CreateHousehold(ctx context.Context, arg CreateHouseholdParams) (Household, error)
+	// Onboarding handshakes (BOOTSTRAP.md §5.1): the gap between registering a
+	// credential and having an account. Instance-local auth state, so it
+	// hard-deletes. id is the SHA-256 of the cookie's token, like sessions.id.
+	// The expiry is the database's own now() plus the TTL, and every read below
+	// tests it against the same clock (BOOTSTRAP.md §5.1: an instant the database
+	// evaluates comes from the database).
+	CreateOnboardingHandshake(ctx context.Context, arg CreateOnboardingHandshakeParams) (OnboardingHandshake, error)
 	CreateSession(ctx context.Context, arg CreateSessionParams) (Session, error)
+	CreateUser(ctx context.Context, arg CreateUserParams) (User, error)
+	DeleteExpiredOnboardingHandshakes(ctx context.Context) error
 	DeleteExpiredSessions(ctx context.Context) error
 	DeleteSession(ctx context.Context, id string) error
 	// Revoke every session a User holds. Run on a password change, inside the same
@@ -23,6 +42,9 @@ type Querier interface {
 	// authenticate. A legitimate state, so this returning no rows is not an error.
 	GetCredentialByUserID(ctx context.Context, userID pgtype.UUID) (Credential, error)
 	GetHouseholdByID(ctx context.Context, id pgtype.UUID) (Household, error)
+	// A read, not a claim: it lets a request be refused (400, 403) without
+	// spending the handshake. The commit's own claim is ClaimOnboardingHandshake.
+	GetLiveOnboardingHandshake(ctx context.Context, id string) (OnboardingHandshake, error)
 	// sessions.id is the SHA-256 of the bearer token, never the token. Callers hash
 	// before every read and write.
 	//

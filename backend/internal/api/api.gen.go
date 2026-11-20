@@ -23,18 +23,25 @@ import (
 // Defines values for ErrorCode.
 const (
 	CROSSSITEREQUESTBLOCKED ErrorCode = "CROSS_SITE_REQUEST_BLOCKED"
+	EMAILTAKEN              ErrorCode = "EMAIL_TAKEN"
+	FOUNDINGDISABLED        ErrorCode = "FOUNDING_DISABLED"
 	INTERNAL                ErrorCode = "INTERNAL"
 	INVALIDCREDENTIALS      ErrorCode = "INVALID_CREDENTIALS"
 	INVALIDJSONBODY         ErrorCode = "INVALID_JSON_BODY"
 	TOOMANYATTEMPTS         ErrorCode = "TOO_MANY_ATTEMPTS"
 	UNAUTHORIZED            ErrorCode = "UNAUTHORIZED"
 	VALIDATION              ErrorCode = "VALIDATION"
+	WEAKPASSWORD            ErrorCode = "WEAK_PASSWORD"
 )
 
 // Valid indicates whether the value is a known member of the ErrorCode enum.
 func (e ErrorCode) Valid() bool {
 	switch e {
 	case CROSSSITEREQUESTBLOCKED:
+		return true
+	case EMAILTAKEN:
+		return true
+	case FOUNDINGDISABLED:
 		return true
 	case INTERNAL:
 		return true
@@ -47,6 +54,8 @@ func (e ErrorCode) Valid() bool {
 	case UNAUTHORIZED:
 		return true
 	case VALIDATION:
+		return true
+	case WEAKPASSWORD:
 		return true
 	default:
 		return false
@@ -109,6 +118,11 @@ func (e MeAllowanceMode) Valid() bool {
 
 // AuthMethods defines model for AuthMethods.
 type AuthMethods struct {
+	// FoundingOpen True unless the operator set `FOUNDING_DISABLED`. Display only: the
+	// sign-in screen offers "Create account" from it, and the commit at
+	// the gate is what enforces it.
+	FoundingOpen bool `json:"founding_open"`
+
 	// Google Always false in MVP; planned, not built (PRD §4.1).
 	Google bool `json:"google"`
 
@@ -132,7 +146,8 @@ type Error struct {
 	// falls back to the client's generic string.
 	//
 	// `VALIDATION` carries `{field, rule}` in `args` and reports only the
-	// first failing field, as in Balances.
+	// first failing field, as in Balances. `WEAK_PASSWORD` carries
+	// `{reason}`, `min` or `breached`.
 	Code ErrorCode `json:"code"`
 }
 
@@ -141,7 +156,8 @@ type Error struct {
 // falls back to the client's generic string.
 //
 // `VALIDATION` carries `{field, rule}` in `args` and reports only the
-// first failing field, as in Balances.
+// first failing field, as in Balances. `WEAK_PASSWORD` carries
+// `{reason}`, `min` or `breached`.
 type ErrorCode string
 
 // Health defines model for Health.
@@ -161,6 +177,18 @@ type HealthStatus string
 type LocalLoginRequest struct {
 	Email    string `json:"email"`
 	Password string `json:"password"`
+}
+
+// LocalRegisterRequest defines model for LocalRegisterRequest.
+type LocalRegisterRequest struct {
+	// DisplayName Defaults to the email's local part when absent or blank.
+	DisplayName *string `json:"display_name,omitempty"`
+	Email       string  `json:"email"`
+
+	// Locale `en-GB` or `id-ID`. Deliberately not an enum: anything else falls
+	// back to `en-GB` rather than failing registration.
+	Locale   *string `json:"locale,omitempty"`
+	Password string  `json:"password"`
 }
 
 // Locale Both locales are real from day one (PRD N12a); the frontend owns every
@@ -220,6 +248,30 @@ type Me struct {
 // MeAllowanceMode Default adaptive.
 type MeAllowanceMode string
 
+// OnboardingChoiceRequest A found choice, the only one today. A later slice adds a join choice to
+// this same body, additively.
+type OnboardingChoiceRequest struct {
+	// Found Must be `true`. Any other body is not a found choice and answers
+	// `VALIDATION`.
+	Found bool `json:"found"`
+
+	// HouseholdName The Household's display name, pre-filled by the client from its own
+	// catalogue and editable. The server stores it trimmed; blank after
+	// the trim is `VALIDATION` (`required`), and more than 60 code points
+	// is `VALIDATION` (`max`).
+	HouseholdName string `json:"household_name"`
+}
+
+// OnboardingOptions defines model for OnboardingOptions.
+type OnboardingOptions struct {
+	DisplayName string `json:"display_name"`
+	Email       string `json:"email"`
+
+	// FoundingOpen False when the operator set `FOUNDING_DISABLED`; the gate then has
+	// nothing to offer a stranger.
+	FoundingOpen bool `json:"founding_open"`
+}
+
 // BadRequest The one error envelope the API emits (PRD N7), identical in shape
 // to Balances ADR-0027. It carries **codes, not messages** — the frontend
 // looks `code` up in its i18n catalogue and interpolates `args`. There is
@@ -227,12 +279,33 @@ type MeAllowanceMode string
 // copy drift between the two.
 type BadRequest = Error
 
+// Conflict The one error envelope the API emits (PRD N7), identical in shape
+// to Balances ADR-0027. It carries **codes, not messages** — the frontend
+// looks `code` up in its i18n catalogue and interpolates `args`. There is
+// deliberately no `message` field: shipping English beside the code invites
+// copy drift between the two.
+type Conflict = Error
+
+// Forbidden The one error envelope the API emits (PRD N7), identical in shape
+// to Balances ADR-0027. It carries **codes, not messages** — the frontend
+// looks `code` up in its i18n catalogue and interpolates `args`. There is
+// deliberately no `message` field: shipping English beside the code invites
+// copy drift between the two.
+type Forbidden = Error
+
 // InternalError The one error envelope the API emits (PRD N7), identical in shape
 // to Balances ADR-0027. It carries **codes, not messages** — the frontend
 // looks `code` up in its i18n catalogue and interpolates `args`. There is
 // deliberately no `message` field: shipping English beside the code invites
 // copy drift between the two.
 type InternalError = Error
+
+// OnboardingUnauthorized The one error envelope the API emits (PRD N7), identical in shape
+// to Balances ADR-0027. It carries **codes, not messages** — the frontend
+// looks `code` up in its i18n catalogue and interpolates `args`. There is
+// deliberately no `message` field: shipping English beside the code invites
+// copy drift between the two.
+type OnboardingUnauthorized = Error
 
 // TooManyRequests The one error envelope the API emits (PRD N7), identical in shape
 // to Balances ADR-0027. It carries **codes, not messages** — the frontend
@@ -251,11 +324,20 @@ type Unauthorized = Error
 // LocalLoginJSONRequestBody defines body for LocalLogin for application/json ContentType.
 type LocalLoginJSONRequestBody = LocalLoginRequest
 
+// LocalRegisterJSONRequestBody defines body for LocalRegister for application/json ContentType.
+type LocalRegisterJSONRequestBody = LocalRegisterRequest
+
+// CommitOnboardingChoiceJSONRequestBody defines body for CommitOnboardingChoice for application/json ContentType.
+type CommitOnboardingChoiceJSONRequestBody = OnboardingChoiceRequest
+
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
 	// LocalLogin Exchange email and password for a server-side session.
 	// (POST /auth/local/login)
 	LocalLogin(w http.ResponseWriter, r *http.Request)
+	// LocalRegister Register a credential and open an onboarding handshake.
+	// (POST /auth/local/register)
+	LocalRegister(w http.ResponseWriter, r *http.Request)
 	// Logout Destroy the current server-side session.
 	// (POST /auth/logout)
 	Logout(w http.ResponseWriter, r *http.Request)
@@ -268,6 +350,12 @@ type ServerInterface interface {
 	// GetMe The signed-in User and their Household's settings.
 	// (GET /me)
 	GetMe(w http.ResponseWriter, r *http.Request)
+	// CommitOnboardingChoice Commit the gate's choice, creating the account.
+	// (POST /onboarding/choice)
+	CommitOnboardingChoice(w http.ResponseWriter, r *http.Request)
+	// GetOnboardingOptions What the gate offers the holder of a handshake.
+	// (GET /onboarding/options)
+	GetOnboardingOptions(w http.ResponseWriter, r *http.Request)
 }
 
 // Unimplemented server implementation that returns http.StatusNotImplemented for each endpoint.
@@ -277,6 +365,12 @@ type Unimplemented struct{}
 // LocalLogin Exchange email and password for a server-side session.
 // (POST /auth/local/login)
 func (_ Unimplemented) LocalLogin(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// LocalRegister Register a credential and open an onboarding handshake.
+// (POST /auth/local/register)
+func (_ Unimplemented) LocalRegister(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
@@ -304,6 +398,18 @@ func (_ Unimplemented) GetMe(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
+// CommitOnboardingChoice Commit the gate's choice, creating the account.
+// (POST /onboarding/choice)
+func (_ Unimplemented) CommitOnboardingChoice(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// GetOnboardingOptions What the gate offers the holder of a handshake.
+// (GET /onboarding/options)
+func (_ Unimplemented) GetOnboardingOptions(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
 // ServerInterfaceWrapper converts contexts to parameters.
 type ServerInterfaceWrapper struct {
 	Handler            ServerInterface
@@ -318,6 +424,20 @@ func (siw *ServerInterfaceWrapper) LocalLogin(w http.ResponseWriter, r *http.Req
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.LocalLogin(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// LocalRegister operation middleware
+func (siw *ServerInterfaceWrapper) LocalRegister(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.LocalRegister(w, r)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -374,6 +494,34 @@ func (siw *ServerInterfaceWrapper) GetMe(w http.ResponseWriter, r *http.Request)
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.GetMe(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// CommitOnboardingChoice operation middleware
+func (siw *ServerInterfaceWrapper) CommitOnboardingChoice(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.CommitOnboardingChoice(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetOnboardingOptions operation middleware
+func (siw *ServerInterfaceWrapper) GetOnboardingOptions(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetOnboardingOptions(w, r)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -506,10 +654,19 @@ func HandlerWithOptions(si ServerInterface, options ChiServerOptions) http.Handl
 		r.Post(options.BaseURL+"/auth/local/login", wrapper.LocalLogin)
 	})
 	r.Group(func(r chi.Router) {
+		r.Post(options.BaseURL+"/auth/local/register", wrapper.LocalRegister)
+	})
+	r.Group(func(r chi.Router) {
 		r.Post(options.BaseURL+"/auth/logout", wrapper.Logout)
 	})
 	r.Group(func(r chi.Router) {
 		r.Get(options.BaseURL+"/me", wrapper.GetMe)
+	})
+	r.Group(func(r chi.Router) {
+		r.Get(options.BaseURL+"/onboarding/options", wrapper.GetOnboardingOptions)
+	})
+	r.Group(func(r chi.Router) {
+		r.Post(options.BaseURL+"/onboarding/choice", wrapper.CommitOnboardingChoice)
 	})
 
 	return r
@@ -517,7 +674,20 @@ func HandlerWithOptions(si ServerInterface, options ChiServerOptions) http.Handl
 
 type BadRequestJSONResponse Error
 
+type ConflictJSONResponse Error
+
+type ForbiddenJSONResponse Error
+
 type InternalErrorJSONResponse Error
+
+type OnboardingUnauthorizedResponseHeaders struct {
+	SetCookie *string
+}
+type OnboardingUnauthorizedJSONResponse struct {
+	Body Error
+
+	Headers OnboardingUnauthorizedResponseHeaders
+}
 
 type TooManyRequestsResponseHeaders struct {
 	RetryAfter *int
@@ -602,6 +772,89 @@ func (response LocalLogin429JSONResponse) VisitLocalLoginResponse(w http.Respons
 type LocalLogin500JSONResponse struct{ InternalErrorJSONResponse }
 
 func (response LocalLogin500JSONResponse) VisitLocalLoginResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type LocalRegisterRequestObject struct {
+	Body *LocalRegisterJSONRequestBody
+}
+
+type LocalRegisterResponseObject interface {
+	VisitLocalRegisterResponse(w http.ResponseWriter) error
+}
+
+type LocalRegister204ResponseHeaders struct {
+	SetCookie *string
+}
+
+type LocalRegister204Response struct {
+	Headers LocalRegister204ResponseHeaders
+}
+
+func (response LocalRegister204Response) VisitLocalRegisterResponse(w http.ResponseWriter) error {
+	if response.Headers.SetCookie != nil {
+		w.Header().Set("Set-Cookie", fmt.Sprint(*response.Headers.SetCookie))
+	}
+	w.WriteHeader(204)
+	return nil
+}
+
+type LocalRegister400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response LocalRegister400JSONResponse) VisitLocalRegisterResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type LocalRegister409JSONResponse struct{ ConflictJSONResponse }
+
+func (response LocalRegister409JSONResponse) VisitLocalRegisterResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type LocalRegister429JSONResponse struct{ TooManyRequestsJSONResponse }
+
+func (response LocalRegister429JSONResponse) VisitLocalRegisterResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if response.Headers.RetryAfter != nil {
+		w.Header().Set("Retry-After", fmt.Sprint(*response.Headers.RetryAfter))
+	}
+	w.WriteHeader(429)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type LocalRegister500JSONResponse struct{ InternalErrorJSONResponse }
+
+func (response LocalRegister500JSONResponse) VisitLocalRegisterResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response); err != nil {
@@ -755,11 +1008,167 @@ func (response GetMe500JSONResponse) VisitGetMeResponse(w http.ResponseWriter) e
 	return err
 }
 
+type CommitOnboardingChoiceRequestObject struct {
+	Body *CommitOnboardingChoiceJSONRequestBody
+}
+
+type CommitOnboardingChoiceResponseObject interface {
+	VisitCommitOnboardingChoiceResponse(w http.ResponseWriter) error
+}
+
+type CommitOnboardingChoice204ResponseHeaders struct {
+	SetCookie *string
+}
+
+type CommitOnboardingChoice204Response struct {
+	Headers CommitOnboardingChoice204ResponseHeaders
+}
+
+func (response CommitOnboardingChoice204Response) VisitCommitOnboardingChoiceResponse(w http.ResponseWriter) error {
+	if response.Headers.SetCookie != nil {
+		w.Header().Set("Set-Cookie", fmt.Sprint(*response.Headers.SetCookie))
+	}
+	w.WriteHeader(204)
+	return nil
+}
+
+type CommitOnboardingChoice400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response CommitOnboardingChoice400JSONResponse) VisitCommitOnboardingChoiceResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CommitOnboardingChoice401JSONResponse struct {
+	OnboardingUnauthorizedJSONResponse
+}
+
+func (response CommitOnboardingChoice401JSONResponse) VisitCommitOnboardingChoiceResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if response.Headers.SetCookie != nil {
+		w.Header().Set("Set-Cookie", fmt.Sprint(*response.Headers.SetCookie))
+	}
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CommitOnboardingChoice403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response CommitOnboardingChoice403JSONResponse) VisitCommitOnboardingChoiceResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CommitOnboardingChoice409JSONResponse struct{ ConflictJSONResponse }
+
+func (response CommitOnboardingChoice409JSONResponse) VisitCommitOnboardingChoiceResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CommitOnboardingChoice500JSONResponse struct{ InternalErrorJSONResponse }
+
+func (response CommitOnboardingChoice500JSONResponse) VisitCommitOnboardingChoiceResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetOnboardingOptionsRequestObject struct {
+}
+
+type GetOnboardingOptionsResponseObject interface {
+	VisitGetOnboardingOptionsResponse(w http.ResponseWriter) error
+}
+
+type GetOnboardingOptions200JSONResponse OnboardingOptions
+
+func (response GetOnboardingOptions200JSONResponse) VisitGetOnboardingOptionsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetOnboardingOptions401JSONResponse struct {
+	OnboardingUnauthorizedJSONResponse
+}
+
+func (response GetOnboardingOptions401JSONResponse) VisitGetOnboardingOptionsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if response.Headers.SetCookie != nil {
+		w.Header().Set("Set-Cookie", fmt.Sprint(*response.Headers.SetCookie))
+	}
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetOnboardingOptions500JSONResponse struct{ InternalErrorJSONResponse }
+
+func (response GetOnboardingOptions500JSONResponse) VisitGetOnboardingOptionsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 // StrictServerInterface represents all server handlers.
 type StrictServerInterface interface {
 	// LocalLogin Exchange email and password for a server-side session.
 	// (POST /auth/local/login)
 	LocalLogin(ctx context.Context, request LocalLoginRequestObject) (LocalLoginResponseObject, error)
+	// LocalRegister Register a credential and open an onboarding handshake.
+	// (POST /auth/local/register)
+	LocalRegister(ctx context.Context, request LocalRegisterRequestObject) (LocalRegisterResponseObject, error)
 	// Logout Destroy the current server-side session.
 	// (POST /auth/logout)
 	Logout(ctx context.Context, request LogoutRequestObject) (LogoutResponseObject, error)
@@ -772,6 +1181,12 @@ type StrictServerInterface interface {
 	// GetMe The signed-in User and their Household's settings.
 	// (GET /me)
 	GetMe(ctx context.Context, request GetMeRequestObject) (GetMeResponseObject, error)
+	// CommitOnboardingChoice Commit the gate's choice, creating the account.
+	// (POST /onboarding/choice)
+	CommitOnboardingChoice(ctx context.Context, request CommitOnboardingChoiceRequestObject) (CommitOnboardingChoiceResponseObject, error)
+	// GetOnboardingOptions What the gate offers the holder of a handshake.
+	// (GET /onboarding/options)
+	GetOnboardingOptions(ctx context.Context, request GetOnboardingOptionsRequestObject) (GetOnboardingOptionsResponseObject, error)
 }
 
 type StrictHandlerFunc func(ctx context.Context, w http.ResponseWriter, r *http.Request, request any) (any, error)
@@ -837,6 +1252,37 @@ func (sh *strictHandler) LocalLogin(w http.ResponseWriter, r *http.Request) {
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(LocalLoginResponseObject); ok {
 		if err := validResponse.VisitLocalLoginResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// LocalRegister operation middleware
+func (sh *strictHandler) LocalRegister(w http.ResponseWriter, r *http.Request) {
+	var request LocalRegisterRequestObject
+
+	var body LocalRegisterJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.LocalRegister(ctx, request.(LocalRegisterRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "LocalRegister")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(LocalRegisterResponseObject); ok {
+		if err := validResponse.VisitLocalRegisterResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {
@@ -940,66 +1386,150 @@ func (sh *strictHandler) GetMe(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// CommitOnboardingChoice operation middleware
+func (sh *strictHandler) CommitOnboardingChoice(w http.ResponseWriter, r *http.Request) {
+	var request CommitOnboardingChoiceRequestObject
+
+	var body CommitOnboardingChoiceJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.CommitOnboardingChoice(ctx, request.(CommitOnboardingChoiceRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "CommitOnboardingChoice")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(CommitOnboardingChoiceResponseObject); ok {
+		if err := validResponse.VisitCommitOnboardingChoiceResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetOnboardingOptions operation middleware
+func (sh *strictHandler) GetOnboardingOptions(w http.ResponseWriter, r *http.Request) {
+	var request GetOnboardingOptionsRequestObject
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetOnboardingOptions(ctx, request.(GetOnboardingOptionsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetOnboardingOptions")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetOnboardingOptionsResponseObject); ok {
+		if err := validResponse.VisitGetOnboardingOptionsResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
 // Base64 encoded, compressed with deflate, json marshaled OpenAPI spec.
 // Stored as a slice of fixed-width chunks rather than one concatenated
 // const string: with thousands of chunks the chained `+` fold is several
 // times slower for the Go compiler than parsing a slice literal.
 var swaggerSpec = []string{
-	"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",
-	"9yiWnl1dL91jYbtJ6uzqlX+6ffr/AQA=",
+	"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",
 }
 
 // decodeSpec returns the embedded OpenAPI spec as raw JSON bytes,

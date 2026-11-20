@@ -18,18 +18,18 @@ export function RegisterPage() {
   const register = useRegister();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [displayName, setDisplayName] = useState("");
+  const [userDisplayName, setUserDisplayName] = useState("");
 
   if (me.data) return <Navigate to="/" replace />;
 
   function onSubmit(e: FormEvent) {
     e.preventDefault();
-    const name = displayName.trim();
+    const name = userDisplayName.trim();
     register.mutate(
       {
         email,
         password,
-        ...(name ? { display_name: name } : {}),
+        ...(name ? { user_display_name: name } : {}),
         // The language the person is reading this in: the server stores it as
         // their locale, and falls back to en-GB for anything it does not know.
         locale: i18n.language,
@@ -90,12 +90,12 @@ export function RegisterPage() {
             </p>
           </div>
           <div className="flex flex-col gap-2">
-            <Label htmlFor="display-name">{t("fields.displayName")}</Label>
+            <Label htmlFor="user-display-name">{t("fields.userDisplayName")}</Label>
             <Input
-              id="display-name"
+              id="user-display-name"
               autoComplete="name"
-              value={displayName}
-              onChange={(e) => setDisplayName(e.target.value)}
+              value={userDisplayName}
+              onChange={(e) => setUserDisplayName(e.target.value)}
             />
           </div>
           {failed && (

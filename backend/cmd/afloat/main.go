@@ -18,6 +18,7 @@ import (
 	"github.com/kerti/afloat/backend/internal/auth"
 	"github.com/kerti/afloat/backend/internal/config"
 	"github.com/kerti/afloat/backend/internal/db"
+	"github.com/kerti/afloat/backend/internal/household"
 	"github.com/kerti/afloat/backend/internal/httpserver"
 	"github.com/kerti/afloat/backend/internal/postgres"
 	"github.com/kerti/afloat/backend/internal/system"
@@ -100,6 +101,7 @@ func run() error {
 			MaxBackoff:         cfg.LoginMaxBackoff,
 			FoundingDisabled:   cfg.FoundingDisabled,
 		}),
+		Household: household.New(household.Deps{Querier: queries}),
 		System: system.New(system.Deps{
 			Querier:          queries,
 			Version:          cfg.Version,

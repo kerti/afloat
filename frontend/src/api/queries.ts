@@ -8,10 +8,13 @@ import {
   localLogin,
   localRegister,
   logout,
+  updateHousehold,
+  type Household,
   type LocalRegisterRequest,
   type Me,
   type OnboardingChoiceRequest,
   type OnboardingOptions,
+  type UpdateHouseholdRequest,
 } from "./client";
 import { clearSession, meKey } from "./queryClient";
 
@@ -77,6 +80,16 @@ export function useCommitChoice() {
     // The commit answers 204 with a session cookie and no body; /me is the
     // follow-up, as after a login. Invalidated, not just refetched: the probe
     // on /onboarding has long since cached "signed out".
+    onSuccess: () => qc.invalidateQueries({ queryKey: meKey }),
+  });
+}
+
+export function useUpdateHousehold() {
+  const qc = useQueryClient();
+  return useMutation<Household, ApiError, UpdateHouseholdRequest>({
+    mutationFn: updateHousehold,
+    // /me carries the Household and is the one read path: invalidate, don't
+    // patch the cache by hand.
     onSuccess: () => qc.invalidateQueries({ queryKey: meKey }),
   });
 }

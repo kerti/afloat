@@ -22,12 +22,13 @@ These mirror Balances exactly, deliberately. Where a definition is identical, it
 anyway so this document stands alone.
 
 **Household**: The unit of access and aggregation — the people sharing economic life. Every Expense,
-Budget, Category, Pocket and setting belongs to exactly one Household. Carries a `display_name`,
-`reporting_currency` (default `IDR`), `period_start_day`, `day_starts_at`, and
-`expected_monthly_income`. _Avoid_: Family, Team, Tenant, Account.
+Budget, Category, Pocket and setting belongs to exactly one Household. Carries a
+`household_display_name`, `reporting_currency` (default `IDR`), `period_start_day`, `day_starts_at`,
+`allowance_mode` (`adaptive` or `fixed`) and `expected_monthly_income`. _Avoid_: Family, Team, Tenant,
+Account.
 
 **User**: An individual member of a Household. Belongs to exactly one Household; all Users have full
-read/write access to all of its data. Carries `display_name`, `email`, `locale` (default `en-GB`) and
+read/write access to all of its data. Carries `user_display_name`, `email`, `locale` (default `en-GB`) and
 `time_zone` (default `Asia/Jakarta`). _Avoid_: Account (reserved for the auth identity in prose only),
 Member (acceptable informally, not a modelled term).
 
@@ -41,7 +42,10 @@ purposes; **Joint** — attributed to the Household as a whole. Ownership expres
 the day before `period_start_day` of the next, inclusive. With the default `period_start_day = 1` a
 Period is exactly a calendar month; with `25` it runs the 25th to the 24th. A Period is identified by
 the `year_month` of the calendar month **in which it starts**. _Avoid_: Month, Cycle. (Note the
-divergence from Balances, where `year_month` is always a strict calendar month.)
+divergence from Balances, where `year_month` is always a strict calendar month.) A Period's window is
+always derived from the Household's current `period_start_day`, which is 1 to 28 so that every Period
+starts on a day every month has. Changing it re-cuts the window of every Period, past and in progress,
+at once; nothing records the value a Period was lived under.
 
 **Period Day**: One day of a Budget Period, bounded by `day_starts_at` rather than midnight. Default
 `04:00` local: an Expense captured at 01:00 falls on the previous Period Day. This matters because

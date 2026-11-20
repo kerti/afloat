@@ -7,9 +7,7 @@ import (
 	"log/slog"
 	"math"
 	"net/http"
-	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -28,10 +26,6 @@ const OnboardingCookieName = "afloat_onboarding"
 // may sit at the gate before the person must register again. Fixed by ruling,
 // not an operator knob.
 const onboardingHandshakeTTL = 15 * time.Minute
-
-// maxHouseholdNameCodePoints caps the Household name, in code points like every
-// other length in this codebase (BOOTSTRAP.md §5.1).
-const maxHouseholdNameCodePoints = 60
 
 const (
 	pgUniqueViolation = "23505"
@@ -122,8 +116,8 @@ func (h *Handlers) GetOnboardingOptions(ctx context.Context, _ api.GetOnboarding
 		}, nil
 	}
 	return api.GetOnboardingOptions200JSONResponse{
-		Email:       hs.row.Email,
-		DisplayName: hs.row.DisplayName,
+		Email:           hs.row.Email,
+		UserDisplayName: hs.row.UserDisplayName,
 		// Display only: the commit enforces it.
 		FoundingOpen: !h.foundingDisabled,
 	}, nil
@@ -164,17 +158,9 @@ func (h *Handlers) CommitOnboardingChoice(ctx context.Context, request api.Commi
 			ForbiddenJSONResponse: api.ForbiddenJSONResponse{Code: api.FOUNDINGDISABLED},
 		}, nil
 	}
-	householdName := strings.TrimSpace(body.HouseholdName)
-	switch {
-	case householdName == "":
-		return invalidChoiceField("household_name", "required"), nil
-	case utf8.RuneCountInString(householdName) > maxHouseholdNameCodePoints:
-		return invalidChoiceField("household_name", "max"), nil
-	case !storable(householdName):
-		return invalidChoiceField("household_name", "pattern"), nil
-	case invisible(householdName):
-		// Only zero-width or other format characters: blank to the eye.
-		return invalidChoiceField("household_name", "required"), nil
+	householdName, rule := CheckHouseholdDisplayName(body.HouseholdDisplayName)
+	if rule != "" {
+		return invalidChoiceField("household_display_name", rule), nil
 	}
 
 	// A person who commits gets an account even if their client then goes away:
@@ -239,15 +225,15 @@ func (h *Handlers) found(ctx context.Context, token, householdName string) (pgty
 		return pgtype.UUID{}, err
 	}
 
-	if _, err := q.CreateHousehold(ctx, db.CreateHouseholdParams{ID: householdID, DisplayName: householdName}); err != nil {
+	if _, err := q.CreateHousehold(ctx, db.CreateHouseholdParams{ID: householdID, HouseholdDisplayName: householdName}); err != nil {
 		return pgtype.UUID{}, fmt.Errorf("create household: %w", err)
 	}
 	if _, err := q.CreateUser(ctx, db.CreateUserParams{
-		ID:          userID,
-		HouseholdID: householdID,
-		Email:       hs.Email,
-		DisplayName: hs.DisplayName,
-		Locale:      hs.Locale,
+		ID:              userID,
+		HouseholdID:     householdID,
+		Email:           hs.Email,
+		UserDisplayName: hs.UserDisplayName,
+		Locale:          hs.Locale,
 	}); err != nil {
 		return pgtype.UUID{}, fmt.Errorf("create user: %w", err)
 	}

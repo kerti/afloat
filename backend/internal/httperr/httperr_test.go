@@ -81,7 +81,7 @@ func TestWriteValidationReportsFirstFieldAndRule(t *testing.T) {
 // this is the case that caught it.
 func TestWriteValidationUsesJSONFieldNames(t *testing.T) {
 	type body struct {
-		DisplayName string `json:"display_name" validate:"required"`
+		UserDisplayName string `json:"user_display_name" validate:"required"`
 	}
 
 	rec := httptest.NewRecorder()
@@ -93,8 +93,8 @@ func TestWriteValidationUsesJSONFieldNames(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 		t.Fatalf("body is not JSON: %v", err)
 	}
-	if got.Args["field"] != "display_name" {
-		t.Errorf("field = %q, want display_name (the contract speaks snake_case)", got.Args["field"])
+	if got.Args["field"] != "user_display_name" {
+		t.Errorf("field = %q, want user_display_name (the contract speaks snake_case)", got.Args["field"])
 	}
 }
 

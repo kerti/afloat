@@ -19,9 +19,9 @@ info:
   description: |
     Household spending-trajectory API.
 
-    Health check, authentication and the founding gate (BOOTSTRAP.md §5.1).
-    Invitation acceptance and every domain resource land in step 9 and are
-    deliberately absent here.
+    Health check, authentication, the founding gate (BOOTSTRAP.md §5.1) and the
+    Household's settings (PRD S3). Invitation acceptance and the remaining
+    domain resources land in step 9 and are deliberately absent here.
   license:
     name: AGPL-3.0-only
     url: https://www.gnu.org/licenses/agpl-3.0.html
@@ -34,6 +34,8 @@ tags:
     description: Instance liveness and pre-auth configuration. Unauthenticated.
   - name: auth
     description: Local email + password sessions (BOOTSTRAP.md §5).
+  - name: household
+    description: The caller's own Household and its settings (PRD S3).
   - name: onboarding
     description: |
       The gate between a registered credential and an account: a person who has
@@ -220,6 +222,50 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
 
+  /household:
+    patch:
+      tags: [household]
+      operationId: updateHousehold
+      summary: Change the caller's Household settings.
+      description: |
+        The Household is always the caller's own: there is no id to supply, so
+        nothing to forge across tenants. Any member may change these settings
+        (PRD S2: no roles).
+
+        Merge semantics, the update convention (BOOTSTRAP.md §4): a property
+        left out is unchanged, an unknown property is `INVALID_JSON_BODY`, and
+        `{}` is a valid no-op. The answer is the whole Household. Last write
+        wins, per field: two writers of different fields both land, and there is
+        no version to conflict on.
+
+        `household_display_name` follows the founding rules (BOOTSTRAP.md
+        §5.1.1): trimmed, not blank, at most 60 code points. `reporting_currency`
+        must be an ISO 4217 code (`VALIDATION`, `rule: iso4217`, when it is
+        well formed but not one). `period_start_day` takes effect at once and
+        re-dates every Budget Period; nothing is stored about the old value.
+
+        There is no `GET`: `GET /me` carries the Household. There is no
+        `DELETE`, and there never will be (BOOTSTRAP.md §4).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateHouseholdRequest'
+      responses:
+        '200':
+          description: The Household as it now stands.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Household'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
   /onboarding/options:
     get:
       tags: [onboarding]
@@ -369,11 +415,13 @@ components:
           # `reason: min`, not a schema failure. The cap is the same as the
           # policy's own (counted in code points).
           maxLength: 1024
-        display_name:
+        user_display_name:
           type: string
           maxLength: 255
           description: |
-            Defaults to the email's local part when absent or blank.
+            The registrant's own name; it becomes the User's
+            `user_display_name` at the commit. Defaults to the email's local
+            part when absent or blank.
         locale:
           type: string
           description: |
@@ -383,12 +431,12 @@ components:
 
     OnboardingOptions:
       type: object
-      required: [email, display_name, founding_open]
+      required: [email, user_display_name, founding_open]
       properties:
         email:
           type: string
           format: email
-        display_name:
+        user_display_name:
           type: string
           minLength: 1
           maxLength: 255
@@ -404,36 +452,69 @@ components:
       description: |
         A found choice, the only one today. A later slice adds a join choice to
         this same body, additively.
-      required: [found, household_name]
+      required: [found, household_display_name]
       properties:
         found:
           type: boolean
           description: |
             Must be `true`. Any other body is not a found choice and answers
             `VALIDATION`.
-        household_name:
+        household_display_name:
           type: string
           maxLength: 255
           description: |
-            The Household's display name, pre-filled by the client from its own
+            The Household's name, pre-filled by the client from its own
             catalogue and editable. The server stores it trimmed; blank after
             the trim is `VALIDATION` (`required`), and more than 60 code points
-            is `VALIDATION` (`max`).
+            is `VALIDATION` (`max`). The same rules apply when it is edited
+            (`PATCH /household`).
       additionalProperties: false
 
     Me:
       type: object
       description: |
-        The User's own fields (PRD S4) plus the Household settings the client
-        needs to render anything (PRD S3). One call, because every screen needs
-        both and they change rarely.
+        The User's own fields (PRD S4) and, nested, their Household's settings
+        (PRD S3) that the client needs to render anything. One call, because
+        every screen needs both and they change rarely; a change to either
+        invalidates it. It is the client's one read of the Household.
       required:
         - id
-        - household_id
         - email
-        - display_name
+        - user_display_name
         - locale
         - time_zone
+        - household
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: UUIDv7.
+        email:
+          type: string
+          format: email
+        user_display_name:
+          type: string
+          minLength: 1
+          maxLength: 255
+        locale:
+          $ref: '#/components/schemas/Locale'
+        time_zone:
+          type: string
+          description: IANA time zone identifier.
+          example: Asia/Jakarta
+        household:
+          $ref: '#/components/schemas/Household'
+      additionalProperties: false
+
+    Household:
+      type: object
+      description: |
+        A Household's settings (PRD S3): the whole set, read-only fields
+        included, so the shape does not change as more of them become writable.
+        A User belongs to exactly one Household and the binding is irreversible
+        (PRD S1).
+      required:
+        - id
         - household_display_name
         - reporting_currency
         - period_start_day
@@ -444,25 +525,6 @@ components:
           type: string
           format: uuid
           description: UUIDv7.
-        household_id:
-          type: string
-          format: uuid
-          description: |
-            A User belongs to exactly one Household and the binding is
-            irreversible (PRD S1).
-        email:
-          type: string
-          format: email
-        display_name:
-          type: string
-          minLength: 1
-          maxLength: 255
-        locale:
-          $ref: '#/components/schemas/Locale'
-        time_zone:
-          type: string
-          description: IANA time zone identifier.
-          example: Asia/Jakarta
         household_display_name:
           type: string
           minLength: 1
@@ -475,7 +537,9 @@ components:
           example: IDR
         period_start_day:
           type: integer
-          description: Day of month a Budget Period opens. Default 1.
+          description: |
+            Day of month a Budget Period opens, 1 to 28: the highest day every
+            month has. Default 1.
           minimum: 1
           maximum: 28
         day_starts_at:
@@ -488,16 +552,40 @@ components:
           example: '04:00'
         expected_monthly_income:
           type: string
-          nullable: true
           description: |
-            Decimal serialised as a string (PRD N2). Nullable — the Household
-            may never supply one.
+            Decimal serialised as a string at exactly four decimal places (PRD
+            N2), denominated in `reporting_currency`. Omitted when the Household
+            has not supplied one.
           example: '25000000.0000'
         allowance_mode:
-          type: string
-          enum: [adaptive, flat]
-          description: Default adaptive.
+          $ref: '#/components/schemas/AllowanceMode'
       additionalProperties: false
+
+    UpdateHouseholdRequest:
+      type: object
+      description: |
+        The settings a Household may change today, merge-style: a property left
+        out is unchanged, and none is required. A property naming a setting not
+        listed here is not accepted. `null` is not accepted for any of them.
+      properties:
+        household_display_name:
+          type: string
+          # An outer bound that counts padding; the handler's 60 code points
+          # applies to the trimmed name.
+          maxLength: 255
+        reporting_currency:
+          type: string
+          pattern: '^[A-Z]{3}$'
+        period_start_day:
+          type: integer
+          minimum: 1
+          maximum: 28
+      additionalProperties: false
+
+    AllowanceMode:
+      type: string
+      description: How the daily allowance is read. Default `adaptive`.
+      enum: [adaptive, fixed]
 
     Locale:
       type: string
@@ -535,7 +623,9 @@ components:
         falls back to the client's generic string.
 
         `VALIDATION` carries `{field, rule}` in `args` and reports only the
-        first failing field, as in Balances. `WEAK_PASSWORD` carries
+        first failing field, as in Balances. `field` is the wire name of the
+        property, so a Household's name (`household_display_name`) and a User's
+        (`user_display_name`) are never confused. `WEAK_PASSWORD` carries
         `{reason}`, `min` or `breached`.
       enum:
         - VALIDATION

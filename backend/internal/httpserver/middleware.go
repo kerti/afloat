@@ -40,9 +40,10 @@ func recoverer(next http.Handler) http.Handler {
 
 // requestLogger records method, path, status and duration — and nothing else.
 //
-// Never the body, never query values, never the session cookie. PRD N6 forbids
-// telemetry of any kind, and a log line carrying an Expense description is
-// telemetry that happens to be written to disk (docs/adr/go/0003).
+// Never the body, never query values, never the session cookie. PRD §3 (Q-01)
+// rules out telemetry of any kind, and a log line carrying an Expense
+// description is telemetry that happens to be written to disk
+// (docs/adr/go/0003).
 func requestLogger(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ww := middleware.NewWrapResponseWriter(w, r.ProtoMajor)

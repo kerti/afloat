@@ -32,8 +32,8 @@ const (
 func seeded(t *testing.T) *testutil.TestDB {
 	t.Helper()
 	tdb := testutil.NewTestDB(t)
-	mustExec(t, tdb, `INSERT INTO households (id, display_name) VALUES ('`+hh+`', 'Test Household')`)
-	mustExec(t, tdb, `INSERT INTO users (id, household_id, email, display_name) VALUES ('`+u1+`', '`+hh+`', 'a@example.com', 'A')`)
+	mustExec(t, tdb, `INSERT INTO households (id, household_display_name) VALUES ('`+hh+`', 'Test Household')`)
+	mustExec(t, tdb, `INSERT INTO users (id, household_id, email, user_display_name) VALUES ('`+u1+`', '`+hh+`', 'a@example.com', 'A')`)
 	mustExec(t, tdb, `INSERT INTO credentials (user_id, password_hash) VALUES ('`+u1+`', 'x')`)
 	return tdb
 }
@@ -58,25 +58,28 @@ func TestSchemaRefuses(t *testing.T) {
 	for _, tc := range []struct {
 		name, sql, code, constraint string
 	}{
-		{"period_start_day 29", `INSERT INTO households (id, display_name, period_start_day) VALUES (gen_random_uuid(), 'x', 29)`,
+		{"period_start_day 29", `INSERT INTO households (id, household_display_name, period_start_day) VALUES (gen_random_uuid(), 'x', 29)`,
 			checkViolation, "households_period_start_day_range"},
-		{"period_start_day 0", `INSERT INTO households (id, display_name, period_start_day) VALUES (gen_random_uuid(), 'x', 0)`,
+		{"period_start_day 0", `INSERT INTO households (id, household_display_name, period_start_day) VALUES (gen_random_uuid(), 'x', 0)`,
 			checkViolation, "households_period_start_day_range"},
-		{"lower-case reporting_currency", `INSERT INTO households (id, display_name, reporting_currency) VALUES (gen_random_uuid(), 'x', 'idr')`,
+		{"lower-case reporting_currency", `INSERT INTO households (id, household_display_name, reporting_currency) VALUES (gen_random_uuid(), 'x', 'idr')`,
 			checkViolation, "households_reporting_currency_iso4217"},
-		{"negative expected income", `INSERT INTO households (id, display_name, expected_monthly_income) VALUES (gen_random_uuid(), 'x', -1)`,
+		{"negative expected income", `INSERT INTO households (id, household_display_name, expected_monthly_income) VALUES (gen_random_uuid(), 'x', -1)`,
 			checkViolation, "households_expected_monthly_income_non_negative"},
-		{"blank household display_name", `INSERT INTO households (id, display_name) VALUES (gen_random_uuid(), '   ')`,
-			checkViolation, "households_display_name_not_blank"},
-		{"unknown allowance_mode", `INSERT INTO households (id, display_name, allowance_mode) VALUES (gen_random_uuid(), 'x', 'strict')`,
+		{"blank household_display_name", `INSERT INTO households (id, household_display_name) VALUES (gen_random_uuid(), '   ')`,
+			checkViolation, "households_household_display_name_not_blank"},
+		{"unknown allowance_mode", `INSERT INTO households (id, household_display_name, allowance_mode) VALUES (gen_random_uuid(), 'x', 'strict')`,
 			checkViolation, "households_allowance_mode_known"},
-		{"unknown locale", `INSERT INTO users (id, household_id, email, display_name, locale) VALUES (gen_random_uuid(), '` + hh + `', 'q@example.com', 'x', 'fr-FR')`,
+		// The spelling this schema once had; CONTEXT and PRD §4 say `fixed`.
+		{"retired allowance_mode flat", `INSERT INTO households (id, household_display_name, allowance_mode) VALUES (gen_random_uuid(), 'x', 'flat')`,
+			checkViolation, "households_allowance_mode_known"},
+		{"unknown locale", `INSERT INTO users (id, household_id, email, user_display_name, locale) VALUES (gen_random_uuid(), '` + hh + `', 'q@example.com', 'x', 'fr-FR')`,
 			checkViolation, "users_locale_known"},
-		{"blank user display_name", `INSERT INTO users (id, household_id, email, display_name) VALUES (gen_random_uuid(), '` + hh + `', 'q@example.com', '  ')`,
-			checkViolation, "users_display_name_not_blank"},
-		{"live email taken, other case", `INSERT INTO users (id, household_id, email, display_name) VALUES (gen_random_uuid(), '` + hh + `', 'A@EXAMPLE.COM', 'dup')`,
+		{"blank user_display_name", `INSERT INTO users (id, household_id, email, user_display_name) VALUES (gen_random_uuid(), '` + hh + `', 'q@example.com', '  ')`,
+			checkViolation, "users_user_display_name_not_blank"},
+		{"live email taken, other case", `INSERT INTO users (id, household_id, email, user_display_name) VALUES (gen_random_uuid(), '` + hh + `', 'A@EXAMPLE.COM', 'dup')`,
 			uniqueViolation, "users_email_idx"},
-		{"household must exist", `INSERT INTO users (id, household_id, email, display_name) VALUES (gen_random_uuid(), gen_random_uuid(), 'z@example.com', 'x')`,
+		{"household must exist", `INSERT INTO users (id, household_id, email, user_display_name) VALUES (gen_random_uuid(), gen_random_uuid(), 'z@example.com', 'x')`,
 			fkViolation, "users_household_id_fkey"},
 		{"session for a user that doesn't exist", `INSERT INTO sessions (id, user_id, expires_at) VALUES (repeat('a', 64), gen_random_uuid(), now())`,
 			fkViolation, "sessions_user_id_fkey"},
@@ -86,9 +89,9 @@ func TestSchemaRefuses(t *testing.T) {
 		{"invitation from a user that doesn't exist", `INSERT INTO invitations (id, household_id, invited_email, token_hash, created_by, expires_at)
 			VALUES (gen_random_uuid(), '` + hh + `', 's@example.com', repeat('b', 64), gen_random_uuid(), now())`,
 			fkViolation, "invitations_created_by_fkey"},
-		{"handshake with an unknown locale", `INSERT INTO onboarding_handshakes (id, email, display_name, locale, expires_at) VALUES (repeat('c', 64), 'h@example.com', 'H', 'fr-FR', now())`,
+		{"handshake with an unknown locale", `INSERT INTO onboarding_handshakes (id, email, user_display_name, locale, expires_at) VALUES (repeat('c', 64), 'h@example.com', 'H', 'fr-FR', now())`,
 			checkViolation, "onboarding_handshakes_locale_known"},
-		{"second handshake under one token", `INSERT INTO onboarding_handshakes (id, email, display_name, locale, expires_at) VALUES (repeat('c', 64), 'h@example.com', 'H', 'en-GB', now()), (repeat('c', 64), 'i@example.com', 'I', 'en-GB', now())`,
+		{"second handshake under one token", `INSERT INTO onboarding_handshakes (id, email, user_display_name, locale, expires_at) VALUES (repeat('c', 64), 'h@example.com', 'H', 'en-GB', now()), (repeat('c', 64), 'i@example.com', 'I', 'en-GB', now())`,
 			uniqueViolation, "onboarding_handshakes_pkey"},
 		{"second credential for one user", `INSERT INTO credentials (user_id, password_hash) VALUES ('` + u1 + `', 'y')`,
 			uniqueViolation, "credentials_pkey"},
@@ -127,11 +130,12 @@ func TestDuplicateInvitationTokenIsRefused(t *testing.T) {
 
 func TestSchemaAccepts(t *testing.T) {
 	for _, tc := range []struct{ name, sql string }{
-		{"period_start_day 28", `INSERT INTO households (id, display_name, period_start_day) VALUES (gen_random_uuid(), 'x', 28)`},
-		{"zero expected income", `INSERT INTO households (id, display_name, expected_monthly_income) VALUES (gen_random_uuid(), 'x', 0)`},
+		{"period_start_day 28", `INSERT INTO households (id, household_display_name, period_start_day) VALUES (gen_random_uuid(), 'x', 28)`},
+		{"allowance_mode fixed", `INSERT INTO households (id, household_display_name, allowance_mode) VALUES (gen_random_uuid(), 'x', 'fixed')`},
+		{"zero expected income", `INSERT INTO households (id, household_display_name, expected_monthly_income) VALUES (gen_random_uuid(), 'x', 0)`},
 		{"session", `INSERT INTO sessions (id, user_id, expires_at) VALUES (repeat('a', 64), '` + u1 + `', now() + interval '30 days')`},
 		// No password: the handshake a Google identity will open.
-		{"handshake without a password hash", `INSERT INTO onboarding_handshakes (id, email, display_name, locale, expires_at) VALUES (repeat('c', 64), 'h@example.com', 'H', 'id-ID', now() + interval '15 minutes')`},
+		{"handshake without a password hash", `INSERT INTO onboarding_handshakes (id, email, user_display_name, locale, expires_at) VALUES (repeat('c', 64), 'h@example.com', 'H', 'id-ID', now() + interval '15 minutes')`},
 		{"login_attempts row", `INSERT INTO login_attempts (key, failure_count, backoff_until) VALUES ('ip:203.0.113.7', 3, now() + interval '4 seconds')`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -156,10 +160,10 @@ func TestSchemaDefaults(t *testing.T) {
 // its holder is deleted, however many deleted Users shared it.
 func TestSoftDeletedUsersReleaseTheirEmail(t *testing.T) {
 	tdb := seeded(t)
-	mustExec(t, tdb, `INSERT INTO users (id, household_id, email, display_name) VALUES ('`+u2+`', '`+hh+`', 'b@example.com', 'B')`)
+	mustExec(t, tdb, `INSERT INTO users (id, household_id, email, user_display_name) VALUES ('`+u2+`', '`+hh+`', 'b@example.com', 'B')`)
 	mustExec(t, tdb, `UPDATE users SET deleted_at = now() WHERE id IN ('`+u1+`', '`+u2+`')`)
 	mustExec(t, tdb, `UPDATE users SET email = 'same@example.com' WHERE id IN ('`+u1+`', '`+u2+`')`)
-	mustExec(t, tdb, `INSERT INTO users (id, household_id, email, display_name) VALUES (gen_random_uuid(), '`+hh+`', 'same@example.com', 'live')`)
+	mustExec(t, tdb, `INSERT INTO users (id, household_id, email, user_display_name) VALUES (gen_random_uuid(), '`+hh+`', 'same@example.com', 'live')`)
 	mustExec(t, tdb, `UPDATE users SET deleted_at = NULL, email = 'a@example.com' WHERE id = '`+u1+`'`)
 }
 

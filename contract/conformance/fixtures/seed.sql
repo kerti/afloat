@@ -11,10 +11,10 @@
 -- at the §5.1 cost (m=19456, t=2, p=1), minted once by the backend's
 -- HashPassword, which verifies a PHC string by the parameters inside it.
 
-INSERT INTO households (id, display_name) VALUES
+INSERT INTO households (id, household_display_name) VALUES
     ('0192f0a0-0000-7000-8000-000000000001', 'Conformance Household');
 
-INSERT INTO users (id, household_id, email, display_name) VALUES
+INSERT INTO users (id, household_id, email, user_display_name) VALUES
     -- Can sign in.
     ('0192f0a0-0000-7000-8000-0000000000a1', '0192f0a0-0000-7000-8000-000000000001',
      'alice@example.com', 'Alice'),
@@ -25,7 +25,7 @@ INSERT INTO users (id, household_id, email, display_name) VALUES
 
 -- Soft-deleted, with a credential that would otherwise verify: a deleted User
 -- is not a User (non-negotiable 4).
-INSERT INTO users (id, household_id, email, display_name, deleted_at) VALUES
+INSERT INTO users (id, household_id, email, user_display_name, deleted_at) VALUES
     ('0192f0a0-0000-7000-8000-0000000000c1', '0192f0a0-0000-7000-8000-000000000001',
      'carol@example.com', 'Carol', now());
 

@@ -97,7 +97,7 @@ Each would push the product toward the enforcement posture §3 of `VISION.md` re
 ### Out
 
 Income tracking as events. Transfers and top-ups. Pocket balances. Reconciliation. Bank or e-wallet
-sync. Bank-statement import. Multi-currency (schema carries `currency`; the UI is pinned to the
+sync. Bank-statement import. Multi-currency **[OPEN Q-16]** (schema carries `currency`; the UI is pinned to the
 reporting currency, mirroring Balances' `multi_currency_enabled` default-off). Forecasting beyond the
 State model. Historical budget suggestions. Seasonality. Backup / restore / erasure. Offline write
 queue (see §8.3). Notifications. Email. Telemetry.
@@ -126,10 +126,13 @@ must not be foreclosed.
   binding is irreversible; a User belongs to exactly one Household. Mirrors Balances. Until
   invitations land the gate offers founding only.
 - **S2.** All Users in a Household have equal, full read/write access. No roles, no permission tiers.
-- **S3.** Household settings: `display_name`, `reporting_currency` (default IDR), `period_start_day`
-  (default 1), `day_starts_at` (default 04:00), `expected_monthly_income` (nullable),
-  `allowance_mode` (default adaptive).
-- **S4.** User settings: `display_name`, `email`, `locale` (default `en-GB`), `time_zone` (default
+- **S3.** Household settings: `household_display_name`, `reporting_currency` (default IDR; an ISO 4217
+  code), `period_start_day` (default 1; 1 to 28, the highest day every month has, so every Period
+  starts on a day that exists), `day_starts_at` (default 04:00), `expected_monthly_income` (nullable;
+  denominated in `reporting_currency`), `allowance_mode` (default `adaptive`; `adaptive` or `fixed`).
+  Any member may change them (S2). Today the settings screen writes three: `household_display_name`,
+  `reporting_currency` and `period_start_day`; the others follow with the slices that consume them.
+- **S4.** User settings: `user_display_name`, `email`, `locale` (default `en-GB`), `time_zone` (default
   `Asia/Jakarta`).
 
 - **S2a.** MVP authentication is **local email + password**, server-side session, host-only session
@@ -247,7 +250,8 @@ The first screen answers the core question with no navigation.
 - **N2.** Monetary values `DECIMAL(20,4)`; decimals serialised as **strings** on the wire. Mirrors
   Balances (ADR-0011).
 - **N3.** Every monetary value carries its `currency` even while the UI is pinned to the reporting
-  currency.
+  currency. The one exception is `households.expected_monthly_income`: it has no `currency` column
+  and is denominated in the Household's `reporting_currency`.
 - **N4.** Soft-delete everywhere. Hard delete is not exposed.
 - **N5.** No stored aggregates or derived snapshots in MVP. Every figure recomputes on read.
   **[ASSUMED]** — acceptable at single-Household data volumes; revisit if it stops being true.
@@ -350,6 +354,7 @@ capture is the launch surface · **Q-12** name kept.
 | Q-13 | Cash discipline. Every cash spend must be recorded individually or the Cash Pocket silently under-reports. Is a periodic "cash reconciliation" adjustment Expense worth the conceptual cost? | Post-MVP, probably |
 | Q-14 | Backup / restore / erasure. Balances has all three, including a GDPR erasure path. Afloat holds spending data, which is arguably more sensitive. Defer, or parity from the start? | Post-MVP scope |
 | Q-15 | Does a Household ever need more than one Budget Period shape — e.g. a weekly view for the daily bucket? | Post-MVP |
+| Q-16 | Multi-currency: exchange-rate source, which date's rate applies, how the trajectory sums mixed currencies. | Post-MVP, planned |
 
 ## 12. Deferred — not commitments
 
@@ -364,6 +369,7 @@ two-bucket split. Multi-currency UI. An "Underwater" fourth State for an exhaust
 
 | Date | Change |
 |---|---|
+| 2026-11-20 | Household settings (issue #113). Rulings from Rad: D1, a `period_start_day` change takes effect at once and re-derives every Period window, past and current, from the current value, with nothing stored and one line of helper text, never a confirmation; D2, `reporting_currency` is writable with no guard until money rows exist, and multi-currency stays out of MVP as a planned item, recorded as **Q-16**; D3, accepted currency codes are ISO 4217, checked server-side; D4, three fields are writable now, and each later S3 field is one additive property; D5, `flat` becomes `fixed` (CONTEXT, §4 and the trajectory already said `fixed`), and the unqualified name field, which meant two things, is retired for `household_display_name` and `user_display_name` on the wire, in the database, in Go and in i18n keys; D6, the update convention (PATCH, merge semantics, last write wins per field, `BOOTSTRAP.md` §4); D7, the handler lives in `backend/internal/household/`. S3 and S4 renamed and S3 given its ranges; N3 records `expected_monthly_income`'s missing currency column; §4 Out marks Multi-currency `[OPEN Q-16]`. |
 | 2026-11-19 | Founding: self-registration and the onboarding gate (issue #108, found-only). Rulings from Rad: open registration with founding gated by `FOUNDING_DISABLED`, following Balances' code rather than its self-hosting notes; register creates no account, only a 15-minute handshake; the gate offers "found" only until invitations land; a registered address is `409 EMAIL_TAKEN` (enumeration accepted on register, login unchanged); Balances' password policy exactly; Household and User ids server-generated at founding (an exception to client-generated keys, which stand for domain POSTs); the Household name is pre-filled by the frontend from i18n and capped at 60 code points. S1 and S2b updated. |
 | 2026-11-19 | The Kotlin learning track is dropped; Afloat is Go-only. The Kotlin backend, the cross-backend parity requirement and the Flyway migration format are removed: migrations are hand-written goose files in `backend/internal/migrations/`, the database is `afloat`, and the conformance harness tests the one backend against its cases. N5a, N6–N8a updated to match. |
 | 2026-09-26 | Trajectory fixture and Go calculation (issue #73, BOOTSTRAP.md §11 step 8 part A). Rulings R1–R4: R1, allowance figures (Baseline Daily Budget, Today's Allowance, Left to Spend Today, Forward Daily Rate) floor at 4dp on the server, toward −∞; R2, Trajectory Variance and Buffer Days go on the wire half-up (half away from zero) at 4dp, and State is decided from exact, unrounded values with no division; R3, the warm-up floor and the two State thresholds are arguments to the calculation, carried as fixture defaults with per-row overrides — Q-05 stays open; R4, the Q-04 display cap and the Q-06 fully-committed presentation stay out of scope, while the mid-period Budget change's clamp *arithmetic* is in scope. |

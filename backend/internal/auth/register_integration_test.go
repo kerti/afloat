@@ -16,7 +16,7 @@ const registerPassword = "kucing oranye di atap"
 
 type registration struct {
 	email, password string
-	displayName     *string
+	userDisplayName *string
 	locale          *string
 }
 
@@ -24,10 +24,10 @@ func (h harness) register(ctx context.Context, t *testing.T, r registration) api
 	t.Helper()
 	resp, err := h.auth.LocalRegister(ctx, api.LocalRegisterRequestObject{
 		Body: &api.LocalRegisterJSONRequestBody{
-			Email:       r.email,
-			Password:    r.password,
-			DisplayName: r.displayName,
-			Locale:      r.locale,
+			Email:           r.email,
+			Password:        r.password,
+			UserDisplayName: r.userDisplayName,
+			Locale:          r.locale,
 		},
 	})
 	if err != nil {
@@ -121,13 +121,13 @@ func TestRegisterOpensAHandshakeAndCreatesNoAccount(t *testing.T) {
 	}
 
 	var (
-		id, email, displayName, locale string
-		hash                           *string
-		ttl                            time.Duration
+		id, email, userDisplayName, locale string
+		hash                               *string
+		ttl                                time.Duration
 	)
 	if err := h.tdb.Pool.QueryRow(context.Background(),
-		`SELECT id, email, display_name, locale, password_hash, expires_at - created_at FROM onboarding_handshakes`).
-		Scan(&id, &email, &displayName, &locale, &hash, &ttl); err != nil {
+		`SELECT id, email, user_display_name, locale, password_hash, expires_at - created_at FROM onboarding_handshakes`).
+		Scan(&id, &email, &userDisplayName, &locale, &hash, &ttl); err != nil {
 		t.Fatalf("read handshake: %v", err)
 	}
 	// Hashed at rest, like a session: the row holds a password hash, and a
@@ -135,8 +135,8 @@ func TestRegisterOpensAHandshakeAndCreatesNoAccount(t *testing.T) {
 	if id != auth.HashToken(cookie.Value) || id == cookie.Value {
 		t.Errorf("handshake id = %q; want the SHA-256 of the cookie value, never the value itself", id)
 	}
-	if email != "new@example.com" || displayName != "new" || locale != "en-GB" {
-		t.Errorf("handshake = email %q display_name %q locale %q, want new@example.com / new / en-GB", email, displayName, locale)
+	if email != "new@example.com" || userDisplayName != "new" || locale != "en-GB" {
+		t.Errorf("handshake = email %q user_display_name %q locale %q, want new@example.com / new / en-GB", email, userDisplayName, locale)
 	}
 	if ttl != 15*time.Minute {
 		t.Errorf("handshake TTL = %v, want 15m", ttl)
@@ -209,50 +209,50 @@ func TestRegisterDisplayNameAndLocale(t *testing.T) {
 	h := newHarness(t, time.Now)
 
 	for i, tc := range []struct {
-		name        string
-		displayName *string
-		locale      *string
-		email       string
-		wantName    string
-		wantLocale  string
-		wantRule    string // non-empty: refused as VALIDATION on display_name with this rule
+		name            string
+		userDisplayName *string
+		locale          *string
+		email           string
+		wantName        string
+		wantLocale      string
+		wantRule        string // non-empty: refused as VALIDATION on user_display_name with this rule
 	}{
 		{name: "defaults to the local part", email: "dewi.putri+tag@example.com", wantName: "dewi.putri+tag", wantLocale: "en-GB"},
-		{name: "blank defaults to the local part", displayName: ptr("   \t "), email: "bayu@example.com", wantName: "bayu", wantLocale: "en-GB"},
-		{name: "supplied and trimmed", displayName: ptr("  Dewi Putri "), email: "d@example.com", wantName: "Dewi Putri", wantLocale: "en-GB"},
+		{name: "blank defaults to the local part", userDisplayName: ptr("   \t "), email: "bayu@example.com", wantName: "bayu", wantLocale: "en-GB"},
+		{name: "supplied and trimmed", userDisplayName: ptr("  Dewi Putri "), email: "d@example.com", wantName: "Dewi Putri", wantLocale: "en-GB"},
 		{name: "id-ID is kept", locale: ptr("id-ID"), email: "e@example.com", wantName: "e", wantLocale: "id-ID"},
 		{name: "en-GB is kept", locale: ptr("en-GB"), email: "f@example.com", wantName: "f", wantLocale: "en-GB"},
 		{name: "unsupported locale falls back", locale: ptr("fr-FR"), email: "g@example.com", wantName: "g", wantLocale: "en-GB"},
 		{name: "locale is not case-folded", locale: ptr("id-id"), email: "i@example.com", wantName: "i", wantLocale: "en-GB"},
 		{name: "empty locale falls back", locale: ptr(""), email: "j@example.com", wantName: "j", wantLocale: "en-GB"},
-		// Me.display_name is capped at 255; a defaulted name must not outgrow it.
+		// Me.user_display_name is capped at 255; a defaulted name must not outgrow it.
 		{name: "a long local part is cut at 255 code points", email: strings.Repeat("a", 300) + "@example.com",
 			wantName: strings.Repeat("a", 255), wantLocale: "en-GB"},
 		// Postgres TEXT holds no NUL: refused here rather than a 500 at the insert.
-		{name: "NUL in a display name", displayName: ptr("Dewi\x00"), email: "k@example.com", wantRule: "pattern"},
+		{name: "NUL in a display name", userDisplayName: ptr("Dewi\x00"), email: "k@example.com", wantRule: "pattern"},
 		// Only invisible characters (category Cf: zero-width space and joiners, word
 		// joiner, BOM) is a name nobody can see: blank, not a default.
-		{name: "zero-width characters only", displayName: ptr("\u200b\u200c\u200d"), email: "l@example.com", wantRule: "required"},
-		{name: "word joiner and BOM among spaces", displayName: ptr(" \u2060 \ufeff "), email: "m@example.com", wantRule: "required"},
+		{name: "zero-width characters only", userDisplayName: ptr("\u200b\u200c\u200d"), email: "l@example.com", wantRule: "required"},
+		{name: "word joiner and BOM among spaces", userDisplayName: ptr(" \u2060 \ufeff "), email: "m@example.com", wantRule: "required"},
 		// Not stripped from a visible name, and a bidi control inside one stays (Balances parity).
-		{name: "a visible name keeps its zero-width character", displayName: ptr("Dewi\u200b"), email: "n@example.com", wantName: "Dewi\u200b", wantLocale: "en-GB"},
-		{name: "a bidi control inside a visible name is accepted", displayName: ptr("Dewi \u202e Putri"), email: "o@example.com", wantName: "Dewi \u202e Putri", wantLocale: "en-GB"},
+		{name: "a visible name keeps its zero-width character", userDisplayName: ptr("Dewi\u200b"), email: "n@example.com", wantName: "Dewi\u200b", wantLocale: "en-GB"},
+		{name: "a bidi control inside a visible name is accepted", userDisplayName: ptr("Dewi \u202e Putri"), email: "o@example.com", wantName: "Dewi \u202e Putri", wantLocale: "en-GB"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := ipContext("203.0.113." + string(rune('a'+i)))
-			resp := h.register(ctx, t, registration{email: tc.email, password: registerPassword, displayName: tc.displayName, locale: tc.locale})
+			resp := h.register(ctx, t, registration{email: tc.email, password: registerPassword, userDisplayName: tc.userDisplayName, locale: tc.locale})
 			if tc.wantRule != "" {
-				assertBadRequest(t, resp, api.VALIDATION, map[string]any{"field": "display_name", "rule": tc.wantRule})
+				assertBadRequest(t, resp, api.VALIDATION, map[string]any{"field": "user_display_name", "rule": tc.wantRule})
 				return
 			}
 			handshakeCookie(t, resp)
 			var name, locale string
 			if err := h.tdb.Pool.QueryRow(context.Background(),
-				`SELECT display_name, locale FROM onboarding_handshakes WHERE email = lower($1)`, tc.email).Scan(&name, &locale); err != nil {
+				`SELECT user_display_name, locale FROM onboarding_handshakes WHERE email = lower($1)`, tc.email).Scan(&name, &locale); err != nil {
 				t.Fatalf("read handshake: %v", err)
 			}
 			if name != tc.wantName || locale != tc.wantLocale {
-				t.Errorf("display_name %q locale %q, want %q / %q", name, locale, tc.wantName, tc.wantLocale)
+				t.Errorf("user_display_name %q locale %q, want %q / %q", name, locale, tc.wantName, tc.wantLocale)
 			}
 		})
 	}

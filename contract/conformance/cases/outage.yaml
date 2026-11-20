@@ -157,7 +157,7 @@
     path: /onboarding/choice
     headers:
       Content-Type: application/json
-    body: '{"found":true,"household_name":"Rumah"}'
+    body: '{"found":true,"household_display_name":"Rumah"}'
   expect:
     status: 500
     body_json: {code: INTERNAL}

@@ -5,10 +5,11 @@ import type { components } from "@/api/schema.gen";
 type Me = components["schemas"]["Me"];
 type ErrorBody = components["schemas"]["Error"];
 type RegisterBody = components["schemas"]["LocalRegisterRequest"];
+type UpdateHouseholdBody = components["schemas"]["UpdateHouseholdRequest"];
 type ChoiceBody = components["schemas"]["OnboardingChoiceRequest"];
 
 // The handshake a registration opens, as the fake server holds it.
-export type Handshake = { email: string; display_name: string; locale: string };
+export type Handshake = { email: string; user_display_name: string; locale: string };
 
 export type State = {
   signedIn: boolean;
@@ -19,23 +20,26 @@ export type State = {
   // What the fake server was sent, for a test to assert on.
   registered?: RegisterBody;
   committed?: ChoiceBody;
+  // Every PATCH /household body, in order.
+  patches?: UpdateHouseholdBody[];
 };
 
 // Shapes are the generated contract types, so a contract change that breaks
 // these fixtures fails the typecheck rather than drifting silently.
 export const alice: Me = {
   id: "0192f0a0-0000-7000-8000-0000000000a1",
-  household_id: "0192f0a0-0000-7000-8000-000000000001",
   email: "alice@example.com",
-  display_name: "Alice",
+  user_display_name: "Alice",
   locale: "en-GB",
   time_zone: "Asia/Jakarta",
-  household_display_name: "Test Household",
-  reporting_currency: "IDR",
-  period_start_day: 1,
-  day_starts_at: "04:00",
-  expected_monthly_income: null,
-  allowance_mode: "adaptive",
+  household: {
+    id: "0192f0a0-0000-7000-8000-000000000001",
+    household_display_name: "Test Household",
+    reporting_currency: "IDR",
+    period_start_day: 1,
+    day_starts_at: "04:00",
+    allowance_mode: "adaptive",
+  },
 };
 
 export const envelope = (code: ErrorBody["code"], args?: ErrorBody["args"]): ErrorBody =>
@@ -81,7 +85,7 @@ export function defaultHandlers(state: State = { signedIn: false, me: alice }) {
       state.registered = body;
       state.handshake = {
         email: body.email,
-        display_name: body.display_name ?? body.email.split("@")[0]!,
+        user_display_name: body.user_display_name ?? body.email.split("@")[0]!,
         locale: body.locale ?? "en-GB",
       };
       return new HttpResponse(null, { status: 204 });
@@ -90,7 +94,7 @@ export function defaultHandlers(state: State = { signedIn: false, me: alice }) {
       state.handshake
         ? HttpResponse.json({
             email: state.handshake.email,
-            display_name: state.handshake.display_name,
+            user_display_name: state.handshake.user_display_name,
             founding_open: state.foundingOpen ?? true,
           })
         : HttpResponse.json(envelope("UNAUTHORIZED"), { status: 401 }),
@@ -108,11 +112,21 @@ export function defaultHandlers(state: State = { signedIn: false, me: alice }) {
       state.me = {
         ...alice,
         email: hs.email,
-        display_name: hs.display_name,
+        user_display_name: hs.user_display_name,
         locale: hs.locale as Me["locale"],
-        household_display_name: body.household_name.trim(),
+        household: {
+          ...alice.household,
+          household_display_name: body.household_display_name.trim(),
+        },
       };
       return new HttpResponse(null, { status: 204 });
+    }),
+    http.patch("/api/household", async ({ request }) => {
+      if (!state.signedIn) return HttpResponse.json(envelope("UNAUTHORIZED"), { status: 401 });
+      const body = (await request.json()) as UpdateHouseholdBody;
+      (state.patches ??= []).push(body);
+      state.me = { ...state.me, household: { ...state.me.household, ...body } };
+      return HttpResponse.json(state.me.household);
     }),
     http.post("/api/auth/logout", () => {
       state.signedIn = false;

@@ -141,6 +141,19 @@ Balances.
   original), zero is not.
 - **Error envelope:** one shape, following Balances ADR-0027. It carries
   **codes, not messages**; the frontend localises.
+- **Updates are `PATCH`, with merge semantics** (#113, the first one; every later update copies it).
+  The body is JSON; an absent property is unchanged, an unknown property is `INVALID_JSON_BODY`
+  (`additionalProperties: false`), and `{}` is a valid no-op. The answer is `200` with the whole
+  resource. `null` clears a nullable field and is `INVALID_JSON_BODY` for any other, so a field that
+  can be cleared needs a request type that tells absent from `null`, which oapi-codegen's default
+  pointers cannot. **Last write wins, per field:** no `If-Match`, no version column and no conflict
+  code. Disjoint fields from two writers both land, because the update is one `UPDATE` with
+  `coalesce(sqlc.narg(...), column)`, never a read-modify-write. A precondition header can be added
+  later without breaking a client. The idempotent-create rule above concerns `POST` and a
+  client-supplied id and does not apply; a `PATCH` of absolute values is idempotent on its own, so a
+  retry is safe. A domain update is tenant-scoped in SQL (`WHERE id = <household_id from the session>`,
+  never from the request), sets `updated_at` itself from the database's `now()` (no trigger does), and
+  is rejected before it runs by the contract's own rules, then by the handler's.
 
 ## 5. Authentication
 
@@ -367,7 +380,7 @@ in each. The departures, and the reason for each, are below.
 would-be credential in an **onboarding handshake**; the User, the Household and the credential are
 created only when the person commits at the gate (`POST /onboarding/choice`). The handshake is the
 `onboarding_handshakes` table: `id` (the opaque token, minted like a session id and **hashed at rest**
-the same way, so a leaked row is not a presentable cookie), `email`, `display_name`, `locale`,
+the same way, so a leaked row is not a presentable cookie), `email`, `user_display_name`, `locale`,
 `password_hash` (nullable, for the day a Google identity opens one), `created_at`, `expires_at`. TTL
 **15 minutes**, fixed, not a §12 variable. There is no `household_id`: nothing exists yet to point at,
 and a later join choice adds columns rather than reshaping these. It is instance-local auth state, so
@@ -376,9 +389,9 @@ it hard-deletes like `sessions` (§4); liveness is `expires_at > now()` in SQL o
 cookie is `afloat_onboarding`: host-only, `HttpOnly`, `SameSite=Lax`, `Secure` per `COOKIE_SECURE`,
 expiring with the handshake. No session is issued until the commit.
 
-**The gate offers "found" only, for now.** `GET /onboarding/options` answers `{email, display_name,
+**The gate offers "found" only, for now.** `GET /onboarding/options` answers `{email, user_display_name,
 founding_open}`; no invitations field yet, and adding one later is additive. `POST /onboarding/choice`
-takes `{found: true, household_name}` and nothing else (`additionalProperties: false`): a later join
+takes `{found: true, household_display_name}` and nothing else (`additionalProperties: false`): a later join
 choice adds properties, not a different shape. Anything that is not a found choice is `400 VALIDATION`.
 No live handshake is `401 UNAUTHORIZED`, and a stale cookie is cleared; `FOUNDING_DISABLED` is `403`,
 checked after the handshake. That ordering hides nothing: `GET /auth/methods` is public and reports
@@ -399,10 +412,12 @@ that goes away does not turn "created or rolled back" into a coin flip. Requests
 **The Household name is the client's string — a departure.** The SPA pre-fills it from its own
 catalogue (en-GB `{{name}}'s Household`, id-ID `Rumah Tangga {{name}}`) and the person edits it. The
 server stores what was submitted, trimmed, not blank, at most **60 code points** (Balances' cap):
-`VALIDATION` with `rule: required` or `max`. Balances builds an English suggestion on the server; here
-the frontend owns every string (§9). A `U+0000` in a name is refused as `VALIDATION` (`pattern`)
-rather than reaching Postgres, which cannot store it. A `display_name` or `household_name` made only
-of whitespace and format characters (Unicode category Cf: zero-width space and joiners, word joiner,
+`VALIDATION` with `rule: required` or `max`. **Editing runs the same rules** (`PATCH /household`,
+#113): founding and editing call one function, `auth.CheckHouseholdDisplayName`, so neither can store
+a name the other would refuse, and the field is named `household_display_name` in both. Balances
+builds an English suggestion on the server; here the frontend owns every string (§9). A `U+0000` in a
+name is refused as `VALIDATION` (`pattern`) rather than reaching Postgres, which cannot store it. A
+`user_display_name` or `household_display_name` made only of whitespace and format characters (Unicode category Cf: zero-width space and joiners, word joiner,
 BOM) is `VALIDATION` with `rule: required`, blank to the eye though not to `TrimSpace`; such
 characters are never stripped from an otherwise visible name, and a bidi control inside one is
 accepted (Balances parity).
@@ -489,6 +504,10 @@ the first failing field only.
   parameter is ignored too, an unparseable one included.
 - Otherwise every failing field competes, an absent required one (`rule: required`) included. The
   reported one is the least by wire field name, then by rule.
+- The contract's rules are judged before the handler's, not alongside them: the validator answers as
+  middleware, so a handler rule (`iso4217`, a blank-to-the-eye name) competes only once every
+  contract rule has passed. `{"period_start_day": 0, "household_display_name": ""}` reports
+  `period_start_day` (`min`). Registration and every later write behave the same (#113).
 - `rule` uses go-playground/validator's tag names (`required`, `min`, `max`, `email`), plus `pattern`.
 - `minLength` and `maxLength` count code points, JSON Schema's characters: an emoji is one, not two
   UTF-16 units or four bytes.

@@ -227,16 +227,17 @@
     status: 200
     body_json:
       id: 0192f0a0-0000-7000-8000-0000000000a1
-      household_id: 0192f0a0-0000-7000-8000-000000000001
       email: alice@example.com
-      display_name: Alice
+      user_display_name: Alice
       locale: en-GB
       time_zone: Asia/Jakarta
-      household_display_name: Conformance Household
-      reporting_currency: IDR
-      period_start_day: 1
-      day_starts_at: "04:00"
-      allowance_mode: adaptive
+      household:
+        id: 0192f0a0-0000-7000-8000-000000000001
+        household_display_name: Conformance Household
+        reporting_currency: IDR
+        period_start_day: 1
+        day_starts_at: "04:00"
+        allowance_mode: adaptive
 
 # Read, the same body meets the cap: the decode stops at 1 MiB and never sees
 # the end of the object, so this is the undecodable body, not a password over

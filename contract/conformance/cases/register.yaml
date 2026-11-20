@@ -15,7 +15,7 @@
     path: /auth/local/register
     headers:
       Content-Type: application/json
-    body: '{"email":"new@example.com","password":"kucing oranye di atap","display_name":"Dewi Putri","locale":"id-ID"}'
+    body: '{"email":"new@example.com","password":"kucing oranye di atap","user_display_name":"Dewi Putri","locale":"id-ID"}'
   expect:
     status: 204
     body_empty: true
@@ -30,14 +30,14 @@
         expires: max-age
     rows:
       - sql: |
-          SELECT email, display_name, locale,
+          SELECT email, user_display_name, locale,
                  round(extract(epoch FROM expires_at - created_at))::int AS ttl_seconds,
                  left(password_hash, 31) AS hash_prefix,
                  length(id) AS id_length
           FROM onboarding_handshakes
         rows:
           - email: new@example.com
-            display_name: Dewi Putri
+            user_display_name: Dewi Putri
             locale: id-ID
             ttl_seconds: 900
             hash_prefix: "$argon2id$v=19$m=19456,t=2,p=1$"
@@ -62,15 +62,15 @@
     path: /auth/local/register
     headers:
       Content-Type: application/json
-    body: '{"email":"  Dewi.Putri@Example.COM ","password":"kucing oranye di atap","display_name":"   ","locale":"fr-FR"}'
+    body: '{"email":"  Dewi.Putri@Example.COM ","password":"kucing oranye di atap","user_display_name":"   ","locale":"fr-FR"}'
   expect:
     status: 204
     body_empty: true
     cookies:
       afloat_onboarding: *handshake-cookie
     rows:
-      - sql: SELECT email, display_name, locale FROM onboarding_handshakes
-        rows: [{email: dewi.putri@example.com, display_name: dewi.putri, locale: en-GB}]
+      - sql: SELECT email, user_display_name, locale FROM onboarding_handshakes
+        rows: [{email: dewi.putri@example.com, user_display_name: dewi.putri, locale: en-GB}]
 
 # Not an enum in the contract: an unsupported locale is a fallback, not a failure.
 - name: register with no locale falls back to en-GB

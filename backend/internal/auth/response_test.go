@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"encoding/json"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -8,7 +9,11 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/shopspring/decimal"
+
 	"github.com/kerti/afloat/backend/internal/api"
+	"github.com/kerti/afloat/backend/internal/db"
 )
 
 // Each handler's unexpected-failure path must answer its own 500. A nil
@@ -101,3 +106,65 @@ func apiTypeName(e ast.Expr) string {
 	}
 	return "api." + sel.Sel.Name
 }
+
+// HouseholdResponse is the one projection of a Household, shared by GET /me and
+// PATCH /household. Money leaves as a string at the storage scale, and a null
+// income is not a field at all, so "none supplied" is never read as zero.
+func TestHouseholdResponseRendersMoneyAtFourPlacesAndOmitsANull(t *testing.T) {
+	base := db.Household{
+		ID:                   pgtype.UUID{Bytes: [16]byte{1}, Valid: true},
+		HouseholdDisplayName: "Home",
+		ReportingCurrency:    "IDR",
+		PeriodStartDay:       25,
+		DayStartsAt:          pgtype.Time{Microseconds: (4*60 + 30) * 60 * 1_000_000, Valid: true},
+		AllowanceMode:        "fixed",
+	}
+
+	for _, tc := range []struct {
+		name   string
+		income decimal.NullDecimal
+		want   *string
+	}{
+		{"null is omitted", decimal.NullDecimal{}, nil},
+		{"zero is a real answer", decimal.NullDecimal{Decimal: decimal.Zero, Valid: true}, ptr("0.0000")},
+		{"whole number keeps its zeros", decimal.NullDecimal{Decimal: decimal.RequireFromString("25000000"), Valid: true}, ptr("25000000.0000")},
+		{"fraction", decimal.NullDecimal{Decimal: decimal.RequireFromString("1234.56"), Valid: true}, ptr("1234.5600")},
+		{"large value is not exponent notation", decimal.NullDecimal{Decimal: decimal.RequireFromString("100000000000000"), Valid: true}, ptr("100000000000000.0000")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := base
+			h.ExpectedMonthlyIncome = tc.income
+			got := HouseholdResponse(h)
+
+			switch {
+			case tc.want == nil && got.ExpectedMonthlyIncome != nil:
+				t.Errorf("expected_monthly_income = %q, want it omitted", *got.ExpectedMonthlyIncome)
+			case tc.want != nil && (got.ExpectedMonthlyIncome == nil || *got.ExpectedMonthlyIncome != *tc.want):
+				t.Errorf("expected_monthly_income = %v, want %q", got.ExpectedMonthlyIncome, *tc.want)
+			}
+			if got.HouseholdDisplayName != "Home" || got.ReportingCurrency != "IDR" || got.PeriodStartDay != 25 ||
+				got.DayStartsAt != "04:30" || got.AllowanceMode != api.Fixed {
+				t.Errorf("projection = %+v", got)
+			}
+			wire, err := json.Marshal(got)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var generic map[string]any
+			if err := json.Unmarshal(wire, &generic); err != nil {
+				t.Fatal(err)
+			}
+			switch v, present := generic["expected_monthly_income"]; {
+			case tc.want == nil && present:
+				t.Errorf("wire carries expected_monthly_income = %v, want no such key", v)
+			case tc.want != nil && v != *tc.want:
+				t.Errorf("wire expected_monthly_income = %#v, want the string %q", v, *tc.want)
+			}
+			if got.Id.String() != "01000000-0000-0000-0000-000000000000" {
+				t.Errorf("id = %s", got.Id)
+			}
+		})
+	}
+}
+
+func ptr[T any](v T) *T { return &v }

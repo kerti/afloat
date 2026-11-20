@@ -65,7 +65,7 @@ describe("create account", () => {
     expect(state.registered).toEqual({
       email: "dewi@example.com",
       password: "kucing oranye di atap",
-      display_name: "Dewi Putri",
+      user_display_name: "Dewi Putri",
       locale: "en-GB",
     });
 
@@ -74,7 +74,10 @@ describe("create account", () => {
     // /me was invalidated, so the shell answers as the new User.
     expect(await screen.findByText("Signed in as Dewi Putri")).toBeInTheDocument();
     expect(screen.getByText("Household: Dewi Putri's Household")).toBeInTheDocument();
-    expect(state.committed).toEqual({ found: true, household_name: "Dewi Putri's Household" });
+    expect(state.committed).toEqual({
+      found: true,
+      household_display_name: "Dewi Putri's Household",
+    });
   });
 
   it("registers without a name and the gate falls back to what the server derived", async () => {
@@ -86,8 +89,8 @@ describe("create account", () => {
     await register(user);
 
     expect(await screen.findByLabelText("Household name")).toHaveValue("dewi's Household");
-    // No display_name key at all, so the server defaults it.
-    expect(state.registered).not.toHaveProperty("display_name");
+    // No user_display_name key at all, so the server defaults it.
+    expect(state.registered).not.toHaveProperty("user_display_name");
   });
 
   it("pre-fills the Household name in Indonesian from the catalogue", async () => {
@@ -121,7 +124,7 @@ describe("create account", () => {
 
     expect(await screen.findByText("Household: Kos Kuning")).toBeInTheDocument();
     // Sent as typed: trimming is the server's.
-    expect(state.committed?.household_name).toBe("  Kos Kuning ");
+    expect(state.committed?.household_display_name).toBe("  Kos Kuning ");
   });
 
   it("says an address is taken in words, with the way to sign in", async () => {
@@ -206,7 +209,7 @@ describe("the onboarding gate", () => {
         HttpResponse.json(envelope("UNAUTHORIZED"), { status: 401 }),
       ),
       ...defaultHandlers(
-        fresh({ handshake: { email: "d@example.com", display_name: "D", locale: "en-GB" } }),
+        fresh({ handshake: { email: "d@example.com", user_display_name: "D", locale: "en-GB" } }),
       ),
     );
     const user = userEvent.setup();
@@ -223,7 +226,7 @@ describe("the onboarding gate", () => {
         HttpResponse.json(envelope("FOUNDING_DISABLED"), { status: 403 }),
       ),
       ...defaultHandlers(
-        fresh({ handshake: { email: "d@example.com", display_name: "D", locale: "en-GB" } }),
+        fresh({ handshake: { email: "d@example.com", user_display_name: "D", locale: "en-GB" } }),
       ),
     );
     const user = userEvent.setup();
@@ -241,7 +244,7 @@ describe("the onboarding gate", () => {
       ...defaultHandlers(
         fresh({
           foundingOpen: false,
-          handshake: { email: "d@example.com", display_name: "D", locale: "en-GB" },
+          handshake: { email: "d@example.com", user_display_name: "D", locale: "en-GB" },
         }),
       ),
     );
@@ -256,7 +259,7 @@ describe("the onboarding gate", () => {
         HttpResponse.json(envelope("EMAIL_TAKEN"), { status: 409 }),
       ),
       ...defaultHandlers(
-        fresh({ handshake: { email: "d@example.com", display_name: "D", locale: "en-GB" } }),
+        fresh({ handshake: { email: "d@example.com", user_display_name: "D", locale: "en-GB" } }),
       ),
     );
     const user = userEvent.setup();
@@ -272,12 +275,15 @@ describe("the onboarding gate", () => {
   it("shows a blank-name VALIDATION in words, and the form stays", async () => {
     server.use(
       http.post("/api/onboarding/choice", () =>
-        HttpResponse.json(envelope("VALIDATION", { field: "household_name", rule: "required" }), {
-          status: 400,
-        }),
+        HttpResponse.json(
+          envelope("VALIDATION", { field: "household_display_name", rule: "required" }),
+          {
+            status: 400,
+          },
+        ),
       ),
       ...defaultHandlers(
-        fresh({ handshake: { email: "d@example.com", display_name: "D", locale: "en-GB" } }),
+        fresh({ handshake: { email: "d@example.com", user_display_name: "D", locale: "en-GB" } }),
       ),
     );
     const user = userEvent.setup();

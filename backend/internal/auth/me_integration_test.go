@@ -2,6 +2,9 @@ package auth_test
 
 import (
 	"context"
+	"encoding/json"
+	"maps"
+	"slices"
 	"testing"
 	"time"
 
@@ -54,8 +57,8 @@ func TestGetMeReportsTheCallersOwnHousehold(t *testing.T) {
 		t.Fatalf("response = %T, want 200", resp)
 	}
 
-	if me.HouseholdDisplayName != "Our Household" {
-		t.Errorf("household = %q, want Our Household", me.HouseholdDisplayName)
+	if me.Household.HouseholdDisplayName != "Our Household" {
+		t.Errorf("household = %q, want Our Household", me.Household.HouseholdDisplayName)
 	}
 	if me.Email != "ours@example.com" {
 		t.Errorf("email = %q, want ours@example.com", me.Email)
@@ -81,14 +84,14 @@ func TestGetMeProjectsHouseholdSettings(t *testing.T) {
 	}
 	me := resp.(api.GetMe200JSONResponse)
 
-	if me.ReportingCurrency != "IDR" {
-		t.Errorf("reporting_currency = %q, want IDR", me.ReportingCurrency)
+	if me.Household.ReportingCurrency != "IDR" {
+		t.Errorf("reporting_currency = %q, want IDR", me.Household.ReportingCurrency)
 	}
-	if me.PeriodStartDay != 1 {
-		t.Errorf("period_start_day = %d, want 1", me.PeriodStartDay)
+	if me.Household.PeriodStartDay != 1 {
+		t.Errorf("period_start_day = %d, want 1", me.Household.PeriodStartDay)
 	}
-	if me.DayStartsAt != "04:00" {
-		t.Errorf("day_starts_at = %q, want 04:00", me.DayStartsAt)
+	if me.Household.DayStartsAt != "04:00" {
+		t.Errorf("day_starts_at = %q, want 04:00", me.Household.DayStartsAt)
 	}
 	if me.Locale != api.EnGB {
 		t.Errorf("locale = %q, want en-GB", me.Locale)
@@ -96,12 +99,12 @@ func TestGetMeProjectsHouseholdSettings(t *testing.T) {
 	if me.TimeZone != "Asia/Jakarta" {
 		t.Errorf("time_zone = %q, want Asia/Jakarta", me.TimeZone)
 	}
-	if me.AllowanceMode != api.Adaptive {
-		t.Errorf("allowance_mode = %q, want adaptive", me.AllowanceMode)
+	if me.Household.AllowanceMode != api.Adaptive {
+		t.Errorf("allowance_mode = %q, want adaptive", me.Household.AllowanceMode)
 	}
 	// Null means "not supplied", which is a different statement from zero.
-	if me.ExpectedMonthlyIncome != nil {
-		t.Errorf("expected_monthly_income = %v, want absent", *me.ExpectedMonthlyIncome)
+	if me.Household.ExpectedMonthlyIncome != nil {
+		t.Errorf("expected_monthly_income = %v, want absent", *me.Household.ExpectedMonthlyIncome)
 	}
 }
 
@@ -128,10 +131,10 @@ func TestGetMeSerialisesMoneyAsAString(t *testing.T) {
 	}
 	me := resp.(api.GetMe200JSONResponse)
 
-	if me.ExpectedMonthlyIncome == nil {
+	if me.Household.ExpectedMonthlyIncome == nil {
 		t.Fatal("expected_monthly_income is absent, want a string")
 	}
-	if got := *me.ExpectedMonthlyIncome; got != "25000000.0000" {
+	if got := *me.Household.ExpectedMonthlyIncome; got != "25000000.0000" {
 		t.Errorf("expected_monthly_income = %q, want 25000000.0000", got)
 	}
 }
@@ -161,10 +164,10 @@ func TestGetMeSerialisesFractionalMoneyAtStorageScale(t *testing.T) {
 	}
 	me := resp.(api.GetMe200JSONResponse)
 
-	if me.ExpectedMonthlyIncome == nil {
+	if me.Household.ExpectedMonthlyIncome == nil {
 		t.Fatal("expected_monthly_income is absent, want a string")
 	}
-	if got := *me.ExpectedMonthlyIncome; got != "1234.5600" {
+	if got := *me.Household.ExpectedMonthlyIncome; got != "1234.5600" {
 		t.Errorf("expected_monthly_income = %q, want 1234.5600", got)
 	}
 }
@@ -221,5 +224,48 @@ func TestLogoutWithoutASessionSucceeds(t *testing.T) {
 	}
 	if out.Headers.SetCookie == nil {
 		t.Error("logout without a session did not clear the client's cookie")
+	}
+}
+
+// The wire shape of #113: the User's fields, and the Household nested whole.
+// Nothing of the Household stays at the top level, and no unqualified name field
+// survives to mean two things.
+func TestGetMeNestsTheHousehold(t *testing.T) {
+	h := newHarness(t, time.Now)
+	ctx := context.Background()
+
+	householdID := h.tdb.CreateHousehold(t, "Test Household")
+	userID := h.tdb.CreateUser(t, householdID, "a@example.com", "A")
+	user, err := h.tdb.Queries.GetUserByID(ctx, userID)
+	if err != nil {
+		t.Fatalf("GetUserByID: %v", err)
+	}
+	resp, err := h.auth.GetMe(auth.WithUser(ctx, user), api.GetMeRequestObject{})
+	if err != nil {
+		t.Fatalf("GetMe: %v", err)
+	}
+	wire, err := json.Marshal(resp.(api.GetMe200JSONResponse))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var me map[string]json.RawMessage
+	if err := json.Unmarshal(wire, &me); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := slices.Sorted(maps.Keys(me)), []string{"email", "household", "id", "locale", "time_zone", "user_display_name"}; !slices.Equal(got, want) {
+		t.Errorf("Me keys = %v, want %v", got, want)
+	}
+
+	var household map[string]any
+	if err := json.Unmarshal(me["household"], &household); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := slices.Sorted(maps.Keys(household)), []string{
+		"allowance_mode", "day_starts_at", "household_display_name", "id", "period_start_day", "reporting_currency",
+	}; !slices.Equal(got, want) {
+		t.Errorf("Household keys = %v, want %v (expected_monthly_income is omitted when null)", got, want)
+	}
+	if household["id"] != householdID.String() {
+		t.Errorf("household id = %v", household["id"])
 	}
 }

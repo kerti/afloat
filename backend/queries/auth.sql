@@ -105,9 +105,9 @@ DELETE FROM login_attempts WHERE key = ANY(sqlc.arg(keys)::text[]);
 -- tests it against the same clock (BOOTSTRAP.md §5.1: an instant the database
 -- evaluates comes from the database).
 -- name: CreateOnboardingHandshake :one
-INSERT INTO onboarding_handshakes (id, email, display_name, locale, password_hash, expires_at)
+INSERT INTO onboarding_handshakes (id, email, user_display_name, locale, password_hash, expires_at)
 VALUES (
-    sqlc.arg(id), sqlc.arg(email), sqlc.arg(display_name), sqlc.arg(locale),
+    sqlc.arg(id), sqlc.arg(email), sqlc.arg(user_display_name), sqlc.arg(locale),
     sqlc.arg(password_hash), now() + sqlc.arg(ttl)::interval
 )
 RETURNING *;
@@ -133,12 +133,12 @@ DELETE FROM onboarding_handshakes WHERE expires_at <= now();
 -- an online auth flow, not an offline-capable write. Defaults the schema owns
 -- (currency, period start, time zone) are left to it.
 -- name: CreateHousehold :one
-INSERT INTO households (id, display_name)
+INSERT INTO households (id, household_display_name)
 VALUES ($1, $2)
 RETURNING *;
 
 -- name: CreateUser :one
-INSERT INTO users (id, household_id, email, display_name, locale)
+INSERT INTO users (id, household_id, email, user_display_name, locale)
 VALUES ($1, $2, $3, $4, $5)
 RETURNING *;
 

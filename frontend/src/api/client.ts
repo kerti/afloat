@@ -2,6 +2,8 @@ import type { components } from "./schema.gen";
 
 export type ErrorCode = components["schemas"]["ErrorCode"];
 export type Me = components["schemas"]["Me"];
+export type Household = components["schemas"]["Household"];
+export type UpdateHouseholdRequest = components["schemas"]["UpdateHouseholdRequest"];
 export type AuthMethods = components["schemas"]["AuthMethods"];
 export type LocalLoginRequest = components["schemas"]["LocalLoginRequest"];
 export type LocalRegisterRequest = components["schemas"]["LocalRegisterRequest"];
@@ -115,6 +117,16 @@ export async function commitOnboardingChoice(body: OnboardingChoiceRequest): Pro
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
+}
+
+export async function updateHousehold(body: UpdateHouseholdRequest): Promise<Household> {
+  return (
+    await request("/household", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    })
+  ).json() as Promise<Household>;
 }
 
 export async function logout(): Promise<void> {

@@ -23,7 +23,7 @@
 
 CREATE TABLE households (
     id                      uuid PRIMARY KEY,
-    display_name            text NOT NULL,
+    household_display_name  text NOT NULL,
     -- PRD S3 defaults. They are declared here as well as in the application so
     -- a row inserted by a migration or a fixture gets the same Household as one
     -- inserted by onboarding.
@@ -41,8 +41,8 @@ CREATE TABLE households (
     updated_at              timestamptz NOT NULL DEFAULT now(),
     deleted_at              timestamptz,
 
-    CONSTRAINT households_display_name_not_blank
-        CHECK (btrim(display_name) <> ''),
+    CONSTRAINT households_household_display_name_not_blank
+        CHECK (btrim(household_display_name) <> ''),
     CONSTRAINT households_reporting_currency_iso4217
         CHECK (reporting_currency ~ '^[A-Z]{3}$'),
     -- 28 is the highest day that exists in every month; 29-31 would silently
@@ -50,7 +50,7 @@ CREATE TABLE households (
     CONSTRAINT households_period_start_day_range
         CHECK (period_start_day BETWEEN 1 AND 28),
     CONSTRAINT households_allowance_mode_known
-        CHECK (allowance_mode IN ('adaptive', 'flat')),
+        CHECK (allowance_mode IN ('adaptive', 'fixed')),
     -- Zero income is a real answer; negative is not.
     CONSTRAINT households_expected_monthly_income_non_negative
         CHECK (expected_monthly_income IS NULL OR expected_monthly_income >= 0)
@@ -61,21 +61,21 @@ CREATE TABLE households (
 -- ---------------------------------------------------------------------------
 
 CREATE TABLE users (
-    id            uuid PRIMARY KEY,
+    id                uuid PRIMARY KEY,
     -- A User belongs to exactly one Household and the binding is irreversible
     -- (PRD S1). All members have equal access — there is no role column, and
     -- deliberately no founder flag: PRD S2 has no permission tiers to hang on it.
-    household_id  uuid NOT NULL REFERENCES households (id),
-    email         text NOT NULL,
-    display_name  text NOT NULL,
-    locale        text NOT NULL DEFAULT 'en-GB',
-    time_zone     text NOT NULL DEFAULT 'Asia/Jakarta',
-    created_at    timestamptz NOT NULL DEFAULT now(),
-    updated_at    timestamptz NOT NULL DEFAULT now(),
-    deleted_at    timestamptz,
+    household_id      uuid NOT NULL REFERENCES households (id),
+    email             text NOT NULL,
+    user_display_name text NOT NULL,
+    locale            text NOT NULL DEFAULT 'en-GB',
+    time_zone         text NOT NULL DEFAULT 'Asia/Jakarta',
+    created_at        timestamptz NOT NULL DEFAULT now(),
+    updated_at        timestamptz NOT NULL DEFAULT now(),
+    deleted_at        timestamptz,
 
-    CONSTRAINT users_display_name_not_blank
-        CHECK (btrim(display_name) <> ''),
+    CONSTRAINT users_user_display_name_not_blank
+        CHECK (btrim(user_display_name) <> ''),
     -- Both locales are real from day one (PRD N12a). Widening this list is what
     -- adding a third language costs in the database.
     CONSTRAINT users_locale_known
@@ -158,16 +158,16 @@ CREATE INDEX sessions_expires_at_idx ON sessions (expires_at);
 CREATE TABLE onboarding_handshakes (
     -- SHA-256 hex of the cookie's token, like sessions.id: the row carries a
     -- password hash, so a database leak must not yield a presentable token.
-    id            text PRIMARY KEY,
+    id                text PRIMARY KEY,
     -- Already trimmed and lower-cased by the registration handler.
-    email         text NOT NULL,
-    display_name  text NOT NULL,
-    locale        text NOT NULL,
+    email             text NOT NULL,
+    user_display_name text NOT NULL,
+    locale            text NOT NULL,
     -- Argon2id PHC string. Nullable for the day a Google identity opens a
     -- handshake with no password to hash.
-    password_hash text,
-    created_at    timestamptz NOT NULL DEFAULT now(),
-    expires_at    timestamptz NOT NULL,
+    password_hash     text,
+    created_at        timestamptz NOT NULL DEFAULT now(),
+    expires_at        timestamptz NOT NULL,
 
     CONSTRAINT onboarding_handshakes_locale_known
         CHECK (locale IN ('en-GB', 'id-ID'))

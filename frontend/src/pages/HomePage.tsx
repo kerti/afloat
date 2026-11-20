@@ -1,4 +1,5 @@
 import { useTranslation } from "react-i18next";
+import { Link } from "react-router";
 import type { Me } from "@/api/client";
 import { useLogout } from "@/api/queries";
 import { errorMessage } from "@/api/errors";
@@ -24,11 +25,14 @@ export function HomePage({ me }: { me: Me }) {
         </Button>
       </header>
       <section className="flex flex-col gap-1">
-        <p>{t("home.signedInAs", { name: me.display_name })}</p>
+        <p>{t("home.signedInAs", { name: me.user_display_name })}</p>
         <p className="text-muted-foreground">
-          {t("home.household", { name: me.household_display_name })}
+          {t("home.household", { name: me.household.household_display_name })}
         </p>
       </section>
+      <Link to="/settings/household" className="text-sm underline">
+        {t("home.settingsLink")}
+      </Link>
       <p className="text-muted-foreground">{t("home.comingSoon")}</p>
       {logout.error && (
         <p role="alert" className="text-sm text-destructive">

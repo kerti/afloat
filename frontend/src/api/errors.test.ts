@@ -13,6 +13,14 @@ describe("errorMessage", () => {
     expect(errorMessage(tID, err)).toBe("Periksa kolom kata sandi.");
   });
 
+  it("words each name spelling on its own, in both languages", () => {
+    const v = (field: string) => new ApiError(400, "VALIDATION", { field, rule: "required" });
+    expect(errorMessage(t, v("user_display_name"))).toBe("Check the name field.");
+    expect(errorMessage(tID, v("user_display_name"))).toBe("Periksa kolom nama.");
+    expect(errorMessage(t, v("household_display_name"))).toBe("Check the household name field.");
+    expect(errorMessage(tID, v("household_display_name"))).toBe("Periksa kolom nama rumah tangga.");
+  });
+
   it("falls back to the raw field name for a field the catalogue does not know yet", () => {
     expect(
       errorMessage(t, new ApiError(400, "VALIDATION", { field: "amount", rule: "required" })),

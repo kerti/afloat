@@ -589,6 +589,14 @@ an entry it cannot mount at.
 > (`backend/tools/gen-routes`, `gen-ts-types`). Afloat's spec leads instead, so the frontend's types
 > and the backend's interfaces come from the same hand-written file.
 
+**Who may call an operation is declared in the contract and enforced once (#114).** The global
+`security: [sessionCookie]` protects every operation by default; a public one says so with
+`security: []`; optional auth, as `logout` has, is `[{sessionCookie: []}, {}]`. Operations that
+need only `onboardingCookie` are checked by their own handlers, which own that 401's shape.
+Enforcement is `httpserver`'s `sessionRequired`, which runs ahead of request validation. At startup
+it refuses a scheme name it does not know, and an operation naming both cookies: it cannot check a
+handshake, so that shape needs a ruling first.
+
 **Trajectory is computed server-side.** The client formats and floors for display but derives
 nothing. This keeps one source of truth.
 

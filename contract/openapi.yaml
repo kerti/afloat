@@ -19,10 +19,9 @@ info:
   description: |
     Household spending-trajectory API.
 
-    Scaffold step 2 (BOOTSTRAP.md §11): health check and authentication only —
-    enough to prove the generator chain across Go and TypeScript.
-    Household founding, invitation acceptance and every domain resource land in
-    step 9 and are deliberately absent here.
+    Health check, authentication and the founding gate (BOOTSTRAP.md §5.1).
+    Invitation acceptance and every domain resource land in step 9 and are
+    deliberately absent here.
   license:
     name: AGPL-3.0-only
     url: https://www.gnu.org/licenses/agpl-3.0.html
@@ -35,6 +34,11 @@ tags:
     description: Instance liveness and pre-auth configuration. Unauthenticated.
   - name: auth
     description: Local email + password sessions (BOOTSTRAP.md §5).
+  - name: onboarding
+    description: |
+      The gate between a registered credential and an account: a person who has
+      registered holds a short-lived handshake cookie, and commits their choice
+      here (BOOTSTRAP.md §5.1). Authenticated by that cookie, not a session.
 
 security:
   - sessionCookie: []
@@ -120,6 +124,57 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
 
+  /auth/local/register:
+    post:
+      tags: [auth]
+      operationId: localRegister
+      summary: Register a credential and open an onboarding handshake.
+      description: |
+        Creates no User, no Household and no session. It validates, hashes the
+        password and stores the credential in a short-lived onboarding
+        handshake; the account is born only when the person commits at the
+        gate (`POST /onboarding/choice`). On success the response carries the
+        handshake cookie (host-only, `HttpOnly`, `SameSite=Lax`, `Secure` per
+        deployment) and the client navigates to the gate.
+
+        Validation runs in this order: the email's shape, then the password
+        policy (before any hashing), then whether a live User already holds the
+        address. A `400` with `WEAK_PASSWORD` carries `args.reason`, `min` (under
+        10 code points) or `breached` (in the embedded common-password list,
+        compared case-insensitively). A `409 EMAIL_TAKEN` names a held address:
+        registration enumerates by design, where login never does.
+
+        Registration hashes on unauthenticated input, so it shares login's
+        Argon2 concurrency cap and has its own per-IP backoff: a request that
+        reaches the hash arms a window for its IP, and a request inside one is
+        a `429`.
+
+        With the local provider off, this route answers exactly as a path that
+        was never registered.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LocalRegisterRequest'
+      responses:
+        '204':
+          description: A handshake is open. The handshake cookie is set.
+          headers:
+            Set-Cookie:
+              schema:
+                type: string
+              description: The onboarding handshake cookie.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
   /auth/logout:
     post:
       tags: [auth]
@@ -160,6 +215,76 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
 
+  /onboarding/options:
+    get:
+      tags: [onboarding]
+      operationId: getOnboardingOptions
+      summary: What the gate offers the holder of a handshake.
+      description: |
+        Authenticated by the handshake cookie alone. Today the gate offers
+        founding a Household; invitations arrive later as an additive field.
+      security:
+        - onboardingCookie: []
+      responses:
+        '200':
+          description: The handshake is live.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OnboardingOptions'
+        '401':
+          $ref: '#/components/responses/OnboardingUnauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /onboarding/choice:
+    post:
+      tags: [onboarding]
+      operationId: commitOnboardingChoice
+      summary: Commit the gate's choice, creating the account.
+      description: |
+        One transaction claims the handshake, creates the Household, the User
+        and the credential, and commits; only then is the session issued. Two
+        concurrent commits on one handshake cannot both found: the loser
+        answers `401`.
+
+        Founding disabled (`FOUNDING_DISABLED`) answers `403`; the address
+        having been taken since registration answers `409 EMAIL_TAKEN` and
+        creates nothing. The server mints the Household's and the User's ids,
+        UUIDv7 (BOOTSTRAP.md §5.1): founding is an online flow, not an
+        offline-capable write.
+      security:
+        - onboardingCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OnboardingChoiceRequest'
+      responses:
+        '204':
+          description: |
+            The account exists. The handshake cookie is cleared and the session
+            cookie is set.
+          headers:
+            Set-Cookie:
+              schema:
+                type: string
+              description: |
+                The session cookie (attributes per BOOTSTRAP.md §5), then a
+                second `Set-Cookie` line expiring the handshake cookie. Two
+                lines, though OpenAPI 3.0 can describe one header value only.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/OnboardingUnauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
 components:
   securitySchemes:
     sessionCookie:
@@ -169,6 +294,13 @@ components:
       # cookies on separate hostnames today, but a self-hoster putting both
       # behind one hostname would have them overwrite each other.
       name: afloat_session
+
+    onboardingCookie:
+      type: apiKey
+      in: cookie
+      # The handshake token, hashed at rest like a session's. Its own name, so
+      # holding one is never mistaken for holding the other.
+      name: afloat_onboarding
 
   schemas:
     Health:
@@ -186,7 +318,7 @@ components:
 
     AuthMethods:
       type: object
-      required: [local, google]
+      required: [local, google, founding_open]
       properties:
         local:
           type: boolean
@@ -194,6 +326,12 @@ components:
         google:
           type: boolean
           description: Always false in MVP; planned, not built (PRD §4.1).
+        founding_open:
+          type: boolean
+          description: |
+            True unless the operator set `FOUNDING_DISABLED`. Display only: the
+            sign-in screen offers "Create account" from it, and the commit at
+            the gate is what enforces it.
       additionalProperties: false
 
     LocalLoginRequest:
@@ -209,6 +347,73 @@ components:
           format: password
           minLength: 1
           maxLength: 4096
+      additionalProperties: false
+
+    LocalRegisterRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+          maxLength: 320
+        password:
+          type: string
+          format: password
+          # No minLength: a short password is `400 WEAK_PASSWORD` with
+          # `reason: min`, not a schema failure. The cap is the same as the
+          # policy's own (counted in code points).
+          maxLength: 1024
+        display_name:
+          type: string
+          maxLength: 255
+          description: |
+            Defaults to the email's local part when absent or blank.
+        locale:
+          type: string
+          description: |
+            `en-GB` or `id-ID`. Deliberately not an enum: anything else falls
+            back to `en-GB` rather than failing registration.
+      additionalProperties: false
+
+    OnboardingOptions:
+      type: object
+      required: [email, display_name, founding_open]
+      properties:
+        email:
+          type: string
+          format: email
+        display_name:
+          type: string
+          minLength: 1
+          maxLength: 255
+        founding_open:
+          type: boolean
+          description: |
+            False when the operator set `FOUNDING_DISABLED`; the gate then has
+            nothing to offer a stranger.
+      additionalProperties: false
+
+    OnboardingChoiceRequest:
+      type: object
+      description: |
+        A found choice, the only one today. A later slice adds a join choice to
+        this same body, additively.
+      required: [found, household_name]
+      properties:
+        found:
+          type: boolean
+          description: |
+            Must be `true`. Any other body is not a found choice and answers
+            `VALIDATION`.
+        household_name:
+          type: string
+          maxLength: 255
+          description: |
+            The Household's display name, pre-filled by the client from its own
+            catalogue and editable. The server stores it trimmed; blank after
+            the trim is `VALIDATION` (`required`), and more than 60 code points
+            is `VALIDATION` (`max`).
       additionalProperties: false
 
     Me:
@@ -325,7 +530,8 @@ components:
         falls back to the client's generic string.
 
         `VALIDATION` carries `{field, rule}` in `args` and reports only the
-        first failing field, as in Balances.
+        first failing field, as in Balances. `WEAK_PASSWORD` carries
+        `{reason}`, `min` or `breached`.
       enum:
         - VALIDATION
         - INVALID_JSON_BODY
@@ -333,11 +539,16 @@ components:
         - TOO_MANY_ATTEMPTS
         - UNAUTHORIZED
         - CROSS_SITE_REQUEST_BLOCKED
+        - EMAIL_TAKEN
+        - WEAK_PASSWORD
+        - FOUNDING_DISABLED
         - INTERNAL
 
   responses:
     BadRequest:
-      description: Malformed body, or a field that failed validation.
+      description: |
+        Malformed body, a field that failed validation, or (registration only)
+        a password the policy refuses: `WEAK_PASSWORD`.
       content:
         application/json:
           schema:
@@ -348,9 +559,38 @@ components:
         application/json:
           schema:
             $ref: '#/components/schemas/Error'
+    OnboardingUnauthorized:
+      description: |
+        No handshake, or an expired or unknown one. A stale handshake cookie is
+        cleared, so the client stops presenting it.
+      headers:
+        Set-Cookie:
+          schema:
+            type: string
+          description: The handshake cookie, expired. Present when one was sent.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Forbidden:
+      description: |
+        `FOUNDING_DISABLED`: the operator has closed this instance to new
+        Households.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Conflict:
+      description: |
+        `EMAIL_TAKEN`: a live User already holds the address, at registration or
+        at the commit.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
     TooManyRequests:
       description: |
-        Login backoff (per-IP and per-email). `Retry-After` carries the wait in
+        Login backoff (per-IP and per-email), or registration's per-IP backoff. `Retry-After` carries the wait in
         seconds. Backoff, never a hard lockout — a hard lock is a self-host
         footgun.
       headers:

@@ -42,6 +42,7 @@ AFLOAT_REQUIRE_CONFORMANCE=1 go test -v ./...
 |---|---|---|
 | `AFLOAT_BASE_URL` | `http://localhost:5182/api` | Where the `default` profile's server is |
 | `AFLOAT_LOCAL_DISABLED_BASE_URL` | `http://localhost:5186/api` | The `local-disabled` profile's server |
+| `AFLOAT_FOUNDING_DISABLED_BASE_URL` | `http://localhost:5187/api` | The `founding-disabled` profile's server |
 | `AFLOAT_DATABASE_URL` | `postgres://afloat:afloat@localhost:5184/afloat` | The database, which the runner resets, seeds and reads |
 | `AFLOAT_REQUIRE_CONFORMANCE` | unset | `1` turns "no server answering" from a **skip** into a **failure** |
 
@@ -163,9 +164,11 @@ server where login is off.
 |---|---|---|
 | `default` | — | `5182` |
 | `local-disabled` | `AUTH_LOCAL_ENABLED=false`, `AUTH_GOOGLE_ENABLED=true` (the backend refuses to boot with no provider), `AUTO_MIGRATE=false` | `5186` |
+| `founding-disabled` | `FOUNDING_DISABLED=true`, `AUTO_MIGRATE=false` | `5187` |
 
-The second server shares the database and starts only once the default one has
-migrated it; nothing the `local-disabled` cases do writes a row. Only the
+The other servers share the database and start only once the default one has
+migrated it; nothing the `local-disabled` cases do writes a row, and the
+`founding-disabled` ones write only what a registration does. Only the
 profiles some case uses are waited for.
 
 Adding a profile means a constant in `case.go`, an entry in

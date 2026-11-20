@@ -46,6 +46,12 @@ type Config struct {
 	AuthLocalEnabled  bool `env:"AUTH_LOCAL_ENABLED" envDefault:"true"`
 	AuthGoogleEnabled bool `env:"AUTH_GOOGLE_ENABLED" envDefault:"false"`
 
+	// Whether a new Household may be founded here. Registration and the gate stay
+	// open to anyone who reaches the instance, so an operator found their own
+	// Household first, then set this (BOOTSTRAP.md §12). It stops founding, not
+	// sign-in, and reports through GET /auth/methods as founding_open.
+	FoundingDisabled bool `env:"FOUNDING_DISABLED" envDefault:"false"`
+
 	// SessionTTL is the sliding window, refreshed once a session is past half
 	// its life rather than on every request. SessionMaxLifetime is the absolute
 	// cap measured from creation: without it a stolen cookie stays valid

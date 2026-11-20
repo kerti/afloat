@@ -37,8 +37,9 @@ var database = struct{ envKey, fallback string }{
 // servers is where each profile's server answers by default, and the
 // variable that moves it. scripts/conformance.sh boots one per profile.
 var servers = map[string]struct{ envKey, fallback string }{
-	conformance.ProfileDefault:       {"AFLOAT_BASE_URL", "http://localhost:5182/api"},
-	conformance.ProfileLocalDisabled: {"AFLOAT_LOCAL_DISABLED_BASE_URL", "http://localhost:5186/api"},
+	conformance.ProfileDefault:          {"AFLOAT_BASE_URL", "http://localhost:5182/api"},
+	conformance.ProfileLocalDisabled:    {"AFLOAT_LOCAL_DISABLED_BASE_URL", "http://localhost:5186/api"},
+	conformance.ProfileFoundingDisabled: {"AFLOAT_FOUNDING_DISABLED_BASE_URL", "http://localhost:5187/api"},
 }
 
 // perResponseHeaders carry a value minted per response, so two answers from

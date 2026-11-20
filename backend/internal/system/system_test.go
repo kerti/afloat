@@ -82,3 +82,19 @@ func TestGetAuthMethodsReportsConfiguredProviders(t *testing.T) {
 		}
 	}
 }
+
+// founding_open is !FOUNDING_DISABLED, and independent of which providers are
+// on. It controls display only: the commit at the gate enforces it.
+func TestGetAuthMethodsReportsWhetherFoundingIsOpen(t *testing.T) {
+	for _, disabled := range []bool{false, true} {
+		h := New(Deps{Querier: fakeQuerier{}, LocalEnabled: true, FoundingDisabled: disabled})
+
+		resp, err := h.GetAuthMethods(context.Background(), api.GetAuthMethodsRequestObject{})
+		if err != nil {
+			t.Fatalf("GetAuthMethods: %v", err)
+		}
+		if got := resp.(api.GetAuthMethods200JSONResponse); got.FoundingOpen == disabled {
+			t.Errorf("FOUNDING_DISABLED=%v: founding_open = %v, want %v", disabled, got.FoundingOpen, !disabled)
+		}
+	}
+}

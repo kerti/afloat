@@ -50,7 +50,8 @@ Full detail in `BOOTSTRAP.md` §4; the ones most likely to be violated by a plau
    notation is a bug, not a formatting quirk.
 2. **Primary keys:** UUIDv7, **client-generated**. `POST` is idempotent on the client-supplied id
    (`INSERT ... ON CONFLICT (id) DO NOTHING` + read-back) — this is the offline-write contract, live in
-   MVP even though the queue isn't.
+   MVP even though the queue isn't. The one exception is founding: the Household and User it
+   creates get server-minted UUIDv7s, because it is an online auth flow (`BOOTSTRAP.md` §4).
 3. **Tenancy:** every query touching Household-scoped data filters `household_id` **in SQL**, never
    only in middleware.
 4. **Soft delete everywhere.** No hard-delete endpoint, ever.

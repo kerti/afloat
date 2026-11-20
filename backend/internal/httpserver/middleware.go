@@ -60,23 +60,43 @@ func requestLogger(next http.Handler) http.Handler {
 	})
 }
 
-// localLoginPath is the login route's full mounted path — the one route
-// disabledLocalLogin404 gates. The prefix is the spec's (basePath); the rest is
-// spelled out, because the generated api package has no constant for it.
-var localLoginPath = basePath + "/auth/local/login"
+// localLoginPath and localRegisterPath are the local provider's mounted paths —
+// the routes disabledLocalAuth404 gates. The prefix is the spec's (basePath); the
+// rest is spelled out, because the generated api package has no constant for it.
+//
+// The onboarding routes (/onboarding/*) are not here: the gate is shared with
+// providers still to come, and with no registration it simply has no handshake
+// to honour, so it answers 401 to everyone.
+var (
+	localLoginPath    = basePath + "/auth/local/login"
+	localRegisterPath = basePath + "/auth/local/register"
+)
 
-// disabledLocalLogin404 makes /api/auth/local/login answer a bare 404
-// when the local provider is off, matching how GET /api/auth/methods already
-// reports it (issue #24). When enabled is true this is a no-op: the returned
-// middleware is next itself, so the default configuration's request path is
-// unchanged.
-func disabledLocalLogin404(enabled bool) func(http.Handler) http.Handler {
+// disabledLocalAuth404 makes the local provider's routes answer a bare 404 when
+// the provider is off, matching how GET /api/auth/methods already reports it
+// (issue #24). When enabled is true this is a no-op: the returned middleware is
+// next itself, so the default configuration's request path is unchanged.
+//
+// One gate for every local route, not one per route: a route added to the list
+// is gated the same way, on every method, and the 404 is the router's own
+// unregistered-path answer, so none of them can be told apart from a path that
+// was never registered.
+func disabledLocalAuth404(enabled bool) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		if enabled {
 			return next
 		}
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.URL.Path == localLoginPath {
+			if r.URL.Path == localLoginPath || r.URL.Path == localRegisterPath {
+				// A HEAD for an unregistered path goes through headAsGet, which
+				// drops the body before net/http can count it. Written to the
+				// bare writer instead, net/http would count the 19 bytes it was
+				// handed and declare Content-Length: 19 on a HEAD where an
+				// unregistered path declares none: a difference a prober can see
+				// on the wire, though a ResponseRecorder cannot.
+				if r.Method == http.MethodHead {
+					w = headDiscardingWriter{w}
+				}
 				http.NotFound(w, r)
 				return
 			}
@@ -184,7 +204,7 @@ func (headDiscardingWriter) Write(b []byte) (int, error) { return len(b), nil }
 // every path - registered, unregistered, or the disabled-login route - is
 // what keeps the disabled route indistinguishable from one never registered
 // at all (#24's rule "on every method"), without a second gate that could
-// drift from disabledLocalLogin404's. Mounted ahead of routing entirely, so
+// drift from disabledLocalAuth404's. Mounted ahead of routing entirely, so
 // chi's own method-not-allowed handling (which would add Allow: GET, HEAD for
 // a route it does find) never runs for this method.
 func optionsRefused(next http.Handler) http.Handler {

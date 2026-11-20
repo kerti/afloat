@@ -15,23 +15,26 @@ type Handlers struct {
 	q       db.Querier
 	version string
 
-	localEnabled  bool
-	googleEnabled bool
+	localEnabled     bool
+	googleEnabled    bool
+	foundingDisabled bool
 }
 
 type Deps struct {
-	Querier       db.Querier
-	Version       string
-	LocalEnabled  bool
-	GoogleEnabled bool
+	Querier          db.Querier
+	Version          string
+	LocalEnabled     bool
+	GoogleEnabled    bool
+	FoundingDisabled bool
 }
 
 func New(d Deps) *Handlers {
 	return &Handlers{
-		q:             d.Querier,
-		version:       d.Version,
-		localEnabled:  d.LocalEnabled,
-		googleEnabled: d.GoogleEnabled,
+		q:                d.Querier,
+		version:          d.Version,
+		localEnabled:     d.LocalEnabled,
+		googleEnabled:    d.GoogleEnabled,
+		foundingDisabled: d.FoundingDisabled,
 	}
 }
 
@@ -70,5 +73,7 @@ func (h *Handlers) GetAuthMethods(_ context.Context, _ api.GetAuthMethodsRequest
 	return api.GetAuthMethods200JSONResponse{
 		Local:  h.localEnabled,
 		Google: h.googleEnabled,
+		// Display only: the commit at the gate is what enforces it.
+		FoundingOpen: !h.foundingDisabled,
 	}, nil
 }

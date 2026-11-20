@@ -50,9 +50,19 @@ func HashToken(plaintext string) string {
 // on the login 204, so the generated strict response carries it and the handler
 // never touches a ResponseWriter.
 func (h *Handlers) IssueSession(ctx context.Context, userID pgtype.UUID, userAgent string) (*http.Cookie, error) {
-	token, err := newSessionToken()
+	token, expiresAt, err := h.createSession(ctx, userID, userAgent)
 	if err != nil {
 		return nil, err
+	}
+	return h.sessionCookie(token, expiresAt), nil
+}
+
+// createSession stores a session and returns its plaintext token and expiry,
+// for a caller that builds the cookie itself where it writes it.
+func (h *Handlers) createSession(ctx context.Context, userID pgtype.UUID, userAgent string) (string, time.Time, error) {
+	token, err := newSessionToken()
+	if err != nil {
+		return "", time.Time{}, err
 	}
 	expiresAt := h.now().Add(h.sessionTTL)
 
@@ -62,10 +72,9 @@ func (h *Handlers) IssueSession(ctx context.Context, userID pgtype.UUID, userAge
 		ExpiresAt: pgtype.Timestamptz{Time: expiresAt, Valid: true},
 		UserAgent: nullString(userAgent),
 	}); err != nil {
-		return nil, fmt.Errorf("create session: %w", err)
+		return "", time.Time{}, fmt.Errorf("create session: %w", err)
 	}
-
-	return h.sessionCookie(token, expiresAt), nil
+	return token, expiresAt, nil
 }
 
 func (h *Handlers) setSessionCookie(w http.ResponseWriter, token string, expires time.Time) {

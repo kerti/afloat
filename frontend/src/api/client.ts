@@ -4,6 +4,9 @@ export type ErrorCode = components["schemas"]["ErrorCode"];
 export type Me = components["schemas"]["Me"];
 export type AuthMethods = components["schemas"]["AuthMethods"];
 export type LocalLoginRequest = components["schemas"]["LocalLoginRequest"];
+export type LocalRegisterRequest = components["schemas"]["LocalRegisterRequest"];
+export type OnboardingOptions = components["schemas"]["OnboardingOptions"];
+export type OnboardingChoiceRequest = components["schemas"]["OnboardingChoiceRequest"];
 
 // The contract's base path (servers[0].url). Same origin as the page: the Go
 // binary serves both in production, the Vite proxy in development.
@@ -43,6 +46,9 @@ const errorCodeKnown: Record<ErrorCode, true> = {
   TOO_MANY_ATTEMPTS: true,
   UNAUTHORIZED: true,
   CROSS_SITE_REQUEST_BLOCKED: true,
+  EMAIL_TAKEN: true,
+  WEAK_PASSWORD: true,
+  FOUNDING_DISABLED: true,
   INTERNAL: true,
 };
 export const errorCodes = Object.keys(errorCodeKnown) as ErrorCode[];
@@ -83,6 +89,28 @@ export async function getAuthMethods(): Promise<AuthMethods> {
 
 export async function localLogin(body: LocalLoginRequest): Promise<void> {
   await request("/auth/local/login", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+// Registration opens a handshake and answers 204; the cookie it sets is the
+// onboarding gate's credential, held by the browser and never read here.
+export async function localRegister(body: LocalRegisterRequest): Promise<void> {
+  await request("/auth/local/register", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+export async function getOnboardingOptions(): Promise<OnboardingOptions> {
+  return (await request("/onboarding/options")).json() as Promise<OnboardingOptions>;
+}
+
+export async function commitOnboardingChoice(body: OnboardingChoiceRequest): Promise<void> {
+  await request("/onboarding/choice", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),

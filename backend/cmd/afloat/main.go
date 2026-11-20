@@ -98,12 +98,14 @@ func run() error {
 			CookieSecure:       cfg.CookieSecure,
 			FirstBackoff:       cfg.LoginFirstBackoff,
 			MaxBackoff:         cfg.LoginMaxBackoff,
+			FoundingDisabled:   cfg.FoundingDisabled,
 		}),
 		System: system.New(system.Deps{
-			Querier:       queries,
-			Version:       cfg.Version,
-			LocalEnabled:  cfg.AuthLocalEnabled,
-			GoogleEnabled: cfg.AuthGoogleEnabled,
+			Querier:          queries,
+			Version:          cfg.Version,
+			LocalEnabled:     cfg.AuthLocalEnabled,
+			GoogleEnabled:    cfg.AuthGoogleEnabled,
+			FoundingDisabled: cfg.FoundingDisabled,
 		}),
 		// The same variable newHTTPServer derives the write deadline from: one
 		// bound on how long a handler may run, not a second literal that could

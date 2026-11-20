@@ -167,4 +167,4 @@
       Origin: http://evil.example
   expect:
     status: 200
-    body_json: {local: true, google: false}
+    body_json: {local: true, google: false, founding_open: true}

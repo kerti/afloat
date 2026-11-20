@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
-import { Navigate } from "react-router";
+import { Link, Navigate } from "react-router";
 import { useAuthMethods, useLogin, useMe } from "@/api/queries";
 import { errorMessage } from "@/api/errors";
 import { Button } from "@/components/ui/button";
@@ -23,6 +23,8 @@ export function LoginPage() {
   }
 
   const localOff = methods.data?.local === false;
+  // Display only: the gate's commit is what enforces founding_open.
+  const canRegister = methods.data?.local === true && methods.data.founding_open;
   const failed = login.error ? errorMessage(t, login.error) : null;
 
   return (
@@ -67,6 +69,11 @@ export function LoginPage() {
           <Button type="submit" disabled={login.isPending}>
             {login.isPending ? t("login.submitting") : t("login.submit")}
           </Button>
+          {canRegister && (
+            <Link to="/register" className="text-sm underline">
+              {t("login.createAccount")}
+            </Link>
+          )}
         </form>
       )}
     </main>

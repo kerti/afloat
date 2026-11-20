@@ -28,6 +28,14 @@ type harness struct {
 	tdb  *testutil.TestDB
 	auth *auth.Handlers
 	now  func() time.Time
+
+	foundingDisabled bool
+}
+
+// withFoundingDisabled is h with FOUNDING_DISABLED set, on the same database.
+func (h harness) withFoundingDisabled() harness {
+	h.foundingDisabled = true
+	return h.withQuerier(h.tdb.Queries)
 }
 
 func newHarness(t *testing.T, clock func() time.Time) harness {
@@ -46,6 +54,7 @@ func (h harness) withQuerier(q db.Querier) harness {
 		SessionTTL:         testTTL,
 		SessionMaxLifetime: testMaxLifetime,
 		CookieSecure:       true,
+		FoundingDisabled:   h.foundingDisabled,
 		FirstBackoff:       testFirstBackoff,
 		MaxBackoff:         testMaxBackoff,
 		Now:                h.now,

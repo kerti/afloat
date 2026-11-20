@@ -17,14 +17,14 @@
         path: /auth/local/register
         headers:
           Content-Type: application/json
-        body: '{"email":"Dewi@Example.com","password":"kucing oranye di atap","display_name":"Dewi Putri","locale":"id-ID"}'
+        body: '{"email":"Dewi@Example.com","password":"kucing oranye di atap","user_display_name":"Dewi Putri","locale":"id-ID"}'
       status: 204
   request:
     method: GET
     path: /onboarding/options
   expect:
     status: 200
-    body_json: {email: dewi@example.com, display_name: Dewi Putri, founding_open: true}
+    body_json: {email: dewi@example.com, user_display_name: Dewi Putri, founding_open: true}
     cookies: {}
 
 - name: onboarding options with no handshake is UNAUTHORIZED and sets no cookie
@@ -85,7 +85,7 @@
     headers:
       Content-Type: application/json
       User-Agent: conformance/1.0
-    body: '{"found":true,"household_name":"  Rumah Tangga Dewi  "}'
+    body: '{"found":true,"household_display_name":"  Rumah Tangga Dewi  "}'
   expect:
     status: 204
     body_empty: true
@@ -102,19 +102,19 @@
     rows:
       # The name stored trimmed; the schema's defaults for everything else.
       - sql: |
-          SELECT display_name, reporting_currency, period_start_day, to_char(day_starts_at, 'HH24:MI') AS day_starts_at,
+          SELECT household_display_name, reporting_currency, period_start_day, to_char(day_starts_at, 'HH24:MI') AS day_starts_at,
                  allowance_mode, substr(id::text, 15, 1) AS id_version
           FROM households WHERE id <> '0192f0a0-0000-7000-8000-000000000001'
         rows:
-          - {display_name: Rumah Tangga Dewi, reporting_currency: IDR, period_start_day: 1, day_starts_at: "04:00",
+          - {household_display_name: Rumah Tangga Dewi, reporting_currency: IDR, period_start_day: 1, day_starts_at: "04:00",
              allowance_mode: adaptive, id_version: "7"}
-      # The handshake's email, display_name and locale; time_zone is the default.
+      # The handshake's email, user_display_name and locale; time_zone is the default.
       - sql: |
-          SELECT email, display_name, locale, time_zone, substr(id::text, 15, 1) AS id_version,
+          SELECT email, user_display_name, locale, time_zone, substr(id::text, 15, 1) AS id_version,
                  household_id <> '0192f0a0-0000-7000-8000-000000000001' AS own_household
           FROM users WHERE email = 'dewi@example.com'
         rows:
-          - {email: dewi@example.com, display_name: Dewi Putri, locale: id-ID, time_zone: Asia/Jakarta, id_version: "7", own_household: true}
+          - {email: dewi@example.com, user_display_name: Dewi Putri, locale: id-ID, time_zone: Asia/Jakarta, id_version: "7", own_household: true}
       # The credential is the registered one's hash, and the session is the new
       # User's. Nothing is left at the gate.
       - sql: |
@@ -137,7 +137,7 @@
         path: /onboarding/choice
         headers:
           Content-Type: application/json
-        body: '{"found":true,"household_name":"Rumah Tangga Dewi"}'
+        body: '{"found":true,"household_display_name":"Rumah Tangga Dewi"}'
       status: 204
   request:
     method: GET
@@ -156,7 +156,7 @@
         path: /onboarding/choice
         headers:
           Content-Type: application/json
-        body: '{"found":true,"household_name":"Rumah Tangga Dewi"}'
+        body: '{"found":true,"household_display_name":"Rumah Tangga Dewi"}'
       status: 204
     - request:
         method: POST
@@ -188,7 +188,7 @@
     path: /onboarding/choice
     headers:
       Content-Type: application/json
-    body: '{"found":true,"household_name":"Rumah"}'
+    body: '{"found":true,"household_display_name":"Rumah"}'
   expect:
     status: 401
     body_json: {code: UNAUTHORIZED}
@@ -207,7 +207,7 @@
     headers:
       Content-Type: application/json
       Cookie: afloat_onboarding=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
-    body: '{"found":true,"household_name":"Rumah"}'
+    body: '{"found":true,"household_display_name":"Rumah"}'
   expect:
     status: 401
     body_json: {code: UNAUTHORIZED}
@@ -228,7 +228,7 @@
     path: /onboarding/choice
     headers:
       Content-Type: application/json
-    body: '{"found":true,"household_name":"Rumah"}'
+    body: '{"found":true,"household_display_name":"Rumah"}'
   expect:
     status: 401
     body_json: {code: UNAUTHORIZED}
@@ -248,7 +248,7 @@
     path: /onboarding/choice
     headers:
       Content-Type: application/json
-    body: '{"found":false,"household_name":"Rumah"}'
+    body: '{"found":false,"household_display_name":"Rumah"}'
   expect:
     status: 400
     body_json: {code: VALIDATION, args: {field: found, rule: required}}
@@ -268,10 +268,10 @@
     path: /onboarding/choice
     headers:
       Content-Type: application/json
-    body: '{"found":true,"household_name":"   "}'
+    body: '{"found":true,"household_display_name":"   "}'
   expect:
     status: 400
-    body_json: {code: VALIDATION, args: {field: household_name, rule: required}}
+    body_json: {code: VALIDATION, args: {field: household_display_name, rule: required}}
     cookies: {}
     rows: *handshake-kept
 
@@ -288,7 +288,7 @@
     body: '{"found":true}'
   expect:
     status: 400
-    body_json: {code: VALIDATION, args: {field: household_name, rule: required}}
+    body_json: {code: VALIDATION, args: {field: household_display_name, rule: required}}
     cookies: {}
     rows: *handshake-kept
 
@@ -302,10 +302,10 @@
     path: /onboarding/choice
     headers:
       Content-Type: application/json
-    body: '{"found":true,"household_name":"ééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé"}'
+    body: '{"found":true,"household_display_name":"ééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé"}'
   expect:
     status: 400
-    body_json: {code: VALIDATION, args: {field: household_name, rule: max}}
+    body_json: {code: VALIDATION, args: {field: household_display_name, rule: max}}
     cookies: {}
     rows: *handshake-kept
 
@@ -319,7 +319,7 @@
     path: /onboarding/choice
     headers:
       Content-Type: application/json
-    body: '{"found":true,"household_name":"éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé"}'
+    body: '{"found":true,"household_display_name":"éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé"}'
   expect:
     status: 204
     body_empty: true
@@ -346,7 +346,7 @@
     path: /onboarding/choice
     headers:
       Content-Type: application/json
-    body: '{"found":"true","household_name":"Rumah"}'
+    body: '{"found":"true","household_display_name":"Rumah"}'
   expect:
     status: 400
     body_json: {code: INVALID_JSON_BODY}
@@ -378,14 +378,14 @@
     - request: *register-dewi
       status: 204
     - sql: |
-        INSERT INTO users (id, household_id, email, display_name)
+        INSERT INTO users (id, household_id, email, user_display_name)
         VALUES ('0192f0a0-0000-7000-8000-0000000000d1', '0192f0a0-0000-7000-8000-000000000001', 'DEWI@example.com', 'Raced')
   request:
     method: POST
     path: /onboarding/choice
     headers:
       Content-Type: application/json
-    body: '{"found":true,"household_name":"Rumah"}'
+    body: '{"found":true,"household_display_name":"Rumah"}'
   expect:
     status: 409
     body_json: {code: EMAIL_TAKEN}
@@ -408,7 +408,7 @@
     headers:
       Content-Type: application/json
       Sec-Fetch-Site: cross-site
-    body: '{"found":true,"household_name":"Rumah"}'
+    body: '{"found":true,"household_display_name":"Rumah"}'
   expect:
     status: 403
     body_json: {code: CROSS_SITE_REQUEST_BLOCKED}
@@ -437,7 +437,7 @@
     path: /onboarding/options
   expect:
     status: 200
-    body_json: {email: dewi@example.com, display_name: Dewi Putri, founding_open: false}
+    body_json: {email: dewi@example.com, user_display_name: Dewi Putri, founding_open: false}
 
 - name: founding disabled - the commit is FOUNDING_DISABLED and spends nothing
   issue: "108"
@@ -450,7 +450,7 @@
     path: /onboarding/choice
     headers:
       Content-Type: application/json
-    body: '{"found":true,"household_name":"Rumah"}'
+    body: '{"found":true,"household_display_name":"Rumah"}'
   expect:
     status: 403
     body_json: {code: FOUNDING_DISABLED}
@@ -467,7 +467,7 @@
     path: /onboarding/choice
     headers:
       Content-Type: application/json
-    body: '{"found":true,"household_name":"Rumah"}'
+    body: '{"found":true,"household_display_name":"Rumah"}'
   expect:
     status: 401
     body_json: {code: UNAUTHORIZED}

@@ -12,6 +12,7 @@ import (
 
 	"github.com/kerti/afloat/backend/internal/api"
 	"github.com/kerti/afloat/backend/internal/auth"
+	"github.com/kerti/afloat/backend/internal/household"
 	"github.com/kerti/afloat/backend/internal/system"
 )
 
@@ -22,13 +23,15 @@ import (
 // both contribute a type named Handlers, and promotion would silently decide
 // which one won.
 type Server struct {
-	system *system.Handlers
-	auth   *auth.Handlers
+	system    *system.Handlers
+	auth      *auth.Handlers
+	household *household.Handlers
 }
 
 type Deps struct {
-	System *system.Handlers
-	Auth   *auth.Handlers
+	System    *system.Handlers
+	Auth      *auth.Handlers
+	Household *household.Handlers
 
 	// Web serves the built frontend (web.Handler, BOOTSTRAP.md §8) on every
 	// GET and HEAD outside the API. Nil in a binary built without one: the
@@ -74,13 +77,17 @@ func (s *Server) GetMe(ctx context.Context, r api.GetMeRequestObject) (api.GetMe
 	return s.auth.GetMe(ctx, r)
 }
 
+func (s *Server) UpdateHousehold(ctx context.Context, r api.UpdateHouseholdRequestObject) (api.UpdateHouseholdResponseObject, error) {
+	return s.household.UpdateHousehold(ctx, r)
+}
+
 // New builds the router: the API under the contract's base path (basePath,
 // /api today), with the middleware every request passes through.
 //
 // Middleware is written as func(http.Handler) http.Handler and stays free of
 // chi types, so the stdlib exit ADR-0001 describes remains cheap.
 func New(d Deps) http.Handler {
-	srv := &Server{system: d.System, auth: d.Auth}
+	srv := &Server{system: d.System, auth: d.Auth, household: d.Household}
 
 	r := chi.NewRouter()
 	// First, so every response this router produces carries the id and the

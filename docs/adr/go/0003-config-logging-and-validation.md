@@ -23,7 +23,7 @@ written in the tag rather than assumed.
 
 Standard library since 1.21. Structured output, levels, handlers, and nothing to choose.
 
-**No request logging of user content, ever.** `PRD.md` N6 forbids telemetry of any kind, and a log
+**No request logging of user content, ever.** `PRD.md` §3 (Q-01) rules out telemetry of any kind, and a log
 line containing an Expense description is telemetry that happens to be written to disk. Logs carry
 request method, path, status, duration and error codes — never bodies, never amounts, never the
 session token. Error paths log the internal cause; the response carries only a code
@@ -58,3 +58,7 @@ handlers stay free of hand-written `if x == "" ` chains that drift from the spec
 - **2026-11-19** — The Kotlin learning track was dropped (`PRD.md` change log); statements about the
   Kotlin side, and about migrations generated from Flyway-format files, were removed or corrected.
   The decision itself is unchanged.
+- **2026-11-20** — The first paragraph under "No request logging of user content" cited `PRD.md` N6
+  for the no-telemetry ruling. N6 is the contract rule; the ruling is `PRD.md` §3 (Q-01), restated in
+  §4 Out and `BOOTSTRAP.md` §10. The citation was corrected (found in #113). The decision itself is
+  unchanged.

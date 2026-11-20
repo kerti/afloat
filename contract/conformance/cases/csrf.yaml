@@ -158,6 +158,58 @@
       - sql: SELECT count(*)::int AS n FROM sessions
         rows: [{n: 1}]
 
+# Every case above is a POST. The guard covers every non-safe method, so PATCH
+# too (#113): a cross-site page must not be able to change the Household.
+- name: csrf - cross-site household patch is blocked and the Household is unchanged
+  issue: "113"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: PATCH
+    path: /household
+    headers:
+      Content-Type: application/json
+      Sec-Fetch-Site: cross-site
+    body: '{"household_display_name":"Hijacked"}'
+  expect:
+    status: 403
+    body_json: {code: CROSS_SITE_REQUEST_BLOCKED}
+    cookies: {}
+    rows:
+      - sql: SELECT household_display_name FROM households
+        rows: [{household_display_name: Conformance Household}]
+
+- name: csrf - a foreign Origin on a household patch is blocked
+  issue: "113"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: PATCH
+    path: /household
+    headers:
+      Content-Type: application/json
+      Origin: http://evil.example
+    body: '{"household_display_name":"Hijacked"}'
+  expect:
+    status: 403
+    body_json: {code: CROSS_SITE_REQUEST_BLOCKED}
+    cookies: {}
+    rows:
+      - sql: SELECT household_display_name FROM households
+        rows: [{household_display_name: Conformance Household}]
+
 - name: csrf - a safe method is never blocked
   request:
     method: GET

@@ -21,11 +21,11 @@ func NewUUID(t *testing.T) pgtype.UUID {
 // CreateHousehold inserts a Household and returns its id. Tests that need two
 // tenants call it twice: the harness pre-seeds nothing, because a pre-seeded
 // tenant is a fixture everyone quietly depends on.
-func (tdb *TestDB) CreateHousehold(t *testing.T, displayName string) pgtype.UUID {
+func (tdb *TestDB) CreateHousehold(t *testing.T, householdDisplayName string) pgtype.UUID {
 	t.Helper()
 	id := NewUUID(t)
 	_, err := tdb.Pool.Exec(context.Background(),
-		`INSERT INTO households (id, display_name) VALUES ($1, $2)`, id, displayName)
+		`INSERT INTO households (id, household_display_name) VALUES ($1, $2)`, id, householdDisplayName)
 	if err != nil {
 		t.Fatalf("testutil: create household: %v", err)
 	}
@@ -33,12 +33,12 @@ func (tdb *TestDB) CreateHousehold(t *testing.T, displayName string) pgtype.UUID
 }
 
 // CreateUser inserts a User into a Household and returns its id.
-func (tdb *TestDB) CreateUser(t *testing.T, householdID pgtype.UUID, email, displayName string) pgtype.UUID {
+func (tdb *TestDB) CreateUser(t *testing.T, householdID pgtype.UUID, email, userDisplayName string) pgtype.UUID {
 	t.Helper()
 	id := NewUUID(t)
 	_, err := tdb.Pool.Exec(context.Background(),
-		`INSERT INTO users (id, household_id, email, display_name) VALUES ($1, $2, $3, $4)`,
-		id, householdID, email, displayName)
+		`INSERT INTO users (id, household_id, email, user_display_name) VALUES ($1, $2, $3, $4)`,
+		id, householdID, email, userDisplayName)
 	if err != nil {
 		t.Fatalf("testutil: create user: %v", err)
 	}

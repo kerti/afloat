@@ -41,7 +41,7 @@ func (h harness) options(ctx context.Context, t *testing.T) api.GetOnboardingOpt
 func (h harness) commit(ctx context.Context, t *testing.T, found bool, name string) api.CommitOnboardingChoiceResponseObject {
 	t.Helper()
 	resp, err := h.auth.CommitOnboardingChoice(ctx, api.CommitOnboardingChoiceRequestObject{
-		Body: &api.CommitOnboardingChoiceJSONRequestBody{Found: found, HouseholdName: name},
+		Body: &api.CommitOnboardingChoiceJSONRequestBody{Found: found, HouseholdDisplayName: name},
 	})
 	if err != nil {
 		t.Fatalf("CommitOnboardingChoice returned an error: %v", err)
@@ -95,14 +95,14 @@ func (h harness) foundingTables(t *testing.T) string {
 func TestOnboardingOptionsOfALiveHandshake(t *testing.T) {
 	h := newHarness(t, time.Now)
 	ctx, _ := h.atTheGate(t, "198.51.100.50", "Dewi@Example.com", func(r *registration) {
-		r.displayName = ptr("Dewi Putri")
+		r.userDisplayName = ptr("Dewi Putri")
 	})
 
 	got, is := h.options(ctx, t).(api.GetOnboardingOptions200JSONResponse)
 	if !is {
 		t.Fatalf("response = %T, want 200", h.options(ctx, t))
 	}
-	if got.Email != "dewi@example.com" || got.DisplayName != "Dewi Putri" || !got.FoundingOpen {
+	if got.Email != "dewi@example.com" || got.UserDisplayName != "Dewi Putri" || !got.FoundingOpen {
 		t.Errorf("options = %+v, want dewi@example.com / Dewi Putri / founding_open", got)
 	}
 }
@@ -172,7 +172,7 @@ func TestOnboardingOptionsWithoutALiveHandshakeIs401(t *testing.T) {
 func TestCommitFoundsTheHouseholdAndIssuesTheSession(t *testing.T) {
 	h := newHarness(t, time.Now)
 	ctx, token := h.atTheGate(t, "198.51.100.55", "Dewi@Example.com", func(r *registration) {
-		r.displayName = ptr("Dewi Putri")
+		r.userDisplayName = ptr("Dewi Putri")
 		r.locale = ptr("id-ID")
 	})
 	var handshakeHash string
@@ -211,7 +211,7 @@ func TestCommitFoundsTheHouseholdAndIssuesTheSession(t *testing.T) {
 		sessionUser         pgtype.UUID
 	)
 	if err := h.tdb.Pool.QueryRow(context.Background(), `
-		SELECT h.id, h.display_name, h.reporting_currency, u.id, u.email, u.display_name, u.locale, u.time_zone,
+		SELECT h.id, h.household_display_name, h.reporting_currency, u.id, u.email, u.user_display_name, u.locale, u.time_zone,
 		       c.user_id, c.password_hash, s.user_id
 		FROM households h
 		JOIN users u ON u.household_id = h.id
@@ -227,7 +227,7 @@ func TestCommitFoundsTheHouseholdAndIssuesTheSession(t *testing.T) {
 		t.Errorf("currency %q, time zone %q, want the schema's defaults IDR / Asia/Jakarta", currency, zone)
 	}
 	if email != "dewi@example.com" || name != "Dewi Putri" || locale != "id-ID" {
-		t.Errorf("user = %q / %q / %q, want the handshake's email, display_name and locale", email, name, locale)
+		t.Errorf("user = %q / %q / %q, want the handshake's email, user_display_name and locale", email, name, locale)
 	}
 	if credUser != userID || sessionUser != userID {
 		t.Error("the credential and the session do not belong to the new User")
@@ -392,17 +392,17 @@ func TestCommitRefusesAnythingButAFoundChoiceWithoutSpendingTheHandshake(t *test
 		rule  string
 	}{
 		{"not a found choice", false, "Rumah", "found", "required"},
-		{"blank name", true, "", "household_name", "required"},
-		{"spaces only", true, "   \t ", "household_name", "required"},
+		{"blank name", true, "", "household_display_name", "required"},
+		{"spaces only", true, "   \t ", "household_display_name", "required"},
 		// U+00A0 is whitespace to Go's TrimSpace but not to Postgres's btrim: the
 		// trim here is what keeps it from reaching a CHECK it would pass.
-		{"no-break space only", true, "  ", "household_name", "required"},
-		{"61 code points", true, strings.Repeat("a", 61), "household_name", "max"},
-		{"61 code points of 4 bytes", true, strings.Repeat("\U0001F6F6", 61), "household_name", "max"},
-		{"61 code points once padded", true, " " + strings.Repeat("a", 61) + " ", "household_name", "max"},
-		{"NUL", true, "Ru\x00mah", "household_name", "pattern"},
-		{"zero-width characters only", true, "\u200b\u200c\u200d", "household_name", "required"},
-		{"word joiner and BOM among spaces", true, " \u2060 \ufeff ", "household_name", "required"},
+		{"no-break space only", true, "  ", "household_display_name", "required"},
+		{"61 code points", true, strings.Repeat("a", 61), "household_display_name", "max"},
+		{"61 code points of 4 bytes", true, strings.Repeat("\U0001F6F6", 61), "household_display_name", "max"},
+		{"61 code points once padded", true, " " + strings.Repeat("a", 61) + " ", "household_display_name", "max"},
+		{"NUL", true, "Ru\x00mah", "household_display_name", "pattern"},
+		{"zero-width characters only", true, "\u200b\u200c\u200d", "household_display_name", "required"},
+		{"word joiner and BOM among spaces", true, " \u2060 \ufeff ", "household_display_name", "required"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			rec := assertCommitCode(t, h.commit(ctx, t, tc.found, tc.input), http.StatusBadRequest, api.VALIDATION)
@@ -427,7 +427,7 @@ func TestCommitAcceptsAHouseholdNameOfExactlySixtyCodePoints(t *testing.T) {
 		t.Fatalf("status = %d (%s), want 204", rec.Code, rec.Body.String())
 	}
 	var got string
-	if err := h.tdb.Pool.QueryRow(context.Background(), `SELECT display_name FROM households`).Scan(&got); err != nil {
+	if err := h.tdb.Pool.QueryRow(context.Background(), `SELECT household_display_name FROM households`).Scan(&got); err != nil {
 		t.Fatalf("read: %v", err)
 	}
 	if got != name {
@@ -446,7 +446,7 @@ func TestCommitKeepsInvisibleCharactersInAVisibleName(t *testing.T) {
 		t.Fatalf("status = %d (%s), want 204", rec.Code, rec.Body.String())
 	}
 	var got string
-	if err := h.tdb.Pool.QueryRow(context.Background(), `SELECT display_name FROM households`).Scan(&got); err != nil {
+	if err := h.tdb.Pool.QueryRow(context.Background(), `SELECT household_display_name FROM households`).Scan(&got); err != nil {
 		t.Fatalf("read: %v", err)
 	}
 	if got != name {

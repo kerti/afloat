@@ -157,6 +157,43 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/household": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Change the caller's Household settings.
+         * @description The Household is always the caller's own: there is no id to supply, so
+         *     nothing to forge across tenants. Any member may change these settings
+         *     (PRD S2: no roles).
+         *
+         *     Merge semantics, the update convention (BOOTSTRAP.md §4): a property
+         *     left out is unchanged, an unknown property is `INVALID_JSON_BODY`, and
+         *     `{}` is a valid no-op. The answer is the whole Household. Last write
+         *     wins, per field: two writers of different fields both land, and there is
+         *     no version to conflict on.
+         *
+         *     `household_display_name` follows the founding rules (BOOTSTRAP.md
+         *     §5.1.1): trimmed, not blank, at most 60 code points. `reporting_currency`
+         *     must be an ISO 4217 code (`VALIDATION`, `rule: iso4217`, when it is
+         *     well formed but not one). `period_start_day` takes effect at once and
+         *     re-dates every Budget Period; nothing is stored about the old value.
+         *
+         *     There is no `GET`: `GET /me` carries the Household. There is no
+         *     `DELETE`, and there never will be (BOOTSTRAP.md §4).
+         */
+        patch: operations["updateHousehold"];
+        trace?: never;
+    };
     "/onboarding/options": {
         parameters: {
             query?: never;
@@ -243,8 +280,12 @@ export interface components {
             email: string;
             /** Format: password */
             password: string;
-            /** @description Defaults to the email's local part when absent or blank. */
-            display_name?: string;
+            /**
+             * @description The registrant's own name; it becomes the User's
+             *     `user_display_name` at the commit. Defaults to the email's local
+             *     part when absent or blank.
+             */
+            user_display_name?: string;
             /**
              * @description `en-GB` or `id-ID`. Deliberately not an enum: anything else falls
              *     back to `en-GB` rather than failing registration.
@@ -254,7 +295,7 @@ export interface components {
         OnboardingOptions: {
             /** Format: email */
             email: string;
-            display_name: string;
+            user_display_name: string;
             /**
              * @description False when the operator set `FOUNDING_DISABLED`; the gate then has
              *     nothing to offer a stranger.
@@ -272,17 +313,19 @@ export interface components {
              */
             found: boolean;
             /**
-             * @description The Household's display name, pre-filled by the client from its own
+             * @description The Household's name, pre-filled by the client from its own
              *     catalogue and editable. The server stores it trimmed; blank after
              *     the trim is `VALIDATION` (`required`), and more than 60 code points
-             *     is `VALIDATION` (`max`).
+             *     is `VALIDATION` (`max`). The same rules apply when it is edited
+             *     (`PATCH /household`).
              */
-            household_name: string;
+            household_display_name: string;
         };
         /**
-         * @description The User's own fields (PRD S4) plus the Household settings the client
-         *     needs to render anything (PRD S3). One call, because every screen needs
-         *     both and they change rarely.
+         * @description The User's own fields (PRD S4) and, nested, their Household's settings
+         *     (PRD S3) that the client needs to render anything. One call, because
+         *     every screen needs both and they change rarely; a change to either
+         *     invalidates it. It is the client's one read of the Household.
          */
         Me: {
             /**
@@ -290,28 +333,39 @@ export interface components {
              * @description UUIDv7.
              */
             id: string;
-            /**
-             * Format: uuid
-             * @description A User belongs to exactly one Household and the binding is
-             *     irreversible (PRD S1).
-             */
-            household_id: string;
             /** Format: email */
             email: string;
-            display_name: string;
+            user_display_name: string;
             locale: components["schemas"]["Locale"];
             /**
              * @description IANA time zone identifier.
              * @example Asia/Jakarta
              */
             time_zone: string;
+            household: components["schemas"]["Household"];
+        };
+        /**
+         * @description A Household's settings (PRD S3): the whole set, read-only fields
+         *     included, so the shape does not change as more of them become writable.
+         *     A User belongs to exactly one Household and the binding is irreversible
+         *     (PRD S1).
+         */
+        Household: {
+            /**
+             * Format: uuid
+             * @description UUIDv7.
+             */
+            id: string;
             household_display_name: string;
             /**
              * @description ISO 4217 code. Default IDR.
              * @example IDR
              */
             reporting_currency: string;
-            /** @description Day of month a Budget Period opens. Default 1. */
+            /**
+             * @description Day of month a Budget Period opens, 1 to 28: the highest day every
+             *     month has. Default 1.
+             */
             period_start_day: number;
             /**
              * @description Local time a Period Day rolls over, `HH:MM`. Default 04:00. The
@@ -321,17 +375,29 @@ export interface components {
              */
             day_starts_at: string;
             /**
-             * @description Decimal serialised as a string (PRD N2). Nullable — the Household
-             *     may never supply one.
+             * @description Decimal serialised as a string at exactly four decimal places (PRD
+             *     N2), denominated in `reporting_currency`. Omitted when the Household
+             *     has not supplied one.
              * @example 25000000.0000
              */
-            expected_monthly_income?: string | null;
-            /**
-             * @description Default adaptive.
-             * @enum {string}
-             */
-            allowance_mode: "adaptive" | "flat";
+            expected_monthly_income?: string;
+            allowance_mode: components["schemas"]["AllowanceMode"];
         };
+        /**
+         * @description The settings a Household may change today, merge-style: a property left
+         *     out is unchanged, and none is required. A property naming a setting not
+         *     listed here is not accepted. `null` is not accepted for any of them.
+         */
+        UpdateHouseholdRequest: {
+            household_display_name?: string;
+            reporting_currency?: string;
+            period_start_day?: number;
+        };
+        /**
+         * @description How the daily allowance is read. Default `adaptive`.
+         * @enum {string}
+         */
+        AllowanceMode: "adaptive" | "fixed";
         /**
          * @description Both locales are real from day one (PRD N12a); the frontend owns every
          *     user-facing string.
@@ -362,7 +428,9 @@ export interface components {
          *     falls back to the client's generic string.
          *
          *     `VALIDATION` carries `{field, rule}` in `args` and reports only the
-         *     first failing field, as in Balances. `WEAK_PASSWORD` carries
+         *     first failing field, as in Balances. `field` is the wire name of the
+         *     property, so a Household's name (`household_display_name`) and a User's
+         *     (`user_display_name`) are never confused. `WEAK_PASSWORD` carries
          *     `{reason}`, `min` or `breached`.
          * @enum {string}
          */
@@ -604,6 +672,33 @@ export interface operations {
                     "application/json": components["schemas"]["Me"];
                 };
             };
+            401: components["responses"]["Unauthorized"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    updateHousehold: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateHouseholdRequest"];
+            };
+        };
+        responses: {
+            /** @description The Household as it now stands. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Household"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             500: components["responses"]["InternalError"];
         };

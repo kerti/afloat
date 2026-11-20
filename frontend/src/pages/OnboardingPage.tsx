@@ -49,13 +49,13 @@ export function OnboardingPage() {
   }
 
   const gate = options.data;
-  const suggestion = t("onboarding.householdNameDefault", { name: gate.display_name });
+  const suggestion = t("onboarding.householdNameDefault", { name: gate.user_display_name });
   const householdName = edited ?? suggestion;
   const closed = !gate.founding_open || commit.error?.code === "FOUNDING_DISABLED";
 
   function onSubmit(e: FormEvent) {
     e.preventDefault();
-    commit.mutate({ found: true, household_name: householdName });
+    commit.mutate({ found: true, household_display_name: householdName });
   }
 
   return (
@@ -74,7 +74,7 @@ export function OnboardingPage() {
         <form onSubmit={onSubmit} className="flex flex-col gap-4" noValidate>
           <p className="text-muted-foreground">{t("onboarding.intro", { email: gate.email })}</p>
           <div className="flex flex-col gap-2">
-            <Label htmlFor="household-name">{t("fields.householdName")}</Label>
+            <Label htmlFor="household-name">{t("fields.householdDisplayName")}</Label>
             <Input
               id="household-name"
               required

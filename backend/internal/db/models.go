@@ -18,7 +18,7 @@ type Credential struct {
 
 type Household struct {
 	ID                    pgtype.UUID
-	DisplayName           string
+	HouseholdDisplayName  string
 	ReportingCurrency     string
 	PeriodStartDay        int32
 	DayStartsAt           pgtype.Time
@@ -48,13 +48,13 @@ type LoginAttempt struct {
 }
 
 type OnboardingHandshake struct {
-	ID           string
-	Email        string
-	DisplayName  string
-	Locale       string
-	PasswordHash *string
-	CreatedAt    pgtype.Timestamptz
-	ExpiresAt    pgtype.Timestamptz
+	ID              string
+	Email           string
+	UserDisplayName string
+	Locale          string
+	PasswordHash    *string
+	CreatedAt       pgtype.Timestamptz
+	ExpiresAt       pgtype.Timestamptz
 }
 
 type Session struct {
@@ -67,13 +67,13 @@ type Session struct {
 }
 
 type User struct {
-	ID          pgtype.UUID
-	HouseholdID pgtype.UUID
-	Email       string
-	DisplayName string
-	Locale      string
-	TimeZone    string
-	CreatedAt   pgtype.Timestamptz
-	UpdatedAt   pgtype.Timestamptz
-	DeletedAt   pgtype.Timestamptz
+	ID              pgtype.UUID
+	HouseholdID     pgtype.UUID
+	Email           string
+	UserDisplayName string
+	Locale          string
+	TimeZone        string
+	CreatedAt       pgtype.Timestamptz
+	UpdatedAt       pgtype.Timestamptz
+	DeletedAt       pgtype.Timestamptz
 }

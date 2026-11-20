@@ -14,7 +14,9 @@ import (
 // client's first call after login and its session probe on load.
 //
 // One call rather than two because every screen needs both and they change
-// rarely; the cost is that a Household settings change invalidates it.
+// rarely; the cost is that a settings change (PATCH /household) invalidates it.
+// It is also the client's only read of the Household: there is no GET
+// /household.
 func (h *Handlers) GetMe(ctx context.Context, _ api.GetMeRequestObject) (api.GetMeResponseObject, error) {
 	user, ok := UserFromContext(ctx)
 	if !ok {

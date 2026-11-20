@@ -1,0 +1,1030 @@
+# PATCH /household (#113): the first update in the contract, so the convention
+# every later PATCH copies (BOOTSTRAP.md §4): merge semantics, an unknown
+# property is INVALID_JSON_BODY, `{}` is a valid no-op, the answer is the whole
+# resource, last write wins per field.
+#
+# The Household is always the caller's own (the session's, never the request's).
+# fixtures/seed.sql holds one; cases that prove another is untouched add a
+# second in `given:`. `rows:` read the columns, because a response can be right
+# while the row behind it is not.
+#
+# Under an outage the session itself cannot be read, which is a 401 that leaves
+# the cookie alone (#27), so there is no handler 500 to see from here; the
+# backend's own suite covers that path (a failing UPDATE, a soft-deleted
+# Household).
+
+- name: household - patch the name
+  issue: "113"
+  given: &signed-in
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: PATCH
+    path: /household
+    headers:
+      Content-Type: application/json
+    body: '{"household_display_name":"Rumah Kita"}'
+  expect:
+    status: 200
+    headers:
+      Content-Type: application/json
+    body_json:
+      id: 0192f0a0-0000-7000-8000-000000000001
+      household_display_name: Rumah Kita
+      reporting_currency: IDR
+      period_start_day: 1
+      day_starts_at: "04:00"
+      allowance_mode: adaptive
+    cookies: {}
+    rows:
+      - sql: |
+          SELECT household_display_name, reporting_currency, period_start_day, to_char(day_starts_at, 'HH24:MI') AS day_starts_at,
+                 allowance_mode, (expected_monthly_income IS NULL) AS no_income
+          FROM households
+        rows:
+          - {household_display_name: Rumah Kita, reporting_currency: IDR, period_start_day: 1, day_starts_at: "04:00", allowance_mode: adaptive, no_income: true}
+
+- name: household - patch the reporting currency
+  issue: "113"
+  given: *signed-in
+  request:
+    method: PATCH
+    path: /household
+    headers:
+      Content-Type: application/json
+    body: '{"reporting_currency":"USD"}'
+  expect:
+    status: 200
+    body_json:
+      id: 0192f0a0-0000-7000-8000-000000000001
+      household_display_name: Conformance Household
+      reporting_currency: USD
+      period_start_day: 1
+      day_starts_at: "04:00"
+      allowance_mode: adaptive
+    cookies: {}
+    rows:
+      - sql: SELECT household_display_name, reporting_currency, period_start_day FROM households
+        rows: [{household_display_name: Conformance Household, reporting_currency: USD, period_start_day: 1}]
+
+- name: household - patch the period start day
+  issue: "113"
+  given: *signed-in
+  request:
+    method: PATCH
+    path: /household
+    headers:
+      Content-Type: application/json
+    body: '{"period_start_day":25}'
+  expect:
+    status: 200
+    body_json:
+      id: 0192f0a0-0000-7000-8000-000000000001
+      household_display_name: Conformance Household
+      reporting_currency: IDR
+      period_start_day: 25
+      day_starts_at: "04:00"
+      allowance_mode: adaptive
+    cookies: {}
+    rows:
+      - sql: SELECT household_display_name, reporting_currency, period_start_day FROM households
+        rows: [{household_display_name: Conformance Household, reporting_currency: IDR, period_start_day: 25}]
+
+- name: household - patch all three at once
+  issue: "113"
+  given: *signed-in
+  request:
+    method: PATCH
+    path: /household
+    headers:
+      Content-Type: application/json
+    body: '{"household_display_name":"Rumah Tangga Dewi","reporting_currency":"SGD","period_start_day":28}'
+  expect:
+    status: 200
+    body_json:
+      id: 0192f0a0-0000-7000-8000-000000000001
+      household_display_name: Rumah Tangga Dewi
+      reporting_currency: SGD
+      period_start_day: 28
+      day_starts_at: "04:00"
+      allowance_mode: adaptive
+    cookies: {}
+    rows:
+      - sql: SELECT household_display_name, reporting_currency, period_start_day FROM households
+        rows: [{household_display_name: Rumah Tangga Dewi, reporting_currency: SGD, period_start_day: 28}]
+
+- name: household - the bounds of the period start day are accepted
+  issue: "113"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+    - request:
+        method: PATCH
+        path: /household
+        headers:
+          Content-Type: application/json
+        body: '{"period_start_day":28}'
+      status: 200
+  request:
+    method: PATCH
+    path: /household
+    headers:
+      Content-Type: application/json
+    body: '{"period_start_day":1}'
+  expect:
+    status: 200
+    body_json:
+      id: 0192f0a0-0000-7000-8000-000000000001
+      household_display_name: Conformance Household
+      reporting_currency: IDR
+      period_start_day: 1
+      day_starts_at: "04:00"
+      allowance_mode: adaptive
+    cookies: {}
+
+# An empty object is a valid no-op, and answers the Household as it is.
+- name: household - an empty body is a no-op
+  issue: "113"
+  given: *signed-in
+  request:
+    method: PATCH
+    path: /household
+    headers:
+      Content-Type: application/json
+    body: '{}'
+  expect:
+    status: 200
+    body_json:
+      id: 0192f0a0-0000-7000-8000-000000000001
+      household_display_name: Conformance Household
+      reporting_currency: IDR
+      period_start_day: 1
+      day_starts_at: "04:00"
+      allowance_mode: adaptive
+    cookies: {}
+    rows:
+      - sql: SELECT household_display_name, reporting_currency, period_start_day, allowance_mode FROM households
+        rows: [{household_display_name: Conformance Household, reporting_currency: IDR, period_start_day: 1, allowance_mode: adaptive}]
+
+- name: household - a change is what /me reports next, under household
+  issue: "113"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+    - request:
+        method: PATCH
+        path: /household
+        headers:
+          Content-Type: application/json
+        body: '{"household_display_name":"Rumah Kita","reporting_currency":"EUR","period_start_day":9}'
+      status: 200
+  request:
+    method: GET
+    path: /me
+  expect:
+    status: 200
+    body_json:
+      id: 0192f0a0-0000-7000-8000-0000000000a1
+      email: alice@example.com
+      user_display_name: Alice
+      locale: en-GB
+      time_zone: Asia/Jakarta
+      household:
+        id: 0192f0a0-0000-7000-8000-000000000001
+        household_display_name: Rumah Kita
+        reporting_currency: EUR
+        period_start_day: 9
+        day_starts_at: "04:00"
+        allowance_mode: adaptive
+
+# `fixed`, not the `flat` this schema once had (CONTEXT, PRD §4). Nothing can
+# write allowance_mode yet, so a row is the only way to reach it; /me and the
+# PATCH's answer both report it. expected_monthly_income, when the row has one,
+# is a string at exactly four decimal places.
+- name: household - fixed and an income round-trip through patch and me
+  issue: "113"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+    - sql: UPDATE households SET allowance_mode = 'fixed', expected_monthly_income = 25000000
+  request:
+    method: PATCH
+    path: /household
+    headers:
+      Content-Type: application/json
+    body: '{"period_start_day":3}'
+  expect:
+    status: 200
+    body_json:
+      id: 0192f0a0-0000-7000-8000-000000000001
+      household_display_name: Conformance Household
+      reporting_currency: IDR
+      period_start_day: 3
+      day_starts_at: "04:00"
+      expected_monthly_income: "25000000.0000"
+      allowance_mode: fixed
+    cookies: {}
+    rows:
+      - sql: SELECT allowance_mode, expected_monthly_income::text AS income FROM households
+        rows: [{allowance_mode: fixed, income: "25000000.0000"}]
+
+- name: household - me reports fixed
+  issue: "113"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+    - sql: UPDATE households SET allowance_mode = 'fixed'
+  request:
+    method: GET
+    path: /me
+  expect:
+    status: 200
+    body_json:
+      id: 0192f0a0-0000-7000-8000-0000000000a1
+      email: alice@example.com
+      user_display_name: Alice
+      locale: en-GB
+      time_zone: Asia/Jakarta
+      household:
+        id: 0192f0a0-0000-7000-8000-000000000001
+        household_display_name: Conformance Household
+        reporting_currency: IDR
+        period_start_day: 1
+        day_starts_at: "04:00"
+        allowance_mode: fixed
+
+# The name's rules are the founding commit's: trimmed on the way in...
+- name: household - the name is stored trimmed
+  issue: "113"
+  given: *signed-in
+  request:
+    method: PATCH
+    path: /household
+    headers:
+      Content-Type: application/json
+    body: '{"household_display_name":"  Rumah Kita \t"}'
+  expect:
+    status: 200
+    body_json:
+      id: 0192f0a0-0000-7000-8000-000000000001
+      household_display_name: Rumah Kita
+      reporting_currency: IDR
+      period_start_day: 1
+      day_starts_at: "04:00"
+      allowance_mode: adaptive
+    cookies: {}
+    rows:
+      - sql: SELECT household_display_name FROM households
+        rows: [{household_display_name: Rumah Kita}]
+
+# ...and the 60 code point cap counts the trimmed name, in code points (é is
+# two bytes): sixty of them behind two spaces of padding is fine, though the
+# string sent is 62 long.
+- name: household - a name of 60 code points is accepted, padded to more
+  issue: "113"
+  given: *signed-in
+  request:
+    method: PATCH
+    path: /household
+    headers:
+      Content-Type: application/json
+    body: '{"household_display_name":" éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé "}'
+  expect:
+    status: 200
+    body_json:
+      id: 0192f0a0-0000-7000-8000-000000000001
+      household_display_name: "éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé"
+      reporting_currency: IDR
+      period_start_day: 1
+      day_starts_at: "04:00"
+      allowance_mode: adaptive
+    cookies: {}
+    rows:
+      - sql: SELECT household_display_name, char_length(household_display_name) AS code_points FROM households
+        rows: [{household_display_name: "éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé", code_points: 60}]
+
+- name: household - a name of 61 code points is refused
+  issue: "113"
+  given: *signed-in
+  request:
+    method: PATCH
+    path: /household
+    headers:
+      Content-Type: application/json
+    body: '{"household_display_name":"ééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé"}'
+  expect:
+    status: 400
+    body_json: {code: VALIDATION, args: {field: household_display_name, rule: max}}
+    cookies: {}
+    rows: &unchanged
+      - sql: SELECT household_display_name, reporting_currency, period_start_day, allowance_mode FROM households
+        rows: [{household_display_name: Conformance Household, reporting_currency: IDR, period_start_day: 1, allowance_mode: adaptive}]
+
+- name: household - a name of 61 code points is refused once padded too
+  issue: "113"
+  given: *signed-in
+  request:
+    method: PATCH
+    path: /household
+    headers:
+      Content-Type: application/json
+    body: '{"household_display_name":"  ééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé  "}'
+  expect:
+    status: 400
+    body_json: {code: VALIDATION, args: {field: household_display_name, rule: max}}
+    cookies: {}
+    rows: *unchanged
+
+# VALIDATION: the spec validator's rules (shape and range, from the contract),
+# then the handler's (what the contract cannot say). Every refusal writes nothing.
+
+- name: household - a blank name is required
+  issue: "113"
+  given: *signed-in
+  request:
+    method: PATCH
+    path: /household
+    headers:
+      Content-Type: application/json
+    body: '{"household_display_name":""}'
+  expect:
+    status: 400
+    body_json: {code: VALIDATION, args: {field: household_display_name, rule: required}}
+    cookies: {}
+    rows: *unchanged
+
+- name: household - a name of only spaces is required
+  issue: "113"
+  given: *signed-in
+  request:
+    method: PATCH
+    path: /household
+    headers:
+      Content-Type: application/json
+    body: '{"household_display_name":"   \t "}'
+  expect:
+    status: 400
+    body_json: {code: VALIDATION, args: {field: household_display_name, rule: required}}
+    cookies: {}
+    rows: *unchanged
+
+- name: household - a name of only zero-width characters is required
+  issue: "113"
+  given: *signed-in
+  request:
+    method: PATCH
+    path: /household
+    headers:
+      Content-Type: application/json
+    body: '{"household_display_name":"\u200b\u200c\u200d"}'
+  expect:
+    status: 400
+    body_json: {code: VALIDATION, args: {field: household_display_name, rule: required}}
+    cookies: {}
+    rows: *unchanged
+
+- name: household - a NUL in the name is a pattern failure
+  issue: "113"
+  given: *signed-in
+  request:
+    method: PATCH
+    path: /household
+    headers:
+      Content-Type: application/json
+    body: '{"household_display_name":"Ru\u0000mah"}'
+  expect:
+    status: 400
+    body_json: {code: VALIDATION, args: {field: household_display_name, rule: pattern}}
+    cookies: {}
+    rows: *unchanged
+
+- name: household - a name over the contract's outer bound is max
+  issue: "113"
+  given: *signed-in
+  request:
+    method: PATCH
+    path: /household
+    headers:
+      Content-Type: application/json
+    body: '{"household_display_name":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}'
+  expect:
+    status: 400
+    body_json: {code: VALIDATION, args: {field: household_display_name, rule: max}}
+    cookies: {}
+    rows: *unchanged
+
+- name: household - a currency that is not an ISO 4217 code is iso4217
+  issue: "113"
+  given: *signed-in
+  request:
+    method: PATCH
+    path: /household
+    headers:
+      Content-Type: application/json
+    body: '{"reporting_currency":"ABC"}'
+  expect:
+    status: 400
+    body_json: {code: VALIDATION, args: {field: reporting_currency, rule: iso4217}}
+    cookies: {}
+    rows: *unchanged
+
+- name: household - a lower-case currency is a pattern failure
+  issue: "113"
+  given: *signed-in
+  request:
+    method: PATCH
+    path: /household
+    headers:
+      Content-Type: application/json
+    body: '{"reporting_currency":"idr"}'
+  expect:
+    status: 400
+    body_json: {code: VALIDATION, args: {field: reporting_currency, rule: pattern}}
+    cookies: {}
+    rows: *unchanged
+
+- name: household - a two-letter currency is a pattern failure
+  issue: "113"
+  given: *signed-in
+  request:
+    method: PATCH
+    path: /household
+    headers:
+      Content-Type: application/json
+    body: '{"reporting_currency":"ID"}'
+  expect:
+    status: 400
+    body_json: {code: VALIDATION, args: {field: reporting_currency, rule: pattern}}
+    cookies: {}
+    rows: *unchanged
+
+- name: household - a period start day of 0 is min
+  issue: "113"
+  given: *signed-in
+  request:
+    method: PATCH
+    path: /household
+    headers:
+      Content-Type: application/json
+    body: '{"period_start_day":0}'
+  expect:
+    status: 400
+    body_json: {code: VALIDATION, args: {field: period_start_day, rule: min}}
+    cookies: {}
+    rows: *unchanged
+
+- name: household - a period start day of 29 is max
+  issue: "113"
+  given: *signed-in
+  request:
+    method: PATCH
+    path: /household
+    headers:
+      Content-Type: application/json
+    body: '{"period_start_day":29}'
+  expect:
+    status: 400
+    body_json: {code: VALIDATION, args: {field: period_start_day, rule: max}}
+    cookies: {}
+    rows: *unchanged
+
+- name: household - a negative period start day is min
+  issue: "113"
+  given: *signed-in
+  request:
+    method: PATCH
+    path: /household
+    headers:
+      Content-Type: application/json
+    body: '{"period_start_day":-3}'
+  expect:
+    status: 400
+    body_json: {code: VALIDATION, args: {field: period_start_day, rule: min}}
+    cookies: {}
+    rows: *unchanged
+
+- name: household - the least field is reported, the name before the currency
+  issue: "113"
+  given: *signed-in
+  request:
+    method: PATCH
+    path: /household
+    headers:
+      Content-Type: application/json
+    body: '{"reporting_currency":"ABC","household_display_name":""}'
+  expect:
+    status: 400
+    body_json: {code: VALIDATION, args: {field: household_display_name, rule: required}}
+    cookies: {}
+    rows: *unchanged
+
+- name: household - a good field beside a bad one writes neither
+  issue: "113"
+  given: *signed-in
+  request:
+    method: PATCH
+    path: /household
+    headers:
+      Content-Type: application/json
+    body: '{"household_display_name":"Rumah Kita","reporting_currency":"ABC"}'
+  expect:
+    status: 400
+    body_json: {code: VALIDATION, args: {field: reporting_currency, rule: iso4217}}
+    cookies: {}
+    rows: *unchanged
+
+- name: household - a spec failure is reported before a handler one
+  issue: "113"
+  given: *signed-in
+  request:
+    method: PATCH
+    path: /household
+    headers:
+      Content-Type: application/json
+    body: '{"period_start_day":0,"household_display_name":""}'
+  expect:
+    status: 400
+    body_json: {code: VALIDATION, args: {field: period_start_day, rule: min}}
+    cookies: {}
+    rows: *unchanged
+
+# INVALID_JSON_BODY: not an instance of the declared shape at all. `5.0` is
+# pinned: the spec validator reads it as the integer 5, and the generated
+# binding then cannot decode it into one, so it is refused all the same.
+
+- name: household - the period start day as a string is INVALID_JSON_BODY
+  issue: "113"
+  given: *signed-in
+  request:
+    method: PATCH
+    path: /household
+    headers:
+      Content-Type: application/json
+    body: '{"period_start_day":"5"}'
+  expect:
+    status: 400
+    body_json: {code: INVALID_JSON_BODY}
+    cookies: {}
+    rows: *unchanged
+
+- name: household - a fractional period start day is INVALID_JSON_BODY
+  issue: "113"
+  given: *signed-in
+  request:
+    method: PATCH
+    path: /household
+    headers:
+      Content-Type: application/json
+    body: '{"period_start_day":5.5}'
+  expect:
+    status: 400
+    body_json: {code: INVALID_JSON_BODY}
+    cookies: {}
+    rows: *unchanged
+
+- name: household - a period start day of 5.0 is INVALID_JSON_BODY
+  issue: "113"
+  given: *signed-in
+  request:
+    method: PATCH
+    path: /household
+    headers:
+      Content-Type: application/json
+    body: '{"period_start_day":5.0}'
+  expect:
+    status: 400
+    body_json: {code: INVALID_JSON_BODY}
+    cookies: {}
+    rows: *unchanged
+
+- name: household - a null name is INVALID_JSON_BODY
+  issue: "113"
+  given: *signed-in
+  request:
+    method: PATCH
+    path: /household
+    headers:
+      Content-Type: application/json
+    body: '{"household_display_name":null}'
+  expect:
+    status: 400
+    body_json: {code: INVALID_JSON_BODY}
+    cookies: {}
+    rows: *unchanged
+
+- name: household - a null currency is INVALID_JSON_BODY
+  issue: "113"
+  given: *signed-in
+  request:
+    method: PATCH
+    path: /household
+    headers:
+      Content-Type: application/json
+    body: '{"reporting_currency":null}'
+  expect:
+    status: 400
+    body_json: {code: INVALID_JSON_BODY}
+    cookies: {}
+    rows: *unchanged
+
+- name: household - a null period start day is INVALID_JSON_BODY
+  issue: "113"
+  given: *signed-in
+  request:
+    method: PATCH
+    path: /household
+    headers:
+      Content-Type: application/json
+    body: '{"period_start_day":null}'
+  expect:
+    status: 400
+    body_json: {code: INVALID_JSON_BODY}
+    cookies: {}
+    rows: *unchanged
+
+- name: household - a name that is a number is INVALID_JSON_BODY
+  issue: "113"
+  given: *signed-in
+  request:
+    method: PATCH
+    path: /household
+    headers:
+      Content-Type: application/json
+    body: '{"household_display_name":5}'
+  expect:
+    status: 400
+    body_json: {code: INVALID_JSON_BODY}
+    cookies: {}
+    rows: *unchanged
+
+- name: household - an unknown property is INVALID_JSON_BODY
+  issue: "113"
+  given: *signed-in
+  request:
+    method: PATCH
+    path: /household
+    headers:
+      Content-Type: application/json
+    body: '{"nickname":"x"}'
+  expect:
+    status: 400
+    body_json: {code: INVALID_JSON_BODY}
+    cookies: {}
+    rows: *unchanged
+
+- name: household - day_starts_at is not writable yet and is INVALID_JSON_BODY
+  issue: "113"
+  given: *signed-in
+  request:
+    method: PATCH
+    path: /household
+    headers:
+      Content-Type: application/json
+    body: '{"day_starts_at":"05:00"}'
+  expect:
+    status: 400
+    body_json: {code: INVALID_JSON_BODY}
+    cookies: {}
+    rows: *unchanged
+
+- name: household - allowance_mode is not writable yet and is INVALID_JSON_BODY
+  issue: "113"
+  given: *signed-in
+  request:
+    method: PATCH
+    path: /household
+    headers:
+      Content-Type: application/json
+    body: '{"allowance_mode":"fixed"}'
+  expect:
+    status: 400
+    body_json: {code: INVALID_JSON_BODY}
+    cookies: {}
+    rows: *unchanged
+
+- name: household - expected_monthly_income is not writable yet and is INVALID_JSON_BODY
+  issue: "113"
+  given: *signed-in
+  request:
+    method: PATCH
+    path: /household
+    headers:
+      Content-Type: application/json
+    body: '{"expected_monthly_income":"1000.0000"}'
+  expect:
+    status: 400
+    body_json: {code: INVALID_JSON_BODY}
+    cookies: {}
+    rows: *unchanged
+
+- name: household - the retired bare display_name is INVALID_JSON_BODY
+  issue: "113"
+  given: *signed-in
+  request:
+    method: PATCH
+    path: /household
+    headers:
+      Content-Type: application/json
+    body: '{"display_name":"x"}'
+  expect:
+    status: 400
+    body_json: {code: INVALID_JSON_BODY}
+    cookies: {}
+    rows: *unchanged
+
+- name: household - malformed JSON is INVALID_JSON_BODY
+  issue: "113"
+  given: *signed-in
+  request:
+    method: PATCH
+    path: /household
+    headers:
+      Content-Type: application/json
+    body: '{"period_start_day":'
+  expect:
+    status: 400
+    body_json: {code: INVALID_JSON_BODY}
+    cookies: {}
+    rows: *unchanged
+
+- name: household - an array body is INVALID_JSON_BODY
+  issue: "113"
+  given: *signed-in
+  request:
+    method: PATCH
+    path: /household
+    headers:
+      Content-Type: application/json
+    body: '[]'
+  expect:
+    status: 400
+    body_json: {code: INVALID_JSON_BODY}
+    cookies: {}
+    rows: *unchanged
+
+- name: household - no body is INVALID_JSON_BODY
+  issue: "113"
+  given: *signed-in
+  request:
+    method: PATCH
+    path: /household
+    headers:
+      Content-Type: application/json
+    body: ""
+  expect:
+    status: 400
+    body_json: {code: INVALID_JSON_BODY}
+    cookies: {}
+    rows: *unchanged
+
+- name: household - a body that is not JSON by its Content-Type is INVALID_JSON_BODY
+  issue: "113"
+  given: *signed-in
+  request:
+    method: PATCH
+    path: /household
+    headers:
+      Content-Type: text/plain
+    body: '{"household_display_name":"Rumah Kita"}'
+  expect:
+    status: 400
+    body_json: {code: INVALID_JSON_BODY}
+    cookies: {}
+    rows: *unchanged
+
+- name: household - a body with no Content-Type is INVALID_JSON_BODY
+  issue: "113"
+  given: *signed-in
+  request:
+    method: PATCH
+    path: /household
+    body: '{"household_display_name":"Rumah Kita"}'
+  expect:
+    status: 400
+    body_json: {code: INVALID_JSON_BODY}
+    cookies: {}
+    rows: *unchanged
+
+# Who may call it: a session, enforced from the contract's `security` ahead of
+# the body (#114), so a malformed body without one is still a 401.
+- name: household - with no cookie it is unauthorized and writes nothing
+  issue: "113"
+  request:
+    method: PATCH
+    path: /household
+    headers:
+      Content-Type: application/json
+    body: '{"household_display_name":"Hijacked"}'
+  expect:
+    status: 401
+    body_json: {code: UNAUTHORIZED}
+    cookies: {}
+    rows: *unchanged
+
+- name: household - with no cookie, even a malformed body is unauthorized
+  issue: "114"
+  request:
+    method: PATCH
+    path: /household
+    headers:
+      Content-Type: application/json
+    body: '{"household_display_name":'
+  expect:
+    status: 401
+    body_json: {code: UNAUTHORIZED}
+    cookies: {}
+    rows: *unchanged
+
+- name: household - with an expired session it is unauthorized, clears the cookie and writes nothing
+  issue: "113"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+    - sql: UPDATE sessions SET expires_at = now() - interval '1 minute'
+  request:
+    method: PATCH
+    path: /household
+    headers:
+      Content-Type: application/json
+    body: '{"household_display_name":"Hijacked"}'
+  expect:
+    status: 401
+    body_json: {code: UNAUTHORIZED}
+    cookies:
+      afloat_session:
+        value: ""
+        path: /
+        max_age: 0
+        http_only: true
+        secure: false
+        same_site: Lax
+        expires: past
+    rows: *unchanged
+
+# Tenancy: the Household is the session's, with no id in the request to forge,
+# so another Household is untouched by every field. Its row is read back whole.
+- name: household - another Household is untouched
+  issue: "113"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name, reporting_currency, period_start_day, day_starts_at, allowance_mode, expected_monthly_income)
+        VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household', 'USD', 15, '06:30', 'fixed', 5000)
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: PATCH
+    path: /household
+    headers:
+      Content-Type: application/json
+    body: '{"household_display_name":"Rumah Kita","reporting_currency":"EUR","period_start_day":28}'
+  expect:
+    status: 200
+    body_json:
+      id: 0192f0a0-0000-7000-8000-000000000001
+      household_display_name: Rumah Kita
+      reporting_currency: EUR
+      period_start_day: 28
+      day_starts_at: "04:00"
+      allowance_mode: adaptive
+    cookies: {}
+    rows:
+      - sql: |
+          SELECT household_display_name, reporting_currency, period_start_day, to_char(day_starts_at, 'HH24:MI') AS day_starts_at,
+                 allowance_mode, expected_monthly_income::text AS income, (updated_at = created_at) AS never_updated, (deleted_at IS NULL) AS live
+          FROM households WHERE id = '0192f0a0-0000-7000-8000-000000000002'
+        rows:
+          - {household_display_name: Other Household, reporting_currency: USD, period_start_day: 15, day_starts_at: "06:30", allowance_mode: fixed, income: "5000.0000", never_updated: true, live: true}
+      - sql: SELECT count(*)::int AS n FROM households
+        rows: [{n: 2}]
+
+# Under an outage the session cannot be read, so the request is unauthenticated:
+# 401, the cookie kept (#27), nothing written.
+- name: household - during an outage it is unauthorized, keeps the cookie and writes nothing
+  issue: "113"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+    - outage: true
+  request:
+    method: PATCH
+    path: /household
+    headers:
+      Content-Type: application/json
+    body: '{"household_display_name":"Hijacked"}'
+  expect:
+    status: 401
+    body_json: {code: UNAUTHORIZED}
+    cookies: {}
+    rows:
+      - sql: SELECT count(*)::int AS n FROM sessions
+        rows: [{n: 1}]
+      - sql: SELECT household_display_name FROM households
+        rows: [{household_display_name: Conformance Household}]
+
+# There is no GET, PUT or DELETE on /household, and no hard delete ever
+# (BOOTSTRAP.md §4): the router answers 405 as for any route that exists under
+# another method, `Allow` naming PATCH and no body. OPTIONS is the flat 405 of
+# #66, with no Allow.
+- name: household - GET is method not allowed
+  issue: "113"
+  given: *signed-in
+  request:
+    method: GET
+    path: /household
+  expect:
+    status: 405
+    body_empty: true
+    headers:
+      Allow: PATCH
+
+- name: household - PUT is method not allowed
+  issue: "113"
+  given: *signed-in
+  request:
+    method: PUT
+    path: /household
+    headers:
+      Content-Type: application/json
+    body: '{"household_display_name":"Rumah Kita","reporting_currency":"IDR","period_start_day":1}'
+  expect:
+    status: 405
+    body_empty: true
+    headers:
+      Allow: PATCH
+    rows: *unchanged
+
+- name: household - DELETE is method not allowed and deletes nothing
+  issue: "113"
+  given: *signed-in
+  request:
+    method: DELETE
+    path: /household
+  expect:
+    status: 405
+    body_empty: true
+    headers:
+      Allow: PATCH
+    rows:
+      - sql: SELECT count(*)::int AS n, count(deleted_at)::int AS deleted FROM households
+        rows: [{n: 1, deleted: 0}]
+
+- name: household - HEAD is method not allowed
+  issue: "113"
+  given: *signed-in
+  request:
+    method: HEAD
+    path: /household
+  expect:
+    status: 405
+    body_empty: true
+
+- name: household - OPTIONS is method not allowed, no Allow
+  issue: "113"
+  request:
+    method: OPTIONS
+    path: /household
+  expect:
+    status: 405
+    body_empty: true
+    headers:
+      Allow: ""

@@ -17,10 +17,10 @@ import (
 	"github.com/kerti/afloat/backend/internal/db"
 )
 
-// maxDisplayNameCodePoints is the contract's cap on a User's display_name
-// (Me.display_name), so a name defaulted from a long email local part cannot
-// outgrow what GET /me declares.
-const maxDisplayNameCodePoints = 255
+// maxUserDisplayNameCodePoints is the contract's cap on a User's
+// user_display_name (Me.user_display_name), so a name defaulted from a long
+// email local part cannot outgrow what GET /me declares.
+const maxUserDisplayNameCodePoints = 255
 
 // localeFallback is what a registration naming no supported locale gets.
 const localeFallback = "en-GB"
@@ -44,9 +44,9 @@ func (h *Handlers) LocalRegister(ctx context.Context, request api.LocalRegisterR
 		return weakPassword(err), nil
 	}
 
-	displayName, rule := registrationDisplayName(body.DisplayName, email)
+	userDisplayName, rule := registrationUserDisplayName(body.UserDisplayName, email)
 	if rule != "" {
-		return invalidRegistrationField("display_name", rule), nil
+		return invalidRegistrationField("user_display_name", rule), nil
 	}
 	locale := resolveLocale(body.Locale)
 
@@ -106,7 +106,7 @@ func (h *Handlers) LocalRegister(ctx context.Context, request api.LocalRegisterR
 	h.recordFailure(ctx, keys)
 	releasePermit()
 
-	cookie, err := h.openHandshake(ctx, email, displayName, locale, hash)
+	cookie, err := h.openHandshake(ctx, email, userDisplayName, locale, hash)
 	if err != nil {
 		slog.Error("register: open handshake", "err", err)
 		resp, _ := internalError[api.LocalRegisterResponseObject]()
@@ -166,7 +166,7 @@ func throttledOrInternal(refused *api.LocalRegister429JSONResponse, err error) a
 // carries its token. The token is minted like a session's and only its hash is
 // stored, so a database leak does not yield a presentable handshake: the row
 // holds a password hash, and a leaked id would otherwise be enough to commit it.
-func (h *Handlers) openHandshake(ctx context.Context, email, displayName, locale, passwordHash string) (*http.Cookie, error) {
+func (h *Handlers) openHandshake(ctx context.Context, email, userDisplayName, locale, passwordHash string) (*http.Cookie, error) {
 	token, err := newSessionToken()
 	if err != nil {
 		return nil, err
@@ -180,12 +180,12 @@ func (h *Handlers) openHandshake(ctx context.Context, email, displayName, locale
 	}
 
 	row, err := h.q.CreateOnboardingHandshake(ctx, db.CreateOnboardingHandshakeParams{
-		ID:           HashToken(token),
-		Email:        email,
-		DisplayName:  displayName,
-		Locale:       locale,
-		PasswordHash: &passwordHash,
-		Ttl:          intervalFrom(onboardingHandshakeTTL),
+		ID:              HashToken(token),
+		Email:           email,
+		UserDisplayName: userDisplayName,
+		Locale:          locale,
+		PasswordHash:    &passwordHash,
+		Ttl:             intervalFrom(onboardingHandshakeTTL),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("create handshake: %w", err)
@@ -193,17 +193,17 @@ func (h *Handlers) openHandshake(ctx context.Context, email, displayName, locale
 	return h.onboardingCookie(token, row.ExpiresAt.Time), nil
 }
 
-// registrationDisplayName is the trimmed name, or the email's local part when
+// registrationUserDisplayName is the trimmed name, or the email's local part when
 // there is none. rule is the VALIDATION rule the name breaks, or "" when it is
 // fine: `pattern` for one Postgres cannot store, `required` for one with
 // nothing visible in it (blank, as the Household name's blank rule is).
-func registrationDisplayName(supplied *string, email string) (name, rule string) {
+func registrationUserDisplayName(supplied *string, email string) (name, rule string) {
 	if supplied != nil {
 		name = strings.TrimSpace(*supplied)
 	}
 	if name == "" {
 		local, _, _ := strings.Cut(email, "@")
-		name = truncateCodePoints(local, maxDisplayNameCodePoints)
+		name = truncateCodePoints(local, maxUserDisplayNameCodePoints)
 	}
 	switch {
 	case !storable(name):

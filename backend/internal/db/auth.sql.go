@@ -14,7 +14,7 @@ import (
 const claimOnboardingHandshake = `-- name: ClaimOnboardingHandshake :one
 DELETE FROM onboarding_handshakes
 WHERE id = $1 AND expires_at > now()
-RETURNING id, email, display_name, locale, password_hash, created_at, expires_at
+RETURNING id, email, user_display_name, locale, password_hash, created_at, expires_at
 `
 
 // The commit's claim. Run inside the founding transaction: a second concurrent
@@ -26,7 +26,7 @@ func (q *Queries) ClaimOnboardingHandshake(ctx context.Context, id string) (Onbo
 	err := row.Scan(
 		&i.ID,
 		&i.Email,
-		&i.DisplayName,
+		&i.UserDisplayName,
 		&i.Locale,
 		&i.PasswordHash,
 		&i.CreatedAt,
@@ -61,25 +61,25 @@ func (q *Queries) CreateCredential(ctx context.Context, arg CreateCredentialPara
 }
 
 const createHousehold = `-- name: CreateHousehold :one
-INSERT INTO households (id, display_name)
+INSERT INTO households (id, household_display_name)
 VALUES ($1, $2)
-RETURNING id, display_name, reporting_currency, period_start_day, day_starts_at, expected_monthly_income, allowance_mode, created_at, updated_at, deleted_at
+RETURNING id, household_display_name, reporting_currency, period_start_day, day_starts_at, expected_monthly_income, allowance_mode, created_at, updated_at, deleted_at
 `
 
 type CreateHouseholdParams struct {
-	ID          pgtype.UUID
-	DisplayName string
+	ID                   pgtype.UUID
+	HouseholdDisplayName string
 }
 
 // Founding. Ids are minted by the server, UUIDv7 (BOOTSTRAP.md §4): founding is
 // an online auth flow, not an offline-capable write. Defaults the schema owns
 // (currency, period start, time zone) are left to it.
 func (q *Queries) CreateHousehold(ctx context.Context, arg CreateHouseholdParams) (Household, error) {
-	row := q.db.QueryRow(ctx, createHousehold, arg.ID, arg.DisplayName)
+	row := q.db.QueryRow(ctx, createHousehold, arg.ID, arg.HouseholdDisplayName)
 	var i Household
 	err := row.Scan(
 		&i.ID,
-		&i.DisplayName,
+		&i.HouseholdDisplayName,
 		&i.ReportingCurrency,
 		&i.PeriodStartDay,
 		&i.DayStartsAt,
@@ -94,21 +94,21 @@ func (q *Queries) CreateHousehold(ctx context.Context, arg CreateHouseholdParams
 
 const createOnboardingHandshake = `-- name: CreateOnboardingHandshake :one
 
-INSERT INTO onboarding_handshakes (id, email, display_name, locale, password_hash, expires_at)
+INSERT INTO onboarding_handshakes (id, email, user_display_name, locale, password_hash, expires_at)
 VALUES (
     $1, $2, $3, $4,
     $5, now() + $6::interval
 )
-RETURNING id, email, display_name, locale, password_hash, created_at, expires_at
+RETURNING id, email, user_display_name, locale, password_hash, created_at, expires_at
 `
 
 type CreateOnboardingHandshakeParams struct {
-	ID           string
-	Email        string
-	DisplayName  string
-	Locale       string
-	PasswordHash *string
-	Ttl          pgtype.Interval
+	ID              string
+	Email           string
+	UserDisplayName string
+	Locale          string
+	PasswordHash    *string
+	Ttl             pgtype.Interval
 }
 
 // Onboarding handshakes (BOOTSTRAP.md §5.1): the gap between registering a
@@ -121,7 +121,7 @@ func (q *Queries) CreateOnboardingHandshake(ctx context.Context, arg CreateOnboa
 	row := q.db.QueryRow(ctx, createOnboardingHandshake,
 		arg.ID,
 		arg.Email,
-		arg.DisplayName,
+		arg.UserDisplayName,
 		arg.Locale,
 		arg.PasswordHash,
 		arg.Ttl,
@@ -130,7 +130,7 @@ func (q *Queries) CreateOnboardingHandshake(ctx context.Context, arg CreateOnboa
 	err := row.Scan(
 		&i.ID,
 		&i.Email,
-		&i.DisplayName,
+		&i.UserDisplayName,
 		&i.Locale,
 		&i.PasswordHash,
 		&i.CreatedAt,
@@ -172,17 +172,17 @@ func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) (S
 }
 
 const createUser = `-- name: CreateUser :one
-INSERT INTO users (id, household_id, email, display_name, locale)
+INSERT INTO users (id, household_id, email, user_display_name, locale)
 VALUES ($1, $2, $3, $4, $5)
-RETURNING id, household_id, email, display_name, locale, time_zone, created_at, updated_at, deleted_at
+RETURNING id, household_id, email, user_display_name, locale, time_zone, created_at, updated_at, deleted_at
 `
 
 type CreateUserParams struct {
-	ID          pgtype.UUID
-	HouseholdID pgtype.UUID
-	Email       string
-	DisplayName string
-	Locale      string
+	ID              pgtype.UUID
+	HouseholdID     pgtype.UUID
+	Email           string
+	UserDisplayName string
+	Locale          string
 }
 
 func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (User, error) {
@@ -190,7 +190,7 @@ func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (User, e
 		arg.ID,
 		arg.HouseholdID,
 		arg.Email,
-		arg.DisplayName,
+		arg.UserDisplayName,
 		arg.Locale,
 	)
 	var i User
@@ -198,7 +198,7 @@ func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (User, e
 		&i.ID,
 		&i.HouseholdID,
 		&i.Email,
-		&i.DisplayName,
+		&i.UserDisplayName,
 		&i.Locale,
 		&i.TimeZone,
 		&i.CreatedAt,
@@ -266,7 +266,7 @@ func (q *Queries) GetCredentialByUserID(ctx context.Context, userID pgtype.UUID)
 }
 
 const getHouseholdByID = `-- name: GetHouseholdByID :one
-SELECT id, display_name, reporting_currency, period_start_day, day_starts_at, expected_monthly_income, allowance_mode, created_at, updated_at, deleted_at FROM households
+SELECT id, household_display_name, reporting_currency, period_start_day, day_starts_at, expected_monthly_income, allowance_mode, created_at, updated_at, deleted_at FROM households
 WHERE id = $1 AND deleted_at IS NULL
 `
 
@@ -275,7 +275,7 @@ func (q *Queries) GetHouseholdByID(ctx context.Context, id pgtype.UUID) (Househo
 	var i Household
 	err := row.Scan(
 		&i.ID,
-		&i.DisplayName,
+		&i.HouseholdDisplayName,
 		&i.ReportingCurrency,
 		&i.PeriodStartDay,
 		&i.DayStartsAt,
@@ -289,7 +289,7 @@ func (q *Queries) GetHouseholdByID(ctx context.Context, id pgtype.UUID) (Househo
 }
 
 const getLiveOnboardingHandshake = `-- name: GetLiveOnboardingHandshake :one
-SELECT id, email, display_name, locale, password_hash, created_at, expires_at FROM onboarding_handshakes
+SELECT id, email, user_display_name, locale, password_hash, created_at, expires_at FROM onboarding_handshakes
 WHERE id = $1 AND expires_at > now()
 `
 
@@ -301,7 +301,7 @@ func (q *Queries) GetLiveOnboardingHandshake(ctx context.Context, id string) (On
 	err := row.Scan(
 		&i.ID,
 		&i.Email,
-		&i.DisplayName,
+		&i.UserDisplayName,
 		&i.Locale,
 		&i.PasswordHash,
 		&i.CreatedAt,
@@ -366,7 +366,7 @@ func (q *Queries) GetLoginBackoff(ctx context.Context, keys []string) (float64, 
 
 const getUserByEmail = `-- name: GetUserByEmail :one
 
-SELECT id, household_id, email, display_name, locale, time_zone, created_at, updated_at, deleted_at FROM users
+SELECT id, household_id, email, user_display_name, locale, time_zone, created_at, updated_at, deleted_at FROM users
 WHERE lower(email) = lower($1) AND deleted_at IS NULL
 `
 
@@ -382,7 +382,7 @@ func (q *Queries) GetUserByEmail(ctx context.Context, email string) (User, error
 		&i.ID,
 		&i.HouseholdID,
 		&i.Email,
-		&i.DisplayName,
+		&i.UserDisplayName,
 		&i.Locale,
 		&i.TimeZone,
 		&i.CreatedAt,
@@ -393,7 +393,7 @@ func (q *Queries) GetUserByEmail(ctx context.Context, email string) (User, error
 }
 
 const getUserByID = `-- name: GetUserByID :one
-SELECT id, household_id, email, display_name, locale, time_zone, created_at, updated_at, deleted_at FROM users
+SELECT id, household_id, email, user_display_name, locale, time_zone, created_at, updated_at, deleted_at FROM users
 WHERE id = $1 AND deleted_at IS NULL
 `
 
@@ -404,7 +404,7 @@ func (q *Queries) GetUserByID(ctx context.Context, id pgtype.UUID) (User, error)
 		&i.ID,
 		&i.HouseholdID,
 		&i.Email,
-		&i.DisplayName,
+		&i.UserDisplayName,
 		&i.Locale,
 		&i.TimeZone,
 		&i.CreatedAt,

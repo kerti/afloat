@@ -63,30 +63,41 @@ func formatDayStartsAt(t pgtype.Time) string {
 	return fmt.Sprintf("%02d:%02d", minutes/60, minutes%60)
 }
 
-// meResponse projects the User and Household onto the wire shape.
+// meResponse projects the User, and their Household nested, onto the wire
+// shape.
+func meResponse(user db.User, household db.Household) api.Me {
+	return api.Me{
+		Id:              openapi_types.UUID(user.ID.Bytes),
+		Email:           user.Email,
+		UserDisplayName: user.UserDisplayName,
+		Locale:          api.Locale(user.Locale),
+		TimeZone:        user.TimeZone,
+		Household:       HouseholdResponse(household),
+	}
+}
+
+// HouseholdResponse projects a Household onto the wire shape. It lives here,
+// with GetMe's projection, and is exported for the household package's PATCH:
+// that package imports auth (for the User in the context), so the dependency
+// cannot run the other way.
 //
 // Money is a STRING at the storage scale, 4 decimal places, never trimmed
 // (BOOTSTRAP.md §4) — StringFixed(4), not String(), which strips trailing
 // zeros. decimal.NullDecimal.String() would also render "0" for a null,
 // which is a different statement from "not supplied", so the null case
 // returns no field at all.
-func meResponse(user db.User, household db.Household) api.Me {
-	me := api.Me{
-		Id:                   openapi_types.UUID(user.ID.Bytes),
-		HouseholdId:          openapi_types.UUID(user.HouseholdID.Bytes),
-		Email:                user.Email,
-		DisplayName:          user.DisplayName,
-		Locale:               api.Locale(user.Locale),
-		TimeZone:             user.TimeZone,
-		HouseholdDisplayName: household.DisplayName,
+func HouseholdResponse(household db.Household) api.Household {
+	out := api.Household{
+		Id:                   openapi_types.UUID(household.ID.Bytes),
+		HouseholdDisplayName: household.HouseholdDisplayName,
 		ReportingCurrency:    household.ReportingCurrency,
 		PeriodStartDay:       int(household.PeriodStartDay),
 		DayStartsAt:          formatDayStartsAt(household.DayStartsAt),
-		AllowanceMode:        api.MeAllowanceMode(household.AllowanceMode),
+		AllowanceMode:        api.AllowanceMode(household.AllowanceMode),
 	}
 	if household.ExpectedMonthlyIncome.Valid {
 		income := household.ExpectedMonthlyIncome.Decimal.StringFixed(4)
-		me.ExpectedMonthlyIncome = &income
+		out.ExpectedMonthlyIncome = &income
 	}
-	return me
+	return out
 }

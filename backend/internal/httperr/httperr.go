@@ -15,7 +15,7 @@ import (
 // reports the JSON field name rather than the Go one.
 //
 // This matters more than it looks: validator reports the struct field by
-// default, so DisplayName becomes "displayname", and the frontend looks up a
+// default, so UserDisplayName becomes "userdisplayname", and the frontend looks up a
 // catalogue key that does not exist. The contract speaks snake_case and so must
 // the envelope.
 //

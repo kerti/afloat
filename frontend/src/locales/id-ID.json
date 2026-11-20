@@ -5,16 +5,20 @@
     "retry": "Coba lagi"
   },
   "fields": {
+    "reportingCurrency": "Mata uang pelaporan",
+    "periodStartDay": "Periode anggaran dimulai pada tanggal",
     "email": "Email",
     "password": "Kata sandi",
-    "displayName": "Nama Anda (opsional)",
-    "householdName": "Nama rumah tangga"
+    "userDisplayName": "Nama Anda (opsional)",
+    "householdDisplayName": "Nama rumah tangga"
   },
   "fieldNames": {
+    "reporting_currency": "mata uang pelaporan",
+    "period_start_day": "tanggal mulai periode anggaran",
     "email": "email",
     "password": "kata sandi",
-    "display_name": "nama",
-    "household_name": "nama rumah tangga"
+    "user_display_name": "nama",
+    "household_display_name": "nama rumah tangga"
   },
   "login": {
     "title": "Masuk",
@@ -27,6 +31,7 @@
     "signedInAs": "Masuk sebagai {{name}}",
     "household": "Rumah tangga: {{name}}",
     "comingSoon": "Dasbor Anda akan muncul di sini.",
+    "settingsLink": "Pengaturan rumah tangga",
     "signOut": "Keluar"
   },
   "pwa": {
@@ -70,5 +75,15 @@
     "submitting": "Membuat…",
     "closed": "Instans ini sedang tidak menerima rumah tangga baru. Minta pengelolanya untuk membukanya, atau masuk ke akun yang sudah ada.",
     "backToSignIn": "Kembali ke halaman masuk"
+  },
+  "settings": {
+    "household": {
+      "title": "Pengaturan rumah tangga",
+      "save": "Simpan",
+      "saving": "Menyimpan…",
+      "saved": "Tersimpan.",
+      "back": "Kembali",
+      "periodStartDayHint": "Setiap Periode anggaran dimulai pada tanggal ini, dari 1 sampai 28. Mengubahnya langsung menggeser tanggal Periode anggaran Anda."
+    }
   }
 }

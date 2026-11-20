@@ -23,21 +23,22 @@
     status: 200
     # Every Household default comes from the schema (fixtures/seed.sql sets
     # none of them), so this also pins that the defaults are read as stored.
-    # expected_monthly_income is null in the row and absent here: the contract
-    # makes it optional as well as nullable, the backend omits it, and the
-    # client must read absent as null.
+    # expected_monthly_income is null in the row and absent from household: the
+    # contract makes it optional, the backend omits it when null, and the client
+    # must read absent as none supplied.
     body_json:
       id: 0192f0a0-0000-7000-8000-0000000000a1
-      household_id: 0192f0a0-0000-7000-8000-000000000001
       email: alice@example.com
-      display_name: Alice
+      user_display_name: Alice
       locale: en-GB
       time_zone: Asia/Jakarta
-      household_display_name: Conformance Household
-      reporting_currency: IDR
-      period_start_day: 1
-      day_starts_at: "04:00"
-      allowance_mode: adaptive
+      household:
+        id: 0192f0a0-0000-7000-8000-000000000001
+        household_display_name: Conformance Household
+        reporting_currency: IDR
+        period_start_day: 1
+        day_starts_at: "04:00"
+        allowance_mode: adaptive
     # More than half the window remains, so nothing is refreshed.
     cookies: {}
     rows:
@@ -92,16 +93,17 @@
     status: 200
     body_json:
       id: 0192f0a0-0000-7000-8000-0000000000a1
-      household_id: 0192f0a0-0000-7000-8000-000000000001
       email: alice@example.com
-      display_name: Alice
+      user_display_name: Alice
       locale: en-GB
       time_zone: Asia/Jakarta
-      household_display_name: Conformance Household
-      reporting_currency: IDR
-      period_start_day: 1
-      day_starts_at: "04:00"
-      allowance_mode: adaptive
+      household:
+        id: 0192f0a0-0000-7000-8000-000000000001
+        household_display_name: Conformance Household
+        reporting_currency: IDR
+        period_start_day: 1
+        day_starts_at: "04:00"
+        allowance_mode: adaptive
     cookies:
       afloat_session:
         value_pattern: '[A-Za-z0-9_-]{43}'

@@ -76,6 +76,17 @@ type Querier interface {
 	Ping(ctx context.Context) (int32, error)
 	RecordLoginFailure(ctx context.Context, arg RecordLoginFailureParams) error
 	TouchSession(ctx context.Context, arg TouchSessionParams) error
+	// Household settings (PRD S3). Tenant-scoped in SQL: the id is the
+	// authenticated User's household_id, never anything the request supplied
+	// (BOOTSTRAP.md §4).
+	// Merge semantics (BOOTSTRAP.md §4): a NULL argument leaves its column alone,
+	// in one statement, so two writers of different fields both land. A
+	// read-modify-write would let the second overwrite the first's field. None of
+	// the three columns is nullable, so coalesce cannot be mistaken for "clear".
+	//
+	// updated_at is set here because the baseline has no trigger, and from the
+	// database's own clock (BOOTSTRAP.md §5.1).
+	UpdateHousehold(ctx context.Context, arg UpdateHouseholdParams) (Household, error)
 	UpsertCredential(ctx context.Context, arg UpsertCredentialParams) error
 }
 

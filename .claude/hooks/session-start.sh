@@ -1,6 +1,11 @@
 #!/bin/sh
-# SessionStart hook - orient the agent, and fast-forward main only when it is
-# safe: already on main, with a clean tree. Any other branch is left alone.
+# SessionStart hook - orient the agent, and sync main when (and only when) that
+# is safe: already on main, with a clean tree. Syncing is `make start-task`, the
+# same pre-flight a human runs, so the two cannot drift.
+#
+# start-task ends in `git checkout main`, so running it from a clean feature
+# branch would silently yank you off it. On any branch but main the hook reports
+# where you are and touches nothing.
 #
 # Emits JSON on stdout: additionalContext goes into the agent's context,
 # systemMessage is shown to the human. Never fails the session - worst case it
@@ -25,24 +30,20 @@ branch=$(git branch --show-current 2>/dev/null || echo "")
 [ -n "$branch" ] || exit 0
 dirty=$(git status --porcelain 2>/dev/null | grep -c . || true)
 
-if [ ! -f Makefile ]; then
-  emit "On branch '$branch'. No Makefile yet - see BOOTSTRAP.md §11 for scaffold order."
-fi
-
 if [ "$dirty" -gt 0 ]; then
-  emit "On branch '$branch', working tree dirty ($dirty change(s))."
+  sm="! Working tree dirty ($dirty change(s)) on '$branch' - commit, stash, or clean before syncing."
+  if ! git ls-remote origin HEAD >/dev/null 2>&1; then
+    sm="$sm  Also: no GitHub access - run: ssh-add --apple-load-keychain"
+  fi
+  emit "On branch '$branch', working tree dirty ($dirty change(s)) - start-task skipped." "$sm"
 fi
 
 if [ "$branch" != "main" ]; then
-  emit "On feature branch '$branch', clean tree @ $(git rev-parse --short HEAD). Left alone - main is only fast-forwarded from a clean 'main' branch."
+  emit "On feature branch '$branch', clean tree @ $(git rev-parse --short HEAD). Left alone - start-task only syncs when you are on main."
 fi
 
-if git remote get-url origin >/dev/null 2>&1 && git fetch origin main --quiet 2>/dev/null; then
-  if git merge-base --is-ancestor HEAD origin/main 2>/dev/null; then
-    if git merge --ff-only origin/main --quiet 2>/dev/null; then
-      emit "On 'main', fast-forwarded to $(git rev-parse --short HEAD)."
-    fi
-  fi
+if output=$(make start-task 2>&1); then
+  emit "start-task: $output"
+else
+  emit "start-task FAILED: $output" "! start-task failed - the repo needs attention before proceeding: $output"
 fi
-
-emit "On 'main', up to date @ $(git rev-parse --short HEAD)."

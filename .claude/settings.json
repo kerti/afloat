@@ -8,21 +8,49 @@
     "file is portable across clones - never hardcode an absolute path here.",
     "Note: allow-rules in a committed settings.json require the one-time",
     "workspace-trust prompt before they take effect.",
-    "model + effortLevel pin the orchestrator. They are a default, not",
-    "enforcement: /effort, --effort and CLAUDE_CODE_EFFORT_LEVEL all win, and the",
-    "env var wins over everything. Role agents pin their own effort in",
-    ".claude/agents/*.md frontmatter, which overrides the session level."
+    "model + effortLevel pin the orchestrator's tier and effort (BOOTSTRAP.md",
+    "§13); 'opus' is an alias, so the model behind it floats. They are a default,",
+    "not enforcement: /effort, --effort and CLAUDE_CODE_EFFORT_LEVEL all win, and",
+    "the env var wins over everything. Role agents pin their own effort in",
+    ".claude/agents/*.md frontmatter, which overrides the session level.",
+    "CLAUDE_CODE_FORK_SUBAGENT=0 turns off the built-in 'fork' agent type. While",
+    "forks are on, every subagent runs in the background, so CLAUDE.md's",
+    "foreground rule could not be followed. Afloat delegates only to its role",
+    "agents, never to forks.",
+    "The Agent hook makes every subagent spawn a permission prompt.",
+    "gh issue: only view and list are allowed. Anyone can write an issue, and",
+    "agents read issue text as live state, so a write (create, comment, edit,",
+    "close, delete, transfer) always prompts - an instruction planted in an",
+    "issue must never publish without a human.",
+    "make: the gates and the generators only. db-reset, conformance and",
+    "test-migrations wipe or recreate data and always prompt."
   ],
+  "env": {
+    "CLAUDE_CODE_FORK_SUBAGENT": "0"
+  },
   "model": "opus",
   "effortLevel": "medium",
   "permissions": {
     "allow": [
+      "Bash(make check)",
+      "Bash(make check-go)",
+      "Bash(make check-frontend)",
+      "Bash(make doctor)",
+      "Bash(make gen)",
+      "Bash(make gen-oapi)",
+      "Bash(make gen-sqlc)",
+      "Bash(make gen-ts)",
+      "Bash(go build *)",
+      "Bash(go test *)",
+      "Bash(gofmt *)",
       "Bash(git status)",
       "Bash(git diff *)",
       "Bash(git log *)",
       "Bash(git checkout -b *)",
       "Bash(git switch -c *)",
-      "Bash(gh issue *)",
+      "Bash(gh issue view *)",
+      "Bash(gh issue list)",
+      "Bash(gh issue list *)",
       "Bash(gh pr view *)"
     ]
   },
@@ -45,6 +73,15 @@
           {
             "type": "command",
             "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/pre-push-gate.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "Agent",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/agent-gate.sh"
           }
         ]
       }

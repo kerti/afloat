@@ -77,6 +77,48 @@ Most of this doesn't exist yet — `BOOTSTRAP.md` §11 has the scaffold order. D
 ahead of it; if a task needs a directory not listed here or in `BOOTSTRAP.md`, stop and ask rather than
 guessing the layout.
 
+## How agents work here (`BOOTSTRAP.md` §13)
+
+The main session is the **orchestrator**: Opus at `medium`, pinned in `.claude/settings.json`. It holds
+the plan, makes and surfaces the decisions, reads the diffs, writes the PR body, and asks for the
+commit. Bulk reading, writing and reasoning go to the role agents in `.claude/agents/`, each pinned to a
+model tier and effort in its frontmatter. **The frontmatter is the mechanism; this table is the map.**
+
+| Agent | Tier · effort | Give it |
+|---|---|---|
+| `researcher` | sonnet · medium | Where something lives, how it already works, what exists before we add another. Read-only. |
+| `planner` | sonnet · xhigh | Doc edits, `draft` ADRs, issue breakdowns (`to-issues`, `triage`). Drafts issues; never files them. |
+| `grill` | sonnet · max | Stress-testing a plan or draft ADR before code exists (`grill-with-docs`). |
+| `builder` | sonnet · medium | Code whose shape is decided: wiring, handlers, migrations + regeneration, fixtures, i18n, UI assembly. |
+| `builder-deep` | sonnet · high | Trajectory and State, money and budget arithmetic, auth and sessions, data-reshaping migrations, the contract, unexplained failures. |
+| `reviewer` | sonnet · high | A finished slice, before the PR. Read-only. |
+
+- **Delegation needs a yes, every time.** `.claude/hooks/agent-gate.sh` makes every `Agent` call a
+  permission prompt. Propose the batch in one message (agent, task, why it beats inline); one yes
+  covers that batch only.
+- **Delegate for context, not tokens.** A subagent starts cold and misses the prompt cache, so spend
+  goes *up*; what it buys is a clean main window. Under ~3 files or 2 tool calls, do it inline.
+  Anything that would dump listings, logs or search results into the main window, delegate.
+- **Every brief carries its own context:** issue, branch, exact paths, the docs and ADRs in play,
+  whether it changes `contract/openapi.yaml`, definition of done, "do not commit, push, or open a PR".
+  Dispatch in the foreground.
+- **Reports come back bounded** (paths changed, decisions made, what's open, what contradicted the
+  docs) — and **are never trusted**: confirm a builder with `git diff` and `make check` yourself.
+- **Never delegated:** commits, pushes, PRs and labels, issue writes, tags, dropping an ADR's `draft`
+  tag, resolving an `[OPEN Q-nn]` or promoting an `[ASSUMED]`, UX choices, scope calls. That is the
+  sign-off surface.
+- **One writer per path.** Parallel code work uses `isolation: worktree`; migrations and generated
+  files are single-writer.
+- **Agent context is public-repo context.** No agent reads `.env`, server logs or the dev database (a
+  real household's spending) without a reason in the brief.
+- **Blocking yes, polling no.** Agents run `make check` / `go test` / `vitest` and wait. Never a
+  foreground server, a `--watch` mode, or a CI query. `make conformance` and `make test-migrations`
+  only when the brief asks (`conformance` empties the local database).
+- **Runbooks:** batching Dependabot PRs is `docs/agents/dependabot-batch.md` (skill:
+  `dependabot-batch`); starting work from a fresh `main` is `make start-task`.
+- **Tools without subagents** (anything reading `AGENTS.md`): same phases, one agent. Ask the human to
+  raise effort before planning or grilling and drop it for mechanical work. Every rule above still binds.
+
 ## Things explicitly NOT to do
 
 - **Don't add a feature, screen, setting, or dependency `PRD.md` §4 doesn't ask for.** Three similar

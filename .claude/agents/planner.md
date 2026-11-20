@@ -25,3 +25,5 @@ Your deliverable is text: a doc, a `draft` ADR, a set of issues, a sequence. Not
   `docs/adr/go/`.
 - **Skills that fit this work:** `to-issues` for breaking a plan into vertical slices, `triage` for
   issue state, `to-prd`, `grill-with-docs` when a plan needs stress-testing before it's written down.
+- **Never** commit, push, open or merge a PR, or file/edit/close a GitHub issue — draft the issue text
+  and return it; the orchestrator files it.

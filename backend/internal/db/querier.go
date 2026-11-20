@@ -35,8 +35,10 @@ type Querier interface {
 	DeleteExpiredSessions(ctx context.Context) error
 	DeleteSession(ctx context.Context, id string) error
 	// Revoke every session a User holds. Run on a password change, inside the same
-	// transaction, so the change boots any other session before the new one is
-	// minted — the "reset because compromised" guarantee.
+	// transaction as the credential write and before the caller's new session is
+	// minted, so the change boots every other session, and the one that made the
+	// request, before the new one exists — the "reset because compromised"
+	// guarantee (BOOTSTRAP.md §5.1).
 	DeleteSessionsForUser(ctx context.Context, userID pgtype.UUID) error
 	// A User with no row here is DORMANT: present, owns data, cannot yet
 	// authenticate. A legitimate state, so this returning no rows is not an error.
@@ -75,6 +77,12 @@ type Querier interface {
 	// at a database the role cannot read fails here and passes a bare Ping.
 	Ping(ctx context.Context) (int32, error)
 	RecordLoginFailure(ctx context.Context, arg RecordLoginFailureParams) error
+	// Compare-and-swap, for a password change: the new hash is written only if the
+	// stored one is still the hash the current password was verified against. Zero
+	// rows means another change landed since, so two concurrent submissions of the
+	// same form cannot both win, and the loser's session revocation never runs.
+	// Not UpsertCredential, which would let both through.
+	SwapCredentialPasswordHash(ctx context.Context, arg SwapCredentialPasswordHashParams) (int64, error)
 	TouchSession(ctx context.Context, arg TouchSessionParams) error
 	// Household settings (PRD S3). Tenant-scoped in SQL: the id is the
 	// authenticated User's household_id, never anything the request supplied
@@ -87,6 +95,22 @@ type Querier interface {
 	// updated_at is set here because the baseline has no trigger, and from the
 	// database's own clock (BOOTSTRAP.md §5.1).
 	UpdateHousehold(ctx context.Context, arg UpdateHouseholdParams) (Household, error)
+	// User settings (PRD S4). A User changes only their own row, so every statement
+	// here filters on BOTH ids in SQL: users is Household-scoped, and a query that
+	// filtered on household_id alone would rewrite every member's row once a
+	// Household has more than one (BOOTSTRAP.md §4). Both ids come from the
+	// authenticated User, never from the request.
+	// Merge semantics (BOOTSTRAP.md §4): a NULL argument leaves its column alone,
+	// in one statement, so two writers of different fields both land. None of the
+	// three columns is nullable, so coalesce cannot be mistaken for "clear".
+	//
+	// updated_at is set here because the baseline has no trigger, and from the
+	// database's own clock (BOOTSTRAP.md §5.1).
+	UpdateUser(ctx context.Context, arg UpdateUserParams) (User, error)
+	// The sign-in handle. The unique index users_email_idx (lower(email), live rows
+	// only) is the race-free answer to "is it taken": a violation is EMAIL_TAKEN,
+	// and there is no lookup beforehand for it to race (BOOTSTRAP.md §5.1.1).
+	UpdateUserEmail(ctx context.Context, arg UpdateUserEmailParams) (User, error)
 	UpsertCredential(ctx context.Context, arg UpsertCredentialParams) error
 }
 

@@ -132,8 +132,12 @@ must not be foreclosed.
   denominated in `reporting_currency`), `allowance_mode` (default `adaptive`; `adaptive` or `fixed`).
   Any member may change them (S2). Today the settings screen writes three: `household_display_name`,
   `reporting_currency` and `period_start_day`; the others follow with the slices that consume them.
-- **S4.** User settings: `user_display_name`, `email`, `locale` (default `en-GB`), `time_zone` (default
-  `Asia/Jakarta`).
+- **S4.** User settings: `user_display_name`, `email`, `locale` (default `en-GB`; `en-GB` or `id-ID`),
+  `time_zone` (default `Asia/Jakarta`; an IANA name) and the password. Each User changes only their own:
+  S2's equal access is about the Household's data, and a name, a language and a zone are personal.
+  Changing the email or the password requires the current password, and the password policy is S2b's.
+  The address change is not verified, because no email exists (§4); it takes effect at once. A password
+  change signs the User out everywhere else.
 
 - **S2a.** MVP authentication is **local email + password**, server-side session, host-only session
   cookie. **Users carry no credential column** — credentials live in their own table, so an
@@ -145,7 +149,8 @@ must not be foreclosed.
   only when the person commits at the gate. An operator sets `FOUNDING_DISABLED=true` to stop any
   further Household being founded (`BOOTSTRAP.md` §12). Operators found their own Household *before*
   exposing the instance and then set it: until they do, the first person through the gate founds one.
-  Passwords are at least 10 code points and not in a common-password list; a registered address is
+  Passwords are at least 10 code points and not in a common-password list, at registration and at a
+  later change (S4, which also requires the current password); a registered address is
   answered `EMAIL_TAKEN` (registration enumerates, login does not). Invitations are a one-time link
   generated and shown in the UI and will add a join choice to the same gate; password reset is a CLI
   command on the instance. Both are replaced by email later. Mechanics in `BOOTSTRAP.md` §5.1.1.
@@ -369,6 +374,7 @@ two-bucket split. Multi-currency UI. An "Underwater" fourth State for an exhaust
 
 | Date | Change |
 |---|---|
+| 2026-11-20 | User settings (issue #119). Rulings from Rad, D1 to D8, ratified as recommended: three operations, not one `PATCH` (`PATCH /me` for name, language and zone; `POST /auth/local/change-password` and `POST /auth/local/change-email`, behind the disabled-local gate); a password change revokes every session the User holds, the caller's included, and mints one for the caller in the same transaction, an email change touches none; no email verification, the change is immediate, because there is no mail transport; a wrong current password is `403 INVALID_CURRENT_PASSWORD` with a backoff keyed `current-password:<user id>`, shared by both operations; `time_zone` is validated server-side and the binary embeds `time/tzdata`, Period Day math is not touched and the client derives none; the handlers live in `backend/internal/auth/`; the settings screen is `/settings/user`, three forms, no settings hub. S4 gains the password and each User's own-only rule, S2b the current-password clause. Handed forward: the CLI password reset S2b describes is not built (#118), and what the trajectory slice owes a `time_zone` change. |
 | 2026-11-20 | Household settings (issue #113). Rulings from Rad: D1, a `period_start_day` change takes effect at once and re-derives every Period window, past and current, from the current value, with nothing stored and one line of helper text, never a confirmation; D2, `reporting_currency` is writable with no guard until money rows exist, and multi-currency stays out of MVP as a planned item, recorded as **Q-16**; D3, accepted currency codes are ISO 4217, checked server-side; D4, three fields are writable now, and each later S3 field is one additive property; D5, `flat` becomes `fixed` (CONTEXT, §4 and the trajectory already said `fixed`), and the unqualified name field, which meant two things, is retired for `household_display_name` and `user_display_name` on the wire, in the database, in Go and in i18n keys; D6, the update convention (PATCH, merge semantics, last write wins per field, `BOOTSTRAP.md` §4); D7, the handler lives in `backend/internal/household/`. S3 and S4 renamed and S3 given its ranges; N3 records `expected_monthly_income`'s missing currency column; §4 Out marks Multi-currency `[OPEN Q-16]`. |
 | 2026-11-19 | Founding: self-registration and the onboarding gate (issue #108, found-only). Rulings from Rad: open registration with founding gated by `FOUNDING_DISABLED`, following Balances' code rather than its self-hosting notes; register creates no account, only a 15-minute handshake; the gate offers "found" only until invitations land; a registered address is `409 EMAIL_TAKEN` (enumeration accepted on register, login unchanged); Balances' password policy exactly; Household and User ids server-generated at founding (an exception to client-generated keys, which stand for domain POSTs); the Household name is pre-filled by the frontend from i18n and capped at 60 code points. S1 and S2b updated. |
 | 2026-11-19 | The Kotlin learning track is dropped; Afloat is Go-only. The Kotlin backend, the cross-backend parity requirement and the Flyway migration format are removed: migrations are hand-written goose files in `backend/internal/migrations/`, the database is `afloat`, and the conformance harness tests the one backend against its cases. N5a, N6–N8a updated to match. |

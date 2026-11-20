@@ -29,7 +29,8 @@ Account.
 
 **User**: An individual member of a Household. Belongs to exactly one Household; all Users have full
 read/write access to all of its data. Carries `user_display_name`, `email`, `locale` (default `en-GB`) and
-`time_zone` (default `Asia/Jakarta`). _Avoid_: Account (reserved for the auth identity in prose only),
+`time_zone` (default `Asia/Jakarta`). `email` is the sign-in handle, never the identity. `time_zone` is
+an input to Today and is never derived by the client. _Avoid_: Account (reserved for the auth identity in prose only),
 Member (acceptable informally, not a modelled term).
 
 **Ownership** (Expense attribute): **SoleOwner** — attributed to a specific User for breakdown

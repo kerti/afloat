@@ -73,10 +73,14 @@ func TestEveryDisabledLocalRouteIsIndistinguishableFromAnUnregisteredPath(t *tes
 	paths := []string{
 		localLoginPath,
 		localRegisterPath,
+		localChangePasswordPath,
+		localChangeEmailPath,
 		// An encoded spelling is the same route once decoded (#56), so the gate
 		// holds on it too.
 		"/api/auth/local/regist%65r",
 		"/api/auth/local/r%65gister",
+		"/api/auth/local/change-%70assword",
+		"/api/auth/local/ch%61nge-email",
 	}
 	methods := []string{
 		http.MethodGet, http.MethodHead, http.MethodPost, http.MethodPut, http.MethodPatch,

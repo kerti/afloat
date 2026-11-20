@@ -59,13 +59,21 @@ func (h *Handlers) IssueSession(ctx context.Context, userID pgtype.UUID, userAge
 // createSession stores a session and returns its plaintext token and expiry,
 // for a caller that builds the cookie itself where it writes it.
 func (h *Handlers) createSession(ctx context.Context, userID pgtype.UUID, userAgent string) (string, time.Time, error) {
+	return h.createSessionWith(ctx, h.q, userID, userAgent)
+}
+
+// createSessionWith is createSession through q, so a caller inside a
+// transaction mints the session in it: a password change revokes every session
+// and mints the caller's new one atomically (change_password.go), and a session
+// inserted on the pool would survive a rollback of the revocation beside it.
+func (h *Handlers) createSessionWith(ctx context.Context, q db.Querier, userID pgtype.UUID, userAgent string) (string, time.Time, error) {
 	token, err := newSessionToken()
 	if err != nil {
 		return "", time.Time{}, err
 	}
 	expiresAt := h.now().Add(h.sessionTTL)
 
-	if _, err := h.q.CreateSession(ctx, db.CreateSessionParams{
+	if _, err := q.CreateSession(ctx, db.CreateSessionParams{
 		ID:        HashToken(token),
 		UserID:    userID,
 		ExpiresAt: pgtype.Timestamptz{Time: expiresAt, Valid: true},

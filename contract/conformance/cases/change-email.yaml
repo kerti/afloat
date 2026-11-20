@@ -1,0 +1,488 @@
+# POST /auth/local/change-email (#119): the sign-in address, behind the current
+# password. The change takes effect at once and is not verified (there is no
+# mail transport, PRD §4). No session is touched: a session is keyed on the
+# User's id, and what stops a stolen cookie swapping the handle is the
+# current-password gate.
+#
+# The order is the point (BOOTSTRAP.md §5.1.1): the session, the body's shape,
+# then the same throttle and password check as change-password, under the same
+# key, and only then the address. A caller who has not proved the password
+# learns nothing about whether an address is held.
+#
+# alice is the caller, bob is a live User in her Household, carol is
+# soft-deleted (so her address is free: the unique index is partial).
+
+- name: change email - success answers the whole Me and touches no session
+  issue: "119"
+  given: &signed-in
+    - sql: INSERT INTO sessions (id, user_id, expires_at) VALUES (encode(sha256('conformance-other-device'::bytea), 'hex'), '0192f0a0-0000-7000-8000-0000000000a1', now() + interval '30 days')
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request: &change
+    method: POST
+    path: /auth/local/change-email
+    headers:
+      Content-Type: application/json
+    body: '{"email":"alice.new@example.com","current_password":"conformance-correct-horse"}'
+  expect:
+    status: 200
+    headers:
+      Content-Type: application/json
+    body_json:
+      id: 0192f0a0-0000-7000-8000-0000000000a1
+      email: alice.new@example.com
+      user_display_name: Alice
+      locale: en-GB
+      time_zone: Asia/Jakarta
+      household:
+        id: 0192f0a0-0000-7000-8000-000000000001
+        household_display_name: Conformance Household
+        reporting_currency: IDR
+        period_start_day: 1
+        day_starts_at: "04:00"
+        allowance_mode: adaptive
+    # No cookie: no session is minted or touched.
+    cookies: {}
+    rows:
+      - sql: SELECT email FROM users WHERE id = '0192f0a0-0000-7000-8000-0000000000a1'
+        rows: [{email: alice.new@example.com}]
+      # Both of alice's sessions, the other device's included.
+      - sql: SELECT count(*)::int AS n FROM sessions WHERE user_id = '0192f0a0-0000-7000-8000-0000000000a1'
+        rows: [{n: 2}]
+      - sql: SELECT (password_hash = '$argon2id$v=19$m=19456,t=2,p=1$ONoBwoeQyx5Q6rcT+99mQQ$SwIz0ZviKsLDspuhSO7B6UvPvKMokTfAVA9i9RqMiUg') AS seeded FROM credentials WHERE user_id = '0192f0a0-0000-7000-8000-0000000000a1'
+        rows: [{seeded: true}]
+      - sql: SELECT count(*)::int AS n FROM login_attempts
+        rows: [{n: 0}]
+
+- name: change email - the new address signs in
+  issue: "119"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+    - request: *change
+      status: 200
+  request:
+    method: POST
+    path: /auth/local/login
+    headers:
+      Content-Type: application/json
+    body: '{"email":"alice.new@example.com","password":"conformance-correct-horse"}'
+  expect:
+    status: 204
+    body_empty: true
+
+- name: change email - the old address no longer signs in
+  issue: "119"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+    - request: *change
+      status: 200
+  request:
+    method: POST
+    path: /auth/local/login
+    headers:
+      Content-Type: application/json
+    body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+  expect:
+    status: 401
+    body_json: {code: INVALID_CREDENTIALS}
+
+- name: change email - the session that made the request still works
+  issue: "119"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+    - request: *change
+      status: 200
+  request:
+    method: GET
+    path: /me
+  expect:
+    status: 200
+    body_json:
+      id: 0192f0a0-0000-7000-8000-0000000000a1
+      email: alice.new@example.com
+      user_display_name: Alice
+      locale: en-GB
+      time_zone: Asia/Jakarta
+      household:
+        id: 0192f0a0-0000-7000-8000-000000000001
+        household_display_name: Conformance Household
+        reporting_currency: IDR
+        period_start_day: 1
+        day_starts_at: "04:00"
+        allowance_mode: adaptive
+
+- name: change email - the address is stored trimmed and lower-cased
+  issue: "119"
+  given: *signed-in
+  request:
+    method: POST
+    path: /auth/local/change-email
+    headers:
+      Content-Type: application/json
+    body: '{"email":"  Alice.New@Example.COM ","current_password":"conformance-correct-horse"}'
+  expect:
+    status: 200
+    body_json:
+      id: 0192f0a0-0000-7000-8000-0000000000a1
+      email: alice.new@example.com
+      user_display_name: Alice
+      locale: en-GB
+      time_zone: Asia/Jakarta
+      household:
+        id: 0192f0a0-0000-7000-8000-000000000001
+        household_display_name: Conformance Household
+        reporting_currency: IDR
+        period_start_day: 1
+        day_starts_at: "04:00"
+        allowance_mode: adaptive
+    rows:
+      - sql: SELECT email FROM users WHERE id = '0192f0a0-0000-7000-8000-0000000000a1'
+        rows: [{email: alice.new@example.com}]
+
+# A live User holds it: bob, in any case. Nothing changes.
+- name: change email - an address a live User holds is EMAIL_TAKEN
+  issue: "119"
+  given: *signed-in
+  request:
+    method: POST
+    path: /auth/local/change-email
+    headers:
+      Content-Type: application/json
+    body: '{"email":"bob@example.com","current_password":"conformance-correct-horse"}'
+  expect:
+    status: 409
+    body_json: {code: EMAIL_TAKEN}
+    cookies: {}
+    rows: &unchanged
+      - sql: SELECT email FROM users WHERE id = '0192f0a0-0000-7000-8000-0000000000a1'
+        rows: [{email: alice@example.com}]
+      - sql: SELECT count(*)::int AS n FROM sessions WHERE user_id = '0192f0a0-0000-7000-8000-0000000000a1'
+        rows: [{n: 2}]
+
+- name: change email - a taken address in another case is EMAIL_TAKEN too
+  issue: "119"
+  given: *signed-in
+  request:
+    method: POST
+    path: /auth/local/change-email
+    headers:
+      Content-Type: application/json
+    body: '{"email":"  BOB@Example.com ","current_password":"conformance-correct-horse"}'
+  expect:
+    status: 409
+    body_json: {code: EMAIL_TAKEN}
+    rows: *unchanged
+
+- name: change email - the caller's own address in another case is fine
+  issue: "119"
+  given: *signed-in
+  request:
+    method: POST
+    path: /auth/local/change-email
+    headers:
+      Content-Type: application/json
+    body: '{"email":"ALICE@Example.com","current_password":"conformance-correct-horse"}'
+  expect:
+    status: 200
+    body_json:
+      id: 0192f0a0-0000-7000-8000-0000000000a1
+      email: alice@example.com
+      user_display_name: Alice
+      locale: en-GB
+      time_zone: Asia/Jakarta
+      household:
+        id: 0192f0a0-0000-7000-8000-000000000001
+        household_display_name: Conformance Household
+        reporting_currency: IDR
+        period_start_day: 1
+        day_starts_at: "04:00"
+        allowance_mode: adaptive
+
+- name: change email - a soft-deleted User's address is free
+  issue: "119"
+  given: *signed-in
+  request:
+    method: POST
+    path: /auth/local/change-email
+    headers:
+      Content-Type: application/json
+    body: '{"email":"carol@example.com","current_password":"conformance-correct-horse"}'
+  expect:
+    status: 200
+    body_json:
+      id: 0192f0a0-0000-7000-8000-0000000000a1
+      email: carol@example.com
+      user_display_name: Alice
+      locale: en-GB
+      time_zone: Asia/Jakarta
+      household:
+        id: 0192f0a0-0000-7000-8000-000000000001
+        household_display_name: Conformance Household
+        reporting_currency: IDR
+        period_start_day: 1
+        day_starts_at: "04:00"
+        allowance_mode: adaptive
+    rows:
+      - sql: SELECT id::text AS id, email, (deleted_at IS NOT NULL) AS deleted FROM users WHERE lower(email) = 'carol@example.com' ORDER BY id
+        rows:
+          - {id: 0192f0a0-0000-7000-8000-0000000000a1, email: carol@example.com, deleted: false}
+          - {id: 0192f0a0-0000-7000-8000-0000000000c1, email: carol@example.com, deleted: true}
+
+# The address's state is revealed only to a caller who has proved the password.
+- name: change email - a wrong password with a taken address is 403, not 409
+  issue: "119"
+  given: *signed-in
+  request:
+    method: POST
+    path: /auth/local/change-email
+    headers:
+      Content-Type: application/json
+    body: '{"email":"bob@example.com","current_password":"not the current password"}'
+  expect:
+    status: 403
+    body_json: {code: INVALID_CURRENT_PASSWORD}
+    cookies: {}
+    rows: &one-failure
+      - sql: SELECT email FROM users WHERE id = '0192f0a0-0000-7000-8000-0000000000a1'
+        rows: [{email: alice@example.com}]
+      - sql: SELECT key, failure_count FROM login_attempts
+        rows: [{key: "current-password:0192f0a0-0000-7000-8000-0000000000a1", failure_count: 1}]
+
+- name: change email - inside the backoff window is 429 with Retry-After
+  issue: "119"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+    - request:
+        method: POST
+        path: /auth/local/change-email
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice.new@example.com","current_password":"not the current password"}'
+      status: 403
+  request: *change
+  expect:
+    status: 429
+    headers:
+      Retry-After: "1"
+    body_json: {code: TOO_MANY_ATTEMPTS}
+    cookies: {}
+    rows: *one-failure
+
+# One key for both operations, from the other side.
+- name: change email - a failure through change-password throttles it
+  issue: "119"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+    - request:
+        method: POST
+        path: /auth/local/change-password
+        headers:
+          Content-Type: application/json
+        body: '{"current_password":"not the current password","new_password":"kucing oranye di atap"}'
+      status: 403
+  request: *change
+  expect:
+    status: 429
+    headers:
+      Retry-After: "1"
+    body_json: {code: TOO_MANY_ATTEMPTS}
+    rows: *one-failure
+
+# A success clears the key, and so does a proved password whose address turns
+# out to be taken.
+- name: change email - a success clears the backoff key
+  issue: "119"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+    - request:
+        method: POST
+        path: /auth/local/change-email
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice.new@example.com","current_password":"not the current password"}'
+      status: 403
+    - sql: UPDATE login_attempts SET backoff_until = now() - interval '1 second'
+  request: *change
+  expect:
+    status: 200
+    rows:
+      - sql: SELECT count(*)::int AS n FROM login_attempts
+        rows: [{n: 0}]
+
+- name: change email - a User with no credential is answered as a wrong password
+  issue: "119"
+  given:
+    - sql: INSERT INTO sessions (id, user_id, expires_at) VALUES (encode(sha256('conformance-bob'::bytea), 'hex'), '0192f0a0-0000-7000-8000-0000000000b1', now() + interval '30 days')
+  request:
+    method: POST
+    path: /auth/local/change-email
+    headers:
+      Content-Type: application/json
+      Cookie: afloat_session=conformance-bob
+    body: '{"email":"bob.new@example.com","current_password":"conformance-correct-horse"}'
+  expect:
+    status: 403
+    body_json: {code: INVALID_CURRENT_PASSWORD}
+    rows:
+      - sql: SELECT email FROM users WHERE id = '0192f0a0-0000-7000-8000-0000000000b1'
+        rows: [{email: bob@example.com}]
+
+# Tenancy: bob (same Household) and dave (another) are untouched.
+- name: change email - leaves every other User alone
+  issue: "119"
+  given:
+    - sql: INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Another Household')
+    - sql: INSERT INTO users (id, household_id, email, user_display_name) VALUES ('0192f0a0-0000-7000-8000-0000000000d1', '0192f0a0-0000-7000-8000-000000000002', 'dave@example.com', 'Dave')
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request: *change
+  expect:
+    status: 200
+    rows:
+      - sql: SELECT email, user_display_name FROM users WHERE id <> '0192f0a0-0000-7000-8000-0000000000a1' ORDER BY email
+        rows:
+          - {email: bob@example.com, user_display_name: Bob}
+          - {email: carol@example.com, user_display_name: Carol}
+          - {email: dave@example.com, user_display_name: Dave}
+
+# The contract's shape rules, judged first.
+- name: change email - not an address is a validation failure
+  issue: "119"
+  given: *signed-in
+  request:
+    method: POST
+    path: /auth/local/change-email
+    headers:
+      Content-Type: application/json
+    body: '{"email":"nobody","current_password":"conformance-correct-horse"}'
+  expect:
+    status: 400
+    body_json: {code: VALIDATION, args: {field: email, rule: email}}
+    rows: &nothing-recorded
+      - sql: SELECT email FROM users WHERE id = '0192f0a0-0000-7000-8000-0000000000a1'
+        rows: [{email: alice@example.com}]
+      - sql: SELECT count(*)::int AS n FROM login_attempts
+        rows: [{n: 0}]
+
+- name: change email - a missing address is a validation failure
+  issue: "119"
+  given: *signed-in
+  request:
+    method: POST
+    path: /auth/local/change-email
+    headers:
+      Content-Type: application/json
+    body: '{"current_password":"conformance-correct-horse"}'
+  expect:
+    status: 400
+    body_json: {code: VALIDATION, args: {field: email, rule: required}}
+    rows: *nothing-recorded
+
+- name: change email - a missing current password is a validation failure
+  issue: "119"
+  given: *signed-in
+  request:
+    method: POST
+    path: /auth/local/change-email
+    headers:
+      Content-Type: application/json
+    body: '{"email":"alice.new@example.com"}'
+  expect:
+    status: 400
+    body_json: {code: VALIDATION, args: {field: current_password, rule: required}}
+    rows: *nothing-recorded
+
+- name: change email - an unknown property is refused
+  issue: "119"
+  given: *signed-in
+  request:
+    method: POST
+    path: /auth/local/change-email
+    headers:
+      Content-Type: application/json
+    body: '{"email":"alice.new@example.com","current_password":"conformance-correct-horse","user_display_name":"x"}'
+  expect:
+    status: 400
+    body_json: {code: INVALID_JSON_BODY}
+    rows: *nothing-recorded
+
+- name: change email - with no session is unauthorized
+  issue: "119"
+  request: *change
+  expect:
+    status: 401
+    body_json: {code: UNAUTHORIZED}
+    cookies: {}
+    rows:
+      - sql: SELECT email FROM users WHERE id = '0192f0a0-0000-7000-8000-0000000000a1'
+        rows: [{email: alice@example.com}]
+      - sql: SELECT count(*)::int AS n FROM login_attempts
+        rows: [{n: 0}]
+
+- name: change email - during an outage is unauthorized and changes nothing
+  issue: "119"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+    - outage: true
+  request: *change
+  expect:
+    status: 401
+    body_json: {code: UNAUTHORIZED}
+    cookies: {}
+    rows:
+      - sql: SELECT email FROM users WHERE id = '0192f0a0-0000-7000-8000-0000000000a1'
+        rows: [{email: alice@example.com}]
+      - sql: SELECT count(*)::int AS n FROM sessions
+        rows: [{n: 1}]

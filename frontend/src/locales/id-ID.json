@@ -18,7 +18,11 @@
     "email": "email",
     "password": "kata sandi",
     "user_display_name": "nama",
-    "household_display_name": "nama rumah tangga"
+    "household_display_name": "nama rumah tangga",
+    "time_zone": "zona waktu",
+    "locale": "bahasa",
+    "current_password": "kata sandi saat ini",
+    "new_password": "kata sandi baru"
   },
   "login": {
     "title": "Masuk",
@@ -32,6 +36,7 @@
     "household": "Rumah tangga: {{name}}",
     "comingSoon": "Dasbor Anda akan muncul di sini.",
     "settingsLink": "Pengaturan rumah tangga",
+    "userSettingsLink": "Pengaturan Anda",
     "signOut": "Keluar"
   },
   "pwa": {
@@ -55,7 +60,8 @@
       "min": "Gunakan minimal 10 karakter.",
       "breached": "Kata sandi itu terlalu umum. Pilih yang lain."
     },
-    "FOUNDING_DISABLED": "Instans ini tidak menerima rumah tangga baru. Tanyakan kepada pengelolanya."
+    "FOUNDING_DISABLED": "Instans ini tidak menerima rumah tangga baru. Tanyakan kepada pengelolanya.",
+    "INVALID_CURRENT_PASSWORD": "Itu bukan kata sandi Anda saat ini."
   },
   "register": {
     "title": "Buat akun Anda",
@@ -84,6 +90,42 @@
       "saved": "Tersimpan.",
       "back": "Kembali",
       "periodStartDayHint": "Setiap Periode anggaran dimulai pada tanggal ini, dari 1 sampai 28. Mengubahnya langsung menggeser tanggal Periode anggaran Anda."
+    },
+    "user": {
+      "title": "Pengaturan Anda",
+      "back": "Kembali",
+      "profile": {
+        "heading": "Profil",
+        "name": "Nama Anda",
+        "language": "Bahasa",
+        "timeZone": "Zona waktu",
+        "save": "Simpan",
+        "saving": "Menyimpan…",
+        "saved": "Tersimpan."
+      },
+      "languages": {
+        "enGB": "English (UK)",
+        "idID": "Bahasa Indonesia"
+      },
+      "email": {
+        "heading": "Email",
+        "newEmail": "Email baru",
+        "currentPassword": "Kata sandi saat ini",
+        "submit": "Ubah email",
+        "submitting": "Mengubah…",
+        "saved": "Tersimpan. Mulai sekarang, masuk dengan {{email}}."
+      },
+      "password": {
+        "heading": "Kata sandi",
+        "hint": "Mengubah kata sandi akan mengeluarkan Anda dari semua perangkat lain.",
+        "currentPassword": "Kata sandi saat ini",
+        "newPassword": "Kata sandi baru",
+        "confirm": "Ulangi kata sandi baru",
+        "mismatch": "Kata sandi baru tidak sama. Ketik ulang keduanya.",
+        "submit": "Ubah kata sandi",
+        "submitting": "Mengubah…",
+        "saved": "Kata sandi diubah."
+      }
     }
   }
 }

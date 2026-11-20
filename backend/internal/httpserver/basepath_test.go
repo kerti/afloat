@@ -55,10 +55,40 @@ func TestBasePathIsTheContracts(t *testing.T) {
 	if basePath != want {
 		t.Errorf("basePath = %q; contract/openapi.yaml's servers[0].url is %q", basePath, want)
 	}
-	if localLoginPath != basePath+"/auth/local/login" {
-		t.Errorf("localLoginPath = %q, not under basePath %q", localLoginPath, basePath)
+	for path := range localPaths {
+		if !strings.HasPrefix(path, basePath+"/auth/local/") {
+			t.Errorf("gated path %q is not under basePath %q's /auth/local/", path, basePath)
+		}
 	}
-	if localRegisterPath != basePath+"/auth/local/register" {
-		t.Errorf("localRegisterPath = %q, not under basePath %q", localRegisterPath, basePath)
+}
+
+// Every route the contract puts under /auth/local/ is behind the disabled-local
+// gate, and the gate guards nothing the contract does not declare. The gate is
+// a hand-kept list (the generated router mounts every operation
+// unconditionally, so it cannot be skipped per route), and a path left off it
+// stays live with local sign-in off: this is what catches one.
+func TestEveryLocalRouteIsGated(t *testing.T) {
+	spec, err := openapi3.NewLoader().LoadFromFile("../../../contract/openapi.yaml")
+	if err != nil {
+		t.Fatalf("load contract: %v", err)
+	}
+	declared := map[string]bool{}
+	for path := range spec.Paths.Map() {
+		if strings.HasPrefix(path, "/auth/local/") {
+			declared[basePath+path] = true
+		}
+	}
+	if len(declared) == 0 {
+		t.Fatal("the contract declares no /auth/local/ route; the test reads the wrong thing")
+	}
+	for path := range declared {
+		if _, gated := localPaths[path]; !gated {
+			t.Errorf("%s is in the contract under /auth/local/ but not behind disabledLocalAuth404", path)
+		}
+	}
+	for path := range localPaths {
+		if !declared[path] {
+			t.Errorf("%s is gated but the contract declares no such route", path)
+		}
 	}
 }

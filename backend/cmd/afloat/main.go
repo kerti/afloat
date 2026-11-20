@@ -15,6 +15,13 @@ import (
 	"syscall"
 	"time"
 
+	// Embeds the IANA zone database (about 450 KB) as a floor, not a pin:
+	// time.LoadLocation tries the host's zoneinfo first and falls back to this.
+	// A scratch or distroless image has no zoneinfo, and without it every valid
+	// time_zone would answer VALIDATION. The trajectory slice resolves zones on
+	// every read, and needs at least the same set.
+	_ "time/tzdata"
+
 	"github.com/kerti/afloat/backend/internal/auth"
 	"github.com/kerti/afloat/backend/internal/config"
 	"github.com/kerti/afloat/backend/internal/db"

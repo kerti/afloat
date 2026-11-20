@@ -33,6 +33,9 @@ export function HomePage({ me }: { me: Me }) {
       <Link to="/settings/household" className="text-sm underline">
         {t("home.settingsLink")}
       </Link>
+      <Link to="/settings/user" className="text-sm underline">
+        {t("home.userSettingsLink")}
+      </Link>
       <p className="text-muted-foreground">{t("home.comingSoon")}</p>
       {logout.error && (
         <p role="alert" className="text-sm text-destructive">

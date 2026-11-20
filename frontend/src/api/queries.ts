@@ -1,6 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ApiError,
+  changeEmail,
+  changePassword,
   commitOnboardingChoice,
   getAuthMethods,
   getMe,
@@ -9,12 +11,16 @@ import {
   localRegister,
   logout,
   updateHousehold,
+  updateMe,
+  type ChangeEmailRequest,
+  type ChangePasswordRequest,
   type Household,
   type LocalRegisterRequest,
   type Me,
   type OnboardingChoiceRequest,
   type OnboardingOptions,
   type UpdateHouseholdRequest,
+  type UpdateMeRequest,
 } from "./client";
 import { clearSession, meKey } from "./queryClient";
 
@@ -91,6 +97,37 @@ export function useUpdateHousehold() {
     // /me carries the Household and is the one read path: invalidate, don't
     // patch the cache by hand.
     onSuccess: () => qc.invalidateQueries({ queryKey: meKey }),
+  });
+}
+
+// The answer is a Me, but /me is the one read path: invalidate rather than
+// patch the cache. A locale change flips the language when RequireSession
+// sees the refetched locale.
+export function useUpdateMe() {
+  const qc = useQueryClient();
+  return useMutation<Me, ApiError, UpdateMeRequest>({
+    mutationFn: updateMe,
+    onSuccess: () => qc.invalidateQueries({ queryKey: meKey }),
+  });
+}
+
+export function useChangeEmail() {
+  const qc = useQueryClient();
+  return useMutation<Me, ApiError, ChangeEmailRequest>({
+    mutationFn: changeEmail,
+    onSuccess: () => qc.invalidateQueries({ queryKey: meKey }),
+  });
+}
+
+// The server rotates this session's cookie in the same transaction that
+// commits the change, so a request still in flight with the old cookie answers
+// 401 UNAUTHORIZED and would end the UI's session (#119 D6). Cancel everything
+// first. Nothing in Me changes, so /me is not refetched.
+export function useChangePassword() {
+  const qc = useQueryClient();
+  return useMutation<void, ApiError, ChangePasswordRequest>({
+    mutationFn: changePassword,
+    onMutate: () => qc.cancelQueries(),
   });
 }
 

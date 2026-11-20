@@ -1,4 +1,4 @@
-.PHONY: help setup hooks-install claude-install doctor check test-migrations \
+.PHONY: help setup hooks-install claude-install doctor start-task check test-migrations \
         db-up db-down db-reset gen-oapi gen-sqlc gen-ts gen check-go conformance lint-install \
         frontend-install frontend-dev frontend-build check-frontend
 
@@ -31,7 +31,8 @@ help:
 	@echo "  db-reset                destroy and recreate the database from scratch"
 	@echo ""
 	@echo "Workflow:"
-	@echo "  gen                     run every generator (contract, sqlc, TypeScript types)"
+	@echo "  start-task              before new work: clean tree + GitHub access, then main fast-forwarded"
+	@echo "  gen                   run every generator (contract, sqlc, TypeScript types)"
 	@echo "  gen-oapi                regenerate Go server interfaces from contract/openapi.yaml"
 	@echo "  gen-sqlc                regenerate typed queries from the migrations + backend/queries"
 	@echo "  gen-ts                  regenerate frontend/src/api/schema.gen.ts from contract/openapi.yaml"
@@ -81,7 +82,17 @@ claude-install:
 	  echo "! jq not found - the Claude Code hooks parse tool JSON with it and will" >&2; \
 	  echo "  silently no-op until it's installed (brew install jq)." >&2; \
 	fi
-	@echo "ok Claude Code hooks armed (session-start, pre-push gate, format-on-write)"
+	@echo "ok Claude Code hooks armed (session-start, pre-push gate, agent gate, format-on-write)"
+
+# Pre-task pre-flight: refuse on a dirty tree, verify GitHub access, then switch
+# to main and fast-forward it, so new work never branches off a stale main. The
+# SessionStart hook runs this only when you are already on a clean main.
+start-task:
+	@test -z "$$(git status --porcelain)" || { echo "FAIL working tree dirty - commit or stash first, then re-run"; exit 1; }
+	@git ls-remote origin HEAD >/dev/null 2>&1 || { echo "FAIL no GitHub access - unlock the SSH key (ssh-add) or run 'gh auth login'"; exit 1; }
+	@git checkout main >/dev/null 2>&1 || { echo "FAIL could not switch to main"; exit 1; }
+	@git pull --ff-only >/dev/null 2>&1 || { echo "FAIL pull failed (diverged or no upstream) - resolve manually"; exit 1; }
+	@echo "ok on main, up to date @ $$(git rev-parse --short HEAD)"
 
 # Report on the parts of the environment the Makefile can't install for you.
 # Versions are the ones BOOTSTRAP.md §3 pins. Never fails - a readout, not a gate.

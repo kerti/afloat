@@ -8,6 +8,9 @@ file grows as real targets land.
 - `make setup` — fresh clone: `hooks-install` (pre-commit pii-guard, seeds the gitignored
   `.pii-patterns`) + `claude-install` (hook executable bits, seeds `.claude/settings.local.json`).
 - `make doctor` — toolchain readout against `BOOTSTRAP.md` §3. Never fails.
+- `make start-task` — before new work: refuses a dirty tree, checks GitHub access, then switches to
+  `main` and fast-forwards it. The SessionStart hook runs it for you only when you are already on a
+  clean `main`; from a feature branch, run it yourself when you mean to leave that branch.
 - `make check` — the pre-push gate `pre-push-gate.sh` runs. `backend/` is wired (lint, build,
   `go test -race`, coverage), `frontend/` is wired (`check-frontend`), as are generated-code drift
   (Go and TypeScript), the env-var docs gate and the conformance case files. A new surface must be

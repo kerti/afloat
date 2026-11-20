@@ -2,6 +2,9 @@
 # Claude Code — personal, per-clone settings
 # ---------------------------------------------------------------------------
 .claude/settings.local.json
+# Agent worktrees (`isolation: worktree`). Untracked, they would make every
+# clean tree read dirty to `make start-task` and the SessionStart hook.
+.claude/worktrees/
 
 # ---------------------------------------------------------------------------
 # pre-commit pii-guard denylist — local only; the terms themselves are the PII

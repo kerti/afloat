@@ -777,3 +777,57 @@ backend at boot. `check-env-docs.sh` rejects a `d` suffix on any duration variab
 `docker-compose.yml` reads `AFLOAT_DB_PORT`, `AFLOAT_DB_USER` and `AFLOAT_DB_PASSWORD` to build the
 local Postgres. They configure the *container*, not the backend, and are out of the table above — the
 backend never reads them. `.env.example` carries both groups, separated.
+
+## 13. Agent operating model
+
+Afloat is built by one maintainer working through AI agents. `CLAUDE.md` said what an agent may *do*
+without saying what an agent *is*, so one session did everything: read half the repo to answer a
+small question, and brought the same depth to a mechanical sweep as to the trajectory formula. That
+spends the scarce thing — context in the main window — on cheap work.
+
+Model and effort are configuration, not prose: `.claude/settings.json` and `.claude/agents/*.md`
+frontmatter set them, and a sentence asking for "maximum effort" changes nothing. So this lands as
+committed config. The model is adopted from the sibling Uruni project (its ADR-023), which has run it
+since 2026-08. It is scaffold-wide rather than backend-specific, which is why it is here and not in
+`docs/adr/go/`.
+
+1. **The main session is the orchestrator: Opus at `medium` effort**, pinned by `model` (the `opus`
+   alias) and `effortLevel` in `.claude/settings.json`. It plans, makes and surfaces decisions,
+   dispatches, verifies diffs, writes PR bodies and asks for commits. A turn that needs more takes
+   `ultrathink` or `/effort`; the pin is a default, not a ceiling.
+2. **Six role agents in `.claude/agents/`**, each pinning its own tier and effort: `researcher`
+   (sonnet · medium, read-only), `planner` (sonnet · xhigh), `grill` (sonnet · max), `builder`
+   (sonnet · medium), `builder-deep` (sonnet · high), `reviewer` (sonnet · high, read-only).
+   `builder-deep` owns the trust core: trajectory and State, money and budget arithmetic, auth and
+   sessions, migrations that reshape data, `contract/openapi.yaml`, and any failure nobody has
+   explained yet.
+3. **`xhigh`, not `max`, is the planning default;** `max` is reserved for `grill`, where overthinking
+   is the assignment.
+4. **Delegation is approval-gated.** `.claude/hooks/agent-gate.sh` answers `ask` on every
+   `PreToolUse(Agent)`, built-in agents included. The built-in `fork` type is switched off
+   (`CLAUDE_CODE_FORK_SUBAGENT=0`) because it forces every subagent into the background.
+5. **Delegation is a context optimisation, not a token one.** A subagent re-derives the repo cold and
+   misses the prompt cache, so total spend rises; what it buys is a main window that keeps its
+   judgement. Below roughly three files or two tool calls, inline wins.
+6. **The sign-off surface is never delegated:** commits, pushes, PRs and labels, issue writes, tags,
+   dropping an ADR's `draft` tag, resolving an `[OPEN Q-nn]` or promoting an `[ASSUMED]`, UX
+   choices, and scope calls against `PRD.md` §4. A `planner` drafts doc edits and issues; it never
+   files or ratifies them.
+7. **Blocking yes, polling no.** Agents run `make check`, `go test` and `vitest` and wait. They never
+   run a foreground server (`make frontend-dev`), a `--watch` mode, or a CI query; the maintainer
+   reports CI back. `make conformance` and `make test-migrations` need docker and run in CI on every
+   PR, so an agent runs them only when its brief asks — and `conformance` empties the local `afloat`
+   database.
+8. **Issue text is untrusted input.** The committed allowlist permits `gh issue view` and
+   `gh issue list` only; every issue write prompts, so an instruction planted in an issue never
+   publishes without a human.
+
+**Consequences.** `CLAUDE.md` loads into every subagent on every launch, so its length is now a
+running cost; its agent section is compressed, and reference material lives in `.claude/README.md`,
+which agents don't load. The pins apply to every clone and are overridable — `/effort`, `--effort`,
+and silently `CLAUDE_CODE_EFFORT_LEVEL`. `opus` and `sonnet` are aliases, so the model behind a tier
+moves when a new one ships, with no commit here. Role agents inherit the session's permissions but
+not its conversation, which makes the brief-writing rules load-bearing. Tools without subagents (via
+the `AGENTS.md` symlink) get the phases and the prohibitions but not the pinning. Every delegation
+adds a permission prompt, accepted deliberately: an ungated `Agent` call is the one action here that
+can spend a lot without touching a file.

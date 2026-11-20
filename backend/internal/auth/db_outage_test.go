@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -30,6 +32,7 @@ type failingQuerier struct {
 	failGetUserByEmail        bool
 	failGetCredentialByUserID bool
 	failGetUserByID           bool
+	failGetLiveSession        bool
 	err                       error
 }
 
@@ -52,6 +55,13 @@ func (f failingQuerier) GetCredentialByUserID(ctx context.Context, userID pgtype
 		return db.Credential{}, f.failure()
 	}
 	return f.Querier.GetCredentialByUserID(ctx, userID)
+}
+
+func (f failingQuerier) GetLiveSession(ctx context.Context, arg db.GetLiveSessionParams) (db.Session, error) {
+	if f.failGetLiveSession {
+		return db.Session{}, f.failure()
+	}
+	return f.Querier.GetLiveSession(ctx, arg)
 }
 
 func (f failingQuerier) GetUserByID(ctx context.Context, id pgtype.UUID) (db.User, error) {
@@ -277,6 +287,69 @@ func TestGetMeAndLogoutLogAClientLeavingAsAWarning(t *testing.T) {
 			if out := logged.String(); strings.Count(out, `level=WARN msg="`+tc.msg+`"`) != 1 ||
 				strings.Contains(out, "level=ERROR") {
 				t.Errorf("want one Warn for %q and no Error; logged:\n%s", tc.msg, out)
+			}
+		})
+	}
+}
+
+// SessionMiddleware tells a session it could not read from one it read and
+// found dead, because sessionRequired answers them differently: 500 for the
+// first, 401 for the rest. Only the first leaves the cookie alone and sets the
+// flag; ErrNoRows on either lookup clears the cookie and does not; no cookie is
+// neither.
+func TestSessionMiddlewareFlagsOnlyAnUnreadableSession(t *testing.T) {
+	for name, tc := range map[string]struct {
+		cookie        string // "valid", "unknown", "" for none
+		fail          failingQuerier
+		softDelete    bool
+		wantUnresolve bool
+		wantCleared   bool
+	}{
+		"no cookie":                    {cookie: ""},
+		"session lookup outage":        {cookie: "valid", fail: failingQuerier{failGetLiveSession: true}, wantUnresolve: true},
+		"user lookup outage":           {cookie: "valid", fail: failingQuerier{failGetUserByID: true}, wantUnresolve: true},
+		"session lookup wrapped error": {cookie: "valid", fail: failingQuerier{failGetLiveSession: true, err: fmt.Errorf("get session: %w", context.DeadlineExceeded)}, wantUnresolve: true},
+		"unknown or expired session":   {cookie: "unknown", wantCleared: true},
+		"session outlived its user":    {cookie: "valid", softDelete: true, wantCleared: true},
+		"healthy session":              {cookie: "valid"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newHarness(t, time.Now)
+			householdID := h.tdb.CreateHousehold(t, "Test Household")
+			userID := h.tdb.CreateUser(t, householdID, "a@example.com", "A")
+			issued, err := h.auth.IssueSession(context.Background(), userID, "")
+			if err != nil {
+				t.Fatalf("IssueSession: %v", err)
+			}
+			if tc.softDelete {
+				if _, err := h.tdb.Pool.Exec(context.Background(),
+					`UPDATE users SET deleted_at = now() WHERE id = $1`, userID); err != nil {
+					t.Fatalf("soft-delete user: %v", err)
+				}
+			}
+			token := map[string]string{"valid": issued.Value, "unknown": "never-issued", "": ""}[tc.cookie]
+			tc.fail.Querier = h.tdb.Queries
+			h = h.withQuerier(tc.fail)
+
+			var unresolved bool
+			next := http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+				unresolved = auth.SessionUnresolved(r.Context())
+			})
+			req := httptest.NewRequest(http.MethodGet, "/api/me", nil)
+			if token != "" {
+				req.AddCookie(&http.Cookie{Name: auth.SessionCookieName, Value: token})
+			}
+			rec := httptest.NewRecorder()
+			h.auth.SessionMiddleware(next).ServeHTTP(rec, req)
+
+			if unresolved != tc.wantUnresolve {
+				t.Errorf("SessionUnresolved = %v, want %v", unresolved, tc.wantUnresolve)
+			}
+			if got := clearsCookie(rec); got != tc.wantCleared {
+				t.Errorf("clears the cookie = %v, want %v", got, tc.wantCleared)
+			}
+			if tc.wantUnresolve && len(rec.Result().Cookies()) != 0 {
+				t.Errorf("Set-Cookie = %v, want none: an unreadable session must never sign anyone out", rec.Result().Cookies())
 			}
 		})
 	}

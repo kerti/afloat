@@ -1,8 +1,8 @@
 # The database, not the caller, is the problem (#23, #27). An outage is never
 # a statement about an account: no cookie is cleared, no failure is counted
 # against an address. Login answers 500 INTERNAL (#23). A session that cannot
-# be resolved leaves the request unauthenticated - 401, cookie untouched, so
-# the same token works once the database is back (#27).
+# be read is not an invalid one: a route that needs it answers 500 INTERNAL,
+# cookie untouched, so the same token works once the database is back (#27).
 #
 # `outage: true` terminates every connection the backend holds to its
 # database and refuses new ones, until the request has been answered; the
@@ -52,8 +52,10 @@
         rows: [{sessions: 0, attempts: 0}]
 
 # The session is unreadable, not invalid. A cleared cookie here would sign
-# every user out for the length of the outage; the 401 alone does not.
-- name: outage - me with a session is 401 and keeps the cookie
+# every user out for the length of the outage, and a 401 would tell the client
+# to sign in again over a fault that is ours: 500, cookie kept, so the same
+# cookie works once the database is back (#27).
+- name: outage - me with a session is 500 and keeps the cookie
   issue: "27"
   given:
     - request:
@@ -68,8 +70,8 @@
     method: GET
     path: /me
   expect:
-    status: 401
-    body_json: {code: UNAUTHORIZED}
+    status: 500
+    body_json: {code: INTERNAL}
     cookies: {}
     rows:
       - sql: SELECT count(*)::int AS n FROM sessions

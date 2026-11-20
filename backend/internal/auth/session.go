@@ -142,7 +142,9 @@ func (h *Handlers) ClearSessionCookie(w http.ResponseWriter) {
 // context. It never rejects, so an unauthenticated request can still reach a
 // public route; whether an operation needs a session is decided from the
 // contract by the httpserver package's sessionRequired middleware, which
-// answers 401 when this left no User.
+// answers 401 when this left no User, or 500 when SessionUnresolved says the
+// lookup failed for infrastructure reasons: an unreadable session is not an
+// invalid one.
 func (h *Handlers) SessionMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		cookie, err := r.Cookie(SessionCookieName)
@@ -168,6 +170,7 @@ func (h *Handlers) SessionMiddleware(next http.Handler) http.Handler {
 				h.ClearSessionCookie(w)
 			} else {
 				logQueryError("session lookup", err)
+				r = r.WithContext(withSessionUnresolved(ctx))
 			}
 			next.ServeHTTP(w, r)
 			return
@@ -182,8 +185,10 @@ func (h *Handlers) SessionMiddleware(next http.Handler) http.Handler {
 				// An infrastructure failure is not a statement about this
 				// user's session: leave the cookie alone. The request
 				// proceeds unauthenticated, same as the session-lookup branch
-				// above (#27).
+				// above (#27), flagged so a route that needs a session
+				// answers 500 rather than 401.
 				logQueryError("session user lookup", err)
+				r = r.WithContext(withSessionUnresolved(ctx))
 			}
 			next.ServeHTTP(w, r)
 			return

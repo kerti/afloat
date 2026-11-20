@@ -465,7 +465,9 @@
       - sql: SELECT count(*)::int AS n FROM login_attempts
         rows: [{n: 0}]
 
-- name: change email - during an outage is unauthorized and changes nothing
+# The session cannot be read during an outage: the middleware's 500, not the 401
+# of an invalid session, with the cookie left alone (#27).
+- name: change email - during an outage is 500 and changes nothing
   issue: "119"
   given:
     - request:
@@ -478,8 +480,8 @@
     - outage: true
   request: *change
   expect:
-    status: 401
-    body_json: {code: UNAUTHORIZED}
+    status: 500
+    body_json: {code: INTERNAL}
     cookies: {}
     rows:
       - sql: SELECT email FROM users WHERE id = '0192f0a0-0000-7000-8000-0000000000a1'

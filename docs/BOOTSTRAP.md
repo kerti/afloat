@@ -340,8 +340,12 @@ answers "does not verify", never an error or a panic.
 **A database outage is not a statement about an account (#23, #27).** Only a lookup that genuinely
 found nothing counts as an absent user, credential or session: `pgx.ErrNoRows`. Every other failure — a dropped connection, an exhausted pool — answers login
 with `500 INTERNAL`, not `401 INVALID_CREDENTIALS`, and records **no** backoff failure. Session
-resolution **leaves the cookie alone** and lets the request continue unauthenticated, so `/me` answers
-`401` and the same cookie works again once the database is back. Answering an outage as though it were
+resolution **leaves the cookie alone** and marks the request as one whose session it could not read,
+so a route that needs a session answers `500 INTERNAL` and the same cookie works again once the
+database is back. An unreadable session is a `500` with the cookie kept; an invalid one (no such
+session, expired, or outliving its User: `pgx.ErrNoRows`) is a `401` with the cookie cleared; no cookie
+is a `401`. A `401` tells the client to sign in again, which is the wrong instruction over an outage.
+Answering an outage as though it were
 about the account costs something that outlives the outage: a password reset that was never needed,
 every address that tried to log in during it left sitting behind a backoff window, every active
 session logged out. A 500 is not an answer about any one address: an outage that takes the database
@@ -675,6 +679,9 @@ need only `onboardingCookie` are checked by their own handlers, which own that 4
 Enforcement is `httpserver`'s `sessionRequired`, which runs ahead of request validation. At startup
 it refuses a scheme name it does not know, and an operation naming both cookies: it cannot check a
 handshake, so that shape needs a ruling first.
+When the session cookie was presented but the lookup itself failed (an outage, not `pgx.ErrNoRows`),
+it answers `500 INTERNAL` instead of `401`, so every session-requiring operation declares a `500`
+(§5.1).
 
 **Trajectory is computed server-side.** The client formats and floors for display but derives
 nothing. This keeps one source of truth.

@@ -14,9 +14,10 @@
 # Household is untouched adds one in `given:`. `rows:` read the columns,
 # because a response can be right while the row behind it is not.
 #
-# Under an outage the session itself cannot be read, which is a 401 that leaves
-# the cookie alone (#27), so there is no handler 500 to see from here; the
-# backend's own suite covers that path (a failing UPDATE, a soft-deleted User).
+# Under an outage the session itself cannot be read, which the session
+# middleware answers 500 with the cookie left alone (#27); it never reaches the
+# handler, whose own 500s (a failing UPDATE, a soft-deleted User) the backend's
+# suite covers.
 
 - name: user settings - patch the name, trimmed
   issue: "119"
@@ -566,9 +567,10 @@
       - sql: SELECT user_display_name FROM users WHERE id = '0192f0a0-0000-7000-8000-0000000000a1'
         rows: [{user_display_name: Alice}]
 
-# The session cannot be read during an outage, so it is the middleware's 401,
-# with the cookie left alone (#27), and nothing is written.
-- name: user settings - patch during an outage is unauthorized and keeps the cookie
+# The session cannot be read during an outage, so it is the middleware's 500
+# (not the 401 of an invalid session), with the cookie left alone (#27), and
+# nothing is written.
+- name: user settings - patch during an outage is 500 and keeps the cookie
   issue: "119"
   given:
     - request:
@@ -586,8 +588,8 @@
       Content-Type: application/json
     body: '{"user_display_name":"Dewi"}'
   expect:
-    status: 401
-    body_json: {code: UNAUTHORIZED}
+    status: 500
+    body_json: {code: INTERNAL}
     cookies: {}
     rows:
       - sql: SELECT user_display_name FROM users WHERE id = '0192f0a0-0000-7000-8000-0000000000a1'

@@ -17,7 +17,6 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/kerti/afloat/backend/internal/db"
-	"github.com/kerti/afloat/backend/internal/httperr"
 )
 
 // SessionCookieName is deliberately not Balances' bare `session`. Host-only
@@ -132,9 +131,10 @@ func (h *Handlers) ClearSessionCookie(w http.ResponseWriter) {
 }
 
 // SessionMiddleware resolves the session cookie into a User on the request
-// context. It never rejects: handlers that require authentication wrap
-// themselves with RequireAuth, so an unauthenticated request can still reach a
-// public route.
+// context. It never rejects, so an unauthenticated request can still reach a
+// public route; whether an operation needs a session is decided from the
+// contract by the httpserver package's sessionRequired middleware, which
+// answers 401 when this left no User.
 func (h *Handlers) SessionMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		cookie, err := r.Cookie(SessionCookieName)
@@ -211,17 +211,6 @@ func (h *Handlers) touchIfStale(ctx context.Context, w http.ResponseWriter, sess
 	// The cookie must keep the PLAINTEXT the client presented. Writing the
 	// hashed id here would mean the next request's hash never matches this row.
 	h.setSessionCookie(w, token, newExpiry)
-}
-
-// RequireAuth rejects a request that SessionMiddleware did not attach a User to.
-func RequireAuth(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if _, ok := UserFromContext(r.Context()); !ok {
-			httperr.Write(w, http.StatusUnauthorized, httperr.CodeUnauthorized, nil)
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
 }
 
 func nullString(s string) *string {

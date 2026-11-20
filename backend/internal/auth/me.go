@@ -18,6 +18,10 @@ import (
 func (h *Handlers) GetMe(ctx context.Context, _ api.GetMeRequestObject) (api.GetMeResponseObject, error) {
 	user, ok := UserFromContext(ctx)
 	if !ok {
+		// Unreachable through the router: httpserver's sessionRequired answers
+		// 401 for this operation first. Kept because the User is read from the
+		// context, and a router change that lost the check should degrade to
+		// the contract's 401 rather than a lookup with a zero household_id.
 		return api.GetMe401JSONResponse{
 			UnauthorizedJSONResponse: api.UnauthorizedJSONResponse{Code: api.UNAUTHORIZED},
 		}, nil

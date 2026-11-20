@@ -184,6 +184,11 @@ paths:
         Provider-agnostic, and idempotent: calling it without a session is a
         success, not an error, so a client clearing a stale cookie never has to
         special-case the result. Revocation is the session row's deletion.
+      # Optional auth: the empty alternative lets a request with no session
+      # through, which the session-enforcing middleware would otherwise refuse.
+      security:
+        - sessionCookie: []
+        - {}
       responses:
         '204':
           description: The session is destroyed and the cookie cleared.

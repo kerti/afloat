@@ -113,14 +113,11 @@ func strictJSONBodyDecoder(body io.Reader, _ http.Header, _ *openapi3.SchemaRef,
 // never hand-patch api.gen.go to add this; the generator config already
 // owns it).
 //
-// AuthenticationFunc is a no-op: the contract's `security: [sessionCookie]`
-// documents that most routes expect a session, but enforcing that is
-// deliberately NOT this middleware's job. server.go's SessionMiddleware
-// resolves a session into a User but never rejects — each handler decides
-// for itself whether it needs one, so that a new authenticated route can't be
-// added without a deliberate choice. Wiring a real AuthenticationFunc here
-// would make the OpenAPI layer a second, earlier enforcement point with its
-// own opinion, which disagrees with that design the moment the two diverge.
+// AuthenticationFunc is a no-op: the contract's `security` is enforced by
+// sessionRequired (session_required.go), which runs ahead of this middleware
+// and reads the same requirements. This layer validates request shape only; a
+// real AuthenticationFunc here would be a second enforcement point with its
+// own opinion of what the requirements mean.
 //
 // MultiError is on so that every failure is collected and the reported one
 // is chosen by the rule in writeOpenAPIValidationError, not whichever check
@@ -160,14 +157,13 @@ func openapiRequestValidator() func(http.Handler) http.Handler {
 
 // withoutSecurityRequirements removes every security requirement from the
 // validator's copy of the spec (api.GetSpec decodes a fresh one per call).
-// Enforcing a session is the handlers' job, as AuthenticationFunc's comment
-// above says, so the requirements check nothing here - and kin-openapi pays
-// for them anyway: before it calls even a no-op AuthenticationFunc it reads the
-// whole request body into memory, on every operation that declares one. Under
-// maxBodyBytes a body over 1 MiB fails that read, the failure comes back as a
-// SecurityRequirementsError, and a logout or a signed-in /me answered 401 for a
-// body neither handler reads (#56). With no requirement left, kin-openapi
-// returns before the read.
+// sessionRequired enforces them before this middleware runs, so they check
+// nothing here - and kin-openapi pays for them anyway: before it calls even a
+// no-op AuthenticationFunc it reads the whole request body into memory, on
+// every operation that declares one. Under maxBodyBytes a body over 1 MiB
+// fails that read, the failure comes back as a SecurityRequirementsError, and
+// a logout or a signed-in /me answered 401 for a body neither handler reads
+// (#56). With no requirement left, kin-openapi returns before the read.
 func withoutSecurityRequirements(spec *openapi3.T) {
 	spec.Security = nil
 	for _, item := range spec.Paths.Map() {
@@ -260,10 +256,11 @@ func isToken(s string) bool {
 func writeOpenAPIValidationError(_ context.Context, err error, w http.ResponseWriter, r *http.Request, _ nethttpmiddleware.ErrorHandlerOpts) {
 	var secErr *openapi3filter.SecurityRequirementsError
 	if errors.As(err, &secErr) {
-		// Unreachable: withoutSecurityRequirements leaves nothing to fail.
-		// Kept so a change that restores the requirements degrades to the
-		// right code instead of a 500 below. Before #56 this was reached, by
-		// a body read failing inside the security check, not by a session.
+		// Unreachable: withoutSecurityRequirements leaves nothing to fail,
+		// and the session check is sessionRequired's. Kept so a change that
+		// restores the requirements degrades to the right code instead of a
+		// 500 below. Before #56 this was reached, by a body read failing
+		// inside the security check, not by a session.
 		slog.Warn("openapi validator: unexpected security failure", "path", r.URL.Path)
 		httperr.Write(w, http.StatusUnauthorized, httperr.CodeUnauthorized, nil)
 		return

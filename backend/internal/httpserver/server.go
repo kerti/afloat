@@ -154,10 +154,9 @@ func mountAPI(r chi.Router, srv *Server, d Deps) {
 	// Carries the client IP, User-Agent and presented token into the handler
 	// context: strict handlers receive only a context, not the request.
 	r.Use(auth.RequestContextMiddleware)
-	// Resolves a session into a User but never rejects. The generated wrapper
-	// mounts every route the same way, so authentication is enforced by each
-	// handler asking for its User rather than by route-level grouping — which
-	// means a new authenticated endpoint cannot be added without deciding.
+	// Resolves a session into a User but never rejects: a public route must
+	// still be reachable with a stale cookie. Enforcement is sessionRequired,
+	// per operation, below.
 	r.Use(d.Auth.SessionMiddleware)
 
 	// The generated routes mount under the contract's servers entry (basePath)
@@ -181,8 +180,10 @@ func mountAPI(r chi.Router, srv *Server, d Deps) {
 	r.Mount(basePath, api.HandlerWithOptions(strict, api.ChiServerOptions{
 		BaseRouter:       apiRouter,
 		ErrorHandlerFunc: paramErrorHandler,
-		// Per-operation, not r.Use above: this only ever runs once chi has
-		// matched a request to a route the contract declares (openapi_validate.go).
-		Middlewares: []api.MiddlewareFunc{openapiRequestValidator()},
+		// Per-operation, not r.Use above: these only ever run once chi has
+		// matched a request to a route the contract declares, so an unknown
+		// path or method keeps chi's own 404/405. Order matters:
+		// operationMiddlewares says why.
+		Middlewares: operationMiddlewares(),
 	}))
 }

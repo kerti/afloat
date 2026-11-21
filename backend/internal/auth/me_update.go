@@ -5,8 +5,6 @@ import (
 	"errors"
 	"log/slog"
 
-	"github.com/jackc/pgx/v5"
-
 	"github.com/kerti/afloat/backend/internal/api"
 	"github.com/kerti/afloat/backend/internal/db"
 	"github.com/kerti/afloat/backend/internal/httperr"
@@ -28,6 +26,9 @@ const timeZoneRule = "timezone"
 //
 // The User is the authenticated one, taken from the context and never from the
 // request, and the UPDATE filters on both of its ids in SQL.
+//
+// A 500 changes nothing: the UPDATE and the Household read the answer needs run
+// in one transaction (updateUserAndReadHousehold).
 func (h *Handlers) UpdateMe(ctx context.Context, request api.UpdateMeRequestObject) (api.UpdateMeResponseObject, error) {
 	user, ok := UserFromContext(ctx)
 	if !ok {
@@ -80,21 +81,20 @@ func (h *Handlers) UpdateMe(ctx context.Context, request api.UpdateMeRequestObje
 	}
 
 	// The answer is built from the row the UPDATE returned, not from the User in
-	// the context, which was read before the write.
-	row, err := h.q.UpdateUser(ctx, params)
+	// the context, which was read before the write. The write and the Household
+	// read are one transaction, so a 500 here changes nothing: it never means a
+	// change landed that the caller was told had failed.
+	row, household, err := h.updateUserAndReadHousehold(ctx, func(q *db.Queries) (db.User, error) {
+		return q.UpdateUser(ctx, params)
+	})
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, errUserMissing) {
 			// A User who is gone cannot be served coherently, as in GetMe.
 			slog.Error("update me: user missing", "user_id", user.ID)
 		} else {
 			// Nothing here logs a request body: a name is user content.
 			logQueryError("update me", err)
 		}
-		return internalError[api.UpdateMeResponseObject]()
-	}
-	household, err := h.q.GetHouseholdByID(ctx, row.HouseholdID)
-	if err != nil {
-		logQueryError("update me: look up household", err)
 		return internalError[api.UpdateMeResponseObject]()
 	}
 	return api.UpdateMe200JSONResponse(meResponse(row, household)), nil

@@ -237,7 +237,7 @@ func (h harness) withBeginner(b auth.Beginner) harness {
 type breakingQuerier struct {
 	db.Querier
 
-	failGetCredential, failGetBackoff, failUpdateUserEmail, failGetHousehold bool
+	failGetCredential, failGetBackoff bool
 }
 
 func (b breakingQuerier) GetCredentialByUserID(ctx context.Context, id pgtype.UUID) (db.Credential, error) {
@@ -254,57 +254,66 @@ func (b breakingQuerier) GetLoginBackoff(ctx context.Context, keys []string) (fl
 	return b.Querier.GetLoginBackoff(ctx, keys)
 }
 
-func (b breakingQuerier) UpdateUserEmail(ctx context.Context, arg db.UpdateUserEmailParams) (db.User, error) {
-	if b.failUpdateUserEmail {
-		return db.User{}, errOutage
-	}
-	return b.Querier.UpdateUserEmail(ctx, arg)
-}
-
-func (b breakingQuerier) GetHouseholdByID(ctx context.Context, id pgtype.UUID) (db.Household, error) {
-	if b.failGetHousehold {
-		return db.Household{}, errOutage
-	}
-	return b.Querier.GetHouseholdByID(ctx, id)
-}
-
-// failingTxBeginner begins real transactions whose statements fail once their
-// SQL contains failOn: an outage part-way through, with the earlier statements
-// already run and so needing the rollback.
+// failingTxBeginner begins real transactions that fail part-way: a statement
+// whose SQL contains failOn, the Begin itself, or the Commit, as the test
+// names. The earlier statements have already run, so the failure needs the
+// rollback. The zero value fails nothing.
+//
+// A failed Commit rolls the real transaction back before it reports the
+// failure, as a connection that dies during COMMIT leaves nothing behind, and
+// so that the test's connection is not left holding the transaction open.
 type failingTxBeginner struct {
 	auth.Beginner
-	failOn string
+	failOn     string
+	failBegin  bool
+	failCommit bool
 }
 
 func (b failingTxBeginner) Begin(ctx context.Context) (pgx.Tx, error) {
+	if b.failBegin {
+		return nil, errOutage
+	}
 	tx, err := b.Beginner.Begin(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return failingTx{Tx: tx, failOn: b.failOn}, nil
+	return failingTx{Tx: tx, failOn: b.failOn, failCommit: b.failCommit}, nil
 }
 
 type failingTx struct {
 	pgx.Tx
-	failOn string
+	failOn     string
+	failCommit bool
+}
+
+func (t failingTx) fails(sql string) bool {
+	return t.failOn != "" && strings.Contains(sql, t.failOn)
+}
+
+func (t failingTx) Commit(ctx context.Context) error {
+	if t.failCommit {
+		_ = t.Rollback(ctx)
+		return errOutage
+	}
+	return t.Tx.Commit(ctx)
 }
 
 func (t failingTx) Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
-	if strings.Contains(sql, t.failOn) {
+	if t.fails(sql) {
 		return pgconn.CommandTag{}, errOutage
 	}
 	return t.Tx.Exec(ctx, sql, args...)
 }
 
 func (t failingTx) Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error) {
-	if strings.Contains(sql, t.failOn) {
+	if t.fails(sql) {
 		return nil, errOutage
 	}
 	return t.Tx.Query(ctx, sql, args...)
 }
 
 func (t failingTx) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
-	if strings.Contains(sql, t.failOn) {
+	if t.fails(sql) {
 		return failingRow{}
 	}
 	return t.Tx.QueryRow(ctx, sql, args...)
@@ -313,3 +322,15 @@ func (t failingTx) QueryRow(ctx context.Context, sql string, args ...any) pgx.Ro
 type failingRow struct{}
 
 func (failingRow) Scan(...any) error { return errOutage }
+
+// writeThenAnswerFailures are the four steps of a User-settings write that
+// answers with the Household: the transaction's begin, the UPDATE, the read of
+// the Household and the commit. Each is failed in turn, so a 500 from any of
+// them must leave the users row as it was (the read and the commit with the
+// UPDATE already run).
+var writeThenAnswerFailures = map[string]failingTxBeginner{
+	"begin":          {failBegin: true},
+	"update":         {failOn: "UPDATE users"},
+	"household read": {failOn: "FROM households"},
+	"commit":         {failCommit: true},
+}

@@ -3,7 +3,6 @@ package auth_test
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -12,7 +11,6 @@ import (
 	"time"
 
 	"github.com/kerti/afloat/backend/internal/api"
-	"github.com/kerti/afloat/backend/internal/db"
 	"github.com/kerti/afloat/backend/internal/httperr"
 )
 
@@ -300,30 +298,33 @@ func TestUpdateMeNoUserInContextIsUnauthorized(t *testing.T) {
 	}
 }
 
-type failingUpdateUser struct{ db.Querier }
+// A 500 changes nothing. The UPDATE and the Household read the answer needs are
+// one transaction, so an outage at its begin, the UPDATE, the read or the commit
+// answers 500 INTERNAL, says nothing about the cause, and leaves the users row
+// byte for byte as it was. The read and the commit fail with the UPDATE already
+// run: were the read outside the transaction, the name would have changed under
+// a 500.
+func TestUpdateMeAFailureInsideTheTransactionChangesNothing(t *testing.T) {
+	for name, fail := range writeThenAnswerFailures {
+		t.Run(name, func(t *testing.T) {
+			h := newHarness(t, time.Now)
+			m := h.seedMemberAlone(t, "a@example.com")
+			before := h.userRow(t, m.id)
+			fail.Beginner = h.tdb.Pool
+			h = h.withBeginner(fail)
 
-func (failingUpdateUser) UpdateUser(context.Context, db.UpdateUserParams) (db.User, error) {
-	return db.User{}, errors.New("connection reset by peer")
-}
-
-// A database failure is 500 INTERNAL, says nothing about the cause, and wrote
-// nothing.
-func TestUpdateMeADatabaseFailureIsInternal(t *testing.T) {
-	h := newHarness(t, time.Now)
-	m := h.seedMemberAlone(t, "a@example.com")
-	h = h.withQuerier(failingUpdateUser{h.tdb.Queries})
-	before := h.userRow(t, m.id)
-
-	resp := h.updateMe(h.ctx(t, m, "198.51.100.1"), t, api.UpdateMeRequest{UserDisplayName: ptr("New")})
-	got, is := resp.(api.UpdateMe500JSONResponse)
-	if !is {
-		t.Fatalf("response = %#v, want 500", resp)
-	}
-	if got.Code != api.INTERNAL || got.Args != nil {
-		t.Errorf("body = %+v, want only the INTERNAL code", got.InternalErrorJSONResponse)
-	}
-	if h.userRow(t, m.id) != before {
-		t.Error("a failed PATCH wrote")
+			resp := h.updateMe(h.ctx(t, m, "198.51.100.1"), t, api.UpdateMeRequest{UserDisplayName: ptr("New")})
+			got, is := resp.(api.UpdateMe500JSONResponse)
+			if !is {
+				t.Fatalf("response = %#v, want 500", resp)
+			}
+			if got.Code != api.INTERNAL || got.Args != nil {
+				t.Errorf("body = %+v, want only the INTERNAL code", got.InternalErrorJSONResponse)
+			}
+			if h.userRow(t, m.id) != before {
+				t.Error("a 500 left the users row changed")
+			}
+		})
 	}
 }
 

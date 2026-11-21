@@ -495,6 +495,13 @@ lower-cased before it is stored, so `Me.email` may differ in case from what was 
 address in any case, and a soft-deleted User's, are not taken. The change is not verified: there is no
 mail transport, so a well-formed typo becomes the sign-in handle at once.
 
+**A `500` from `PATCH /me` or change email changed nothing.** Each answers with the Household as well as
+the User, so the `UPDATE` and the Household read run in one transaction: a failure at its begin, the
+`UPDATE`, the read or the commit rolls back and answers `500 INTERNAL` with the row as it was. A `500`
+never means a change landed that the caller was told had failed. A `409 EMAIL_TAKEN` is the same
+rollback. The current-password proof runs before the transaction, so a wrong or throttled attempt
+never opens one.
+
 **Registration is rate limited like login, with its own key.** It runs Argon2 on unauthenticated
 input, the exposure #33 capped. It shares login's concurrency permit (the bound is on total Argon2 work
 whatever its source) and its discipline: the per-IP backoff is read before queueing, **read again under

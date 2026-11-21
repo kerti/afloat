@@ -182,14 +182,12 @@ func TestChangeEmailNoUserInContextIsUnauthorized(t *testing.T) {
 	}
 }
 
-// An outage at any query is 500; the credential read and the backoff read
-// record no failure, and a failed write leaves the row as it was.
-func TestChangeEmailAnOutageIs500AndRecordsNothing(t *testing.T) {
+// An outage reading the credential or the backoff is 500 and records no
+// failure. The write and the Household read are the next test's.
+func TestChangeEmailAnOutageBeforeTheWriteIs500AndRecordsNothing(t *testing.T) {
 	for name, broken := range map[string]func(q breakingQuerier) breakingQuerier{
 		"credential read": func(q breakingQuerier) breakingQuerier { q.failGetCredential = true; return q },
 		"backoff read":    func(q breakingQuerier) breakingQuerier { q.failGetBackoff = true; return q },
-		"update":          func(q breakingQuerier) breakingQuerier { q.failUpdateUserEmail = true; return q },
-		"household read":  func(q breakingQuerier) breakingQuerier { q.failGetHousehold = true; return q },
 	} {
 		t.Run(name, func(t *testing.T) {
 			h := newHarness(t, time.Now)
@@ -208,6 +206,41 @@ func TestChangeEmailAnOutageIs500AndRecordsNothing(t *testing.T) {
 			}
 			if h.sessionRows(t, m.id) != sessions || !h.live(t, callers) {
 				t.Error("a failed change touched a session")
+			}
+		})
+	}
+}
+
+// A 500 changes nothing. The write and the Household read the answer needs are
+// one transaction, so an outage at its begin, its UPDATE, the read or the
+// commit leaves the users row byte for byte as it was, and no session touched.
+// The read and the commit fail with the UPDATE already run: were the read
+// outside the transaction, the address would have moved under a 500.
+func TestChangeEmailAFailureInsideTheTransactionChangesNothing(t *testing.T) {
+	for name, fail := range writeThenAnswerFailures {
+		t.Run(name, func(t *testing.T) {
+			h := newHarness(t, time.Now)
+			m := h.seedMemberAlone(t, "old@example.com")
+			callers := h.signIn(t, m)
+			user, credential, sessions := h.userRow(t, m.id), h.credentialRow(t, m.id), h.sessionRows(t, m.id)
+			fail.Beginner = h.tdb.Pool
+			h = h.withBeginner(fail)
+
+			resp := h.changeEmail(h.ctx(t, m, "198.51.100.1"), t, "new@example.com", goodPassword)
+			got, is := resp.(api.ChangeLocalEmail500JSONResponse)
+			if !is || got.Code != api.INTERNAL || got.Args != nil {
+				t.Fatalf("response = %#v, want 500 INTERNAL", resp)
+			}
+			if h.userRow(t, m.id) != user {
+				t.Error("a 500 left the users row changed")
+			}
+			if h.credentialRow(t, m.id) != credential || h.sessionRows(t, m.id) != sessions || !h.live(t, callers) {
+				t.Error("a failed change touched the credential or a session")
+			}
+			// The password was proved before the transaction, so its failed
+			// guesses are forgotten whatever the write did.
+			if n := h.loginAttemptRows(t); n != 0 {
+				t.Errorf("login_attempts rows = %d, want 0", n)
 			}
 		})
 	}

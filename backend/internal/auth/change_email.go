@@ -5,8 +5,6 @@ import (
 	"errors"
 	"log/slog"
 
-	"github.com/jackc/pgx/v5"
-
 	"github.com/kerti/afloat/backend/internal/api"
 	"github.com/kerti/afloat/backend/internal/db"
 )
@@ -22,6 +20,9 @@ import (
 // state is never revealed to a caller who has not proved the password. There is
 // no lookup beforehand: the unique index is the race-free answer, and the hash
 // has already been paid for.
+//
+// A 500 changes nothing: the UPDATE and the Household read run in one
+// transaction (updateUserAndReadHousehold).
 func (h *Handlers) ChangeLocalEmail(ctx context.Context, request api.ChangeLocalEmailRequestObject) (api.ChangeLocalEmailResponseObject, error) {
 	user, ok := UserFromContext(ctx)
 	if !ok {
@@ -61,30 +62,29 @@ func (h *Handlers) ChangeLocalEmail(ctx context.Context, request api.ChangeLocal
 	proof.release()
 	proof.clear()
 
-	row, err := h.q.UpdateUserEmail(proof.ctx, db.UpdateUserEmailParams{
-		Email:       email,
-		UserID:      user.ID,
-		HouseholdID: user.HouseholdID,
+	// The write and the Household read the answer needs are one transaction, on
+	// the proof's context, so a 500 from here changes nothing: the address is
+	// never moved under a caller who was told it failed.
+	row, household, err := h.updateUserAndReadHousehold(proof.ctx, func(q *db.Queries) (db.User, error) {
+		return q.UpdateUserEmail(proof.ctx, db.UpdateUserEmailParams{
+			Email:       email,
+			UserID:      user.ID,
+			HouseholdID: user.HouseholdID,
+		})
 	})
 	switch {
 	case isEmailTaken(err):
-		// Nothing changed. The caller's own address, in any case, is their own
-		// row and no conflict; a soft-deleted User's is free (the index is
-		// partial).
+		// Nothing changed: the unique violation aborted the transaction, which
+		// rolled back. The caller's own address, in any case, is their own row and
+		// no conflict; a soft-deleted User's is free (the index is partial).
 		return api.ChangeLocalEmail409JSONResponse{
 			ConflictJSONResponse: api.ConflictJSONResponse{Code: api.EMAILTAKEN},
 		}, nil
-	case errors.Is(err, pgx.ErrNoRows):
+	case errors.Is(err, errUserMissing):
 		slog.Error("change email: user missing", "user_id", user.ID)
 		return internalError[api.ChangeLocalEmailResponseObject]()
 	case err != nil:
-		slog.Error("change email: update", "err", err)
-		return internalError[api.ChangeLocalEmailResponseObject]()
-	}
-
-	household, err := h.q.GetHouseholdByID(proof.ctx, row.HouseholdID)
-	if err != nil {
-		slog.Error("change email: look up household", "err", err)
+		logQueryError("change email", err)
 		return internalError[api.ChangeLocalEmailResponseObject]()
 	}
 	return api.ChangeLocalEmail200JSONResponse(meResponse(row, household)), nil

@@ -61,16 +61,30 @@ func requestLogger(next http.Handler) http.Handler {
 	})
 }
 
-// localLoginPath and localRegisterPath are the local provider's mounted paths —
-// the routes disabledLocalAuth404 gates. The prefix is the spec's (basePath); the
-// rest is spelled out, because the generated api package has no constant for it.
+// The local provider's mounted paths, and localPaths the set of them —
+// the routes disabledLocalAuth404 gates: everything under /auth/local/, which is where a
+// route goes that needs the local credential (BOOTSTRAP.md §5.2). The prefix is
+// the spec's (basePath); the rest is spelled out, because the generated api
+// package has no constant for it. Adding an operation under /auth/local/ means
+// adding it here: a path left off stays live with local sign-in off, and
+// TestEveryLocalRouteIsGated reads the contract to catch one that was.
 //
 // The onboarding routes (/onboarding/*) are not here: the gate is shared with
 // providers still to come, and with no registration it simply has no handshake
-// to honour, so it answers 401 to everyone.
+// to honour, so it answers 401 to everyone. Nor is PATCH /me: a name, a
+// language and a zone are not credentials.
 var (
-	localLoginPath    = basePath + "/auth/local/login"
-	localRegisterPath = basePath + "/auth/local/register"
+	localLoginPath          = basePath + "/auth/local/login"
+	localRegisterPath       = basePath + "/auth/local/register"
+	localChangePasswordPath = basePath + "/auth/local/change-password"
+	localChangeEmailPath    = basePath + "/auth/local/change-email"
+
+	localPaths = map[string]struct{}{
+		localLoginPath:          {},
+		localRegisterPath:       {},
+		localChangePasswordPath: {},
+		localChangeEmailPath:    {},
+	}
 )
 
 // disabledLocalAuth404 makes the local provider's routes answer a bare 404 when
@@ -88,7 +102,7 @@ func disabledLocalAuth404(enabled bool) func(http.Handler) http.Handler {
 			return next
 		}
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.URL.Path == localLoginPath || r.URL.Path == localRegisterPath {
+			if _, gated := localPaths[r.URL.Path]; gated {
 				// A HEAD for an unregistered path goes through headAsGet, which
 				// drops the body before net/http can count it. Written to the
 				// bare writer instead, net/http would count the 19 bytes it was

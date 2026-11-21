@@ -1,0 +1,25 @@
+{
+  "about": "What PATCH /me's `time_zone` accepts: go-playground/validator's `timezone` tag, which is time.LoadLocation plus a refusal of \"\" and \"local\" (D5, #119). Only rows whose answer does not depend on the host: no wrong-case spelling (asia/jakarta) and no legacy file (EST, Factory, posixrules), which a case-insensitive filesystem or an unusual zoneinfo directory answers differently. The binary embeds time/tzdata as a floor: LoadLocation reads the host's zoneinfo first and falls back to the embedded copy. Read by backend/internal/auth/me_update_integration_test.go.",
+  "valid": [
+    "Asia/Jakarta",
+    "Asia/Makassar",
+    "America/New_York",
+    "Europe/London",
+    "Etc/GMT+7",
+    "UTC"
+  ],
+  "invalid": [
+    "",
+    "Local",
+    "local",
+    "Mars/Base",
+    "Asia/Atlantis",
+    "../etc/passwd",
+    "/etc/localtime",
+    "Asia/Jakarta ",
+    " Asia/Jakarta",
+    "Asia\\Jakarta",
+    "+07:00",
+    "GMT+7"
+  ]
+}

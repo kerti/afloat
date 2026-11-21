@@ -18,7 +18,11 @@
     "email": "email",
     "password": "password",
     "user_display_name": "name",
-    "household_display_name": "household name"
+    "household_display_name": "household name",
+    "time_zone": "time zone",
+    "locale": "language",
+    "current_password": "current password",
+    "new_password": "new password"
   },
   "login": {
     "title": "Sign in",
@@ -32,6 +36,7 @@
     "household": "Household: {{name}}",
     "comingSoon": "Your dashboard will appear here.",
     "settingsLink": "Household settings",
+    "userSettingsLink": "Your settings",
     "signOut": "Sign out"
   },
   "pwa": {
@@ -56,7 +61,8 @@
       "min": "Use at least 10 characters.",
       "breached": "That password is too common. Pick another."
     },
-    "FOUNDING_DISABLED": "This instance isn't accepting new Households. Ask whoever runs it."
+    "FOUNDING_DISABLED": "This instance isn't accepting new Households. Ask whoever runs it.",
+    "INVALID_CURRENT_PASSWORD": "That isn't your current password."
   },
   "register": {
     "title": "Create your account",
@@ -85,6 +91,42 @@
       "saved": "Saved.",
       "back": "Back",
       "periodStartDayHint": "Each Budget Period starts on this day, from 1 to 28. Changing it re-dates your Budget Periods straight away."
+    },
+    "user": {
+      "title": "Your settings",
+      "back": "Back",
+      "profile": {
+        "heading": "Profile",
+        "name": "Your name",
+        "language": "Language",
+        "timeZone": "Time zone",
+        "save": "Save",
+        "saving": "Saving…",
+        "saved": "Saved."
+      },
+      "languages": {
+        "enGB": "English (UK)",
+        "idID": "Bahasa Indonesia"
+      },
+      "email": {
+        "heading": "Email",
+        "newEmail": "New email",
+        "currentPassword": "Current password",
+        "submit": "Change email",
+        "submitting": "Changing…",
+        "saved": "Saved. Sign in with {{email}} from now on."
+      },
+      "password": {
+        "heading": "Password",
+        "hint": "Changing your password signs you out everywhere else.",
+        "currentPassword": "Current password",
+        "newPassword": "New password",
+        "confirm": "Confirm new password",
+        "mismatch": "The new passwords don't match. Type them again.",
+        "submit": "Change password",
+        "submitting": "Changing…",
+        "saved": "Password changed."
+      }
     }
   }
 }

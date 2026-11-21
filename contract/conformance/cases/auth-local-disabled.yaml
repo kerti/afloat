@@ -213,3 +213,195 @@
     status: 401
     body_json: {code: UNAUTHORIZED}
     cookies: {}
+
+# The local provider's other two routes (#119), behind the same gate: a password
+# or an address is changed against the local credential, so with local off the
+# routes answer exactly like an unregistered path, on every method and every
+# spelling, before any session is looked at. Nothing is written or recorded.
+- name: local change-password disabled - POST is an unregistered-path 404
+  issue: "119"
+  profile: local-disabled
+  request:
+    method: POST
+    path: /auth/local/change-password
+    headers:
+      Content-Type: application/json
+    body: '{"current_password":"conformance-correct-horse","new_password":"kucing oranye di atap"}'
+  expect:
+    status: 404
+    same_as:
+      method: POST
+      path: /no-such-route
+      headers:
+        Content-Type: application/json
+      body: '{"current_password":"conformance-correct-horse","new_password":"kucing oranye di atap"}'
+    cookies: {}
+    rows: *nothing-opened
+
+- name: local change-password disabled - GET is an unregistered-path 404, not a 405
+  issue: "119"
+  profile: local-disabled
+  request:
+    method: GET
+    path: /auth/local/change-password
+  expect:
+    status: 404
+    same_as:
+      method: GET
+      path: /no-such-route
+
+- name: local change-password disabled - PATCH is an unregistered-path 404
+  issue: "119"
+  profile: local-disabled
+  request:
+    method: PATCH
+    path: /auth/local/change-password
+    headers:
+      Content-Type: application/json
+    body: '{}'
+  expect:
+    status: 404
+    same_as:
+      method: PATCH
+      path: /no-such-route
+      headers:
+        Content-Type: application/json
+      body: '{}'
+
+- name: local change-password disabled - an encoded spelling of the path is gated too
+  issue: "119"
+  profile: local-disabled
+  request:
+    method: POST
+    path: /auth/local/change-%70assword
+    headers:
+      Content-Type: application/json
+    body: '{"current_password":"conformance-correct-horse","new_password":"kucing oranye di atap"}'
+  expect:
+    status: 404
+    same_as:
+      method: POST
+      path: /no-such-route
+      headers:
+        Content-Type: application/json
+      body: '{"current_password":"conformance-correct-horse","new_password":"kucing oranye di atap"}'
+    rows: *nothing-opened
+
+- name: local change-password disabled - HEAD is an unregistered-path 404
+  issue: "119"
+  profile: local-disabled
+  request:
+    method: HEAD
+    path: /auth/local/change-password
+  expect:
+    status: 404
+    same_as:
+      method: HEAD
+      path: /no-such-route
+
+- name: local change-password disabled - an unknown method answers like an unregistered path
+  issue: "119"
+  profile: local-disabled
+  request:
+    method: BREW
+    path: /auth/local/change-password
+  expect:
+    status: 405
+    same_as:
+      method: BREW
+      path: /no-such-route
+    rows: *nothing-opened
+
+- name: local change-email disabled - POST is an unregistered-path 404
+  issue: "119"
+  profile: local-disabled
+  request:
+    method: POST
+    path: /auth/local/change-email
+    headers:
+      Content-Type: application/json
+    body: '{"email":"new@example.com","current_password":"conformance-correct-horse"}'
+  expect:
+    status: 404
+    same_as:
+      method: POST
+      path: /no-such-route
+      headers:
+        Content-Type: application/json
+      body: '{"email":"new@example.com","current_password":"conformance-correct-horse"}'
+    cookies: {}
+    rows: *nothing-opened
+
+- name: local change-email disabled - GET is an unregistered-path 404, not a 405
+  issue: "119"
+  profile: local-disabled
+  request:
+    method: GET
+    path: /auth/local/change-email
+  expect:
+    status: 404
+    same_as:
+      method: GET
+      path: /no-such-route
+
+- name: local change-email disabled - PATCH is an unregistered-path 404
+  issue: "119"
+  profile: local-disabled
+  request:
+    method: PATCH
+    path: /auth/local/change-email
+    headers:
+      Content-Type: application/json
+    body: '{}'
+  expect:
+    status: 404
+    same_as:
+      method: PATCH
+      path: /no-such-route
+      headers:
+        Content-Type: application/json
+      body: '{}'
+
+- name: local change-email disabled - an encoded spelling of the path is gated too
+  issue: "119"
+  profile: local-disabled
+  request:
+    method: POST
+    path: /auth/local/ch%61nge-email
+    headers:
+      Content-Type: application/json
+    body: '{"email":"new@example.com","current_password":"conformance-correct-horse"}'
+  expect:
+    status: 404
+    same_as:
+      method: POST
+      path: /no-such-route
+      headers:
+        Content-Type: application/json
+      body: '{"email":"new@example.com","current_password":"conformance-correct-horse"}'
+    rows: *nothing-opened
+
+- name: local change-email disabled - HEAD is an unregistered-path 404
+  issue: "119"
+  profile: local-disabled
+  request:
+    method: HEAD
+    path: /auth/local/change-email
+  expect:
+    status: 404
+    same_as:
+      method: HEAD
+      path: /no-such-route
+
+- name: local change-email disabled - an unknown method answers like an unregistered path
+  issue: "119"
+  profile: local-disabled
+  request:
+    method: BREW
+    path: /auth/local/change-email
+  expect:
+    status: 405
+    same_as:
+      method: BREW
+      path: /no-such-route
+    rows: *nothing-opened

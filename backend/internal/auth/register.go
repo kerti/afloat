@@ -142,9 +142,7 @@ func (h *Handlers) registerThrottled(ctx context.Context, keys []string) (*api.L
 	if wait <= 0 {
 		return nil, nil
 	}
-	// Rounded up: a Retry-After of 0 invites an immediate retry that is still
-	// inside the window.
-	retryAfter := int(wait.Seconds()) + 1
+	retryAfter := retryAfterSeconds(wait)
 	return &api.LocalRegister429JSONResponse{
 		TooManyRequestsJSONResponse: api.TooManyRequestsJSONResponse{
 			Body:    api.Error{Code: api.TOOMANYATTEMPTS},
@@ -205,7 +203,22 @@ func registrationUserDisplayName(supplied *string, email string) (name, rule str
 		local, _, _ := strings.Cut(email, "@")
 		name = truncateCodePoints(local, maxUserDisplayNameCodePoints)
 	}
+	return CheckUserDisplayName(name)
+}
+
+// CheckUserDisplayName is the one rule for a User's name, called by
+// registration (after it has defaulted a blank one) and by editing (PATCH
+// /me), so neither can store a name the other would refuse (BOOTSTRAP.md
+// §5.1.1). It returns the name as it is to be stored, trimmed, and the
+// VALIDATION rule it breaks, or "" when it is fine: `required` for one with
+// nothing visible in it, `pattern` for a U+0000, which Postgres cannot store.
+// There is no length rule here: the contract's maxLength of 255 counts the
+// padding, so a trimmed name cannot exceed it.
+func CheckUserDisplayName(raw string) (name, rule string) {
+	name = strings.TrimSpace(raw)
 	switch {
+	case name == "":
+		return name, "required"
 	case !storable(name):
 		return name, "pattern"
 	case invisible(name):
@@ -254,16 +267,21 @@ func resolveLocale(supplied *string) string {
 // it cannot arrive: the contract's maxLength (1024, the policy's own cap, both
 // in code points) is enforced before any handler runs.
 func weakPassword(err error) api.LocalRegisterResponseObject {
-	reason := "min"
-	if errors.Is(err, ErrPasswordCommon) {
-		reason = "breached"
-	}
 	return api.LocalRegister400JSONResponse{
 		BadRequestJSONResponse: api.BadRequestJSONResponse{
 			Code: api.WEAKPASSWORD,
-			Args: &map[string]interface{}{"reason": reason},
+			Args: &map[string]interface{}{"reason": weakPasswordReason(err)},
 		},
 	}
+}
+
+// weakPasswordReason is the WEAK_PASSWORD args.reason for a policy refusal,
+// shared by every route that sets a password.
+func weakPasswordReason(err error) string {
+	if errors.Is(err, ErrPasswordCommon) {
+		return "breached"
+	}
+	return "min"
 }
 
 func invalidRegistrationField(field, rule string) api.LocalRegisterResponseObject {

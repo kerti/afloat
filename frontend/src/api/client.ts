@@ -4,6 +4,9 @@ export type ErrorCode = components["schemas"]["ErrorCode"];
 export type Me = components["schemas"]["Me"];
 export type Household = components["schemas"]["Household"];
 export type UpdateHouseholdRequest = components["schemas"]["UpdateHouseholdRequest"];
+export type UpdateMeRequest = components["schemas"]["UpdateMeRequest"];
+export type ChangePasswordRequest = components["schemas"]["ChangePasswordRequest"];
+export type ChangeEmailRequest = components["schemas"]["ChangeEmailRequest"];
 export type AuthMethods = components["schemas"]["AuthMethods"];
 export type LocalLoginRequest = components["schemas"]["LocalLoginRequest"];
 export type LocalRegisterRequest = components["schemas"]["LocalRegisterRequest"];
@@ -51,6 +54,7 @@ const errorCodeKnown: Record<ErrorCode, true> = {
   EMAIL_TAKEN: true,
   WEAK_PASSWORD: true,
   FOUNDING_DISABLED: true,
+  INVALID_CURRENT_PASSWORD: true,
   INTERNAL: true,
 };
 export const errorCodes = Object.keys(errorCodeKnown) as ErrorCode[];
@@ -127,6 +131,36 @@ export async function updateHousehold(body: UpdateHouseholdRequest): Promise<Hou
       body: JSON.stringify(body),
     })
   ).json() as Promise<Household>;
+}
+
+export async function updateMe(body: UpdateMeRequest): Promise<Me> {
+  return (
+    await request("/me", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    })
+  ).json() as Promise<Me>;
+}
+
+export async function changeEmail(body: ChangeEmailRequest): Promise<Me> {
+  return (
+    await request("/auth/local/change-email", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    })
+  ).json() as Promise<Me>;
+}
+
+// Answers 204 and sets a fresh session cookie the browser keeps; the client
+// reads none and holds no token.
+export async function changePassword(body: ChangePasswordRequest): Promise<void> {
+  await request("/auth/local/change-password", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
 }
 
 export async function logout(): Promise<void> {

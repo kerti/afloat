@@ -2,6 +2,7 @@ package httpserver
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -449,5 +450,119 @@ func TestTheUnprotectedOperationsArePinned(t *testing.T) {
 	if !slices.Equal(got, want) {
 		t.Errorf("operations not requiring a session = %v, want %v\n"+
 			"If this change is deliberate, update the list in this test; otherwise an operation has lost its session requirement.", got, want)
+	}
+}
+
+// sessionStub answers the two lookups SessionMiddleware makes and nothing else:
+// any other query hits the nil embedded Querier, so a test that reaches a
+// handler it did not mean to fails loudly.
+type sessionStub struct {
+	db.Querier
+	sessionErr, userErr error
+}
+
+func (s sessionStub) GetLiveSession(context.Context, db.GetLiveSessionParams) (db.Session, error) {
+	return db.Session{}, s.sessionErr
+}
+
+func (s sessionStub) GetUserByID(context.Context, pgtype.UUID) (db.User, error) {
+	return db.User{}, s.userErr
+}
+
+// An unreadable session is a 500 with the cookie left alone; an invalid one is
+// a 401 that clears it; no cookie is a 401 that touches nothing (#27). Swept
+// over every operation the contract protects, so a new one inherits the rule.
+func TestEveryOperationRequiringASessionAnswersAnUnreadableSessionWith500(t *testing.T) {
+	spec, err := api.GetSpec()
+	if err != nil {
+		t.Fatalf("load contract: %v", err)
+	}
+	outage := errors.New("connection reset by peer")
+
+	for name, tc := range map[string]struct {
+		q           sessionStub
+		cookie      bool
+		wantStatus  int
+		wantCode    string
+		wantCleared bool
+	}{
+		"session lookup outage": {q: sessionStub{sessionErr: outage}, cookie: true, wantStatus: http.StatusInternalServerError, wantCode: "INTERNAL"},
+		"user lookup outage":    {q: sessionStub{userErr: outage}, cookie: true, wantStatus: http.StatusInternalServerError, wantCode: "INTERNAL"},
+		"dead session":          {q: sessionStub{sessionErr: pgx.ErrNoRows}, cookie: true, wantStatus: http.StatusUnauthorized, wantCode: "UNAUTHORIZED", wantCleared: true},
+		"session without user":  {q: sessionStub{userErr: pgx.ErrNoRows}, cookie: true, wantStatus: http.StatusUnauthorized, wantCode: "UNAUTHORIZED", wantCleared: true},
+		"no cookie":             {q: sessionStub{sessionErr: outage}, wantStatus: http.StatusUnauthorized, wantCode: "UNAUTHORIZED"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			srv := New(Deps{
+				System: system.New(system.Deps{Querier: tc.q, Version: "test", LocalEnabled: true}),
+				Auth: auth.New(auth.Deps{
+					Querier:            tc.q,
+					SessionTTL:         30 * 24 * time.Hour,
+					SessionMaxLifetime: 90 * 24 * time.Hour,
+					CookieSecure:       true,
+				}),
+				HandlerTimeout: testHandlerTimeout,
+			})
+
+			protected := 0
+			for path, item := range spec.Paths.Map() {
+				for method, op := range item.Operations() {
+					if !requiresSession(effectiveSecurity(spec, op)) {
+						continue
+					}
+					protected++
+					req := httptest.NewRequest(method, basePath+pathParamsFilled(path), strings.NewReader(`{"not":"valid"`))
+					req.Header.Set("Sec-Fetch-Site", "same-origin")
+					if op.RequestBody != nil {
+						req.Header.Set("Content-Type", "application/json")
+					}
+					if tc.cookie {
+						req.AddCookie(&http.Cookie{Name: auth.SessionCookieName, Value: "a-token"})
+					}
+					rec := httptest.NewRecorder()
+					srv.ServeHTTP(rec, req)
+
+					if rec.Code != tc.wantStatus {
+						t.Errorf("%s %s = %d, want %d (body %s)", method, path, rec.Code, tc.wantStatus, rec.Body.String())
+						continue
+					}
+					assertEnvelope(t, rec, tc.wantCode)
+					if tc.wantStatus == http.StatusInternalServerError && rec.Body.String() != `{"code":"INTERNAL"}`+"\n" {
+						t.Errorf("%s %s body = %q, want the same bytes as any other 500", method, path, rec.Body.String())
+					}
+					set := rec.Header().Values("Set-Cookie")
+					if cleared := len(set) == 1 && strings.Contains(set[0], auth.SessionCookieName+"=;"); cleared != tc.wantCleared || (!tc.wantCleared && len(set) != 0) {
+						t.Errorf("%s %s Set-Cookie = %q, want cleared=%v", method, path, set, tc.wantCleared)
+					}
+				}
+			}
+			if protected == 0 {
+				t.Fatal("the contract has no operation requiring a session: this sweep checked nothing")
+			}
+		})
+	}
+}
+
+// A public operation is not made to fail by a presented cookie the middleware
+// could not read.
+func TestAnUnreadableSessionDoesNotFailPublicOperations(t *testing.T) {
+	q := sessionStub{sessionErr: errors.New("connection reset by peer")}
+	srv := New(Deps{
+		System: system.New(system.Deps{Querier: q, Version: "test", LocalEnabled: true}),
+		Auth: auth.New(auth.Deps{
+			Querier:            q,
+			SessionTTL:         30 * 24 * time.Hour,
+			SessionMaxLifetime: 90 * 24 * time.Hour,
+			CookieSecure:       true,
+		}),
+		HandlerTimeout: testHandlerTimeout,
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/auth/methods", nil)
+	req.AddCookie(&http.Cookie{Name: auth.SessionCookieName, Value: "a-token"})
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Errorf("GET /api/auth/methods = %d, want 200", rec.Code)
 	}
 }

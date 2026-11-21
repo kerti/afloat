@@ -6,6 +6,9 @@ type Me = components["schemas"]["Me"];
 type ErrorBody = components["schemas"]["Error"];
 type RegisterBody = components["schemas"]["LocalRegisterRequest"];
 type UpdateHouseholdBody = components["schemas"]["UpdateHouseholdRequest"];
+type UpdateMeBody = components["schemas"]["UpdateMeRequest"];
+type ChangeEmailBody = components["schemas"]["ChangeEmailRequest"];
+type ChangePasswordBody = components["schemas"]["ChangePasswordRequest"];
 type ChoiceBody = components["schemas"]["OnboardingChoiceRequest"];
 
 // The handshake a registration opens, as the fake server holds it.
@@ -22,6 +25,13 @@ export type State = {
   committed?: ChoiceBody;
   // Every PATCH /household body, in order.
   patches?: UpdateHouseholdBody[];
+  // Every PATCH /me body, change-email body and change-password body, in order.
+  mePatches?: UpdateMeBody[];
+  emailChanges?: ChangeEmailBody[];
+  passwordChanges?: ChangePasswordBody[];
+  // The one password the fake server accepts as "current". Defaults to the
+  // login fixture's.
+  password?: string;
 };
 
 // Shapes are the generated contract types, so a contract change that breaks
@@ -127,6 +137,33 @@ export function defaultHandlers(state: State = { signedIn: false, me: alice }) {
       (state.patches ??= []).push(body);
       state.me = { ...state.me, household: { ...state.me.household, ...body } };
       return HttpResponse.json(state.me.household);
+    }),
+    http.patch("/api/me", async ({ request }) => {
+      if (!state.signedIn) return HttpResponse.json(envelope("UNAUTHORIZED"), { status: 401 });
+      const body = (await request.json()) as UpdateMeBody;
+      (state.mePatches ??= []).push(body);
+      state.me = { ...state.me, ...body };
+      return HttpResponse.json(state.me);
+    }),
+    http.post("/api/auth/local/change-email", async ({ request }) => {
+      if (!state.signedIn) return HttpResponse.json(envelope("UNAUTHORIZED"), { status: 401 });
+      const body = (await request.json()) as ChangeEmailBody;
+      (state.emailChanges ??= []).push(body);
+      if (body.current_password !== (state.password ?? "correct-horse")) {
+        return HttpResponse.json(envelope("INVALID_CURRENT_PASSWORD"), { status: 403 });
+      }
+      state.me = { ...state.me, email: body.email };
+      return HttpResponse.json(state.me);
+    }),
+    http.post("/api/auth/local/change-password", async ({ request }) => {
+      if (!state.signedIn) return HttpResponse.json(envelope("UNAUTHORIZED"), { status: 401 });
+      const body = (await request.json()) as ChangePasswordBody;
+      (state.passwordChanges ??= []).push(body);
+      if (body.current_password !== (state.password ?? "correct-horse")) {
+        return HttpResponse.json(envelope("INVALID_CURRENT_PASSWORD"), { status: 403 });
+      }
+      state.password = body.new_password;
+      return new HttpResponse(null, { status: 204 });
     }),
     http.post("/api/auth/logout", () => {
       state.signedIn = false;

@@ -6,6 +6,7 @@ import { HouseholdSettingsPage } from "@/pages/HouseholdSettingsPage";
 import { LoginPage } from "@/pages/LoginPage";
 import { OnboardingPage } from "@/pages/OnboardingPage";
 import { RegisterPage } from "@/pages/RegisterPage";
+import { UserSettingsPage } from "@/pages/UserSettingsPage";
 
 export function App() {
   return (
@@ -18,6 +19,10 @@ export function App() {
         <Route
           path="/settings/household"
           element={<RequireSession>{(me) => <HouseholdSettingsPage me={me} />}</RequireSession>}
+        />
+        <Route
+          path="/settings/user"
+          element={<RequireSession>{(me) => <UserSettingsPage me={me} />}</RequireSession>}
         />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

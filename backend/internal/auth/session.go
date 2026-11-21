@@ -59,13 +59,21 @@ func (h *Handlers) IssueSession(ctx context.Context, userID pgtype.UUID, userAge
 // createSession stores a session and returns its plaintext token and expiry,
 // for a caller that builds the cookie itself where it writes it.
 func (h *Handlers) createSession(ctx context.Context, userID pgtype.UUID, userAgent string) (string, time.Time, error) {
+	return h.createSessionWith(ctx, h.q, userID, userAgent)
+}
+
+// createSessionWith is createSession through q, so a caller inside a
+// transaction mints the session in it: a password change revokes every session
+// and mints the caller's new one atomically (change_password.go), and a session
+// inserted on the pool would survive a rollback of the revocation beside it.
+func (h *Handlers) createSessionWith(ctx context.Context, q db.Querier, userID pgtype.UUID, userAgent string) (string, time.Time, error) {
 	token, err := newSessionToken()
 	if err != nil {
 		return "", time.Time{}, err
 	}
 	expiresAt := h.now().Add(h.sessionTTL)
 
-	if _, err := h.q.CreateSession(ctx, db.CreateSessionParams{
+	if _, err := q.CreateSession(ctx, db.CreateSessionParams{
 		ID:        HashToken(token),
 		UserID:    userID,
 		ExpiresAt: pgtype.Timestamptz{Time: expiresAt, Valid: true},
@@ -134,7 +142,9 @@ func (h *Handlers) ClearSessionCookie(w http.ResponseWriter) {
 // context. It never rejects, so an unauthenticated request can still reach a
 // public route; whether an operation needs a session is decided from the
 // contract by the httpserver package's sessionRequired middleware, which
-// answers 401 when this left no User.
+// answers 401 when this left no User, or 500 when SessionUnresolved says the
+// lookup failed for infrastructure reasons: an unreadable session is not an
+// invalid one.
 func (h *Handlers) SessionMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		cookie, err := r.Cookie(SessionCookieName)
@@ -160,6 +170,7 @@ func (h *Handlers) SessionMiddleware(next http.Handler) http.Handler {
 				h.ClearSessionCookie(w)
 			} else {
 				logQueryError("session lookup", err)
+				r = r.WithContext(withSessionUnresolved(ctx))
 			}
 			next.ServeHTTP(w, r)
 			return
@@ -174,8 +185,10 @@ func (h *Handlers) SessionMiddleware(next http.Handler) http.Handler {
 				// An infrastructure failure is not a statement about this
 				// user's session: leave the cookie alone. The request
 				// proceeds unauthenticated, same as the session-lookup branch
-				// above (#27).
+				// above (#27), flagged so a route that needs a session
+				// answers 500 rather than 401.
 				logQueryError("session user lookup", err)
+				r = r.WithContext(withSessionUnresolved(ctx))
 			}
 			next.ServeHTTP(w, r)
 			return

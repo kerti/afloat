@@ -70,3 +70,20 @@ func HoldArgonPermitsForTest() (release func()) {
 		}
 	})
 }
+
+// TakeArgonPermitsForTest takes n permits, so that fewer than the cap are left
+// for callers, and GiveBackArgonPermitsForTest returns them. Unlike
+// HoldArgonPermitsForTest it can hand back a few at a time, which is what lets a
+// test have exactly one caller run while the rest wait queued.
+func TakeArgonPermitsForTest(n int) {
+	for range n {
+		argonSem <- struct{}{}
+	}
+}
+
+// GiveBackArgonPermitsForTest returns n permits taken by TakeArgonPermitsForTest.
+func GiveBackArgonPermitsForTest(n int) {
+	for range n {
+		<-argonSem
+	}
+}

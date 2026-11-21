@@ -337,3 +337,121 @@
     rows:
       - sql: SELECT (SELECT count(*) FROM sessions)::int AS sessions, (SELECT count(*) FROM login_attempts)::int AS attempts
         rows: [{sessions: 0, attempts: 0}]
+
+# The two credential-gated routes (#119) take POST and nothing else, and /me
+# gained PATCH beside GET (user.yaml): the router answers 405 for every other
+# method, `Allow` naming what the route takes, as for any route that exists
+# under other methods. A request with no session is answered 405 all the same:
+# the method is judged before the session is looked at.
+
+- name: http methods - GET on change-password is method not allowed
+  issue: "119"
+  request:
+    method: GET
+    path: /auth/local/change-password
+  expect:
+    status: 405
+    body_empty: true
+    headers:
+      Allow: POST
+    rows:
+      - sql: SELECT (SELECT count(*) FROM sessions)::int AS sessions, (SELECT count(*) FROM login_attempts)::int AS attempts
+        rows: [{sessions: 0, attempts: 0}]
+
+- name: http methods - PUT on change-password is method not allowed
+  issue: "119"
+  request:
+    method: PUT
+    path: /auth/local/change-password
+  expect:
+    status: 405
+    body_empty: true
+    headers:
+      Allow: POST
+    rows:
+      - sql: SELECT (SELECT count(*) FROM sessions)::int AS sessions, (SELECT count(*) FROM login_attempts)::int AS attempts
+        rows: [{sessions: 0, attempts: 0}]
+
+- name: http methods - PATCH on change-password is method not allowed
+  issue: "119"
+  request:
+    method: PATCH
+    path: /auth/local/change-password
+  expect:
+    status: 405
+    body_empty: true
+    headers:
+      Allow: POST
+    rows:
+      - sql: SELECT (SELECT count(*) FROM sessions)::int AS sessions, (SELECT count(*) FROM login_attempts)::int AS attempts
+        rows: [{sessions: 0, attempts: 0}]
+
+- name: http methods - DELETE on change-password is method not allowed
+  issue: "119"
+  request:
+    method: DELETE
+    path: /auth/local/change-password
+  expect:
+    status: 405
+    body_empty: true
+    headers:
+      Allow: POST
+    rows:
+      - sql: SELECT (SELECT count(*) FROM sessions)::int AS sessions, (SELECT count(*) FROM login_attempts)::int AS attempts
+        rows: [{sessions: 0, attempts: 0}]
+
+- name: http methods - GET on change-email is method not allowed
+  issue: "119"
+  request:
+    method: GET
+    path: /auth/local/change-email
+  expect:
+    status: 405
+    body_empty: true
+    headers:
+      Allow: POST
+    rows:
+      - sql: SELECT (SELECT count(*) FROM sessions)::int AS sessions, (SELECT count(*) FROM login_attempts)::int AS attempts
+        rows: [{sessions: 0, attempts: 0}]
+
+- name: http methods - PUT on change-email is method not allowed
+  issue: "119"
+  request:
+    method: PUT
+    path: /auth/local/change-email
+  expect:
+    status: 405
+    body_empty: true
+    headers:
+      Allow: POST
+    rows:
+      - sql: SELECT (SELECT count(*) FROM sessions)::int AS sessions, (SELECT count(*) FROM login_attempts)::int AS attempts
+        rows: [{sessions: 0, attempts: 0}]
+
+- name: http methods - PATCH on change-email is method not allowed
+  issue: "119"
+  request:
+    method: PATCH
+    path: /auth/local/change-email
+  expect:
+    status: 405
+    body_empty: true
+    headers:
+      Allow: POST
+    rows:
+      - sql: SELECT (SELECT count(*) FROM sessions)::int AS sessions, (SELECT count(*) FROM login_attempts)::int AS attempts
+        rows: [{sessions: 0, attempts: 0}]
+
+- name: http methods - DELETE on change-email is method not allowed
+  issue: "119"
+  request:
+    method: DELETE
+    path: /auth/local/change-email
+  expect:
+    status: 405
+    body_empty: true
+    headers:
+      Allow: POST
+    rows:
+      - sql: SELECT (SELECT count(*) FROM sessions)::int AS sessions, (SELECT count(*) FROM login_attempts)::int AS attempts
+        rows: [{sessions: 0, attempts: 0}]

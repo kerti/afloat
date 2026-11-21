@@ -77,6 +77,18 @@ func (s *Server) GetMe(ctx context.Context, r api.GetMeRequestObject) (api.GetMe
 	return s.auth.GetMe(ctx, r)
 }
 
+func (s *Server) UpdateMe(ctx context.Context, r api.UpdateMeRequestObject) (api.UpdateMeResponseObject, error) {
+	return s.auth.UpdateMe(ctx, r)
+}
+
+func (s *Server) ChangeLocalPassword(ctx context.Context, r api.ChangeLocalPasswordRequestObject) (api.ChangeLocalPasswordResponseObject, error) {
+	return s.auth.ChangeLocalPassword(ctx, r)
+}
+
+func (s *Server) ChangeLocalEmail(ctx context.Context, r api.ChangeLocalEmailRequestObject) (api.ChangeLocalEmailResponseObject, error) {
+	return s.auth.ChangeLocalEmail(ctx, r)
+}
+
 func (s *Server) UpdateHousehold(ctx context.Context, r api.UpdateHouseholdRequestObject) (api.UpdateHouseholdResponseObject, error) {
 	return s.household.UpdateHousehold(ctx, r)
 }
@@ -136,7 +148,8 @@ func mountAPI(r chi.Router, srv *Server, d Deps) {
 	// mounting and no per-route middleware hook (ChiServerOptions.Middlewares
 	// applies to every operation alike). Hand-editing that file is out
 	// (BOOTSTRAP.md §6; CI regenerates and diffs it away). So the local
-	// provider's two routes, login and register, are gated ahead of the
+	// provider's four routes (login, register, change-password and
+	// change-email) are gated ahead of the
 	// generated mux instead: any request whose path matches is answered before
 	// CSRF or session middleware ever run, so a disabled provider gives chi's
 	// ordinary 404 with no session, handshake or backoff row written.

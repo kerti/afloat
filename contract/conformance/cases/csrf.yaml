@@ -220,3 +220,108 @@
   expect:
     status: 200
     body_json: {local: true, google: false, founding_open: true}
+
+# The same guard covers the credential-gated routes and PATCH /me (#119): a
+# cross-site page must not change a password, an address or a setting, and the
+# credential, the session and the row are as they were.
+- name: csrf - cross-site change-password is blocked and the credential is unchanged
+  issue: "119"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /auth/local/change-password
+    headers:
+      Content-Type: application/json
+      Sec-Fetch-Site: cross-site
+    body: '{"current_password":"conformance-correct-horse","new_password":"kucing oranye di atap"}'
+  expect:
+    status: 403
+    body_json: {code: CROSS_SITE_REQUEST_BLOCKED}
+    cookies: {}
+    rows:
+      - sql: SELECT (password_hash = '$argon2id$v=19$m=19456,t=2,p=1$ONoBwoeQyx5Q6rcT+99mQQ$SwIz0ZviKsLDspuhSO7B6UvPvKMokTfAVA9i9RqMiUg') AS seeded FROM credentials WHERE user_id = '0192f0a0-0000-7000-8000-0000000000a1'
+        rows: [{seeded: true}]
+      - sql: SELECT (SELECT count(*) FROM sessions)::int AS sessions, (SELECT count(*) FROM login_attempts)::int AS attempts
+        rows: [{sessions: 1, attempts: 0}]
+
+- name: csrf - a foreign Origin on change-password is blocked
+  issue: "119"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /auth/local/change-password
+    headers:
+      Content-Type: application/json
+      Origin: http://evil.example
+    body: '{"current_password":"conformance-correct-horse","new_password":"kucing oranye di atap"}'
+  expect:
+    status: 403
+    body_json: {code: CROSS_SITE_REQUEST_BLOCKED}
+    cookies: {}
+    rows:
+      - sql: SELECT (password_hash = '$argon2id$v=19$m=19456,t=2,p=1$ONoBwoeQyx5Q6rcT+99mQQ$SwIz0ZviKsLDspuhSO7B6UvPvKMokTfAVA9i9RqMiUg') AS seeded FROM credentials WHERE user_id = '0192f0a0-0000-7000-8000-0000000000a1'
+        rows: [{seeded: true}]
+
+- name: csrf - cross-site change-email is blocked and the address is unchanged
+  issue: "119"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /auth/local/change-email
+    headers:
+      Content-Type: application/json
+      Sec-Fetch-Site: cross-site
+    body: '{"email":"mallory@example.com","current_password":"conformance-correct-horse"}'
+  expect:
+    status: 403
+    body_json: {code: CROSS_SITE_REQUEST_BLOCKED}
+    cookies: {}
+    rows:
+      - sql: SELECT email FROM users WHERE id = '0192f0a0-0000-7000-8000-0000000000a1'
+        rows: [{email: alice@example.com}]
+
+- name: csrf - cross-site user settings patch is blocked and the User is unchanged
+  issue: "119"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: PATCH
+    path: /me
+    headers:
+      Content-Type: application/json
+      Sec-Fetch-Site: cross-site
+    body: '{"user_display_name":"Hijacked"}'
+  expect:
+    status: 403
+    body_json: {code: CROSS_SITE_REQUEST_BLOCKED}
+    cookies: {}
+    rows:
+      - sql: SELECT user_display_name FROM users WHERE id = '0192f0a0-0000-7000-8000-0000000000a1'
+        rows: [{user_display_name: Alice}]

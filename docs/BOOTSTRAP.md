@@ -104,7 +104,11 @@ Recharts, i18next, Vitest, Playwright, MSW. Node 22 (`.nvmrc`). Mobile-first; in
 app-shell service worker (no push in MVP — see §10).
 
 **Backend** — Go 1.27.x. Migrations embedded via `//go:embed` and applied by the binary, mirroring
-Balances.
+Balances. The IANA zone database is embedded too (`_ "time/tzdata"` in `cmd/afloat`, about 450 KB) as
+a floor, not a pin: `time.LoadLocation` reads the host's zoneinfo first and falls back to the embedded
+copy, so a `scratch` or distroless image, which has none, still accepts every valid `time_zone`. A host
+with zoneinfo answers from it, so a case-insensitive filesystem (a Mac) also accepts `asia/jakarta`;
+`contract/testdata/time_zones.json` pins only the rows every host agrees on.
 
 **Database** — PostgreSQL, one instance, one database (`afloat`).
 
@@ -336,8 +340,12 @@ answers "does not verify", never an error or a panic.
 **A database outage is not a statement about an account (#23, #27).** Only a lookup that genuinely
 found nothing counts as an absent user, credential or session: `pgx.ErrNoRows`. Every other failure — a dropped connection, an exhausted pool — answers login
 with `500 INTERNAL`, not `401 INVALID_CREDENTIALS`, and records **no** backoff failure. Session
-resolution **leaves the cookie alone** and lets the request continue unauthenticated, so `/me` answers
-`401` and the same cookie works again once the database is back. Answering an outage as though it were
+resolution **leaves the cookie alone** and marks the request as one whose session it could not read,
+so a route that needs a session answers `500 INTERNAL` and the same cookie works again once the
+database is back. An unreadable session is a `500` with the cookie kept; an invalid one (no such
+session, expired, or outliving its User: `pgx.ErrNoRows`) is a `401` with the cookie cleared; no cookie
+is a `401`. A `401` tells the client to sign in again, which is the wrong instruction over an outage.
+Answering an outage as though it were
 about the account costs something that outlives the outage: a password reset that was never needed,
 every address that tried to log in during it left sitting behind a backoff window, every active
 session logged out. A 500 is not an answer about any one address: an outage that takes the database
@@ -362,6 +370,37 @@ against a different clock.
 
 **Revoke every session on a password reset.** The reset is the "assume it was compromised" lever;
 delete the user's sessions inside the same transaction before minting the new one.
+
+**A password change is that recipe (#119).** `POST /auth/local/change-password` revokes every session
+the User holds, **the caller's included**, and mints a fresh one for the caller, in one transaction with
+the credential write: the credential is compare-and-swapped (`UPDATE credentials SET password_hash =
+$new WHERE user_id = $id AND password_hash = $verified`, zero rows being a wrong current password),
+`DeleteSessionsForUser` runs, and the new session is inserted through the transaction's own querier.
+Rotating rather than keeping the current session matters because a thief who copied *this* browser's
+cookie holds the very token that "revoke the others" would leave live. The `204` carries the new
+session's `Set-Cookie`; the generated visitor writes it with `Header().Set`, which replaces a refreshed
+cookie the session middleware queued for the old token. A request in flight with the old cookie when
+the transaction commits answers `401`, and a `204` lost on the wire leaves the browser with a dead
+cookie: both are the price of rotation and are accepted. **Known limit:** a login that verified the old
+password before the change committed, and inserts its session after the revocation, survives it. The
+window is one Argon2 verify, and the attacker must already hold the old password, which the change has
+just retired. **An email change touches no session**: a session is keyed on the User's id, not the
+address, and what stops a stolen cookie from swapping the sign-in handle is the current-password gate.
+
+**The current-password check has a backoff of its own (#119).** Both credential-gated operations (change
+password, change email) verify the current password, and the holder of a stolen cookie is exactly who
+can guess at it from inside a session, so a wrong one is `403 INVALID_CURRENT_PASSWORD` and arms a
+window under the key **`current-password:<user id>`** in `login_attempts`. **One key for both
+operations**, so the two routes cannot double the guesses; login's curve (`LOGIN_FIRST_BACKOFF`,
+doubling, `LOGIN_MAX_BACKOFF`); read before queueing and again under the Argon2 permit, and recorded
+before the permit passes on, on a context detached from the request (§5.1.1's register discipline);
+**cleared on success**. A request inside the window is `429 TOO_MANY_ATTEMPTS` with `Retry-After`. It is
+not login's keys, and the reasons are the point: `email:<address>` would let a stolen session throttle
+the owner's sign-in, and the owner's own typos here would throttle sign-in on every device. Keyed on the
+User it also does not depend on #110 (behind a reverse proxy every visitor shares one address key), adds
+at most one `login_attempts` row per User, and has none of register's never-decaying count. There is no
+`ip:` component. A User with no credential row is answered as a wrong current password, verified
+against the dummy hash at the same cost, as login's dormant User is.
 
 **A second CSRF layer behind `SameSite=Lax`.** Reject a non-safe-method request whose
 `Sec-Fetch-Site` or `Origin` names another site, before it reaches a handler —
@@ -440,6 +479,29 @@ that is free and one that is taken therefore differ in answer, and in cost (a ta
 The register backoff below limits only requests that reach the hash, so address enumeration through
 `EMAIL_TAKEN` runs at database speed: accepted, with the rest of this trade.
 
+**The two credential-gated routes fail in a fixed order (#119).** Change password and change email each
+reach a step only if every earlier one passed: the session (`401`, from the contract); the body's shape
+(`VALIDATION` or `INVALID_JSON_BODY`); for a password change, `new_password` against the policy,
+**before any hashing and before the throttle** (`WEAK_PASSWORD`, so a weak password costs nothing and
+records nothing); the throttle on `current-password:<user id>`, read before queueing (§5.1); the
+credential, where only `pgx.ErrNoRows` means none and any other failure is a `500` that records no
+failure (#23); the Argon2 permit; then, detached from the request, the throttle again and the verify. Only
+after the verify does the write run, so **an address's state is never revealed to a caller who has not
+proved the password**: a wrong password with a taken address is `403`, never `409`. A change of address
+that finds a live User holding it answers `409 EMAIL_TAKEN`, from the unique index (`users_email_idx`),
+with no lookup beforehand: the index is the race-free answer, and the hash has already been paid for. It
+enumerates exactly as registration does, and costs a hash per probe. The address is trimmed and
+lower-cased before it is stored, so `Me.email` may differ in case from what was typed; the caller's own
+address in any case, and a soft-deleted User's, are not taken. The change is not verified: there is no
+mail transport, so a well-formed typo becomes the sign-in handle at once.
+
+**A `500` from `PATCH /me` or change email changed nothing.** Each answers with the Household as well as
+the User, so the `UPDATE` and the Household read run in one transaction: a failure at its begin, the
+`UPDATE`, the read or the commit rolls back and answers `500 INTERNAL` with the row as it was. A `500`
+never means a change landed that the caller was told had failed. A `409 EMAIL_TAKEN` is the same
+rollback. The current-password proof runs before the transaction, so a wrong or throttled attempt
+never opens one.
+
 **Registration is rate limited like login, with its own key.** It runs Argon2 on unauthenticated
 input, the exposure #33 capped. It shares login's concurrency permit (the bound is on total Argon2 work
 whatever its source) and its discipline: the per-IP backoff is read before queueing, **read again under
@@ -467,7 +529,11 @@ Requests refused before the hash (policy, `EMAIL_TAKEN`, validation) record noth
   unauthenticated, hashing endpoint; it denies registration, never sign-in (login's keys are
   separate), and `FOUNDING_DISABLED` makes it moot once the operator has founded their Household.
 
-**With the local provider off, register is a path that does not exist.** It is gated with login (§5.2)
+**With the local provider off, register is a path that does not exist.** So are change password and
+change email (#119): everything that needs the local credential lives under `/auth/local/*` and is behind
+the gate, and `httpserver`'s list of gated paths must grow with the namespace (a test reads the contract
+and fails for an `/auth/local/` route that is not on it). `PATCH /me` is not gated: a name, a language and
+a zone are not credentials. The gate is shared with login (§5.2)
 by one middleware matching on path alone: a bare 404 on every method, the same bytes and framing as an
 unregistered path (`HEAD` included, whose `Content-Length` once differed on a live server: the
 `headAsGet` stripping the unregistered path gets had to be applied to the gate too). The onboarding
@@ -477,7 +543,12 @@ no handshake to honour and answers `401` to everyone.
 ### 5.2 Wire shape
 
 `/auth/local/*` is namespaced from day one so Google arrives as `/auth/google/*` without moving the
-password routes. Login returns **204** with the cookie and no body; the client then calls `GET /me`.
+password routes. Anything that needs the local credential belongs there: `change-password` and
+`change-email` (#119), which need the current password, are `POST`s in it and behind the disabled-local
+gate (§5.1.1); a User's other settings are `PATCH /me`, which are not credentials and are not gated.
+`INVALID_CURRENT_PASSWORD` is their own `403`: no `args`, and not a `401`, since the session is fine.
+
+Login returns **204** with the cookie and no body; the client then calls `GET /me`.
 That looks like a wasted round trip and isn't: Google arrives as a redirect that cannot return a body,
 so the client needs the fetch-after-auth path regardless, and one post-auth path beats two.
 
@@ -615,6 +686,9 @@ need only `onboardingCookie` are checked by their own handlers, which own that 4
 Enforcement is `httpserver`'s `sessionRequired`, which runs ahead of request validation. At startup
 it refuses a scheme name it does not know, and an operation naming both cookies: it cannot check a
 handshake, so that shape needs a ruling first.
+When the session cookie was presented but the lookup itself failed (an outage, not `pgx.ErrNoRows`),
+it answers `500 INTERNAL` instead of `401`, so every session-requiring operation declares a `500`
+(§5.1).
 
 **Trajectory is computed server-side.** The client formats and floors for display but derives
 nothing. This keeps one source of truth.

@@ -126,15 +126,20 @@ func (h *Handlers) throttled(ctx context.Context, keys []string) api.LocalLoginR
 	if wait <= 0 {
 		return nil
 	}
-	// Rounded up: a Retry-After of 0 invites an immediate retry that is still
-	// inside the window.
-	retryAfter := int(wait.Seconds()) + 1
+	retryAfter := retryAfterSeconds(wait)
 	return api.LocalLogin429JSONResponse{
 		TooManyRequestsJSONResponse: api.TooManyRequestsJSONResponse{
 			Body:    api.Error{Code: api.TOOMANYATTEMPTS},
 			Headers: api.TooManyRequestsResponseHeaders{RetryAfter: &retryAfter},
 		},
 	}
+}
+
+// retryAfterSeconds is the Retry-After for a backoff window with wait left.
+// Rounded up: a Retry-After of 0 invites an immediate retry that is still
+// inside the window.
+func retryAfterSeconds(wait time.Duration) int {
+	return int(wait.Seconds()) + 1
 }
 
 // logQueryError logs a failed query at Warn when the client went away, as the

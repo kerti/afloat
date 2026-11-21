@@ -8,10 +8,10 @@
 # second in `given:`. `rows:` read the columns, because a response can be right
 # while the row behind it is not.
 #
-# Under an outage the session itself cannot be read, which is a 401 that leaves
-# the cookie alone (#27), so there is no handler 500 to see from here; the
-# backend's own suite covers that path (a failing UPDATE, a soft-deleted
-# Household).
+# Under an outage the session itself cannot be read, which the session
+# middleware answers 500 with the cookie left alone (#27); it never reaches the
+# handler, whose own 500s (a failing UPDATE, a soft-deleted Household) the
+# backend's suite covers.
 
 - name: household - patch the name
   issue: "113"
@@ -932,9 +932,9 @@
       - sql: SELECT count(*)::int AS n FROM households
         rows: [{n: 2}]
 
-# Under an outage the session cannot be read, so the request is unauthenticated:
-# 401, the cookie kept (#27), nothing written.
-- name: household - during an outage it is unauthorized, keeps the cookie and writes nothing
+# Under an outage the session cannot be read, which is not the same as invalid:
+# 500, the cookie kept (#27), nothing written.
+- name: household - during an outage it is 500, keeps the cookie and writes nothing
   issue: "113"
   given:
     - request:
@@ -952,8 +952,8 @@
       Content-Type: application/json
     body: '{"household_display_name":"Hijacked"}'
   expect:
-    status: 401
-    body_json: {code: UNAUTHORIZED}
+    status: 500
+    body_json: {code: INTERNAL}
     cookies: {}
     rows:
       - sql: SELECT count(*)::int AS n FROM sessions

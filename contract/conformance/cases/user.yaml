@@ -1,0 +1,641 @@
+# PATCH /me (#119): the User's own settings, the §4 merge convention again
+# (BOOTSTRAP.md §4): a property left out is unchanged, an unknown property is
+# INVALID_JSON_BODY, `{}` is a valid no-op, the answer is the whole Me, last
+# write wins per field.
+#
+# The User is always the caller's own (the session's, never the request's), so
+# there is no id to forge. `email` and the password are not properties of this
+# resource: each needs the current password and has an operation of its own
+# (change-email.yaml, change-password.yaml), so a body naming either is
+# INVALID_JSON_BODY, which is how a client learns they are not profile fields.
+#
+# fixtures/seed.sql holds alice (the caller), bob (same Household, no
+# credential) and carol (soft-deleted); a case that proves a User in another
+# Household is untouched adds one in `given:`. `rows:` read the columns,
+# because a response can be right while the row behind it is not.
+#
+# Under an outage the session itself cannot be read, which the session
+# middleware answers 500 with the cookie left alone (#27); it never reaches the
+# handler, whose own 500s (a failing UPDATE, a soft-deleted User) the backend's
+# suite covers.
+
+- name: user settings - patch the name, trimmed
+  issue: "119"
+  given: &signed-in
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: PATCH
+    path: /me
+    headers:
+      Content-Type: application/json
+    body: '{"user_display_name":"  Dewi Putri \t"}'
+  expect:
+    status: 200
+    headers:
+      Content-Type: application/json
+    body_json: &alice-renamed
+      id: 0192f0a0-0000-7000-8000-0000000000a1
+      email: alice@example.com
+      user_display_name: Dewi Putri
+      locale: en-GB
+      time_zone: Asia/Jakarta
+      household: &the-household
+        id: 0192f0a0-0000-7000-8000-000000000001
+        household_display_name: Conformance Household
+        reporting_currency: IDR
+        period_start_day: 1
+        day_starts_at: "04:00"
+        allowance_mode: adaptive
+    cookies: {}
+    rows:
+      - sql: SELECT user_display_name, locale, time_zone, email FROM users WHERE id = '0192f0a0-0000-7000-8000-0000000000a1'
+        rows: [{user_display_name: Dewi Putri, locale: en-GB, time_zone: Asia/Jakarta, email: alice@example.com}]
+
+- name: user settings - patch the locale
+  issue: "119"
+  given: *signed-in
+  request:
+    method: PATCH
+    path: /me
+    headers:
+      Content-Type: application/json
+    body: '{"locale":"id-ID"}'
+  expect:
+    status: 200
+    body_json:
+      id: 0192f0a0-0000-7000-8000-0000000000a1
+      email: alice@example.com
+      user_display_name: Alice
+      locale: id-ID
+      time_zone: Asia/Jakarta
+      household: *the-household
+    cookies: {}
+    rows:
+      - sql: SELECT locale FROM users WHERE id = '0192f0a0-0000-7000-8000-0000000000a1'
+        rows: [{locale: id-ID}]
+
+- name: user settings - patch the time zone
+  issue: "119"
+  given: *signed-in
+  request:
+    method: PATCH
+    path: /me
+    headers:
+      Content-Type: application/json
+    body: '{"time_zone":"Asia/Makassar"}'
+  expect:
+    status: 200
+    body_json:
+      id: 0192f0a0-0000-7000-8000-0000000000a1
+      email: alice@example.com
+      user_display_name: Alice
+      locale: en-GB
+      time_zone: Asia/Makassar
+      household: *the-household
+    cookies: {}
+    rows:
+      - sql: SELECT time_zone FROM users WHERE id = '0192f0a0-0000-7000-8000-0000000000a1'
+        rows: [{time_zone: Asia/Makassar}]
+
+- name: user settings - patch all three at once
+  issue: "119"
+  given: *signed-in
+  request:
+    method: PATCH
+    path: /me
+    headers:
+      Content-Type: application/json
+    body: '{"user_display_name":"Dewi","locale":"id-ID","time_zone":"Etc/GMT+7"}'
+  expect:
+    status: 200
+    body_json:
+      id: 0192f0a0-0000-7000-8000-0000000000a1
+      email: alice@example.com
+      user_display_name: Dewi
+      locale: id-ID
+      time_zone: Etc/GMT+7
+      household: *the-household
+    cookies: {}
+    rows:
+      - sql: SELECT user_display_name, locale, time_zone FROM users WHERE id = '0192f0a0-0000-7000-8000-0000000000a1'
+        rows: [{user_display_name: Dewi, locale: id-ID, time_zone: Etc/GMT+7}]
+
+# Merge, not replace: a second patch leaves what the first set alone.
+- name: user settings - a second patch leaves the first one's field alone
+  issue: "119"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+    - request:
+        method: PATCH
+        path: /me
+        headers:
+          Content-Type: application/json
+        body: '{"locale":"id-ID"}'
+      status: 200
+  request:
+    method: PATCH
+    path: /me
+    headers:
+      Content-Type: application/json
+    body: '{"time_zone":"Asia/Jayapura"}'
+  expect:
+    status: 200
+    body_json:
+      id: 0192f0a0-0000-7000-8000-0000000000a1
+      email: alice@example.com
+      user_display_name: Alice
+      locale: id-ID
+      time_zone: Asia/Jayapura
+      household: *the-household
+    rows:
+      - sql: SELECT user_display_name, locale, time_zone FROM users WHERE id = '0192f0a0-0000-7000-8000-0000000000a1'
+        rows: [{user_display_name: Alice, locale: id-ID, time_zone: Asia/Jayapura}]
+
+- name: user settings - an empty body is a valid no-op
+  issue: "119"
+  given: *signed-in
+  request:
+    method: PATCH
+    path: /me
+    headers:
+      Content-Type: application/json
+    body: '{}'
+  expect:
+    status: 200
+    body_json:
+      id: 0192f0a0-0000-7000-8000-0000000000a1
+      email: alice@example.com
+      user_display_name: Alice
+      locale: en-GB
+      time_zone: Asia/Jakarta
+      household: *the-household
+    cookies: {}
+    rows:
+      - sql: SELECT user_display_name, locale, time_zone, email FROM users WHERE id = '0192f0a0-0000-7000-8000-0000000000a1'
+        rows: [{user_display_name: Alice, locale: en-GB, time_zone: Asia/Jakarta, email: alice@example.com}]
+
+# The change is what GET /me reports next: /me is the one read path.
+- name: user settings - GET /me reports the change
+  issue: "119"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+    - request:
+        method: PATCH
+        path: /me
+        headers:
+          Content-Type: application/json
+        body: '{"user_display_name":"Dewi Putri","locale":"id-ID","time_zone":"Asia/Makassar"}'
+      status: 200
+  request:
+    method: GET
+    path: /me
+  expect:
+    status: 200
+    body_json:
+      id: 0192f0a0-0000-7000-8000-0000000000a1
+      email: alice@example.com
+      user_display_name: Dewi Putri
+      locale: id-ID
+      time_zone: Asia/Makassar
+      household: *the-household
+
+# Tenancy. bob is in alice's Household, so a statement filtered on household_id
+# alone would rewrite him; dave is in another Household. Neither changes.
+- name: user settings - a patch leaves the other members and Households alone
+  issue: "119"
+  given:
+    - sql: INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Another Household')
+    - sql: INSERT INTO users (id, household_id, email, user_display_name) VALUES ('0192f0a0-0000-7000-8000-0000000000d1', '0192f0a0-0000-7000-8000-000000000002', 'dave@example.com', 'Dave')
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: PATCH
+    path: /me
+    headers:
+      Content-Type: application/json
+    body: '{"user_display_name":"Taken over","locale":"id-ID","time_zone":"Asia/Makassar"}'
+  expect:
+    status: 200
+    rows:
+      - sql: SELECT email, user_display_name, locale, time_zone FROM users WHERE id <> '0192f0a0-0000-7000-8000-0000000000a1' ORDER BY email
+        rows:
+          - {email: bob@example.com, user_display_name: Bob, locale: en-GB, time_zone: Asia/Jakarta}
+          - {email: carol@example.com, user_display_name: Carol, locale: en-GB, time_zone: Asia/Jakarta}
+          - {email: dave@example.com, user_display_name: Dave, locale: en-GB, time_zone: Asia/Jakarta}
+      - sql: SELECT household_display_name FROM households ORDER BY 1
+        rows: [{household_display_name: Another Household}, {household_display_name: Conformance Household}]
+
+# Every refusal is a 400 and writes nothing. The rule is the one named in the
+# envelope; the rows prove the row is as it was.
+- name: user settings - a time zone the server does not know is refused
+  issue: "119"
+  given: *signed-in
+  request: &patch-zone-mars
+    method: PATCH
+    path: /me
+    headers:
+      Content-Type: application/json
+    body: '{"time_zone":"Mars/Base"}'
+  expect:
+    status: 400
+    body_json: {code: VALIDATION, args: {field: time_zone, rule: timezone}}
+    cookies: {}
+    rows: &alice-unchanged
+      - sql: SELECT user_display_name, locale, time_zone FROM users WHERE id = '0192f0a0-0000-7000-8000-0000000000a1'
+        rows: [{user_display_name: Alice, locale: en-GB, time_zone: Asia/Jakarta}]
+
+- name: user settings - Local is not a time zone
+  issue: "119"
+  given: *signed-in
+  request:
+    method: PATCH
+    path: /me
+    headers:
+      Content-Type: application/json
+    body: '{"time_zone":"Local"}'
+  expect:
+    status: 400
+    body_json: {code: VALIDATION, args: {field: time_zone, rule: timezone}}
+    rows: *alice-unchanged
+
+- name: user settings - a path is not a time zone
+  issue: "119"
+  given: *signed-in
+  request:
+    method: PATCH
+    path: /me
+    headers:
+      Content-Type: application/json
+    body: '{"time_zone":"../etc/passwd"}'
+  expect:
+    status: 400
+    body_json: {code: VALIDATION, args: {field: time_zone, rule: timezone}}
+    rows: *alice-unchanged
+
+- name: user settings - a time zone with a trailing space is refused
+  issue: "119"
+  given: *signed-in
+  request:
+    method: PATCH
+    path: /me
+    headers:
+      Content-Type: application/json
+    body: '{"time_zone":"Asia/Jakarta "}'
+  expect:
+    status: 400
+    body_json: {code: VALIDATION, args: {field: time_zone, rule: timezone}}
+    rows: *alice-unchanged
+
+- name: user settings - an empty time zone is the contract's min
+  issue: "119"
+  given: *signed-in
+  request:
+    method: PATCH
+    path: /me
+    headers:
+      Content-Type: application/json
+    body: '{"time_zone":""}'
+  expect:
+    status: 400
+    body_json: {code: VALIDATION, args: {field: time_zone, rule: min}}
+    rows: *alice-unchanged
+
+- name: user settings - a blank name is required, not defaulted
+  issue: "119"
+  given: *signed-in
+  request:
+    method: PATCH
+    path: /me
+    headers:
+      Content-Type: application/json
+    body: '{"user_display_name":"   "}'
+  expect:
+    status: 400
+    body_json: {code: VALIDATION, args: {field: user_display_name, rule: required}}
+    rows: *alice-unchanged
+
+- name: user settings - a name of only zero-width characters is required
+  issue: "119"
+  given: *signed-in
+  request:
+    method: PATCH
+    path: /me
+    headers:
+      Content-Type: application/json
+    body: '{"user_display_name":"\u200b\u200c\u200d"}'
+  expect:
+    status: 400
+    body_json: {code: VALIDATION, args: {field: user_display_name, rule: required}}
+    rows: *alice-unchanged
+
+- name: user settings - a NUL in the name is a pattern failure
+  issue: "119"
+  given: *signed-in
+  request:
+    method: PATCH
+    path: /me
+    headers:
+      Content-Type: application/json
+    body: '{"user_display_name":"De\u0000wi"}'
+  expect:
+    status: 400
+    body_json: {code: VALIDATION, args: {field: user_display_name, rule: pattern}}
+    rows: *alice-unchanged
+
+# Contract rules are judged before handler rules (BOOTSTRAP.md §5.1.1): the
+# zone's `min` is the contract's, the name's `required` the handler's, so the
+# zone is reported though the name sorts after it either way, and the other way
+# round the name's `max` (the contract's) beats the zone's `timezone`.
+- name: user settings - a contract failure is reported before a handler failure
+  issue: "119"
+  given: *signed-in
+  request:
+    method: PATCH
+    path: /me
+    headers:
+      Content-Type: application/json
+    body: '{"time_zone":"","user_display_name":" "}'
+  expect:
+    status: 400
+    body_json: {code: VALIDATION, args: {field: time_zone, rule: min}}
+    rows: *alice-unchanged
+
+- name: user settings - where only handler rules fail, the least field is reported
+  issue: "119"
+  given: *signed-in
+  request:
+    method: PATCH
+    path: /me
+    headers:
+      Content-Type: application/json
+    body: '{"user_display_name":" ","time_zone":"Mars/Base"}'
+  expect:
+    status: 400
+    body_json: {code: VALIDATION, args: {field: time_zone, rule: timezone}}
+    rows: *alice-unchanged
+
+# The body is not an instance of the declared shape: INVALID_JSON_BODY.
+- name: user settings - a locale outside the enum is not a profile value
+  issue: "119"
+  given: *signed-in
+  request:
+    method: PATCH
+    path: /me
+    headers:
+      Content-Type: application/json
+    body: '{"locale":"fr-FR"}'
+  expect:
+    status: 400
+    body_json: {code: INVALID_JSON_BODY}
+    rows: *alice-unchanged
+
+- name: user settings - the email is not a profile field
+  issue: "119"
+  given: *signed-in
+  request:
+    method: PATCH
+    path: /me
+    headers:
+      Content-Type: application/json
+    body: '{"email":"mallory@example.com"}'
+  expect:
+    status: 400
+    body_json: {code: INVALID_JSON_BODY}
+    rows:
+      - sql: SELECT email FROM users WHERE id = '0192f0a0-0000-7000-8000-0000000000a1'
+        rows: [{email: alice@example.com}]
+
+- name: user settings - the password is not a profile field
+  issue: "119"
+  given: *signed-in
+  request:
+    method: PATCH
+    path: /me
+    headers:
+      Content-Type: application/json
+    body: '{"password":"kucing oranye di atap"}'
+  expect:
+    status: 400
+    body_json: {code: INVALID_JSON_BODY}
+    rows:
+      - sql: SELECT (password_hash = '$argon2id$v=19$m=19456,t=2,p=1$ONoBwoeQyx5Q6rcT+99mQQ$SwIz0ZviKsLDspuhSO7B6UvPvKMokTfAVA9i9RqMiUg') AS seeded FROM credentials WHERE user_id = '0192f0a0-0000-7000-8000-0000000000a1'
+        rows: [{seeded: true}]
+
+- name: user settings - an unknown property is refused
+  issue: "119"
+  given: *signed-in
+  request:
+    method: PATCH
+    path: /me
+    headers:
+      Content-Type: application/json
+    body: '{"user_display_name":"Dewi","nickname":"D"}'
+  expect:
+    status: 400
+    body_json: {code: INVALID_JSON_BODY}
+    rows: *alice-unchanged
+
+- name: user settings - null is not accepted for a setting
+  issue: "119"
+  given: *signed-in
+  request:
+    method: PATCH
+    path: /me
+    headers:
+      Content-Type: application/json
+    body: '{"time_zone":null}'
+  expect:
+    status: 400
+    body_json: {code: INVALID_JSON_BODY}
+    rows: *alice-unchanged
+
+- name: user settings - malformed JSON is refused
+  issue: "119"
+  given: *signed-in
+  request:
+    method: PATCH
+    path: /me
+    headers:
+      Content-Type: application/json
+    body: '{"locale":'
+  expect:
+    status: 400
+    body_json: {code: INVALID_JSON_BODY}
+    rows: *alice-unchanged
+
+- name: user settings - no body is refused
+  issue: "119"
+  given: *signed-in
+  request:
+    method: PATCH
+    path: /me
+    headers:
+      Content-Type: application/json
+  expect:
+    status: 400
+    body_json: {code: INVALID_JSON_BODY}
+    rows: *alice-unchanged
+
+- name: user settings - a body that is not JSON is refused
+  issue: "119"
+  given: *signed-in
+  request:
+    method: PATCH
+    path: /me
+    headers:
+      Content-Type: text/plain
+    body: '{"locale":"id-ID"}'
+  expect:
+    status: 400
+    body_json: {code: INVALID_JSON_BODY}
+    rows: *alice-unchanged
+
+# The session check runs before the body is looked at.
+- name: user settings - patch with no session is unauthorized
+  issue: "119"
+  request:
+    method: PATCH
+    path: /me
+    headers:
+      Content-Type: application/json
+    body: '{"user_display_name":"Hijack"}'
+  expect:
+    status: 401
+    body_json: {code: UNAUTHORIZED}
+    cookies: {}
+    rows:
+      - sql: SELECT user_display_name FROM users WHERE id = '0192f0a0-0000-7000-8000-0000000000a1'
+        rows: [{user_display_name: Alice}]
+
+- name: user settings - a bad body with no session is still unauthorized
+  issue: "119"
+  request:
+    method: PATCH
+    path: /me
+    headers:
+      Content-Type: application/json
+    body: '{"nope":'
+  expect:
+    status: 401
+    body_json: {code: UNAUTHORIZED}
+    cookies: {}
+
+- name: user settings - patch with an expired session is unauthorized
+  issue: "119"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+    - sql: UPDATE sessions SET expires_at = now() - interval '1 minute'
+  request:
+    method: PATCH
+    path: /me
+    headers:
+      Content-Type: application/json
+    body: '{"user_display_name":"Hijack"}'
+  expect:
+    status: 401
+    body_json: {code: UNAUTHORIZED}
+    rows:
+      - sql: SELECT user_display_name FROM users WHERE id = '0192f0a0-0000-7000-8000-0000000000a1'
+        rows: [{user_display_name: Alice}]
+
+# The session cannot be read during an outage, so it is the middleware's 500
+# (not the 401 of an invalid session), with the cookie left alone (#27), and
+# nothing is written.
+- name: user settings - patch during an outage is 500 and keeps the cookie
+  issue: "119"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+    - outage: true
+  request:
+    method: PATCH
+    path: /me
+    headers:
+      Content-Type: application/json
+    body: '{"user_display_name":"Dewi"}'
+  expect:
+    status: 500
+    body_json: {code: INTERNAL}
+    cookies: {}
+    rows:
+      - sql: SELECT user_display_name FROM users WHERE id = '0192f0a0-0000-7000-8000-0000000000a1'
+        rows: [{user_display_name: Alice}]
+      - sql: SELECT count(*)::int AS n FROM sessions
+        rows: [{n: 1}]
+
+# /me gains PATCH without losing GET; nothing else, and never a hard delete
+# (BOOTSTRAP.md §4). `Allow` is set from the router's own tree.
+- name: user settings - POST /me is method not allowed
+  issue: "119"
+  given: *signed-in
+  request:
+    method: POST
+    path: /me
+    headers:
+      Content-Type: application/json
+    body: '{"user_display_name":"Dewi"}'
+  expect:
+    status: 405
+    body_empty: true
+    rows: *alice-unchanged
+
+- name: user settings - PUT /me is method not allowed
+  issue: "119"
+  given: *signed-in
+  request:
+    method: PUT
+    path: /me
+    headers:
+      Content-Type: application/json
+    body: '{"user_display_name":"Dewi","locale":"id-ID","time_zone":"Asia/Makassar"}'
+  expect:
+    status: 405
+    body_empty: true
+    rows: *alice-unchanged
+
+- name: user settings - DELETE /me is method not allowed and deletes nothing
+  issue: "119"
+  given: *signed-in
+  request:
+    method: DELETE
+    path: /me
+  expect:
+    status: 405
+    body_empty: true
+    rows:
+      - sql: SELECT count(*)::int AS n, count(deleted_at)::int AS deleted FROM users
+        rows: [{n: 3, deleted: 1}]

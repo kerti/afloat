@@ -122,7 +122,8 @@ func operationMiddlewaresFor(required map[string]bool) []api.MiddlewareFunc {
 // sessionRequired is the one place a session is enforced. It reads the
 // matched operation's effective `security` from the contract and answers 401
 // UNAUTHORIZED when that requires a session and SessionMiddleware attached no
-// User, so a new operation is protected by default and a handler that wants a
+// User (500 INTERNAL instead when it could not read the session at all, an
+// outage), so a new operation is protected by default and a handler that wants a
 // User only has to ask for it (#114).
 //
 // It is per-operation middleware (ChiServerOptions.Middlewares in mountAPI),
@@ -152,6 +153,13 @@ func sessionRequired(required map[string]bool) func(http.Handler) http.Handler {
 			}
 			if needsSession {
 				if _, ok := auth.UserFromContext(r.Context()); !ok {
+					// A session that could not be read is not one that is
+					// invalid: 401 would tell the client to sign in again over
+					// an outage. The cookie was left alone (#27).
+					if auth.SessionUnresolved(r.Context()) {
+						httperr.Write(w, http.StatusInternalServerError, httperr.CodeInternal, nil)
+						return
+					}
 					httperr.Write(w, http.StatusUnauthorized, httperr.CodeUnauthorized, nil)
 					return
 				}

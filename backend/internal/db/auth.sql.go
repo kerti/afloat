@@ -240,8 +240,10 @@ DELETE FROM sessions WHERE user_id = $1
 `
 
 // Revoke every session a User holds. Run on a password change, inside the same
-// transaction, so the change boots any other session before the new one is
-// minted — the "reset because compromised" guarantee.
+// transaction as the credential write and before the caller's new session is
+// minted, so the change boots every other session, and the one that made the
+// request, before the new one exists — the "reset because compromised"
+// guarantee (BOOTSTRAP.md §5.1).
 func (q *Queries) DeleteSessionsForUser(ctx context.Context, userID pgtype.UUID) error {
 	_, err := q.db.Exec(ctx, deleteSessionsForUser, userID)
 	return err
@@ -444,6 +446,31 @@ type RecordLoginFailureParams struct {
 func (q *Queries) RecordLoginFailure(ctx context.Context, arg RecordLoginFailureParams) error {
 	_, err := q.db.Exec(ctx, recordLoginFailure, arg.Key, arg.FirstBackoff, arg.MaxBackoff)
 	return err
+}
+
+const swapCredentialPasswordHash = `-- name: SwapCredentialPasswordHash :execrows
+UPDATE credentials
+SET password_hash = $1, updated_at = now()
+WHERE user_id = $2 AND password_hash = $3
+`
+
+type SwapCredentialPasswordHashParams struct {
+	NewPasswordHash      string
+	UserID               pgtype.UUID
+	VerifiedPasswordHash string
+}
+
+// Compare-and-swap, for a password change: the new hash is written only if the
+// stored one is still the hash the current password was verified against. Zero
+// rows means another change landed since, so two concurrent submissions of the
+// same form cannot both win, and the loser's session revocation never runs.
+// Not UpsertCredential, which would let both through.
+func (q *Queries) SwapCredentialPasswordHash(ctx context.Context, arg SwapCredentialPasswordHashParams) (int64, error) {
+	result, err := q.db.Exec(ctx, swapCredentialPasswordHash, arg.NewPasswordHash, arg.UserID, arg.VerifiedPasswordHash)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const touchSession = `-- name: TouchSession :exec

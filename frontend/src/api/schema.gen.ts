@@ -114,6 +114,72 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/auth/local/change-password": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Change the signed-in User's password.
+         * @description Needs the current password, which is a proof and not a property of the
+         *     User, so this is not a `PATCH /me`. Namespaced `local` with login and
+         *     register: with the local provider off, this route answers exactly as a
+         *     path that was never registered.
+         *
+         *     Validation runs in this order: the body's shape, then `new_password`
+         *     against the policy (`WEAK_PASSWORD`, before any hashing and before the
+         *     throttle, so a weak password costs and records nothing), then the
+         *     throttle, then the current password. A wrong one is `403`
+         *     `INVALID_CURRENT_PASSWORD` and arms a backoff keyed on the User, shared
+         *     with `POST /auth/local/change-email`; a request inside the window is a
+         *     `429` and no hash is run. A success clears it.
+         *
+         *     On success every session the User holds is revoked, the caller's
+         *     included, and a fresh one is minted for the caller, in one transaction:
+         *     the response carries its cookie. Another device's next request is a
+         *     `401`. `new_password` may equal `current_password`.
+         */
+        post: operations["changeLocalPassword"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/local/change-email": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Change the signed-in User's sign-in address.
+         * @description Needs the current password, checked and throttled exactly as
+         *     `POST /auth/local/change-password` does, under the same key. Only once
+         *     it has verified is the address looked at, so a caller who has not
+         *     proved the password learns nothing about whether an address is held.
+         *
+         *     The address is trimmed and lower-cased before it is stored, so
+         *     `Me.email` may differ in case from what was sent. The change takes
+         *     effect at once and is not verified: there is no mail transport (PRD
+         *     §4). Login by the new address works immediately and by the old does
+         *     not. An address a live User already holds is `409` `EMAIL_TAKEN`, the
+         *     caller's own address in any case is not. No session is touched.
+         */
+        post: operations["changeLocalEmail"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/auth/logout": {
         parameters: {
             query?: never;
@@ -154,7 +220,27 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
-        patch?: never;
+        /**
+         * Change the signed-in User's own settings.
+         * @description The User is always the caller: there is no id to supply, and no way to
+         *     change another member's settings. Merge semantics, the update
+         *     convention (BOOTSTRAP.md §4): a property left out is unchanged, an
+         *     unknown property is `INVALID_JSON_BODY`, and `{}` is a valid no-op. The
+         *     answer is the whole `Me`. Last write wins, per field.
+         *
+         *     `email` and the password are not properties of this resource: they need
+         *     the current password and have their own operations
+         *     (`POST /auth/local/change-email`, `POST /auth/local/change-password`),
+         *     so a body naming either is `INVALID_JSON_BODY`.
+         *
+         *     `user_display_name` follows the registration rules, trimmed: blank is
+         *     `VALIDATION` `required` here, where registration defaults it. `locale`
+         *     is `en-GB` or `id-ID`; anything else is `INVALID_JSON_BODY`.
+         *     `time_zone` must be an IANA name the server knows (`VALIDATION`,
+         *     `rule: timezone`). It takes effect at once, and is an input to Today;
+         *     the client derives nothing from it.
+         */
+        patch: operations["updateMe"];
         trace?: never;
     };
     "/household": {
@@ -393,6 +479,33 @@ export interface components {
             reporting_currency?: string;
             period_start_day?: number;
         };
+        ChangePasswordRequest: {
+            /** Format: password */
+            current_password: string;
+            /** Format: password */
+            new_password: string;
+        };
+        ChangeEmailRequest: {
+            /** Format: email */
+            email: string;
+            /** Format: password */
+            current_password: string;
+        };
+        /**
+         * @description The settings a User may change on their own row, merge-style: a property
+         *     left out is unchanged, and none is required. `email` and the password
+         *     are not among them (see `POST /auth/local/change-email` and
+         *     `/change-password`). `null` is not accepted for any of them.
+         */
+        UpdateMeRequest: {
+            user_display_name?: string;
+            locale?: components["schemas"]["Locale"];
+            /**
+             * @description IANA time zone identifier.
+             * @example Asia/Makassar
+             */
+            time_zone?: string;
+        };
         /**
          * @description How the daily allowance is read. Default `adaptive`.
          * @enum {string}
@@ -431,15 +544,18 @@ export interface components {
          *     first failing field, as in Balances. `field` is the wire name of the
          *     property, so a Household's name (`household_display_name`) and a User's
          *     (`user_display_name`) are never confused. `WEAK_PASSWORD` carries
-         *     `{reason}`, `min` or `breached`.
+         *     `{reason}`, `min` or `breached`, at registration and at a password
+         *     change. `INVALID_CURRENT_PASSWORD` is the password change's and the
+         *     email change's own: the current password sent with the request is not
+         *     the User's. It carries no `args`.
          * @enum {string}
          */
-        ErrorCode: "VALIDATION" | "INVALID_JSON_BODY" | "INVALID_CREDENTIALS" | "TOO_MANY_ATTEMPTS" | "UNAUTHORIZED" | "CROSS_SITE_REQUEST_BLOCKED" | "EMAIL_TAKEN" | "WEAK_PASSWORD" | "FOUNDING_DISABLED" | "INTERNAL";
+        ErrorCode: "VALIDATION" | "INVALID_JSON_BODY" | "INVALID_CREDENTIALS" | "TOO_MANY_ATTEMPTS" | "UNAUTHORIZED" | "CROSS_SITE_REQUEST_BLOCKED" | "EMAIL_TAKEN" | "WEAK_PASSWORD" | "INVALID_CURRENT_PASSWORD" | "FOUNDING_DISABLED" | "INTERNAL";
     };
     responses: {
         /**
-         * @description Malformed body, a field that failed validation, or (registration only)
-         *     a password the policy refuses: `WEAK_PASSWORD`.
+         * @description Malformed body, a field that failed validation, or (registration and a
+         *     password change only) a password the policy refuses: `WEAK_PASSWORD`.
          */
         BadRequest: {
             headers: {
@@ -474,7 +590,8 @@ export interface components {
         };
         /**
          * @description `FOUNDING_DISABLED`: the operator has closed this instance to new
-         *     Households.
+         *     Households. `INVALID_CURRENT_PASSWORD`: the current password sent with
+         *     a password or email change is not the User's.
          */
         Forbidden: {
             headers: {
@@ -485,8 +602,8 @@ export interface components {
             };
         };
         /**
-         * @description `EMAIL_TAKEN`: a live User already holds the address, at registration or
-         *     at the commit.
+         * @description `EMAIL_TAKEN`: a live User already holds the address, at registration, at
+         *     the commit or at an email change.
          */
         Conflict: {
             headers: {
@@ -497,8 +614,9 @@ export interface components {
             };
         };
         /**
-         * @description Login backoff (per-IP and per-email), or registration's per-IP backoff. `Retry-After` carries the wait in
-         *     seconds. Backoff, never a hard lockout — a hard lock is a self-host
+         * @description Login backoff (per-IP and per-email), registration's per-IP backoff, or
+         *     the current-password backoff of a password or email change (per User,
+         *     shared by both). `Retry-After` carries the wait in seconds. Backoff, never a hard lockout — a hard lock is a self-host
          *     footgun.
          */
         TooManyRequests: {
@@ -633,6 +751,68 @@ export interface operations {
             500: components["responses"]["InternalError"];
         };
     };
+    changeLocalPassword: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChangePasswordRequest"];
+            };
+        };
+        responses: {
+            /** @description The password is changed. A new session cookie is set. */
+            204: {
+                headers: {
+                    /**
+                     * @description The caller's new session cookie. Every earlier session of this
+                     *     User is gone, the one that made this request included.
+                     */
+                    "Set-Cookie"?: string;
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    changeLocalEmail: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChangeEmailRequest"];
+            };
+        };
+        responses: {
+            /** @description The User as they now stand. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Me"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
     logout: {
         parameters: {
             query?: never;
@@ -672,6 +852,33 @@ export interface operations {
                     "application/json": components["schemas"]["Me"];
                 };
             };
+            401: components["responses"]["Unauthorized"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    updateMe: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateMeRequest"];
+            };
+        };
+        responses: {
+            /** @description The User as they now stand. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Me"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             500: components["responses"]["InternalError"];
         };

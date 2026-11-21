@@ -27,6 +27,16 @@ VALUES ($1, $2)
 ON CONFLICT (user_id) DO UPDATE
 SET password_hash = EXCLUDED.password_hash, updated_at = now();
 
+-- Compare-and-swap, for a password change: the new hash is written only if the
+-- stored one is still the hash the current password was verified against. Zero
+-- rows means another change landed since, so two concurrent submissions of the
+-- same form cannot both win, and the loser's session revocation never runs.
+-- Not UpsertCredential, which would let both through.
+-- name: SwapCredentialPasswordHash :execrows
+UPDATE credentials
+SET password_hash = sqlc.arg(new_password_hash), updated_at = now()
+WHERE user_id = sqlc.arg(user_id) AND password_hash = sqlc.arg(verified_password_hash);
+
 -- sessions.id is the SHA-256 of the bearer token, never the token. Callers hash
 -- before every read and write.
 --
@@ -52,8 +62,10 @@ WHERE id = $1;
 DELETE FROM sessions WHERE id = $1;
 
 -- Revoke every session a User holds. Run on a password change, inside the same
--- transaction, so the change boots any other session before the new one is
--- minted — the "reset because compromised" guarantee.
+-- transaction as the credential write and before the caller's new session is
+-- minted, so the change boots every other session, and the one that made the
+-- request, before the new one exists — the "reset because compromised"
+-- guarantee (BOOTSTRAP.md §5.1).
 -- name: DeleteSessionsForUser :exec
 DELETE FROM sessions WHERE user_id = $1;
 

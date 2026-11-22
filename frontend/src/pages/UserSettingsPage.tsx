@@ -1,15 +1,25 @@
 import { useMemo, useState, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
-import { Link } from "react-router";
-import type { Me, UpdateMeRequest } from "@/api/client";
+import type { Me } from "@/api/client";
 import { useAuthMethods, useChangeEmail, useChangePassword, useUpdateMe } from "@/api/queries";
 import { errorMessage } from "@/api/errors";
+import { BackLink } from "@/components/BackLink";
+import { Field, Form, Section } from "@/components/Form";
+import { FieldError, PageTitle } from "@/components/Text";
+import { TextSetting } from "@/components/TextSetting";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-
-const selectClass =
-  "h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm shadow-xs aria-invalid:border-destructive";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  NativeSelect,
+} from "@/components/ui/select";
+import { toastPlain } from "@/lib/plainToast";
+import { routes } from "@/lib/routes";
+import { useChoice } from "@/lib/useChoice";
 
 const locales = [
   { value: "en-GB", key: "enGB" },
@@ -28,8 +38,10 @@ function timeZoneNames(stored: string): string[] {
   return [...new Set([...names, stored])].sort();
 }
 
-// Three forms, each with its own Save and its own error, so a failed password
-// change never reads as a failed profile save (PRD N14).
+// Profile fields save by control kind (the name types and has its own Save; the
+// language and time zone are choices that save on change). Email and password
+// are typed forms with an explicit submit, each with its own error, so a failed
+// password change never reads as a failed profile save (PRD N14).
 export function UserSettingsPage({ me }: { me: Me }) {
   const { t } = useTranslation();
   const methods = useAuthMethods();
@@ -37,115 +49,66 @@ export function UserSettingsPage({ me }: { me: Me }) {
   const local = methods.data?.local === true;
 
   return (
-    <main className="mx-auto flex min-h-dvh w-full max-w-md flex-col gap-8 px-4 py-8">
-      <header className="flex items-center justify-between gap-4">
-        <h1 className="text-xl font-semibold">{t("settings.user.title")}</h1>
-        <Link to="/" className="text-sm underline">
-          {t("settings.user.back")}
-        </Link>
-      </header>
-      <ProfileForm me={me} />
+    <>
+      <BackLink to={routes.home} label={t("home.title")} />
+      <PageTitle>{t("settings.user.title")}</PageTitle>
+      <ProfileSection me={me} />
       {local && <EmailForm />}
       {local && <PasswordForm />}
-    </main>
+    </>
   );
 }
 
-// Each field is null until typed, so a background /me refetch never overwrites
-// what is being edited, and only what changed is sent (the PATCH merges).
-function ProfileForm({ me }: { me: Me }) {
-  const { t } = useTranslation();
-  const update = useUpdateMe();
-  const [name, setName] = useState<string | null>(null);
-  const [locale, setLocale] = useState<string | null>(null);
-  const [zone, setZone] = useState<string | null>(null);
-
+function ProfileSection({ me }: { me: Me }) {
+  const { t, i18n } = useTranslation();
+  const rename = useUpdateMe();
+  const patch = useUpdateMe();
   const zones = useMemo(() => timeZoneNames(me.time_zone), [me.time_zone]);
-
-  const body: UpdateMeRequest = {};
-  if (name !== null && name !== me.user_display_name) body.user_display_name = name;
-  if (locale !== null && locale !== me.locale) body.locale = locale as Me["locale"];
-  if (zone !== null && zone !== me.time_zone) body.time_zone = zone;
-  const changed = Object.keys(body).length > 0;
-
-  const invalidField = update.error?.code === "VALIDATION" ? update.error.args.field : undefined;
-  const invalid = (field: string) => (invalidField === field ? true : undefined);
-
-  function onSubmit(e: FormEvent) {
-    e.preventDefault();
-    if (!changed) return;
-    update.mutate(body, {
-      onSuccess: () => {
-        setName(null);
-        setLocale(null);
-        setZone(null);
-      },
-    });
-  }
+  // The language flips here, before the "Saved." toast, so the toast is worded
+  // in the language just chosen rather than the one it replaced.
+  const [locale, chooseLocale] = useChoice<string>(me.locale, (v) =>
+    patch
+      .mutateAsync({ locale: v as Me["locale"] })
+      .then((saved) => i18n.changeLanguage(saved.locale)),
+  );
+  const [zone, chooseZone] = useChoice(me.time_zone, (v) => patch.mutateAsync({ time_zone: v }));
 
   return (
-    <section aria-labelledby="profile-heading">
-      <form onSubmit={onSubmit} className="flex flex-col gap-4" noValidate>
-        <h2 id="profile-heading" className="text-lg font-medium">
-          {t("settings.user.profile.heading")}
-        </h2>
-        <div className="flex flex-col gap-2">
-          <Label htmlFor="user-name">{t("settings.user.profile.name")}</Label>
-          <Input
-            id="user-name"
-            autoComplete="name"
-            value={name ?? me.user_display_name}
-            onChange={(e) => setName(e.target.value)}
-            aria-invalid={invalid("user_display_name")}
-          />
-        </div>
-        <div className="flex flex-col gap-2">
-          <Label htmlFor="user-locale">{t("settings.user.profile.language")}</Label>
-          <select
-            id="user-locale"
-            className={selectClass}
-            value={locale ?? me.locale}
-            onChange={(e) => setLocale(e.target.value)}
-            aria-invalid={invalid("locale")}
-          >
+    <Section id="profile" title={t("settings.user.profile.heading")}>
+      <TextSetting
+        id="user-name"
+        label={t("settings.user.profile.name")}
+        stored={me.user_display_name}
+        autoComplete="name"
+        save={(name) => rename.mutateAsync({ user_display_name: name })}
+        pending={rename.isPending}
+        error={rename.error}
+        clearError={rename.reset}
+      />
+      <Field>
+        <Label htmlFor="user-locale">{t("settings.user.profile.language")}</Label>
+        <Select value={locale} onValueChange={chooseLocale}>
+          <SelectTrigger id="user-locale" />
+          <SelectContent>
             {locales.map((l) => (
-              <option key={l.value} value={l.value}>
+              <SelectItem key={l.value} value={l.value}>
                 {t(`settings.user.languages.${l.key}`)}
-              </option>
+              </SelectItem>
             ))}
-          </select>
-        </div>
-        <div className="flex flex-col gap-2">
-          <Label htmlFor="user-time-zone">{t("settings.user.profile.timeZone")}</Label>
-          <select
-            id="user-time-zone"
-            className={selectClass}
-            value={zone ?? me.time_zone}
-            onChange={(e) => setZone(e.target.value)}
-            aria-invalid={invalid("time_zone")}
-          >
-            {zones.map((z) => (
-              <option key={z} value={z}>
-                {z}
-              </option>
-            ))}
-          </select>
-        </div>
-        {update.error && (
-          <p role="alert" className="text-sm text-destructive">
-            {errorMessage(t, update.error)}
-          </p>
-        )}
-        {update.isSuccess && !changed && (
-          <p role="status" className="text-sm text-muted-foreground">
-            {t("settings.user.profile.saved")}
-          </p>
-        )}
-        <Button type="submit" disabled={!changed || update.isPending}>
-          {update.isPending ? t("settings.user.profile.saving") : t("settings.user.profile.save")}
-        </Button>
-      </form>
-    </section>
+          </SelectContent>
+        </Select>
+      </Field>
+      <Field>
+        <Label htmlFor="user-time-zone">{t("settings.user.profile.timeZone")}</Label>
+        <NativeSelect id="user-time-zone" value={zone} onChange={(e) => chooseZone(e.target.value)}>
+          {zones.map((z) => (
+            <option key={z} value={z}>
+              {z}
+            </option>
+          ))}
+        </NativeSelect>
+      </Field>
+    </Section>
   );
 }
 
@@ -163,23 +126,22 @@ function EmailForm() {
 
   function onSubmit(e: FormEvent) {
     e.preventDefault();
-    change.mutate(
-      { email: email.trim(), current_password: current },
-      {
-        onSuccess: () => setEmail(""),
-        // The current password is cleared after any answer.
-        onSettled: () => setCurrent(""),
-      },
-    );
+    // A failure is shown from change.error, so it is swallowed here. The
+    // current password is cleared after any answer.
+    change
+      .mutateAsync({ email: email.trim(), current_password: current })
+      .then((me) => {
+        setEmail("");
+        toastPlain(t("settings.user.email.saved", { email: me.email }));
+      })
+      .catch(() => {})
+      .finally(() => setCurrent(""));
   }
 
   return (
-    <section aria-labelledby="email-heading">
-      <form onSubmit={onSubmit} className="flex flex-col gap-4" noValidate>
-        <h2 id="email-heading" className="text-lg font-medium">
-          {t("settings.user.email.heading")}
-        </h2>
-        <div className="flex flex-col gap-2">
+    <Section id="email" title={t("settings.user.email.heading")}>
+      <Form onSubmit={onSubmit}>
+        <Field>
           <Label htmlFor="new-email">{t("settings.user.email.newEmail")}</Label>
           <Input
             id="new-email"
@@ -188,10 +150,11 @@ function EmailForm() {
             inputMode="email"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
+            disabled={change.isPending}
             aria-invalid={emailInvalid}
           />
-        </div>
-        <div className="flex flex-col gap-2">
+        </Field>
+        <Field>
           <Label htmlFor="email-current-password">{t("settings.user.email.currentPassword")}</Label>
           <Input
             id="email-current-password"
@@ -199,24 +162,16 @@ function EmailForm() {
             autoComplete="current-password"
             value={current}
             onChange={(e) => setCurrent(e.target.value)}
+            disabled={change.isPending}
             aria-invalid={currentInvalid}
           />
-        </div>
-        {change.error && (
-          <p role="alert" className="text-sm text-destructive">
-            {errorMessage(t, change.error)}
-          </p>
-        )}
-        {change.isSuccess && !email && (
-          <p role="status" className="text-sm text-muted-foreground">
-            {t("settings.user.email.saved", { email: change.data.email })}
-          </p>
-        )}
+        </Field>
+        {change.error && <FieldError>{errorMessage(t, change.error)}</FieldError>}
         <Button type="submit" disabled={!email || !current || change.isPending}>
           {change.isPending ? t("settings.user.email.submitting") : t("settings.user.email.submit")}
         </Button>
-      </form>
-    </section>
+      </Form>
+    </Section>
   );
 }
 
@@ -244,28 +199,25 @@ function PasswordForm() {
       return;
     }
     setMismatch(false);
-    change.mutate(
-      { current_password: current, new_password: next },
-      {
-        onSuccess: () => {
-          setNext("");
-          setConfirm("");
-        },
-        onSettled: () => setCurrent(""),
-      },
-    );
+    change
+      .mutateAsync({ current_password: current, new_password: next })
+      .then(() => {
+        setNext("");
+        setConfirm("");
+        toastPlain(t("settings.user.password.saved"));
+      })
+      .catch(() => {})
+      .finally(() => setCurrent(""));
   }
 
   return (
-    <section aria-labelledby="password-heading">
-      <form onSubmit={onSubmit} className="flex flex-col gap-4" noValidate>
-        <h2 id="password-heading" className="text-lg font-medium">
-          {t("settings.user.password.heading")}
-        </h2>
-        <p id="password-hint" className="text-sm text-muted-foreground">
-          {t("settings.user.password.hint")}
-        </p>
-        <div className="flex flex-col gap-2">
+    <Section
+      id="password"
+      title={t("settings.user.password.heading")}
+      description={t("settings.user.password.hint")}
+    >
+      <Form onSubmit={onSubmit}>
+        <Field>
           <Label htmlFor="password-current">{t("settings.user.password.currentPassword")}</Label>
           <Input
             id="password-current"
@@ -273,10 +225,11 @@ function PasswordForm() {
             autoComplete="current-password"
             value={current}
             onChange={(e) => setCurrent(e.target.value)}
+            disabled={change.isPending}
             aria-invalid={currentInvalid}
           />
-        </div>
-        <div className="flex flex-col gap-2">
+        </Field>
+        <Field>
           <Label htmlFor="password-new">{t("settings.user.password.newPassword")}</Label>
           <Input
             id="password-new"
@@ -284,10 +237,11 @@ function PasswordForm() {
             autoComplete="new-password"
             value={next}
             onChange={(e) => setNext(e.target.value)}
+            disabled={change.isPending}
             aria-invalid={nextInvalid}
           />
-        </div>
-        <div className="flex flex-col gap-2">
+        </Field>
+        <Field>
           <Label htmlFor="password-confirm">{t("settings.user.password.confirm")}</Label>
           <Input
             id="password-confirm"
@@ -298,30 +252,18 @@ function PasswordForm() {
               setConfirm(e.target.value);
               setMismatch(false);
             }}
+            disabled={change.isPending}
             aria-invalid={mismatch ? true : undefined}
           />
-        </div>
-        {mismatch && (
-          <p role="alert" className="text-sm text-destructive">
-            {t("settings.user.password.mismatch")}
-          </p>
-        )}
-        {change.error && (
-          <p role="alert" className="text-sm text-destructive">
-            {errorMessage(t, change.error)}
-          </p>
-        )}
-        {change.isSuccess && !next && !confirm && (
-          <p role="status" className="text-sm text-muted-foreground">
-            {t("settings.user.password.saved")}
-          </p>
-        )}
+        </Field>
+        {mismatch && <FieldError>{t("settings.user.password.mismatch")}</FieldError>}
+        {change.error && <FieldError>{errorMessage(t, change.error)}</FieldError>}
         <Button type="submit" disabled={!current || !next || change.isPending}>
           {change.isPending
             ? t("settings.user.password.submitting")
             : t("settings.user.password.submit")}
         </Button>
-      </form>
-    </section>
+      </Form>
+    </Section>
   );
 }

@@ -1,0 +1,25 @@
+import type { ReactNode } from "react";
+
+// A checkbox is 20px inside a label at least 44px tall; "Show inactive …" is a
+// checkbox, never a switch (Balances ShowInactiveToggle, github.com/kerti/balances-v2).
+export function CheckboxRow({
+  checked,
+  onChange,
+  children,
+}: {
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+  children: ReactNode;
+}) {
+  return (
+    <label className="flex min-h-11 items-center justify-end gap-2 text-sm text-muted-foreground">
+      <input
+        type="checkbox"
+        className="size-5"
+        checked={checked}
+        onChange={(e) => onChange(e.target.checked)}
+      />
+      {children}
+    </label>
+  );
+}

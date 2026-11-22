@@ -14,11 +14,44 @@
   --color-ring: var(--ring);
   --color-primary: var(--primary);
   --color-primary-foreground: var(--primary-foreground);
+  --color-attention: var(--attention);
+  --color-scrim: var(--scrim);
   --color-destructive: var(--destructive);
   --color-destructive-foreground: var(--destructive-foreground);
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
+}
+
+/* The top bar's liquid glass (Uruni web/src/index.css header-glass): the page
+   colour at 60% over a blurred, saturated backdrop, a bright 1px rim inside the
+   edge facing the content and a soft glow falling from it. Colours are the
+   --glass-* tokens in theme.css, so dark mode has its own. */
+@utility header-glass {
+  background-color: color-mix(in srgb, var(--background) 60%, transparent);
+  -webkit-backdrop-filter: blur(20px) saturate(1.6);
+  backdrop-filter: blur(20px) saturate(1.6);
+  box-shadow:
+    inset 0 -1px 0 var(--glass-rim),
+    inset 0 -10px 14px -10px var(--glass-glow),
+    0 4px 16px var(--glass-shadow);
+}
+
+/* A 44px touch target around a control drawn smaller than that, without the
+   control's own box growing and pushing the layout apart: an invisible box
+   centred on it, at least 44px each way (Uruni web/src/index.css
+   touch-target). */
+@utility touch-target {
+  position: relative;
+  &::after {
+    content: "";
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: max(100%, 2.75rem);
+    height: max(100%, 2.75rem);
+    transform: translate(-50%, -50%);
+  }
 }
 
 /* Dialog entrance (components/ui/dialog.tsx): opacity and scale only, 150ms
@@ -53,13 +86,15 @@
 }
 
 @layer base {
+  html {
+    /* Shell's top bar is fixed: keep a focused field out from under it. */
+    scroll-padding-top: calc(env(safe-area-inset-top) + 3.5rem);
+  }
   * {
     @apply border-border;
   }
   body {
     @apply bg-background text-foreground antialiased;
-    padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom)
-      env(safe-area-inset-left);
   }
 }
 

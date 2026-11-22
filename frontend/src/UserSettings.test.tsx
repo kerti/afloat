@@ -1,15 +1,28 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
+import { toast } from "sonner";
 import { alice, defaultHandlers, envelope, server, type State } from "@/test/server";
 import { renderApp } from "@/test/render";
+
+vi.mock("sonner", async () => (await import("@/test/sonnerMock")).sonnerMock());
+const toastMock = vi.mocked(toast);
+beforeEach(() => {
+  vi.clearAllMocks();
+});
 
 const signedIn = (extra: Partial<State> = {}): State => ({ signedIn: true, me: alice, ...extra });
 
 const profile = () => within(screen.getByRole("region", { name: "Profile" }));
 const email = () => within(screen.getByRole("region", { name: "Email" }));
 const password = () => within(screen.getByRole("region", { name: "Password" }));
+
+// Language is a Radix Select: open it, then pick the option.
+async function chooseLanguage(user: ReturnType<typeof userEvent.setup>, name: string) {
+  await user.click(profile().getByRole("combobox", { name: "Language" }));
+  await user.click(await screen.findByRole("option", { name }));
+}
 
 async function open() {
   await screen.findByRole("region", { name: "Profile" });
@@ -26,7 +39,7 @@ describe("user settings", () => {
     await open();
 
     expect(profile().getByLabelText("Your name")).toHaveValue("Alice");
-    expect(profile().getByLabelText("Language")).toHaveValue("en-GB");
+    expect(profile().getByRole("combobox", { name: "Language" })).toHaveTextContent("English (UK)");
     expect(profile().getByLabelText("Time zone")).toHaveValue("Asia/Jakarta");
     expect(profile().getByRole("button", { name: "Save" })).toBeDisabled();
     expect(password().getByText(/signs you out everywhere else/)).toBeInTheDocument();
@@ -47,7 +60,7 @@ describe("user settings", () => {
     expect(offered).toContain("Mars/Base");
   });
 
-  it("sends only the name when only the name changed, and the shell shows it after", async () => {
+  it("sends only the name when only the name changed, raises one toast, and the shell shows it after", async () => {
     const state = signedIn();
     server.use(...defaultHandlers(state));
     const user = userEvent.setup();
@@ -59,14 +72,15 @@ describe("user settings", () => {
     await user.type(field, "Alicia");
     await user.click(profile().getByRole("button", { name: "Save" }));
 
-    expect(await profile().findByText("Saved.")).toBeInTheDocument();
+    await waitFor(() => expect(toastMock).toHaveBeenCalledTimes(1));
+    expect(toastMock).toHaveBeenCalledWith("Saved.", expect.objectContaining({ duration: 4000 }));
     expect(state.mePatches).toEqual([{ user_display_name: "Alicia" }]);
 
-    await user.click(screen.getByRole("link", { name: "Back" }));
-    expect(await screen.findByText("Signed in as Alicia")).toBeInTheDocument();
+    await user.click(screen.getByRole("link", { name: "Home" }));
+    expect(await screen.findByText("Signed in as Alicia.")).toBeInTheDocument();
   });
 
-  it("sends the chosen zone as chosen, and nothing else", async () => {
+  it("saves the chosen zone on change, with one toast, and nothing else", async () => {
     const state = signedIn();
     server.use(...defaultHandlers(state));
     const user = userEvent.setup();
@@ -74,36 +88,42 @@ describe("user settings", () => {
     await open();
 
     await user.selectOptions(profile().getByLabelText("Time zone"), "Asia/Makassar");
-    await user.click(profile().getByRole("button", { name: "Save" }));
 
-    expect(await profile().findByText("Saved.")).toBeInTheDocument();
+    await waitFor(() => expect(toastMock).toHaveBeenCalledTimes(1));
+    expect(toastMock).toHaveBeenCalledWith("Saved.", expect.objectContaining({ duration: 4000 }));
     expect(state.mePatches).toEqual([{ time_zone: "Asia/Makassar" }]);
     expect(profile().getByLabelText("Time zone")).toHaveValue("Asia/Makassar");
   });
 
-  it("flips the UI language when the locale changes", async () => {
+  it("flips the UI language when the language is chosen", async () => {
     const state = signedIn();
     server.use(...defaultHandlers(state));
     const user = userEvent.setup();
     renderApp("/settings/user");
     await open();
 
-    await user.selectOptions(profile().getByLabelText("Language"), "id-ID");
-    await user.click(profile().getByRole("button", { name: "Save" }));
+    await chooseLanguage(user, "Bahasa Indonesia");
 
-    expect(state.mePatches).toEqual([{ locale: "id-ID" }]);
     expect(await screen.findByRole("heading", { name: "Pengaturan Anda" })).toBeInTheDocument();
+    expect(state.mePatches).toEqual([{ locale: "id-ID" }]);
     expect(screen.getByRole("region", { name: "Profil" })).toBeInTheDocument();
+    await waitFor(() =>
+      expect(toastMock).toHaveBeenCalledWith(
+        "Tersimpan.",
+        expect.objectContaining({ duration: 4000 }),
+      ),
+    );
   });
 
-  it.each([
-    ["time_zone", "Check the time zone field.", "Time zone"],
-    ["user_display_name", "Check the name field.", "Your name"],
-    ["locale", "Check the language field.", "Language"],
-  ])("shows a VALIDATION on %s in words and marks the field", async (field, text, label) => {
+  it("shows a VALIDATION on the name inline, in words, and marks the field", async () => {
     server.use(
       http.patch("/api/me", () =>
-        HttpResponse.json(envelope("VALIDATION", { field, rule: "required" }), { status: 400 }),
+        HttpResponse.json(
+          envelope("VALIDATION", { field: "user_display_name", rule: "required" }),
+          {
+            status: 400,
+          },
+        ),
       ),
       ...defaultHandlers(signedIn()),
     );
@@ -114,9 +134,47 @@ describe("user settings", () => {
     await user.type(profile().getByLabelText("Your name"), "x");
     await user.click(profile().getByRole("button", { name: "Save" }));
 
-    expect(await profile().findByRole("alert")).toHaveTextContent(text);
-    expect(profile().getByLabelText(label)).toHaveAttribute("aria-invalid", "true");
-    expect(profile().queryByText("Saved.")).not.toBeInTheDocument();
+    expect(await profile().findByRole("alert")).toHaveTextContent("Check the name field.");
+    expect(profile().getByLabelText("Your name")).toHaveAttribute("aria-invalid", "true");
+    expect(toastMock).not.toHaveBeenCalled();
+  });
+
+  it("reverts the name on Esc", async () => {
+    server.use(...defaultHandlers(signedIn()));
+    const user = userEvent.setup();
+    renderApp("/settings/user");
+    await open();
+
+    await user.type(profile().getByLabelText("Your name"), "x");
+    await user.keyboard("{Escape}");
+    expect(profile().getByLabelText("Your name")).toHaveValue("Alice");
+    expect(profile().getByRole("button", { name: "Save" })).toBeDisabled();
+  });
+
+  it.each([
+    ["time_zone", "Check the time zone field."],
+    ["locale", "Check the language field."],
+  ])("rolls a failed %s choice back and says why in an error toast", async (field, text) => {
+    server.use(
+      http.patch("/api/me", () =>
+        HttpResponse.json(envelope("VALIDATION", { field, rule: "required" }), { status: 400 }),
+      ),
+      ...defaultHandlers(signedIn()),
+    );
+    const user = userEvent.setup();
+    renderApp("/settings/user");
+    await open();
+
+    if (field === "time_zone") {
+      await user.selectOptions(profile().getByLabelText("Time zone"), "Asia/Makassar");
+    } else {
+      await chooseLanguage(user, "Bahasa Indonesia");
+    }
+
+    await waitFor(() => expect(toastMock.error).toHaveBeenCalledWith(text, expect.anything()));
+    expect(profile().getByLabelText("Time zone")).toHaveValue("Asia/Jakarta");
+    expect(profile().getByRole("combobox", { name: "Language" })).toHaveTextContent("English (UK)");
+    expect(toastMock).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -154,9 +212,13 @@ describe("user settings", () => {
     await user.type(email().getByLabelText("Current password"), "correct-horse");
     await user.click(email().getByRole("button", { name: "Change email" }));
 
-    expect(
-      await email().findByText("Saved. Sign in with alice@new.example from now on."),
-    ).toBeInTheDocument();
+    await waitFor(() => expect(toastMock).toHaveBeenCalledTimes(1));
+    expect(toastMock).toHaveBeenCalledWith(
+      "Saved. Sign in with alice@new.example from now on.",
+      expect.objectContaining({
+        duration: 4000,
+      }),
+    );
     expect(state.emailChanges).toEqual([
       { email: "alice@new.example", current_password: "correct-horse" },
     ]);
@@ -244,7 +306,11 @@ describe("user settings", () => {
     await user.type(password().getByLabelText("Confirm new password"), "a much longer phrase");
     await user.click(password().getByRole("button", { name: "Change password" }));
 
-    expect(await password().findByText("Password changed.")).toBeInTheDocument();
+    await waitFor(() => expect(toastMock).toHaveBeenCalledTimes(1));
+    expect(toastMock).toHaveBeenCalledWith(
+      "Password changed.",
+      expect.objectContaining({ duration: 4000 }),
+    );
     expect(state.passwordChanges).toEqual([
       { current_password: "correct-horse", new_password: "a much longer phrase" },
     ]);
@@ -341,7 +407,12 @@ describe("user settings", () => {
     await user.type(password().getByLabelText("New password"), "a much longer phrase");
     await user.type(password().getByLabelText("Confirm new password"), "a much longer phrase");
     await user.click(password().getByRole("button", { name: "Change password" }));
-    expect(await password().findByText("Password changed.")).toBeInTheDocument();
+    await waitFor(() =>
+      expect(toastMock).toHaveBeenCalledWith(
+        "Password changed.",
+        expect.objectContaining({ duration: 4000 }),
+      ),
+    );
 
     release();
     await new Promise((r) => setTimeout(r, 50));

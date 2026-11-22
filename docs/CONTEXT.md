@@ -160,9 +160,10 @@ JSON. Blank means not yet in the UI.
 |---|---|---|
 | Household | rumah tangga | founding (#109), Household settings (#117) |
 | User | | |
-| Pocket | Kantong | approved 22 Nov 2026 (#121) |
-| Deactivate / Inactive | Nonaktifkan / Nonaktif | Pockets PR 2 (#125) |
-| Period | Periode anggaran | Household settings (#117) |
+| Pocket | kantong | approved 22 Nov 2026 (#121) |
+| Deactivate / Inactive | nonaktifkan / nonaktif | Pockets PR 2 (#125) |
+| Home (the screen) | Beranda | UI retrofit |
+| Period | periode anggaran | Household settings (#117) |
 | Expense | | |
 | Category | | |
 | Budget | | |

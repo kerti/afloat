@@ -1,8 +1,13 @@
 import { useState, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
-import { Link, Navigate } from "react-router";
+import { Navigate } from "react-router";
 import { useAuthMethods, useLogin, useMe } from "@/api/queries";
 import { errorMessage } from "@/api/errors";
+import { AuthCard } from "@/components/AuthCard";
+import { Field, Form } from "@/components/Form";
+import { FieldError, MutedText, PageTitle } from "@/components/Text";
+import { TextLink } from "@/components/TextLink";
+import { routes } from "@/lib/routes";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -15,7 +20,7 @@ export function LoginPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
 
-  if (me.data) return <Navigate to="/" replace />;
+  if (me.data) return <Navigate to={routes.home} replace />;
 
   function onSubmit(e: FormEvent) {
     e.preventDefault();
@@ -28,15 +33,13 @@ export function LoginPage() {
   const failed = login.error ? errorMessage(t, login.error) : null;
 
   return (
-    <main className="mx-auto flex min-h-dvh w-full max-w-sm flex-col justify-center gap-6 px-4">
-      <h1 className="text-2xl font-semibold">{t("login.title")}</h1>
+    <AuthCard>
+      <PageTitle>{t("login.title")}</PageTitle>
       {localOff ? (
-        <p role="status" className="text-muted-foreground">
-          {t("login.unavailable")}
-        </p>
+        <MutedText role="status">{t("login.unavailable")}</MutedText>
       ) : (
-        <form onSubmit={onSubmit} className="flex flex-col gap-4" noValidate>
-          <div className="flex flex-col gap-2">
+        <Form onSubmit={onSubmit}>
+          <Field>
             <Label htmlFor="email">{t("fields.email")}</Label>
             <Input
               id="email"
@@ -48,8 +51,8 @@ export function LoginPage() {
               onChange={(e) => setEmail(e.target.value)}
               aria-invalid={login.error?.code === "INVALID_CREDENTIALS" || undefined}
             />
-          </div>
-          <div className="flex flex-col gap-2">
+          </Field>
+          <Field>
             <Label htmlFor="password">{t("fields.password")}</Label>
             <Input
               id="password"
@@ -60,22 +63,14 @@ export function LoginPage() {
               onChange={(e) => setPassword(e.target.value)}
               aria-invalid={login.error?.code === "INVALID_CREDENTIALS" || undefined}
             />
-          </div>
-          {failed && (
-            <p role="alert" className="text-sm text-destructive">
-              {failed}
-            </p>
-          )}
+          </Field>
+          {failed && <FieldError>{failed}</FieldError>}
           <Button type="submit" disabled={login.isPending}>
             {login.isPending ? t("login.submitting") : t("login.submit")}
           </Button>
-          {canRegister && (
-            <Link to="/register" className="text-sm underline">
-              {t("login.createAccount")}
-            </Link>
-          )}
-        </form>
+          {canRegister && <TextLink to={routes.register}>{t("login.createAccount")}</TextLink>}
+        </Form>
       )}
-    </main>
+    </AuthCard>
   );
 }

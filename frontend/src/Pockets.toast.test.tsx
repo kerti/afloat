@@ -36,7 +36,7 @@ describe("the Undo toast, for real", () => {
     await deactivateCash(user);
     expect(await screen.findByText("Deactivated Cash.")).toBeInTheDocument();
 
-    await user.click(screen.getByRole("link", { name: "Back" }));
+    await user.click(screen.getByRole("link", { name: "Home" }));
     expect(await screen.findByRole("link", { name: "Pockets" })).toBeInTheDocument();
     expect(screen.getByText("Deactivated Cash.")).toBeInTheDocument();
 

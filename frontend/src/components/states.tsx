@@ -29,7 +29,7 @@ export function Loading() {
 export function ErrorState({ error, onRetry }: { error: ApiError; onRetry: () => void }) {
   const { t } = useTranslation();
   return (
-    <div role="alert" className="flex flex-col gap-2 text-destructive">
+    <div role="alert" className="flex flex-col gap-2 text-attention">
       <p className="flex items-center gap-2">
         <svg
           aria-hidden="true"

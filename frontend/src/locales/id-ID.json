@@ -10,7 +10,7 @@
     "email": "Email",
     "password": "Kata sandi",
     "userDisplayName": "Nama Anda (opsional)",
-    "pocketDisplayName": "Nama Kantong",
+    "pocketDisplayName": "Nama kantong",
     "householdDisplayName": "Nama rumah tangga"
   },
   "fieldNames": {
@@ -19,7 +19,7 @@
     "email": "email",
     "password": "kata sandi",
     "user_display_name": "nama",
-    "pocket_display_name": "nama Kantong",
+    "pocket_display_name": "nama kantong",
     "household_display_name": "nama rumah tangga",
     "time_zone": "zona waktu",
     "locale": "bahasa",
@@ -34,13 +34,13 @@
     "createAccount": "Buat akun"
   },
   "home": {
-    "signedInAs": "Masuk sebagai {{name}}",
+    "title": "Beranda",
+    "signedInAs": "Masuk sebagai {{name}}.",
     "household": "Rumah tangga: {{name}}",
     "comingSoon": "Dasbor Anda akan muncul di sini.",
     "settingsLink": "Pengaturan rumah tangga",
     "userSettingsLink": "Pengaturan Anda",
-    "pocketsLink": "Kantong",
-    "signOut": "Keluar"
+    "pocketsLink": "Kantong"
   },
   "pwa": {
     "updateReady": "Versi baru Afloat sudah siap.",
@@ -82,7 +82,7 @@
   "onboarding": {
     "title": "Siapkan rumah tangga Anda",
     "intro": "Anda mendaftar sebagai {{email}}. Satu langkah terakhir: beri nama rumah tangga Anda, atau pakai saran di bawah.",
-    "householdNameDefault": "Rumah Tangga {{name}}",
+    "householdNameDefault": "Rumah tangga {{name}}",
     "submit": "Buat rumah tangga",
     "submitting": "Membuat…",
     "closed": "Instans ini sedang tidak menerima rumah tangga baru. Minta pengelolanya untuk membukanya, atau masuk ke akun yang sudah ada.",
@@ -90,9 +90,8 @@
   },
   "pockets": {
     "title": "Kantong",
-    "back": "Kembali",
     "empty": "Kantong Anda akan tampil di sini.",
-    "addHeading": "Tambah Kantong",
+    "addHeading": "Tambah kantong",
     "namePlaceholder": "Misalnya: Tunai, OVO, debit BCA",
     "add": "Tambah",
     "adding": "Menambahkan…",
@@ -104,31 +103,25 @@
     "deactivate": "Nonaktifkan",
     "reactivate": "Aktifkan kembali",
     "inactive": "Nonaktif",
-    "showInactive": "Tampilkan Kantong nonaktif ({{count}})",
-    "allInactive_other": "Tidak ada Kantong aktif. {{count}} Kantong nonaktif disembunyikan. Centang “Tampilkan Kantong nonaktif” untuk melihatnya.",
-    "editHeading": "Ubah Kantong",
-    "nameRequired": "Masukkan nama Kantong."
+    "showInactive": "Tampilkan kantong nonaktif ({{count}})",
+    "allInactive_other": "Tidak ada kantong aktif. {{count}} kantong nonaktif disembunyikan. Centang “Tampilkan kantong nonaktif” untuk melihatnya.",
+    "editHeading": "Ubah kantong",
+    "nameRequired": "Masukkan nama kantong."
   },
   "settings": {
+    "save": "Simpan",
+    "saving": "Menyimpan…",
     "household": {
       "title": "Pengaturan rumah tangga",
-      "save": "Simpan",
-      "saving": "Menyimpan…",
-      "saved": "Tersimpan.",
-      "back": "Kembali",
-      "periodStartDayHint": "Setiap Periode anggaran dimulai pada tanggal ini, dari 1 sampai 28. Mengubahnya langsung menggeser tanggal Periode anggaran Anda."
+      "periodStartDayHint": "Setiap periode anggaran dimulai pada tanggal ini, dari 1 sampai 28. Mengubahnya langsung menggeser tanggal periode anggaran Anda."
     },
     "user": {
       "title": "Pengaturan Anda",
-      "back": "Kembali",
       "profile": {
         "heading": "Profil",
         "name": "Nama Anda",
         "language": "Bahasa",
-        "timeZone": "Zona waktu",
-        "save": "Simpan",
-        "saving": "Menyimpan…",
-        "saved": "Tersimpan."
+        "timeZone": "Zona waktu"
       },
       "languages": {
         "enGB": "English (UK)",
@@ -164,5 +157,8 @@
   },
   "dialog": {
     "close": "Tutup"
+  },
+  "shell": {
+    "signOut": "Keluar"
   }
 }

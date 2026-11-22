@@ -60,7 +60,7 @@ function DialogContent({
     <DialogPrimitive.Portal>
       <DialogPrimitive.Overlay
         data-slot="dialog-overlay"
-        className="fixed inset-0 isolate z-50 animate-overlay-in bg-black/20"
+        className="fixed inset-0 isolate z-50 animate-overlay-in bg-scrim supports-backdrop-filter:backdrop-blur-xs"
       />
       <DialogPrimitive.Content
         data-slot="dialog-content"

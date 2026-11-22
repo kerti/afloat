@@ -37,6 +37,30 @@ export default defineConfig([
             "JSXAttribute[name.name=/^(placeholder|title|aria-label|alt)$/] > Literal[value=/\\S/]",
           message: "Bare string attribute - use t('namespace.key').",
         },
+        // One route-builder module (docs/agents/ui-conventions.md): a path
+        // literal in a component is a path that a rename will miss.
+        {
+          selector: "JSXAttribute[name.name='to'] > Literal[value=/^\\//]",
+          message: "Path literal - use routes from '@/lib/routes'.",
+        },
+        {
+          selector: "CallExpression[callee.name='navigate'] > Literal[value=/^\\//]",
+          message: "Path literal - use routes from '@/lib/routes'.",
+        },
+        {
+          selector: "JSXAttribute[name.name='to'] > JSXExpressionContainer > Literal[value=/^\\//]",
+          message: "Path literal - use routes from '@/lib/routes'.",
+        },
+        {
+          selector:
+            "JSXAttribute[name.name='to'] > JSXExpressionContainer > TemplateLiteral > TemplateElement:first-child[value.raw=/^\\//]",
+          message: "Path literal - use routes from '@/lib/routes'.",
+        },
+        {
+          selector:
+            "CallExpression[callee.name='navigate'] > TemplateLiteral > TemplateElement:first-child[value.raw=/^\\//]",
+          message: "Path literal - use routes from '@/lib/routes'.",
+        },
       ],
     },
   },

@@ -455,7 +455,7 @@ describe("session and locale", () => {
 
     await user.click(await screen.findByRole("link", { name: "Pockets" }));
     expect(await screen.findByText("Cash")).toBeInTheDocument();
-    await user.click(screen.getByRole("link", { name: "Back" }));
+    await user.click(screen.getByRole("link", { name: "Home" }));
     await user.click(await screen.findByRole("button", { name: "Sign out" }));
     await screen.findByRole("heading", { name: "Sign in" });
     expect(client.getQueryData(["pockets"])).toBeUndefined();
@@ -484,11 +484,11 @@ describe("session and locale", () => {
 
     expect(await screen.findByRole("heading", { name: "Kantong" })).toBeInTheDocument();
     expect(await screen.findByRole("button", { name: "Ubah Tunai" })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: ip.back })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: idID.home.title })).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: ip.addHeading }));
     const dialog = await screen.findByRole("dialog", { name: ip.addHeading });
-    expect(within(dialog).getByLabelText("Nama Kantong")).toBeInTheDocument();
+    expect(within(dialog).getByLabelText("Nama kantong")).toBeInTheDocument();
     expect(within(dialog).getByRole("button", { name: idID.dialog.close })).toBeInTheDocument();
     expect(within(dialog).getByRole("button", { name: ip.add })).toBeInTheDocument();
   });

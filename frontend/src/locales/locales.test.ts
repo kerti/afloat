@@ -45,4 +45,45 @@ describe("locale catalogues", () => {
       }
     }
   });
+
+  // docs/agents/ui-conventions.md, Copy: no em dash in anything the user reads.
+  // The raw files, so a key's name and a value are both covered.
+  it.each(["en-GB", "id-ID"])("%s has no em dash", (locale) => {
+    const raw = readFileSync(path.resolve(import.meta.dirname, `${locale}.json`), "utf8");
+    expect(raw).not.toMatch(/\u2014|\\u2014|&mdash;/);
+  });
+
+  it.each(["en-GB", "id-ID"])("%s uses the single-character ellipsis", (locale) => {
+    const raw = readFileSync(path.resolve(import.meta.dirname, `${locale}.json`), "utf8");
+    expect(raw).not.toContain("...");
+  });
+});
+
+// Every key the source can reach. A literal "a.b.c" counts; so does a template
+// literal's static prefix (`errors.${code}` covers everything under errors.),
+// because those keys are chosen at run time.
+const sources = import.meta.glob<string>("/src/**/*.{ts,tsx}", {
+  query: "?raw",
+  import: "default",
+  eager: true,
+});
+
+describe("locale keys in use", () => {
+  const app = Object.entries(sources)
+    .filter(
+      ([p]) => !/\.test\.tsx?$/.test(p) && !p.startsWith("/src/test/") && !p.endsWith(".gen.ts"),
+    )
+    .map(([, source]) => source)
+    .join("\n");
+  const literals = new Set(
+    [...app.matchAll(/["'`]([A-Za-z][\w]*(?:\.[\w]+)+)["'`]/g)].map((m) => m[1]!),
+  );
+  const prefixes = [...app.matchAll(/`([A-Za-z][\w.]*\.)\$\{/g)].map((m) => m[1]!);
+
+  it("leaves no key in the catalogues that nothing reads", () => {
+    const unused = stems(enGB).filter(
+      (key) => !literals.has(key) && !prefixes.some((prefix) => key.startsWith(prefix)),
+    );
+    expect(unused, "delete the key, or use it").toEqual([]);
+  });
 });

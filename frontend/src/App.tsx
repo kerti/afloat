@@ -1,4 +1,5 @@
 import { Navigate, Route, Routes } from "react-router";
+import { AppearanceProvider } from "@/lib/appearance";
 import { RequireSession } from "@/components/RequireSession";
 import { Toaster } from "@/components/ui/sonner";
 import { UpdatePrompt } from "@/components/UpdatePrompt";
@@ -13,7 +14,7 @@ import { UserSettingsPage } from "@/pages/UserSettingsPage";
 
 export function App() {
   return (
-    <>
+    <AppearanceProvider>
       <Routes>
         <Route path={routes.login} element={<LoginPage />} />
         <Route path={routes.register} element={<RegisterPage />} />
@@ -38,6 +39,6 @@ export function App() {
       </Routes>
       <UpdatePrompt />
       <Toaster />
-    </>
+    </AppearanceProvider>
   );
 }

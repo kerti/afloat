@@ -95,7 +95,8 @@ tag each, so it has components only. A missing element is proposed first (see Ho
 
 **Toasts**: `lib/plainToast.ts` (`toastPlain`, `toastSaved`, and `toastError` for a failure with
 no form open) and `lib/undoToast.ts` (`toastUndoable`), all tap-to-dismiss (`lib/tapToDismiss.ts`)
-and all through the one `Toaster` (`components/ui/sonner.tsx`).
+and all through the one `Toaster` (`components/ui/sonner.tsx`). Toasts follow the person's chosen
+appearance, not the OS. (Confirmed by the maintainer, 23 Nov 2026, for #124.)
 
 **Dialog actions** (`components/DetailActions.tsx`)
 
@@ -118,20 +119,20 @@ and all through the one `Toaster` (`components/ui/sonner.tsx`).
 One font, Figtree (`--font-ui`). Sizes and weights come from these roles, never per screen. (The
 role table follows Uruni `docs/Design-System.md` § Typography.)
 
-| Role | Size | Weight | Colour | Used for |
-|---|---|---|---|---|
-| Page title | 20px (`text-xl`) | semibold | foreground | `PageTitle`; every screen, auth included |
-| Section and dialog title | 18px (`text-lg`) | semibold | foreground | `SectionTitle`, `DialogTitle`: one look (Uruni H2, 600; ruled 22 Nov) |
-| Brand | 18px (`text-lg`) | semibold | foreground | the top bar's "Afloat" link |
-| Body | 16px (base) | regular | foreground | `BodyText`, a list row's title, inputs, select values |
-| Muted body | 16px | regular | muted-foreground | `MutedText`, `EmptyState`, `Loading`, `BackLink`, an inactive row's title |
-| Label | 14px (`text-sm`) | medium | foreground | `Label`, buttons |
-| Destructive label | 14px | medium | destructive | the `destructive` Button, DetailActions' Delete (ruled 22 Nov) |
-| Hint | 14px | regular | muted-foreground | `FieldHint`, `SectionDescription`, `CheckboxRow` |
-| Error | 14px | regular | attention | `FieldError` |
-| Load failure | 16px | regular | attention | `ErrorState` |
-| Link | 14px | regular, underlined | foreground | `TextLink` |
-| Badge | 12px (`text-xs`) | regular | muted-foreground on muted | `Badge` |
+| Role                     | Size             | Weight              | Colour                    | Used for                                                                  |
+| ------------------------ | ---------------- | ------------------- | ------------------------- | ------------------------------------------------------------------------- |
+| Page title               | 20px (`text-xl`) | semibold            | foreground                | `PageTitle`; every screen, auth included                                  |
+| Section and dialog title | 18px (`text-lg`) | semibold            | foreground                | `SectionTitle`, `DialogTitle`: one look (Uruni H2, 600; ruled 22 Nov)     |
+| Brand                    | 18px (`text-lg`) | semibold            | foreground                | the top bar's "Afloat" link                                               |
+| Body                     | 16px (base)      | regular             | foreground                | `BodyText`, a list row's title, inputs, select values                     |
+| Muted body               | 16px             | regular             | muted-foreground          | `MutedText`, `EmptyState`, `Loading`, `BackLink`, an inactive row's title |
+| Label                    | 14px (`text-sm`) | medium              | foreground                | `Label`, buttons                                                          |
+| Destructive label        | 14px             | medium              | destructive               | the `destructive` Button, DetailActions' Delete (ruled 22 Nov)            |
+| Hint                     | 14px             | regular             | muted-foreground          | `FieldHint`, `SectionDescription`, `CheckboxRow`                          |
+| Error                    | 14px             | regular             | attention                 | `FieldError`                                                              |
+| Load failure             | 16px             | regular             | attention                 | `ErrorState`                                                              |
+| Link                     | 14px             | regular, underlined | foreground                | `TextLink`                                                                |
+| Badge                    | 12px (`text-xs`) | regular             | muted-foreground on muted | `Badge`                                                                   |
 
 - **Radius:** `rounded-md` for controls, the list card, the badge and the back link (`--radius` is
   0.625rem); `rounded-lg` for the dialog and the update banner; `rounded-sm` for a select item;
@@ -223,14 +224,15 @@ role table follows Uruni `docs/Design-System.md` § Typography.)
 - **Pickers:** Radix Select for short lists, full width, `h-11`. Long lists stay native `<select>`,
   also `h-11`, until a searchable combobox is built: currency, time zone, and the period start day
   (1 to 28). Language is a Radix Select. A picker starts blank unless there is only one choice. The
-  capture date field is decided in that slice. (Uruni, adapted.)
+  capture date field is decided in that slice. (Uruni, adapted.) The Appearance select lists System,
+  Light, Dark, the default first. (Confirmed by the maintainer, 23 Nov 2026, for #124.)
 - **Money input** groups digits live, in the app locale, as the user types, and keeps the caret after
   the same digit when separators come and go (Uruni `AmountInput`, #749). A typed `.` or `,` is the
   decimal point; paste goes through a strict locale parser; the value on the wire is a canonical
   decimal string, never a float (Balances `NumericInput`, ADR-0056). `inputmode="decimal"`, or
   `numeric` for a zero-decimal currency.
 - **Settings save by control kind.** (Balances ADR-0058 §7.)
-  - **A choice** (select, switch, theme) saves on change. The new value shows at once
+  - **A choice** (select, switch, appearance) saves on change. The new value shows at once
     (optimistic). Success is a "Saved." toast. A failure rolls the value back and raises an error
     toast, since no form is open. A language change applies before its toast, so the toast reads
     in the language just chosen.
@@ -282,12 +284,12 @@ role table follows Uruni `docs/Design-System.md` § Typography.)
   (the `destructive` Button tone and DetailActions' last act); provisional, like `--attention`:
   light `#b4453c`, dark `#ec8b80`, until the brand session. Nothing is coloured good/bad red/green (PRD §9). The attention colour itself is the brand
   session's; until then `--attention` (`styles/theme.css`) holds a provisional terracotta, AA for text
-  on the background, card and muted surfaces in both themes. (Uruni.)
+  on the background, card and muted surfaces in both light and dark appearance. (Uruni.)
 - **Raw Tailwind palette classes** (`text-red-500`, `bg-green-…`, `bg-white`, `bg-[#…]`) are banned in
   components; use the theme tokens. A test enforces it (`components/noRawColours.test.ts`). (Balances.)
-- **Light and dark** both real (PRD §9), via the tokens in `theme.css`; the picker is #124.
+- **Light and dark** both real (PRD §9), via the tokens in `theme.css`; the appearance picker is #124.
 - **The dialog overlay** is `--scrim` (10% black) plus `backdrop-blur-xs` where supported, the same
-  in both themes. (Uruni `dialog.tsx`, Balances `dialog.tsx`: identical.)
+  in light and dark. (Uruni `dialog.tsx`, Balances `dialog.tsx`: identical.)
 - **Weight marks the figure, not the name:** a row's title is regular weight; its amount is
   `tabular-nums`, medium. Money is always `tabular-nums`. (Uruni.)
 - **Motion** 150–250ms ease-out, and none under `prefers-reduced-motion`. (Uruni.)

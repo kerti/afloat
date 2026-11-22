@@ -252,7 +252,7 @@ func TestGetMeNestsTheHousehold(t *testing.T) {
 	if err := json.Unmarshal(wire, &me); err != nil {
 		t.Fatal(err)
 	}
-	if got, want := slices.Sorted(maps.Keys(me)), []string{"email", "household", "id", "locale", "time_zone", "user_display_name"}; !slices.Equal(got, want) {
+	if got, want := slices.Sorted(maps.Keys(me)), []string{"appearance", "email", "household", "id", "locale", "time_zone", "user_display_name"}; !slices.Equal(got, want) {
 		t.Errorf("Me keys = %v, want %v", got, want)
 	}
 

@@ -152,7 +152,7 @@ type Querier interface {
 	// authenticated User, never from the request.
 	// Merge semantics (BOOTSTRAP.md §4): a NULL argument leaves its column alone,
 	// in one statement, so two writers of different fields both land. None of the
-	// three columns is nullable, so coalesce cannot be mistaken for "clear".
+	// four columns is nullable, so coalesce cannot be mistaken for "clear".
 	//
 	// updated_at is set here because the baseline has no trigger, and from the
 	// database's own clock (BOOTSTRAP.md §5.1).

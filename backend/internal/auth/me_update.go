@@ -18,10 +18,10 @@ import (
 // host.
 const timeZoneRule = "timezone"
 
-// UpdateMe changes the caller's own settings: their name, language and time
-// zone. Merge semantics, one statement, last write wins per field (BOOTSTRAP.md
-// §4): a field left out is not touched, and two writers of different fields
-// both land. The email and the password are not here, because both need the
+// UpdateMe changes the caller's own settings: their name, language, time
+// zone and appearance. Merge semantics, one statement, last write wins per
+// field (BOOTSTRAP.md §4): a field left out is not touched, and two writers
+// of different fields both land. The email and the password are not here, because both need the
 // current password (change_email.go, change_password.go).
 //
 // The User is the authenticated one, taken from the context and never from the
@@ -52,6 +52,10 @@ func (h *Handlers) UpdateMe(ctx context.Context, request api.UpdateMeRequestObje
 	if body.Locale != nil {
 		locale := string(*body.Locale)
 		params.Locale = &locale
+	}
+	if body.Appearance != nil {
+		appearance := string(*body.Appearance)
+		params.Appearance = &appearance
 	}
 
 	// The rules the contract cannot state. Every one that fails is collected

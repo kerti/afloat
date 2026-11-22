@@ -84,6 +84,7 @@ func meResponse(user db.User, household db.Household) api.Me {
 		UserDisplayName: user.UserDisplayName,
 		Locale:          api.Locale(user.Locale),
 		TimeZone:        user.TimeZone,
+		Appearance:      api.Appearance(user.Appearance),
 		Household:       HouseholdResponse(household),
 	}
 }

@@ -83,6 +83,7 @@ type User struct {
 	UserDisplayName string
 	Locale          string
 	TimeZone        string
+	Appearance      string
 	CreatedAt       pgtype.Timestamptz
 	UpdatedAt       pgtype.Timestamptz
 	DeletedAt       pgtype.Timestamptz

@@ -124,11 +124,17 @@
         "heading": "Profile",
         "name": "Your name",
         "language": "Language",
+        "appearance": "Appearance",
         "timeZone": "Time zone"
       },
       "languages": {
         "enGB": "English (UK)",
         "idID": "Bahasa Indonesia"
+      },
+      "appearances": {
+        "system": "Match this device",
+        "light": "Light",
+        "dark": "Dark"
       },
       "email": {
         "heading": "Email",

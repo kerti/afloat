@@ -73,6 +73,9 @@ CREATE TABLE users (
     user_display_name text NOT NULL,
     locale            text NOT NULL DEFAULT 'en-GB',
     time_zone         text NOT NULL DEFAULT 'Asia/Jakarta',
+    -- Light or dark, per User (PRD S4); 'system' follows the device. Not the
+    -- palette (CONTEXT: Appearance).
+    appearance        text NOT NULL DEFAULT 'system',
     created_at        timestamptz NOT NULL DEFAULT now(),
     updated_at        timestamptz NOT NULL DEFAULT now(),
     deleted_at        timestamptz,
@@ -82,7 +85,9 @@ CREATE TABLE users (
     -- Both locales are real from day one (PRD N12a). Widening this list is what
     -- adding a third language costs in the database.
     CONSTRAINT users_locale_known
-        CHECK (locale IN ('en-GB', 'id-ID'))
+        CHECK (locale IN ('en-GB', 'id-ID')),
+    CONSTRAINT users_appearance_known
+        CHECK (appearance IN ('system', 'light', 'dark'))
 );
 
 -- Soft-delete-aware: a deleted User's address frees up for reuse, and two

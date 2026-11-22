@@ -36,6 +36,11 @@ func TestUpdateMeEachFieldUpdatesAndMeReflectsIt(t *testing.T) {
 				t.Errorf("time_zone = %q", me.TimeZone)
 			}
 		}},
+		{"appearance", api.UpdateMeRequest{Appearance: ptr(api.Dark)}, func(t *testing.T, me api.Me) {
+			if me.Appearance != api.Dark {
+				t.Errorf("appearance = %q", me.Appearance)
+			}
+		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h := newHarness(t, time.Now)
@@ -54,6 +59,72 @@ func TestUpdateMeEachFieldUpdatesAndMeReflectsIt(t *testing.T) {
 				t.Errorf("GET /me = %+v, want what the PATCH answered, %+v", me, got)
 			}
 		})
+	}
+}
+
+// Appearance is a plain merge field: it lands in the row, and every other
+// field, locale and time zone included, leaves it alone. The default is the
+// schema's, so a User nobody has asked is on `system`.
+func TestUpdateMeAppearanceLandsInTheRowAndOnlyMovesWithItsOwnPatch(t *testing.T) {
+	h := newHarness(t, time.Now)
+	m := h.seedMemberAlone(t, "a@example.com")
+	ctx := h.ctx(t, m, "198.51.100.1")
+	stored := func() string {
+		t.Helper()
+		var got string
+		if err := h.tdb.Pool.QueryRow(context.Background(), `SELECT appearance FROM users WHERE id = $1`, m.id).Scan(&got); err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+
+	if got := stored(); got != "system" {
+		t.Fatalf("a new User's appearance = %q, want system", got)
+	}
+	for _, want := range []api.Appearance{api.Dark, api.Light, api.System} {
+		if me := h.updatedMe(ctx, t, api.UpdateMeRequest{Appearance: &want}); me.Appearance != want {
+			t.Errorf("answer appearance = %q, want %q", me.Appearance, want)
+		}
+		if got := stored(); got != string(want) {
+			t.Errorf("stored appearance = %q, want %q", got, want)
+		}
+	}
+
+	h.updatedMe(ctx, t, api.UpdateMeRequest{Appearance: ptr(api.Dark)})
+	for _, other := range []api.UpdateMeRequest{
+		{UserDisplayName: ptr("Renamed")},
+		{Locale: ptr(api.IdID)},
+		{TimeZone: ptr("Asia/Makassar")},
+		{},
+	} {
+		if me := h.updatedMe(ctx, t, other); me.Appearance != api.Dark {
+			t.Errorf("a PATCH without appearance (%+v) answered %q, want dark", other, me.Appearance)
+		}
+		if got := stored(); got != "dark" {
+			t.Errorf("a PATCH without appearance (%+v) left %q stored, want dark", other, got)
+		}
+	}
+}
+
+// A second User in the same Household keeps their own appearance.
+func TestUpdateMeAppearanceDoesNotReachAHouseholdMember(t *testing.T) {
+	h := newHarness(t, time.Now)
+	shared := h.tdb.CreateHousehold(t, "Shared")
+	actor := h.seedMember(t, shared, "actor@example.com", goodPassword)
+	sibling := h.seedMember(t, shared, "sibling@example.com", goodPassword)
+	if _, err := h.tdb.Pool.Exec(context.Background(), `UPDATE users SET appearance = 'light' WHERE id = $1`, sibling.id); err != nil {
+		t.Fatal(err)
+	}
+	before := h.userRow(t, sibling.id)
+
+	h.updatedMe(h.ctx(t, actor, "198.51.100.1"), t, api.UpdateMeRequest{Appearance: ptr(api.Dark)})
+
+	if after := h.userRow(t, sibling.id); after != before {
+		t.Errorf("the sibling's row changed:\nbefore %s\nafter  %s", before, after)
+	}
+	var theirs string
+	if err := h.tdb.Pool.QueryRow(context.Background(), `SELECT appearance FROM users WHERE id = $1`, sibling.id).Scan(&theirs); err != nil || theirs != "light" {
+		t.Errorf("sibling appearance = %q (%v), want light", theirs, err)
 	}
 }
 

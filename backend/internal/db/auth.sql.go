@@ -174,7 +174,7 @@ func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) (S
 const createUser = `-- name: CreateUser :one
 INSERT INTO users (id, household_id, email, user_display_name, locale)
 VALUES ($1, $2, $3, $4, $5)
-RETURNING id, household_id, email, user_display_name, locale, time_zone, created_at, updated_at, deleted_at
+RETURNING id, household_id, email, user_display_name, locale, time_zone, appearance, created_at, updated_at, deleted_at
 `
 
 type CreateUserParams struct {
@@ -201,6 +201,7 @@ func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (User, e
 		&i.UserDisplayName,
 		&i.Locale,
 		&i.TimeZone,
+		&i.Appearance,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.DeletedAt,
@@ -368,7 +369,7 @@ func (q *Queries) GetLoginBackoff(ctx context.Context, keys []string) (float64, 
 
 const getUserByEmail = `-- name: GetUserByEmail :one
 
-SELECT id, household_id, email, user_display_name, locale, time_zone, created_at, updated_at, deleted_at FROM users
+SELECT id, household_id, email, user_display_name, locale, time_zone, appearance, created_at, updated_at, deleted_at FROM users
 WHERE lower(email) = lower($1) AND deleted_at IS NULL
 `
 
@@ -387,6 +388,7 @@ func (q *Queries) GetUserByEmail(ctx context.Context, email string) (User, error
 		&i.UserDisplayName,
 		&i.Locale,
 		&i.TimeZone,
+		&i.Appearance,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.DeletedAt,
@@ -395,7 +397,7 @@ func (q *Queries) GetUserByEmail(ctx context.Context, email string) (User, error
 }
 
 const getUserByID = `-- name: GetUserByID :one
-SELECT id, household_id, email, user_display_name, locale, time_zone, created_at, updated_at, deleted_at FROM users
+SELECT id, household_id, email, user_display_name, locale, time_zone, appearance, created_at, updated_at, deleted_at FROM users
 WHERE id = $1 AND deleted_at IS NULL
 `
 
@@ -409,6 +411,7 @@ func (q *Queries) GetUserByID(ctx context.Context, id pgtype.UUID) (User, error)
 		&i.UserDisplayName,
 		&i.Locale,
 		&i.TimeZone,
+		&i.Appearance,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.DeletedAt,

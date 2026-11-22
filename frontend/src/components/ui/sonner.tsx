@@ -1,12 +1,13 @@
 import type { CSSProperties } from "react";
 import { Toaster as Sonner, toast, type ToasterProps } from "sonner";
+import { useAppearance } from "@/lib/useAppearance";
 import { tappedToastId } from "@/lib/tapToDismiss";
 
 // The one toast viewport, mounted once at the app root so a toast outlives the
-// screen that raised it. Afloat has no theme switch yet (the Shallows palette
-// follows the OS), so sonner follows the OS too, and its colours are mapped
-// onto theme.css tokens.
+// screen that raised it. Sonner follows the person's appearance, and its colours
+// are mapped onto theme.css tokens.
 export function Toaster(props: ToasterProps) {
+  const { appearance } = useAppearance();
   // display: contents, so the wrapper adds no box; it only hears the tap that
   // bubbles up from a toast (lib/tapToDismiss.ts).
   return (
@@ -18,7 +19,7 @@ export function Toaster(props: ToasterProps) {
       }}
     >
       <Sonner
-        theme="system"
+        theme={appearance}
         className="toaster group"
         position="bottom-center"
         toastOptions={{

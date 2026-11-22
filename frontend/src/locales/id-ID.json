@@ -122,11 +122,17 @@
         "heading": "Profil",
         "name": "Nama Anda",
         "language": "Bahasa",
+        "appearance": "Tampilan",
         "timeZone": "Zona waktu"
       },
       "languages": {
         "enGB": "English (UK)",
         "idID": "Bahasa Indonesia"
+      },
+      "appearances": {
+        "system": "Ikuti perangkat ini",
+        "light": "Terang",
+        "dark": "Gelap"
       },
       "email": {
         "heading": "Email",

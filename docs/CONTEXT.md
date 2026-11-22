@@ -28,10 +28,16 @@ Budget, Category, Pocket and setting belongs to exactly one Household. Carries a
 Account.
 
 **User**: An individual member of a Household. Belongs to exactly one Household; all Users have full
-read/write access to all of its data. Carries `user_display_name`, `email`, `locale` (default `en-GB`) and
-`time_zone` (default `Asia/Jakarta`). `email` is the sign-in handle, never the identity. `time_zone` is
-an input to Today and is never derived by the client. _Avoid_: Account (reserved for the auth identity in prose only),
+read/write access to all of its data. Carries `user_display_name`, `email`, `locale` (default `en-GB`),
+`time_zone` (default `Asia/Jakarta`) and `appearance` (default `system`). `email` is the sign-in handle,
+never the identity. `time_zone` is an input to Today and is never derived by the client. _Avoid_: Account (reserved for the auth identity in prose only),
 Member (acceptable informally, not a modelled term).
+
+**Appearance**: A User's choice of light or dark: `system` (follow the device, the default), `light` or
+`dark`. Stored per User on the server, so it follows the person across devices, and applied by the client
+alone. It is not the palette: Shallows is the one palette (PRD §9), and the palette is what `theme.css`
+and "theme" name in the frontend. Appearance chooses which values of that palette show. _Avoid_: Theme
+(means the palette), Mode, Dark mode (one of the three values, not the setting).
 
 **Ownership** (Expense attribute): **SoleOwner** — attributed to a specific User for breakdown
 purposes; **Joint** — attributed to the Household as a whole. Ownership expresses the Household's

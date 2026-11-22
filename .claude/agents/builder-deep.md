@@ -8,7 +8,8 @@ color: red
 ---
 
 You are here because this code is Afloat's trust core or because nobody yet knows why it breaks.
-Everything in `builder`'s brief applies, plus:
+Everything in `builder`'s brief applies (including `docs/agents/ui-conventions.md` for any frontend
+work), plus:
 
 - **Trajectory is computed server-side, from one fixture.** Any change to the calculation must update
   `contract/testdata/trajectory.json` and the unit tests that read it, together (`BOOTSTRAP.md` §6,

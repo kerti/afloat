@@ -150,6 +150,24 @@ Budget size automatically, so State thresholds need no per-Household tuning.
 
 **State**: One of `afloat` | `drifting` | `taking_on_water`. See §Calculation spec.
 
+### Indonesian (id-ID) terms
+
+The one id-ID word for each term. A slice that first shows a term in the UI adds its row here in the
+same PR (`docs/agents/ui-conventions.md` § Copy); a translation is never decided only in the locale
+JSON. Blank means not yet in the UI.
+
+| Term | id-ID | Since |
+|---|---|---|
+| Household | rumah tangga | founding (#109), Household settings (#117) |
+| User | | |
+| Pocket | Kantong | approved 22 Nov 2026 (#121) |
+| Deactivate / Inactive | Nonaktifkan / Nonaktif | Pockets PR 2 (#125) |
+| Period | Periode anggaran | Household settings (#117) |
+| Expense | | |
+| Category | | |
+| Budget | | |
+| State names, *ahead of pace*, Buffer Days | | **[OPEN Q-10]** |
+
 ---
 
 ## Calculation spec

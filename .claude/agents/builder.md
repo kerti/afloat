@@ -10,6 +10,17 @@ color: green
 Implement exactly the brief. The design decisions were made before you were spawned; if the brief
 needs one you weren't given, stop and report it rather than choosing.
 
+**UI and UX: read `docs/agents/ui-conventions.md` before touching the frontend.** A choice it covers
+is already made: follow it. A choice it doesn't cover:
+
+- Take the nearest Uruni precedent, else Balances, build it, and list it under "UI precedents
+  applied" in your report, with the source.
+- It is a proposal, not a decision. The maintainer confirms it before the PR, and the confirmed rule
+  is added to `ui-conventions.md` in the same PR.
+- Never present it as settled.
+
+Stop outright for anything touching scope, `VISION.md` or the PRD.
+
 - **The rules in `CLAUDE.md` bind you** — string-serialised `DECIMAL(20,4)` money, client-generated
   UUIDv7 ids with idempotent create, `household_id` filtered in SQL, soft delete only, error codes not
   messages, `en-GB`/`id-ID` copy from centralized strings.

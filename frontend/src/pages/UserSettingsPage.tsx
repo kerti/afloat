@@ -17,6 +17,7 @@ import {
   SelectTrigger,
   NativeSelect,
 } from "@/components/ui/select";
+import { useAppearance } from "@/lib/useAppearance";
 import { toastPlain } from "@/lib/plainToast";
 import { routes } from "@/lib/routes";
 import { useChoice } from "@/lib/useChoice";
@@ -25,6 +26,8 @@ const locales = [
   { value: "en-GB", key: "enGB" },
   { value: "id-ID", key: "idID" },
 ] as const;
+
+const appearances = ["system", "light", "dark"] as const;
 
 // The browser's own list, plus the stored value so a name the browser lacks
 // still shows. A name the server refuses comes back as VALIDATION.
@@ -71,6 +74,20 @@ function ProfileSection({ me }: { me: Me }) {
       .mutateAsync({ locale: v as Me["locale"] })
       .then((saved) => i18n.changeLanguage(saved.locale)),
   );
+  const { choose, settle } = useAppearance();
+  const [appearance, chooseAppearance] = useChoice<Me["appearance"]>(me.appearance, (v) => {
+    const seq = choose(v);
+    return patch.mutateAsync({ appearance: v }).then(
+      (saved) => {
+        settle(seq, true);
+        return saved;
+      },
+      (err: unknown) => {
+        settle(seq, false);
+        throw err;
+      },
+    );
+  });
   const [zone, chooseZone] = useChoice(me.time_zone, (v) => patch.mutateAsync({ time_zone: v }));
 
   return (
@@ -93,6 +110,19 @@ function ProfileSection({ me }: { me: Me }) {
             {locales.map((l) => (
               <SelectItem key={l.value} value={l.value}>
                 {t(`settings.user.languages.${l.key}`)}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </Field>
+      <Field>
+        <Label htmlFor="user-appearance">{t("settings.user.profile.appearance")}</Label>
+        <Select value={appearance} onValueChange={chooseAppearance}>
+          <SelectTrigger id="user-appearance" />
+          <SelectContent>
+            {appearances.map((a) => (
+              <SelectItem key={a} value={a}>
+                {t(`settings.user.appearances.${a}`)}
               </SelectItem>
             ))}
           </SelectContent>

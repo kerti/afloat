@@ -873,6 +873,35 @@ logging) but outside the API-only group, so a static file never pays for a sessi
 
 In development, Vite serves the frontend on 5181 and proxies `/api` to the backend on 5182.
 
+### Appearance: applying it before first paint (#124)
+
+A User's `appearance` (`system`, `light` or `dark`; CONTEXT) lives on the server (`users.appearance`,
+read in `Me`, written by `PATCH /me`). The server only stores it; the client applies it, and getting it
+onto the screen without a wrong-scheme flash is the one thing that needs a rule here.
+
+- **Light and dark are keyed on an attribute.** Each colour token in `theme.css` is written once, as
+  `light-dark(light, dark)`, and `color-scheme` picks the side: `:root` carries `light dark` (the OS
+  decides, which is System), and `:root[data-appearance="light"]` or `[data-appearance="dark"]` narrows
+  it to one. A shared selector list is not possible, because CSS cannot put a media query and an
+  attribute selector in one rule, and two dark blocks would drift. The build (lightningcss) lowers
+  `light-dark()` to `--lightningcss-light`/`--lightningcss-dark` toggles. `system` is the absence of
+  the attribute.
+- **`frontend/public/appearance-init.js`** is an external classic script loaded from `index.html`
+  before the app bundle, because the CSP (#99) allows no inline script. It runs before first paint,
+  reads `localStorage["afloat.appearance"]`, sets `data-appearance` on `<html>` for `light` or `dark`
+  (nothing for `system`, or a value it does not know, or storage that throws), and sets `theme-color`
+  to match. It is written over a small table of keys (today one row, `appearance` to
+  `data-appearance`), so a later palette picker adds a row and changes no mechanism.
+- **The cache is only a cache; the server wins.** `localStorage` holds the last value seen, so the
+  first paint of a cold load is right. Once `/me` loads, the server's value is applied, and the cache is
+  rewritten to it. A stale cache therefore costs at most one correction, never a wrong stored choice.
+- **Signed-out pages follow the cache, else System.** Signing out keeps the cache, so the sign-in page
+  stays in the person's choice; a different User signing in on the same device gets their own value once
+  `/me` loads. The cache is not cleared, because appearance is not sensitive.
+- **A change saves on change and applies at once.** The client sets the attribute and the cache
+  optimistically and sends only `{appearance}`; on failure it rolls both back. The provider is the one
+  writer of the attribute after boot.
+
 ## 9. Internationalisation
 
 **en-GB and id-ID from day one**, both locale files real. i18next, matching Balances.

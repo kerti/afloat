@@ -45,6 +45,7 @@
       user_display_name: Dewi Putri
       locale: en-GB
       time_zone: Asia/Jakarta
+      appearance: system
       household: &the-household
         id: 0192f0a0-0000-7000-8000-000000000001
         household_display_name: Conformance Household
@@ -74,6 +75,7 @@
       user_display_name: Alice
       locale: id-ID
       time_zone: Asia/Jakarta
+      appearance: system
       household: *the-household
     cookies: {}
     rows:
@@ -97,13 +99,76 @@
       user_display_name: Alice
       locale: en-GB
       time_zone: Asia/Makassar
+      appearance: system
       household: *the-household
     cookies: {}
     rows:
       - sql: SELECT time_zone FROM users WHERE id = '0192f0a0-0000-7000-8000-0000000000a1'
         rows: [{time_zone: Asia/Makassar}]
 
-- name: user settings - patch all three at once
+- name: user settings - patch the appearance
+  issue: "124"
+  given: *signed-in
+  request:
+    method: PATCH
+    path: /me
+    headers:
+      Content-Type: application/json
+    body: '{"appearance":"dark"}'
+  expect:
+    status: 200
+    body_json:
+      id: 0192f0a0-0000-7000-8000-0000000000a1
+      email: alice@example.com
+      user_display_name: Alice
+      locale: en-GB
+      time_zone: Asia/Jakarta
+      appearance: dark
+      household: *the-household
+    cookies: {}
+    rows:
+      - sql: SELECT appearance, user_display_name, locale, time_zone FROM users WHERE id = '0192f0a0-0000-7000-8000-0000000000a1'
+        rows: [{appearance: dark, user_display_name: Alice, locale: en-GB, time_zone: Asia/Jakarta}]
+
+# Merge: a patch that leaves appearance out leaves what was chosen alone.
+- name: user settings - a patch without appearance leaves it alone
+  issue: "124"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+    - request:
+        method: PATCH
+        path: /me
+        headers:
+          Content-Type: application/json
+        body: '{"appearance":"light"}'
+      status: 200
+  request:
+    method: PATCH
+    path: /me
+    headers:
+      Content-Type: application/json
+    body: '{"locale":"id-ID"}'
+  expect:
+    status: 200
+    body_json:
+      id: 0192f0a0-0000-7000-8000-0000000000a1
+      email: alice@example.com
+      user_display_name: Alice
+      locale: id-ID
+      time_zone: Asia/Jakarta
+      appearance: light
+      household: *the-household
+    rows:
+      - sql: SELECT appearance, locale FROM users WHERE id = '0192f0a0-0000-7000-8000-0000000000a1'
+        rows: [{appearance: light, locale: id-ID}]
+
+- name: user settings - patch all four at once
   issue: "119"
   given: *signed-in
   request:
@@ -111,7 +176,7 @@
     path: /me
     headers:
       Content-Type: application/json
-    body: '{"user_display_name":"Dewi","locale":"id-ID","time_zone":"Etc/GMT+7"}'
+    body: '{"user_display_name":"Dewi","locale":"id-ID","time_zone":"Etc/GMT+7","appearance":"dark"}'
   expect:
     status: 200
     body_json:
@@ -120,11 +185,12 @@
       user_display_name: Dewi
       locale: id-ID
       time_zone: Etc/GMT+7
+      appearance: dark
       household: *the-household
     cookies: {}
     rows:
-      - sql: SELECT user_display_name, locale, time_zone FROM users WHERE id = '0192f0a0-0000-7000-8000-0000000000a1'
-        rows: [{user_display_name: Dewi, locale: id-ID, time_zone: Etc/GMT+7}]
+      - sql: SELECT user_display_name, locale, time_zone, appearance FROM users WHERE id = '0192f0a0-0000-7000-8000-0000000000a1'
+        rows: [{user_display_name: Dewi, locale: id-ID, time_zone: Etc/GMT+7, appearance: dark}]
 
 # Merge, not replace: a second patch leaves what the first set alone.
 - name: user settings - a second patch leaves the first one's field alone
@@ -158,6 +224,7 @@
       user_display_name: Alice
       locale: id-ID
       time_zone: Asia/Jayapura
+      appearance: system
       household: *the-household
     rows:
       - sql: SELECT user_display_name, locale, time_zone FROM users WHERE id = '0192f0a0-0000-7000-8000-0000000000a1'
@@ -180,6 +247,7 @@
       user_display_name: Alice
       locale: en-GB
       time_zone: Asia/Jakarta
+      appearance: system
       household: *the-household
     cookies: {}
     rows:
@@ -215,6 +283,7 @@
       user_display_name: Dewi Putri
       locale: id-ID
       time_zone: Asia/Makassar
+      appearance: system
       household: *the-household
 
 # Tenancy. bob is in alice's Household, so a statement filtered on household_id
@@ -248,6 +317,38 @@
       - sql: SELECT household_display_name FROM households ORDER BY 1
         rows: [{household_display_name: Another Household}, {household_display_name: Conformance Household}]
 
+# Appearance is per User: bob shares alice's Household and keeps his own, and
+# dave in another Household keeps his. The default is the schema's, so a User
+# nobody has asked is on `system`.
+- name: user settings - an appearance patch leaves the other members alone
+  issue: "124"
+  given:
+    - sql: UPDATE users SET appearance = 'light' WHERE id = '0192f0a0-0000-7000-8000-0000000000b1'
+    - sql: INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Another Household')
+    - sql: INSERT INTO users (id, household_id, email, user_display_name, appearance) VALUES ('0192f0a0-0000-7000-8000-0000000000d1', '0192f0a0-0000-7000-8000-000000000002', 'dave@example.com', 'Dave', 'dark')
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: PATCH
+    path: /me
+    headers:
+      Content-Type: application/json
+    body: '{"appearance":"dark"}'
+  expect:
+    status: 200
+    rows:
+      - sql: SELECT email, appearance FROM users ORDER BY email
+        rows:
+          - {email: alice@example.com, appearance: dark}
+          - {email: bob@example.com, appearance: light}
+          - {email: carol@example.com, appearance: system}
+          - {email: dave@example.com, appearance: dark}
+
 # Every refusal is a 400 and writes nothing. The rule is the one named in the
 # envelope; the rows prove the row is as it was.
 - name: user settings - a time zone the server does not know is refused
@@ -264,8 +365,8 @@
     body_json: {code: VALIDATION, args: {field: time_zone, rule: timezone}}
     cookies: {}
     rows: &alice-unchanged
-      - sql: SELECT user_display_name, locale, time_zone FROM users WHERE id = '0192f0a0-0000-7000-8000-0000000000a1'
-        rows: [{user_display_name: Alice, locale: en-GB, time_zone: Asia/Jakarta}]
+      - sql: SELECT user_display_name, locale, time_zone, appearance FROM users WHERE id = '0192f0a0-0000-7000-8000-0000000000a1'
+        rows: [{user_display_name: Alice, locale: en-GB, time_zone: Asia/Jakarta, appearance: system}]
 
 - name: user settings - Local is not a time zone
   issue: "119"
@@ -407,6 +508,48 @@
     headers:
       Content-Type: application/json
     body: '{"locale":"fr-FR"}'
+  expect:
+    status: 400
+    body_json: {code: INVALID_JSON_BODY}
+    rows: *alice-unchanged
+
+- name: user settings - an appearance outside the enum is not a profile value
+  issue: "124"
+  given: *signed-in
+  request:
+    method: PATCH
+    path: /me
+    headers:
+      Content-Type: application/json
+    body: '{"appearance":"auto"}'
+  expect:
+    status: 400
+    body_json: {code: INVALID_JSON_BODY}
+    rows: *alice-unchanged
+
+- name: user settings - null is not an appearance
+  issue: "124"
+  given: *signed-in
+  request:
+    method: PATCH
+    path: /me
+    headers:
+      Content-Type: application/json
+    body: '{"appearance":null}'
+  expect:
+    status: 400
+    body_json: {code: INVALID_JSON_BODY}
+    rows: *alice-unchanged
+
+- name: user settings - an appearance in the wrong case is refused
+  issue: "124"
+  given: *signed-in
+  request:
+    method: PATCH
+    path: /me
+    headers:
+      Content-Type: application/json
+    body: '{"appearance":"Dark"}'
   expect:
     status: 400
     body_json: {code: INVALID_JSON_BODY}

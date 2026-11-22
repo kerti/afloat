@@ -61,7 +61,8 @@ func TestUserSettingsNeverTouchAnotherUser(t *testing.T) {
 		{UserDisplayName: ptr("Taken over")},
 		{Locale: ptr(api.IdID)},
 		{TimeZone: ptr("America/New_York")},
-		{UserDisplayName: ptr("All"), Locale: ptr(api.EnGB), TimeZone: ptr("Asia/Makassar")},
+		{Appearance: ptr(api.Dark)},
+		{UserDisplayName: ptr("All"), Locale: ptr(api.EnGB), TimeZone: ptr("Asia/Makassar"), Appearance: ptr(api.Light)},
 		{},
 	} {
 		h.updatedMe(ctx, t, body)

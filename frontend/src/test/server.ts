@@ -55,6 +55,7 @@ export const alice: Me = {
   user_display_name: "Alice",
   locale: "en-GB",
   time_zone: "Asia/Jakarta",
+  appearance: "system",
   household: {
     id: "0192f0a0-0000-7000-8000-000000000001",
     household_display_name: "Test Household",

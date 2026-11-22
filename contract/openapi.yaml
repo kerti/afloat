@@ -338,8 +338,9 @@ paths:
         `user_display_name` follows the registration rules, trimmed: blank is
         `VALIDATION` `required` here, where registration defaults it. `locale`
         is `en-GB` or `id-ID`; anything else is `INVALID_JSON_BODY`.
-        `time_zone` must be an IANA name the server knows (`VALIDATION`,
-        `rule: timezone`). It takes effect at once, and is an input to Today;
+        `appearance` is `system`, `light` or `dark`; anything else, `null`
+        included, is `INVALID_JSON_BODY`. `time_zone` must be an IANA name
+        the server knows (`VALIDATION`, `rule: timezone`). It takes effect at once, and is an input to Today;
         the client derives nothing from it.
       requestBody:
         required: true
@@ -853,6 +854,7 @@ components:
         - user_display_name
         - locale
         - time_zone
+        - appearance
         - household
       properties:
         id:
@@ -872,6 +874,8 @@ components:
           type: string
           description: IANA time zone identifier.
           example: Asia/Jakarta
+        appearance:
+          $ref: '#/components/schemas/Appearance'
         household:
           $ref: '#/components/schemas/Household'
       additionalProperties: false
@@ -1085,6 +1089,8 @@ components:
           maxLength: 64
           description: IANA time zone identifier.
           example: Asia/Makassar
+        appearance:
+          $ref: '#/components/schemas/Appearance'
       additionalProperties: false
 
     AllowanceMode:
@@ -1098,6 +1104,15 @@ components:
         Both locales are real from day one (PRD N12a); the frontend owns every
         user-facing string.
       enum: [en-GB, id-ID]
+
+    Appearance:
+      type: string
+      description: |
+        Light or dark, per User (PRD S4). `system` follows the device and is the
+        default. It is not the palette: Shallows stays the one palette, and a
+        value outside this list is `INVALID_JSON_BODY` where it is sent. The
+        client owns applying it (BOOTSTRAP.md §8); the server only stores it.
+      enum: [system, light, dark]
 
     Error:
       type: object

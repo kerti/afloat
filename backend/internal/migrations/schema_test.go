@@ -81,6 +81,10 @@ func TestSchemaRefuses(t *testing.T) {
 			checkViolation, "households_allowance_mode_known"},
 		{"unknown locale", `INSERT INTO users (id, household_id, email, user_display_name, locale) VALUES (gen_random_uuid(), '` + hh + `', 'q@example.com', 'x', 'fr-FR')`,
 			checkViolation, "users_locale_known"},
+		{"unknown appearance", `INSERT INTO users (id, household_id, email, user_display_name, appearance) VALUES (gen_random_uuid(), '` + hh + `', 'q@example.com', 'x', 'auto')`,
+			checkViolation, "users_appearance_known"},
+		{"an appearance in the wrong case", `UPDATE users SET appearance = 'Dark' WHERE id = '` + u1 + `'`,
+			checkViolation, "users_appearance_known"},
 		{"blank user_display_name", `INSERT INTO users (id, household_id, email, user_display_name) VALUES (gen_random_uuid(), '` + hh + `', 'q@example.com', '  ')`,
 			checkViolation, "users_user_display_name_not_blank"},
 		{"live email taken, other case", `INSERT INTO users (id, household_id, email, user_display_name) VALUES (gen_random_uuid(), '` + hh + `', 'A@EXAMPLE.COM', 'dup')`,
@@ -175,6 +179,9 @@ func TestSchemaDefaults(t *testing.T) {
 	}
 	if got := scalar(t, tdb, `SELECT locale || ' / ' || time_zone FROM users WHERE id = '`+u1+`'`); got != "en-GB / Asia/Jakarta" {
 		t.Errorf("user defaults = %q", got)
+	}
+	if got := scalar(t, tdb, `SELECT appearance FROM users WHERE id = '`+u1+`'`); got != "system" {
+		t.Errorf("user appearance default = %q, want system", got)
 	}
 	mustExec(t, tdb, pocketInsert(p1, hh, "OVO"))
 	if got := scalar(t, tdb, `SELECT active || ' / ' || (deleted_at IS NULL)  FROM pockets WHERE id = '`+p1+`'`); got != "true / true" {

@@ -138,7 +138,7 @@ func decodeError(t *testing.T, rec *httptest.ResponseRecorder) wireError {
 func TestPatchMeThroughTheRouter(t *testing.T) {
 	f := newSettingsFixture(t)
 
-	rec := f.patchMe(`{"user_display_name":"  Dewi Putri ","locale":"id-ID","time_zone":"Asia/Makassar"}`)
+	rec := f.patchMe(`{"user_display_name":"  Dewi Putri ","locale":"id-ID","time_zone":"Asia/Makassar","appearance":"dark"}`)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
 	}
@@ -154,6 +154,7 @@ func TestPatchMeThroughTheRouter(t *testing.T) {
 		"user_display_name": "Dewi Putri", // trimmed
 		"locale":            "id-ID",
 		"time_zone":         "Asia/Makassar",
+		"appearance":        "dark",
 	} {
 		if got[k] != want {
 			t.Errorf("%s = %v, want %v", k, got[k], want)
@@ -205,6 +206,12 @@ func TestPatchMeRefusals(t *testing.T) {
 		{"null name", `{"user_display_name":null}`, "INVALID_JSON_BODY", nil},
 		{"null locale", `{"locale":null}`, "INVALID_JSON_BODY", nil},
 		{"null time_zone", `{"time_zone":null}`, "INVALID_JSON_BODY", nil},
+		{"an appearance outside the enum", `{"appearance":"auto"}`, "INVALID_JSON_BODY", nil},
+		{"an appearance in the wrong case", `{"appearance":"Dark"}`, "INVALID_JSON_BODY", nil},
+		{"an empty appearance", `{"appearance":""}`, "INVALID_JSON_BODY", nil},
+		{"null appearance", `{"appearance":null}`, "INVALID_JSON_BODY", nil},
+		{"appearance as a number", `{"appearance":1}`, "INVALID_JSON_BODY", nil},
+		{"a valid appearance beside a bad locale writes neither", `{"appearance":"dark","locale":"fr-FR"}`, "INVALID_JSON_BODY", nil},
 		{"name as a number", `{"user_display_name":5}`, "INVALID_JSON_BODY", nil},
 		{"time_zone as a number", `{"time_zone":7}`, "INVALID_JSON_BODY", nil},
 		{"unknown property", `{"nickname":"x"}`, "INVALID_JSON_BODY", nil},

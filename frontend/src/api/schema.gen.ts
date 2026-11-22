@@ -236,8 +236,9 @@ export interface paths {
          *     `user_display_name` follows the registration rules, trimmed: blank is
          *     `VALIDATION` `required` here, where registration defaults it. `locale`
          *     is `en-GB` or `id-ID`; anything else is `INVALID_JSON_BODY`.
-         *     `time_zone` must be an IANA name the server knows (`VALIDATION`,
-         *     `rule: timezone`). It takes effect at once, and is an input to Today;
+         *     `appearance` is `system`, `light` or `dark`; anything else, `null`
+         *     included, is `INVALID_JSON_BODY`. `time_zone` must be an IANA name
+         *     the server knows (`VALIDATION`, `rule: timezone`). It takes effect at once, and is an input to Today;
          *     the client derives nothing from it.
          */
         patch: operations["updateMe"];
@@ -580,6 +581,7 @@ export interface components {
              * @example Asia/Jakarta
              */
             time_zone: string;
+            appearance: components["schemas"]["Appearance"];
             household: components["schemas"]["Household"];
         };
         /**
@@ -701,6 +703,7 @@ export interface components {
              * @example Asia/Makassar
              */
             time_zone?: string;
+            appearance?: components["schemas"]["Appearance"];
         };
         /**
          * @description How the daily allowance is read. Default `adaptive`.
@@ -713,6 +716,14 @@ export interface components {
          * @enum {string}
          */
         Locale: "en-GB" | "id-ID";
+        /**
+         * @description Light or dark, per User (PRD S4). `system` follows the device and is the
+         *     default. It is not the palette: Shallows stays the one palette, and a
+         *     value outside this list is `INVALID_JSON_BODY` where it is sent. The
+         *     client owns applying it (BOOTSTRAP.md §8); the server only stores it.
+         * @enum {string}
+         */
+        Appearance: "system" | "light" | "dark";
         /**
          * @description The one error envelope the API emits (PRD N7), identical in shape
          *     to Balances ADR-0027. It carries **codes, not messages** — the frontend

@@ -3,6 +3,9 @@ import { afterAll, afterEach, beforeAll, expect } from "vitest";
 import { cleanup } from "@testing-library/react";
 import { server } from "./server";
 import { i18n, initI18n } from "@/i18n";
+// The boot script, as index.html loads it: it sets window.afloatAppearance,
+// which the AppearanceProvider calls.
+import "../../public/appearance-init.js";
 
 initI18n("en-GB");
 
@@ -37,6 +40,9 @@ server.events.on("request:unhandled", ({ request }) => {
 beforeAll(() => server.listen({ onUnhandledFrame: "error" }));
 afterEach(async () => {
   cleanup();
+  // The appearance cache and attribute are device state; no test inherits them.
+  window.localStorage.clear();
+  document.documentElement.removeAttribute("data-appearance");
   server.resetHandlers();
   // A test that switched locale must not leak it into the next.
   await i18n.changeLanguage("en-GB");

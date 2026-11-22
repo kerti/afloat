@@ -17,15 +17,17 @@ UPDATE users SET
     user_display_name = coalesce($1, user_display_name),
     locale            = coalesce($2, locale),
     time_zone         = coalesce($3, time_zone),
+    appearance        = coalesce($4, appearance),
     updated_at        = now()
-WHERE id = $4 AND household_id = $5 AND deleted_at IS NULL
-RETURNING id, household_id, email, user_display_name, locale, time_zone, created_at, updated_at, deleted_at
+WHERE id = $5 AND household_id = $6 AND deleted_at IS NULL
+RETURNING id, household_id, email, user_display_name, locale, time_zone, appearance, created_at, updated_at, deleted_at
 `
 
 type UpdateUserParams struct {
 	UserDisplayName *string
 	Locale          *string
 	TimeZone        *string
+	Appearance      *string
 	UserID          pgtype.UUID
 	HouseholdID     pgtype.UUID
 }
@@ -37,7 +39,7 @@ type UpdateUserParams struct {
 // authenticated User, never from the request.
 // Merge semantics (BOOTSTRAP.md §4): a NULL argument leaves its column alone,
 // in one statement, so two writers of different fields both land. None of the
-// three columns is nullable, so coalesce cannot be mistaken for "clear".
+// four columns is nullable, so coalesce cannot be mistaken for "clear".
 //
 // updated_at is set here because the baseline has no trigger, and from the
 // database's own clock (BOOTSTRAP.md §5.1).
@@ -46,6 +48,7 @@ func (q *Queries) UpdateUser(ctx context.Context, arg UpdateUserParams) (User, e
 		arg.UserDisplayName,
 		arg.Locale,
 		arg.TimeZone,
+		arg.Appearance,
 		arg.UserID,
 		arg.HouseholdID,
 	)
@@ -57,6 +60,7 @@ func (q *Queries) UpdateUser(ctx context.Context, arg UpdateUserParams) (User, e
 		&i.UserDisplayName,
 		&i.Locale,
 		&i.TimeZone,
+		&i.Appearance,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.DeletedAt,
@@ -69,7 +73,7 @@ UPDATE users SET
     email      = $1,
     updated_at = now()
 WHERE id = $2 AND household_id = $3 AND deleted_at IS NULL
-RETURNING id, household_id, email, user_display_name, locale, time_zone, created_at, updated_at, deleted_at
+RETURNING id, household_id, email, user_display_name, locale, time_zone, appearance, created_at, updated_at, deleted_at
 `
 
 type UpdateUserEmailParams struct {
@@ -91,6 +95,7 @@ func (q *Queries) UpdateUserEmail(ctx context.Context, arg UpdateUserEmailParams
 		&i.UserDisplayName,
 		&i.Locale,
 		&i.TimeZone,
+		&i.Appearance,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.DeletedAt,

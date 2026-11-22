@@ -1,20 +1,26 @@
 /*
  * The one theme file. Every colour the app uses is a token here; components
- * use the Tailwind names mapped in index.css, never a literal colour. Neutral
- * until the brand session (PRD §9) picks a palette: swapping it is this file.
+ * use the Tailwind names mapped in index.css, never a literal colour.
+ *
+ * Palette: Shallows (chosen 22 Nov 2026, PRD §9), sky blue over warm sand.
+ * The State colours are not here: they stay the brand session's (PRD §9, Q-10).
+ *
+ * --primary in light is a deeper step of the study's accent (#2E8BC9): white on
+ * #2E8BC9 is 3.7:1, below WCAG AA's 4.5:1 for button text, and #1F74AC is 5.1:1.
+ * The study's accent is kept as the focus ring.
  */
 :root {
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.21 0.006 285.9);
-  --muted: oklch(0.967 0.001 286.4);
-  --muted-foreground: oklch(0.552 0.016 285.9);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.21 0.006 285.9);
-  --border: oklch(0.92 0.004 286.3);
-  --input: oklch(0.92 0.004 286.3);
-  --ring: oklch(0.705 0.015 286.1);
-  --primary: oklch(0.274 0.006 286);
-  --primary-foreground: oklch(0.985 0 0);
+  --background: #f7f9fa;
+  --foreground: #14232e;
+  --muted: #e3f1fa;
+  --muted-foreground: #5e7280;
+  --card: #ffffff;
+  --card-foreground: #14232e;
+  --border: #d8e4eb;
+  --input: #d8e4eb;
+  --ring: #2e8bc9;
+  --primary: #1f74ac;
+  --primary-foreground: #ffffff;
   --destructive: oklch(0.577 0.245 27.3);
   --destructive-foreground: oklch(0.985 0 0);
   --radius: 0.625rem;
@@ -22,17 +28,17 @@
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --background: oklch(0.141 0.005 285.8);
-    --foreground: oklch(0.985 0 0);
-    --muted: oklch(0.274 0.006 286);
-    --muted-foreground: oklch(0.705 0.015 286.1);
-    --card: oklch(0.21 0.006 285.9);
-    --card-foreground: oklch(0.985 0 0);
-    --border: oklch(1 0 0 / 10%);
-    --input: oklch(1 0 0 / 15%);
-    --ring: oklch(0.552 0.016 285.9);
-    --primary: oklch(0.92 0.004 286.3);
-    --primary-foreground: oklch(0.21 0.006 285.9);
+    --background: #0c1820;
+    --foreground: #e3eef4;
+    --muted: #14354a;
+    --muted-foreground: #8ea6b5;
+    --card: #12222d;
+    --card-foreground: #e3eef4;
+    --border: #1f3442;
+    --input: #1f3442;
+    --ring: #5db2e8;
+    --primary: #5db2e8;
+    --primary-foreground: #06131c;
     --destructive: oklch(0.704 0.191 22.2);
     --destructive-foreground: oklch(0.985 0 0);
     color-scheme: dark;

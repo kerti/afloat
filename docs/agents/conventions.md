@@ -7,7 +7,15 @@ whole scaffold sheet. If the two ever disagree, `BOOTSTRAP.md` wins and this fil
 - **Money:** `DECIMAL(20,4)` columns, strings on the wire. A JSON number or scientific notation is a
   bug. Worth its own conformance test rather than trusting review.
 - **Ids:** UUIDv7, client-generated, column type `uuid`. Create is idempotent:
-  `INSERT ... ON CONFLICT (id) DO NOTHING` + read-back, 200 on replay, 201 on first write.
+  `INSERT ... ON CONFLICT (id) DO NOTHING RETURNING *` + read-back, 200 on replay (the row as stored;
+  the rest of the body is not compared), 201 on first write. The contract's `pattern` enforces the
+  canonical dashed v7 spelling. An id held by another Household or by the caller's own deleted row is
+  `409 ID_TAKEN`; a name-index `23505` is read back by id before it is `NAME_TAKEN` (a concurrent
+  replay can raise it). Only `ErrNoRows` means the id is held; apart from the name clash, any other error is `500`.
+- **Names:** `<entity>_display_name` everywhere. One shared rule (`auth.CheckBoundedName`: trimmed,
+  `required` / `max` / `pattern`), a per-entity cap (60 for Household and Pocket). Unique among live
+  rows via a partial index on `lower(name)`; a clash is `409 NAME_TAKEN`. Pin only ASCII case folds.
+- **Collections:** `{"items": [...]}`, empty is `{"items": []}` never `null`, ordered by `created_at, id`.
 - **Tenancy:** `household_id` filtered in SQL on every Household-scoped query, never only in
   middleware.
 - **Dates:** `occurred_on` is a `date` (the Period Day); `captured_at` is `timestamptz`; everything

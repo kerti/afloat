@@ -10,6 +10,7 @@
     "email": "Email",
     "password": "Password",
     "userDisplayName": "Your name (optional)",
+    "pocketDisplayName": "Pocket name",
     "householdDisplayName": "Household name"
   },
   "fieldNames": {
@@ -18,6 +19,7 @@
     "email": "email",
     "password": "password",
     "user_display_name": "name",
+    "pocket_display_name": "Pocket name",
     "household_display_name": "household name",
     "time_zone": "time zone",
     "locale": "language",
@@ -37,6 +39,7 @@
     "comingSoon": "Your dashboard will appear here.",
     "settingsLink": "Household settings",
     "userSettingsLink": "Your settings",
+    "pocketsLink": "Pockets",
     "signOut": "Sign out"
   },
   "pwa": {
@@ -54,6 +57,8 @@
     "UNAUTHORIZED": "Your session has ended. Sign in again.",
     "CROSS_SITE_REQUEST_BLOCKED": "That request was blocked because it came from another site. Reload Afloat and try again.",
     "INTERNAL": "Afloat couldn't complete that. Try again in a moment.",
+    "ID_TAKEN": "Afloat couldn't save that. Try again in a moment.",
+    "NAME_TAKEN": "That name is already in use.",
     "NETWORK": "Can't reach Afloat. Check your connection and try again.",
     "UNKNOWN": "Something went wrong. Try again in a moment.",
     "EMAIL_TAKEN": "An account with that email already exists. Sign in instead.",
@@ -82,6 +87,15 @@
     "submitting": "Creating…",
     "closed": "This instance isn't accepting new Households right now. Ask whoever runs it to open it, or sign in to an existing account.",
     "backToSignIn": "Back to sign in"
+  },
+  "pockets": {
+    "title": "Pockets",
+    "back": "Back",
+    "empty": "No Pockets yet.",
+    "addHeading": "Add a Pocket",
+    "namePlaceholder": "For example: Cash, OVO, BCA debit",
+    "add": "Add",
+    "adding": "Adding…"
   },
   "settings": {
     "household": {

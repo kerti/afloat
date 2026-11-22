@@ -1,7 +1,10 @@
--- Baseline: identity and authentication only (BOOTSTRAP.md §11 step 3).
+-- Baseline: identity and authentication (BOOTSTRAP.md §11 step 3), plus the
+-- domain tables as their slices land in step 9, edited in place until the
+-- freeze (BOOTSTRAP.md §7.1).
 -- Households, Users, credentials, sessions, onboarding handshakes, invitations,
--- login backoff. No domain table (pockets, categories, budgets, expenses) lands
--- until step 9.
+-- login backoff, Pockets. The rest of the domain (categories, budgets,
+-- expenses) lands with its own slice; a dev database already at version 1 does
+-- not gain a table added here, so run `make db-reset` after pulling one.
 --
 -- Canonical and hand-written: the binary embeds it, goose applies it, and sqlc
 -- reads its Up section as the schema (BOOTSTRAP.md §7).
@@ -232,9 +235,39 @@ CREATE INDEX login_attempts_backoff_until_idx
     ON login_attempts (backoff_until)
     WHERE backoff_until IS NOT NULL;
 
+-- ---------------------------------------------------------------------------
+-- pockets
+-- ---------------------------------------------------------------------------
+
+-- A practical container the Household spends from (PRD S10, CONTEXT.md): a
+-- name, and no balance, currency or kind (PRD S11). Belongs to the Household,
+-- never to a User (PRD S2).
+CREATE TABLE pockets (
+    id                  uuid PRIMARY KEY,
+    household_id        uuid NOT NULL REFERENCES households (id),
+    pocket_display_name text NOT NULL,
+    -- Deactivated is not deleted: an inactive Pocket stays in the list, keeps
+    -- labelling its Expenses and keeps its name. deleted_at is the delete.
+    active              boolean NOT NULL DEFAULT true,
+    created_at          timestamptz NOT NULL DEFAULT now(),
+    updated_at          timestamptz NOT NULL DEFAULT now(),
+    deleted_at          timestamptz,
+
+    CONSTRAINT pockets_pocket_display_name_not_blank
+        CHECK (btrim(pocket_display_name) <> '')
+);
+
+-- Soft-delete-aware, like users_email_idx: a deleted Pocket releases its name,
+-- an inactive one keeps it. Also serves the list's household_id and live
+-- filter; a Household holds a handful, so no second index.
+CREATE UNIQUE INDEX pockets_household_name_idx
+    ON pockets (household_id, lower(pocket_display_name))
+    WHERE deleted_at IS NULL;
+
 -- +goose Down
 -- Reverse order of creation, so foreign keys drop before their targets.
 
+DROP TABLE IF EXISTS pockets;
 DROP TABLE IF EXISTS login_attempts;
 DROP TABLE IF EXISTS invitations;
 DROP TABLE IF EXISTS onboarding_handshakes;

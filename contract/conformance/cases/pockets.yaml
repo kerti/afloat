@@ -1,0 +1,1811 @@
+# GET and POST /pockets (#121, PR 1 of 3): the first domain entity, so the
+# conventions every later entity copies (BOOTSTRAP.md §4): the client-supplied
+# UUIDv7 is the idempotency key (201 first, 200 for a replay of a live Pocket of
+# the Household, the STORED row, the rest of the body neither compared nor
+# applied), an id held by something else is 409 ID_TAKEN (another Household's
+# or the caller's own deleted one, one answer), a name already held by a Pocket
+# that is not deleted is 409 NAME_TAKEN (inactive Pockets still hold theirs).
+#
+# The Household is always the session's, never the body's. fixtures/seed.sql holds
+# one; a case that proves another is untouched adds a second in `given:`. `rows:`
+# read the columns, because a response can be right while the row behind it is not.
+#
+# Only ASCII case folding is pinned (OVO/ovo): lower() follows the database's
+# locale, so a non-ASCII row would pass on one host and fail on another.
+#
+# Under an outage the session itself cannot be read, which the session middleware
+# answers 500 with the cookie left alone (#27); it never reaches the handler,
+# whose own 500s the backend's suite covers.
+
+# The Pockets a case starts with, inserted in `given:`. Fixed ids, so a body can
+# name them.
+#   0192f0a0-0000-7000-8001-000000000001  OVO      Household 1, live, active
+#   0192f0a0-0000-7000-8001-000000000002  Dana     Household 1, live, inactive
+#   0192f0a0-0000-7000-8001-000000000003  Gopay    Household 1, deleted
+#   0192f0a0-0000-7000-8001-000000000009  Theirs   Household 2, live, active
+
+- name: pockets - an empty Household lists items, not null
+  issue: "121"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: GET
+    path: /pockets
+  expect:
+    status: 200
+    headers:
+      Content-Type: application/json
+    body_json: {items: []}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets ORDER BY id
+        rows: []
+
+
+- name: pockets - the list is in creation order, inactive ones included, deleted and foreign ones not
+  issue: "121"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO pockets (id, household_id, pocket_display_name, active, deleted_at, created_at) VALUES
+          ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO',    true,  NULL,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Dana',   false, NULL,  '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Gopay',  true,  now(), '2026-01-03T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', true,  NULL,  '2026-01-04T00:00:00Z')
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: GET
+    path: /pockets
+  expect:
+    status: 200
+    body_json:
+      items:
+        - {id: 0192f0a0-0000-7000-8001-000000000001, pocket_display_name: OVO, active: true}
+        - {id: 0192f0a0-0000-7000-8001-000000000002, pocket_display_name: Dana, active: false}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets ORDER BY id
+        rows:
+          - {id: 0192f0a0-0000-7000-8001-000000000001, household_id: 0192f0a0-0000-7000-8000-000000000001, name: OVO, active: true, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000002, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Dana, active: false, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000003, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Gopay, active: true, deleted: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000009, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Theirs, active: true, deleted: false}
+
+
+- name: pockets - creation order is not alphabetical order, and a rename does not move a Pocket
+  issue: "121"
+  given:
+    - sql: |
+        INSERT INTO pockets (id, household_id, pocket_display_name, created_at) VALUES
+          ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'Zeta', '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Alpha', '2026-01-02T00:00:00Z');
+        UPDATE pockets SET pocket_display_name = 'Zeta', updated_at = now() WHERE id = '0192f0a0-0000-7000-8001-000000000001'
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: GET
+    path: /pockets
+  expect:
+    status: 200
+    body_json:
+      items:
+        - {id: 0192f0a0-0000-7000-8001-000000000001, pocket_display_name: Zeta, active: true}
+        - {id: 0192f0a0-0000-7000-8001-000000000002, pocket_display_name: Alpha, active: true}
+    cookies: {}
+
+
+- name: pockets - create answers 201 with the Pocket and stores it active
+  issue: "121"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /pockets
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8001-000000000001","pocket_display_name":"OVO"}'
+  expect:
+    status: 201
+    headers:
+      Content-Type: application/json
+    body_json: {id: 0192f0a0-0000-7000-8001-000000000001, pocket_display_name: OVO, active: true}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets ORDER BY id
+        rows:
+          - {id: 0192f0a0-0000-7000-8001-000000000001, household_id: 0192f0a0-0000-7000-8000-000000000001, name: OVO, active: true, deleted: false}
+
+
+- name: pockets - create stores the name trimmed
+  issue: "121"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /pockets
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8001-000000000001","pocket_display_name":"  OVO  "}'
+  expect:
+    status: 201
+    body_json: {id: 0192f0a0-0000-7000-8001-000000000001, pocket_display_name: OVO, active: true}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets ORDER BY id
+        rows:
+          - {id: 0192f0a0-0000-7000-8001-000000000001, household_id: 0192f0a0-0000-7000-8000-000000000001, name: OVO, active: true, deleted: false}
+
+
+- name: pockets - a name of exactly 60 code points is accepted
+  issue: "121"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /pockets
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8001-000000000001","pocket_display_name":"🛶🛶🛶🛶🛶🛶🛶🛶🛶🛶🛶🛶🛶🛶🛶🛶🛶🛶🛶🛶🛶🛶🛶🛶🛶🛶🛶🛶🛶🛶🛶🛶🛶🛶🛶🛶🛶🛶🛶🛶🛶🛶🛶🛶🛶🛶🛶🛶🛶🛶🛶🛶🛶🛶🛶🛶🛶🛶🛶🛶"}'
+  expect:
+    status: 201
+    body_json: {id: 0192f0a0-0000-7000-8001-000000000001, pocket_display_name: "🛶🛶🛶🛶🛶🛶🛶🛶🛶🛶🛶🛶🛶🛶🛶🛶🛶🛶🛶🛶🛶🛶🛶🛶🛶🛶🛶🛶🛶🛶🛶🛶🛶🛶🛶🛶🛶🛶🛶🛶🛶🛶🛶🛶🛶🛶🛶🛶🛶🛶🛶🛶🛶🛶🛶🛶🛶🛶🛶🛶", active: true}
+    cookies: {}
+
+
+- name: pockets - a replay of the same body answers 200 and changes nothing
+  issue: "121"
+  given:
+    - sql: |
+        INSERT INTO pockets (id, household_id, pocket_display_name, created_at) VALUES
+          ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO', '2026-01-01T00:00:00Z')
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /pockets
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8001-000000000001","pocket_display_name":"OVO"}'
+  expect:
+    status: 200
+    body_json: {id: 0192f0a0-0000-7000-8001-000000000001, pocket_display_name: OVO, active: true}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets ORDER BY id
+        rows:
+          - {id: 0192f0a0-0000-7000-8001-000000000001, household_id: 0192f0a0-0000-7000-8000-000000000001, name: OVO, active: true, deleted: false}
+
+
+- name: pockets - a replay with a different name answers 200 with the stored one and changes nothing
+  issue: "121"
+  given:
+    - sql: |
+        INSERT INTO pockets (id, household_id, pocket_display_name, created_at) VALUES
+          ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO', '2026-01-01T00:00:00Z')
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /pockets
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8001-000000000001","pocket_display_name":"Something Else"}'
+  expect:
+    status: 200
+    body_json: {id: 0192f0a0-0000-7000-8001-000000000001, pocket_display_name: OVO, active: true}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets ORDER BY id
+        rows:
+          - {id: 0192f0a0-0000-7000-8001-000000000001, household_id: 0192f0a0-0000-7000-8000-000000000001, name: OVO, active: true, deleted: false}
+
+
+- name: pockets - a replay of an inactive Pocket answers 200 with active false
+  issue: "121"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO pockets (id, household_id, pocket_display_name, active, deleted_at, created_at) VALUES
+          ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO',    true,  NULL,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Dana',   false, NULL,  '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Gopay',  true,  now(), '2026-01-03T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', true,  NULL,  '2026-01-04T00:00:00Z')
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /pockets
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8001-000000000002","pocket_display_name":"Dana"}'
+  expect:
+    status: 200
+    body_json: {id: 0192f0a0-0000-7000-8001-000000000002, pocket_display_name: Dana, active: false}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets ORDER BY id
+        rows:
+          - {id: 0192f0a0-0000-7000-8001-000000000001, household_id: 0192f0a0-0000-7000-8000-000000000001, name: OVO, active: true, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000002, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Dana, active: false, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000003, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Gopay, active: true, deleted: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000009, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Theirs, active: true, deleted: false}
+
+
+- name: pockets - a replay whose name is another Pocket's is still 200, never NAME_TAKEN
+  issue: "121"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO pockets (id, household_id, pocket_display_name, active, deleted_at, created_at) VALUES
+          ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO',    true,  NULL,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Dana',   false, NULL,  '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Gopay',  true,  now(), '2026-01-03T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', true,  NULL,  '2026-01-04T00:00:00Z')
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /pockets
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8001-000000000002","pocket_display_name":"ovo"}'
+  expect:
+    status: 200
+    body_json: {id: 0192f0a0-0000-7000-8001-000000000002, pocket_display_name: Dana, active: false}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets ORDER BY id
+        rows:
+          - {id: 0192f0a0-0000-7000-8001-000000000001, household_id: 0192f0a0-0000-7000-8000-000000000001, name: OVO, active: true, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000002, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Dana, active: false, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000003, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Gopay, active: true, deleted: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000009, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Theirs, active: true, deleted: false}
+
+
+- name: pockets - the same id in upper case is the same Pocket
+  issue: "121"
+  given:
+    - sql: |
+        INSERT INTO pockets (id, household_id, pocket_display_name, created_at) VALUES
+          ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO', '2026-01-01T00:00:00Z')
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /pockets
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192F0A0-0000-7000-8001-000000000001","pocket_display_name":"OVO"}'
+  expect:
+    status: 200
+    body_json: {id: 0192f0a0-0000-7000-8001-000000000001, pocket_display_name: OVO, active: true}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets ORDER BY id
+        rows:
+          - {id: 0192f0a0-0000-7000-8001-000000000001, household_id: 0192f0a0-0000-7000-8000-000000000001, name: OVO, active: true, deleted: false}
+
+
+- name: pockets - another Household's id is ID_TAKEN and their Pocket is untouched
+  issue: "121"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO pockets (id, household_id, pocket_display_name, active, deleted_at, created_at) VALUES
+          ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO',    true,  NULL,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Dana',   false, NULL,  '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Gopay',  true,  now(), '2026-01-03T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', true,  NULL,  '2026-01-04T00:00:00Z')
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /pockets
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8001-000000000009","pocket_display_name":"Mine"}'
+  expect:
+    status: 409
+    body_json: {code: ID_TAKEN}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets ORDER BY id
+        rows:
+          - {id: 0192f0a0-0000-7000-8001-000000000001, household_id: 0192f0a0-0000-7000-8000-000000000001, name: OVO, active: true, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000002, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Dana, active: false, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000003, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Gopay, active: true, deleted: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000009, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Theirs, active: true, deleted: false}
+
+
+- name: pockets - the caller's own deleted id is ID_TAKEN and stays deleted
+  issue: "121"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO pockets (id, household_id, pocket_display_name, active, deleted_at, created_at) VALUES
+          ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO',    true,  NULL,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Dana',   false, NULL,  '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Gopay',  true,  now(), '2026-01-03T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', true,  NULL,  '2026-01-04T00:00:00Z')
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /pockets
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8001-000000000003","pocket_display_name":"Gopay"}'
+  expect:
+    status: 409
+    body_json: {code: ID_TAKEN}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets ORDER BY id
+        rows:
+          - {id: 0192f0a0-0000-7000-8001-000000000001, household_id: 0192f0a0-0000-7000-8000-000000000001, name: OVO, active: true, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000002, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Dana, active: false, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000003, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Gopay, active: true, deleted: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000009, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Theirs, active: true, deleted: false}
+
+
+- name: pockets - a foreign id and an own deleted id are one answer
+  issue: "121"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO pockets (id, household_id, pocket_display_name, active, deleted_at, created_at) VALUES
+          ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO',    true,  NULL,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Dana',   false, NULL,  '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Gopay',  true,  now(), '2026-01-03T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', true,  NULL,  '2026-01-04T00:00:00Z')
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /pockets
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8001-000000000009","pocket_display_name":"Mine"}'
+  expect:
+    status: 409
+    body_json: {code: ID_TAKEN}
+    same_as:
+      method: POST
+      path: /pockets
+      headers:
+        Content-Type: application/json
+      body: '{"id":"0192f0a0-0000-7000-8001-000000000003","pocket_display_name":"Mine"}'
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets ORDER BY id
+        rows:
+          - {id: 0192f0a0-0000-7000-8001-000000000001, household_id: 0192f0a0-0000-7000-8000-000000000001, name: OVO, active: true, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000002, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Dana, active: false, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000003, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Gopay, active: true, deleted: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000009, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Theirs, active: true, deleted: false}
+
+
+- name: pockets - a name held by a live Pocket is NAME_TAKEN, in the same case
+  issue: "121"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO pockets (id, household_id, pocket_display_name, active, deleted_at, created_at) VALUES
+          ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO',    true,  NULL,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Dana',   false, NULL,  '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Gopay',  true,  now(), '2026-01-03T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', true,  NULL,  '2026-01-04T00:00:00Z')
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /pockets
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8001-000000000005","pocket_display_name":"OVO"}'
+  expect:
+    status: 409
+    body_json: {code: NAME_TAKEN}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets ORDER BY id
+        rows:
+          - {id: 0192f0a0-0000-7000-8001-000000000001, household_id: 0192f0a0-0000-7000-8000-000000000001, name: OVO, active: true, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000002, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Dana, active: false, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000003, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Gopay, active: true, deleted: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000009, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Theirs, active: true, deleted: false}
+
+
+- name: pockets - a name held by a live Pocket is NAME_TAKEN in another case
+  issue: "121"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO pockets (id, household_id, pocket_display_name, active, deleted_at, created_at) VALUES
+          ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO',    true,  NULL,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Dana',   false, NULL,  '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Gopay',  true,  now(), '2026-01-03T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', true,  NULL,  '2026-01-04T00:00:00Z')
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /pockets
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8001-000000000005","pocket_display_name":"ovo"}'
+  expect:
+    status: 409
+    body_json: {code: NAME_TAKEN}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets ORDER BY id
+        rows:
+          - {id: 0192f0a0-0000-7000-8001-000000000001, household_id: 0192f0a0-0000-7000-8000-000000000001, name: OVO, active: true, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000002, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Dana, active: false, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000003, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Gopay, active: true, deleted: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000009, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Theirs, active: true, deleted: false}
+
+
+- name: pockets - a name is compared trimmed
+  issue: "121"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO pockets (id, household_id, pocket_display_name, active, deleted_at, created_at) VALUES
+          ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO',    true,  NULL,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Dana',   false, NULL,  '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Gopay',  true,  now(), '2026-01-03T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', true,  NULL,  '2026-01-04T00:00:00Z')
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /pockets
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8001-000000000005","pocket_display_name":"  oVo "}'
+  expect:
+    status: 409
+    body_json: {code: NAME_TAKEN}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets ORDER BY id
+        rows:
+          - {id: 0192f0a0-0000-7000-8001-000000000001, household_id: 0192f0a0-0000-7000-8000-000000000001, name: OVO, active: true, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000002, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Dana, active: false, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000003, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Gopay, active: true, deleted: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000009, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Theirs, active: true, deleted: false}
+
+
+- name: pockets - an inactive Pocket still holds its name
+  issue: "121"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO pockets (id, household_id, pocket_display_name, active, deleted_at, created_at) VALUES
+          ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO',    true,  NULL,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Dana',   false, NULL,  '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Gopay',  true,  now(), '2026-01-03T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', true,  NULL,  '2026-01-04T00:00:00Z')
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /pockets
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8001-000000000005","pocket_display_name":"DANA"}'
+  expect:
+    status: 409
+    body_json: {code: NAME_TAKEN}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets ORDER BY id
+        rows:
+          - {id: 0192f0a0-0000-7000-8001-000000000001, household_id: 0192f0a0-0000-7000-8000-000000000001, name: OVO, active: true, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000002, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Dana, active: false, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000003, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Gopay, active: true, deleted: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000009, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Theirs, active: true, deleted: false}
+
+
+- name: pockets - a deleted Pocket releases its name
+  issue: "121"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO pockets (id, household_id, pocket_display_name, active, deleted_at, created_at) VALUES
+          ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO',    true,  NULL,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Dana',   false, NULL,  '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Gopay',  true,  now(), '2026-01-03T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', true,  NULL,  '2026-01-04T00:00:00Z')
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /pockets
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8001-000000000005","pocket_display_name":"gopay"}'
+  expect:
+    status: 201
+    body_json: {id: 0192f0a0-0000-7000-8001-000000000005, pocket_display_name: gopay, active: true}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets ORDER BY id
+        rows:
+          - {id: 0192f0a0-0000-7000-8001-000000000001, household_id: 0192f0a0-0000-7000-8000-000000000001, name: OVO, active: true, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000002, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Dana, active: false, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000003, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Gopay, active: true, deleted: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000005, household_id: 0192f0a0-0000-7000-8000-000000000001, name: gopay, active: true, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000009, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Theirs, active: true, deleted: false}
+
+
+- name: pockets - another Household's Pocket does not hold the name
+  issue: "121"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO pockets (id, household_id, pocket_display_name, active, deleted_at, created_at) VALUES
+          ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO',    true,  NULL,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Dana',   false, NULL,  '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Gopay',  true,  now(), '2026-01-03T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', true,  NULL,  '2026-01-04T00:00:00Z')
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /pockets
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8001-000000000005","pocket_display_name":"theirs"}'
+  expect:
+    status: 201
+    body_json: {id: 0192f0a0-0000-7000-8001-000000000005, pocket_display_name: theirs, active: true}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets ORDER BY id
+        rows:
+          - {id: 0192f0a0-0000-7000-8001-000000000001, household_id: 0192f0a0-0000-7000-8000-000000000001, name: OVO, active: true, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000002, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Dana, active: false, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000003, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Gopay, active: true, deleted: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000005, household_id: 0192f0a0-0000-7000-8000-000000000001, name: theirs, active: true, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000009, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Theirs, active: true, deleted: false}
+
+
+- name: pockets - a create lands in the session's Household and the other's Pockets are untouched
+  issue: "121"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO pockets (id, household_id, pocket_display_name, active, deleted_at, created_at) VALUES
+          ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO',    true,  NULL,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Dana',   false, NULL,  '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Gopay',  true,  now(), '2026-01-03T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', true,  NULL,  '2026-01-04T00:00:00Z')
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /pockets
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8001-000000000005","pocket_display_name":"Mine"}'
+  expect:
+    status: 201
+    body_json: {id: 0192f0a0-0000-7000-8001-000000000005, pocket_display_name: Mine, active: true}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets ORDER BY id
+        rows:
+          - {id: 0192f0a0-0000-7000-8001-000000000001, household_id: 0192f0a0-0000-7000-8000-000000000001, name: OVO, active: true, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000002, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Dana, active: false, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000003, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Gopay, active: true, deleted: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000005, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Mine, active: true, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000009, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Theirs, active: true, deleted: false}
+
+
+- name: pockets - a v4 id is refused by the contract's pattern
+  issue: "121"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /pockets
+    headers:
+      Content-Type: application/json
+    body: '{"id":"6ba7b810-9dad-41d1-80b4-00c04fd430c8","pocket_display_name":"OVO"}'
+  expect:
+    status: 400
+    body_json: {code: VALIDATION, args: {field: id, rule: pattern}}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets ORDER BY id
+        rows: []
+
+
+- name: pockets - the nil UUID is refused
+  issue: "121"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /pockets
+    headers:
+      Content-Type: application/json
+    body: '{"id":"00000000-0000-0000-0000-000000000000","pocket_display_name":"OVO"}'
+  expect:
+    status: 400
+    body_json: {code: VALIDATION, args: {field: id, rule: pattern}}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets ORDER BY id
+        rows: []
+
+
+- name: pockets - 32 hex digits are refused
+  issue: "121"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /pockets
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0000070018000000000000005","pocket_display_name":"OVO"}'
+  expect:
+    status: 400
+    body_json: {code: VALIDATION, args: {field: id, rule: pattern}}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets ORDER BY id
+        rows: []
+
+
+- name: pockets - a urn-prefixed id is refused
+  issue: "121"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /pockets
+    headers:
+      Content-Type: application/json
+    body: '{"id":"urn:uuid:0192f0a0-0000-7000-8001-000000000005","pocket_display_name":"OVO"}'
+  expect:
+    status: 400
+    body_json: {code: VALIDATION, args: {field: id, rule: pattern}}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets ORDER BY id
+        rows: []
+
+
+- name: pockets - a braced id is refused
+  issue: "121"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /pockets
+    headers:
+      Content-Type: application/json
+    body: '{"id":"{0192f0a0-0000-7000-8001-000000000005}","pocket_display_name":"OVO"}'
+  expect:
+    status: 400
+    body_json: {code: VALIDATION, args: {field: id, rule: pattern}}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets ORDER BY id
+        rows: []
+
+
+- name: pockets - a v7 id with the wrong variant is refused
+  issue: "121"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /pockets
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-c001-000000000005","pocket_display_name":"OVO"}'
+  expect:
+    status: 400
+    body_json: {code: VALIDATION, args: {field: id, rule: pattern}}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets ORDER BY id
+        rows: []
+
+
+- name: pockets - a blank name is required
+  issue: "121"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /pockets
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8001-000000000005","pocket_display_name":"   "}'
+  expect:
+    status: 400
+    body_json: {code: VALIDATION, args: {field: pocket_display_name, rule: required}}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets ORDER BY id
+        rows: []
+
+
+- name: pockets - an empty name is required
+  issue: "121"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /pockets
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8001-000000000005","pocket_display_name":""}'
+  expect:
+    status: 400
+    body_json: {code: VALIDATION, args: {field: pocket_display_name, rule: required}}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets ORDER BY id
+        rows: []
+
+
+- name: pockets - a name of only zero-width characters is required
+  issue: "121"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /pockets
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8001-000000000005","pocket_display_name":"\u200b\u200c\u200d"}'
+  expect:
+    status: 400
+    body_json: {code: VALIDATION, args: {field: pocket_display_name, rule: required}}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets ORDER BY id
+        rows: []
+
+
+- name: pockets - 61 code points is over the cap
+  issue: "121"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /pockets
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8001-000000000005","pocket_display_name":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}'
+  expect:
+    status: 400
+    body_json: {code: VALIDATION, args: {field: pocket_display_name, rule: max}}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets ORDER BY id
+        rows: []
+
+
+- name: pockets - a name beyond the contract's outer bound is max
+  issue: "121"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /pockets
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8001-000000000005","pocket_display_name":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}'
+  expect:
+    status: 400
+    body_json: {code: VALIDATION, args: {field: pocket_display_name, rule: max}}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets ORDER BY id
+        rows: []
+
+
+- name: pockets - a NUL in the name is pattern
+  issue: "121"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /pockets
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8001-000000000005","pocket_display_name":"O\u0000VO"}'
+  expect:
+    status: 400
+    body_json: {code: VALIDATION, args: {field: pocket_display_name, rule: pattern}}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets ORDER BY id
+        rows: []
+
+
+- name: pockets - a missing id is required
+  issue: "121"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /pockets
+    headers:
+      Content-Type: application/json
+    body: '{"pocket_display_name":"OVO"}'
+  expect:
+    status: 400
+    body_json: {code: VALIDATION, args: {field: id, rule: required}}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets ORDER BY id
+        rows: []
+
+
+- name: pockets - a missing name is required
+  issue: "121"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /pockets
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8001-000000000005"}'
+  expect:
+    status: 400
+    body_json: {code: VALIDATION, args: {field: pocket_display_name, rule: required}}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets ORDER BY id
+        rows: []
+
+
+- name: pockets - a bad id beats a blank name, contract rules first
+  issue: "121"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /pockets
+    headers:
+      Content-Type: application/json
+    body: '{"id":"not-a-uuid","pocket_display_name":"  "}'
+  expect:
+    status: 400
+    body_json: {code: VALIDATION, args: {field: id, rule: pattern}}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets ORDER BY id
+        rows: []
+
+
+- name: pockets - a blank name with another Household's id is the blank name's 400, not 409
+  issue: "121"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO pockets (id, household_id, pocket_display_name, active, deleted_at, created_at) VALUES
+          ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO',    true,  NULL,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Dana',   false, NULL,  '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Gopay',  true,  now(), '2026-01-03T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', true,  NULL,  '2026-01-04T00:00:00Z')
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /pockets
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8001-000000000009","pocket_display_name":" "}'
+  expect:
+    status: 400
+    body_json: {code: VALIDATION, args: {field: pocket_display_name, rule: required}}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets ORDER BY id
+        rows:
+          - {id: 0192f0a0-0000-7000-8001-000000000001, household_id: 0192f0a0-0000-7000-8000-000000000001, name: OVO, active: true, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000002, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Dana, active: false, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000003, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Gopay, active: true, deleted: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000009, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Theirs, active: true, deleted: false}
+
+
+- name: pockets - a blank name with an own deleted id is the blank name's 400, not 409
+  issue: "121"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO pockets (id, household_id, pocket_display_name, active, deleted_at, created_at) VALUES
+          ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO',    true,  NULL,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Dana',   false, NULL,  '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Gopay',  true,  now(), '2026-01-03T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', true,  NULL,  '2026-01-04T00:00:00Z')
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /pockets
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8001-000000000003","pocket_display_name":" "}'
+  expect:
+    status: 400
+    body_json: {code: VALIDATION, args: {field: pocket_display_name, rule: required}}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets ORDER BY id
+        rows:
+          - {id: 0192f0a0-0000-7000-8001-000000000001, household_id: 0192f0a0-0000-7000-8000-000000000001, name: OVO, active: true, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000002, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Dana, active: false, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000003, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Gopay, active: true, deleted: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000009, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Theirs, active: true, deleted: false}
+
+
+- name: pockets - a blank name with a live own id is the blank name's 400, not 200
+  issue: "121"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO pockets (id, household_id, pocket_display_name, active, deleted_at, created_at) VALUES
+          ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO',    true,  NULL,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Dana',   false, NULL,  '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Gopay',  true,  now(), '2026-01-03T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', true,  NULL,  '2026-01-04T00:00:00Z')
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /pockets
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8001-000000000001","pocket_display_name":" "}'
+  expect:
+    status: 400
+    body_json: {code: VALIDATION, args: {field: pocket_display_name, rule: required}}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets ORDER BY id
+        rows:
+          - {id: 0192f0a0-0000-7000-8001-000000000001, household_id: 0192f0a0-0000-7000-8000-000000000001, name: OVO, active: true, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000002, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Dana, active: false, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000003, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Gopay, active: true, deleted: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000009, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Theirs, active: true, deleted: false}
+
+
+- name: pockets - active is an unknown property (a new Pocket is always active), INVALID_JSON_BODY
+  issue: "121"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /pockets
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8001-000000000005","pocket_display_name":"OVO","active":false}'
+  expect:
+    status: 400
+    body_json: {code: INVALID_JSON_BODY}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets ORDER BY id
+        rows: []
+
+
+- name: pockets - household_id is an unknown property (the Household is the session's), INVALID_JSON_BODY
+  issue: "121"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /pockets
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8001-000000000005","pocket_display_name":"OVO","household_id":"0192f0a0-0000-7000-8000-000000000002"}'
+  expect:
+    status: 400
+    body_json: {code: INVALID_JSON_BODY}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets ORDER BY id
+        rows: []
+
+
+- name: pockets - deleted_at is an unknown property is INVALID_JSON_BODY
+  issue: "121"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /pockets
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8001-000000000005","pocket_display_name":"OVO","deleted_at":null}'
+  expect:
+    status: 400
+    body_json: {code: INVALID_JSON_BODY}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets ORDER BY id
+        rows: []
+
+
+- name: pockets - created_at is an unknown property is INVALID_JSON_BODY
+  issue: "121"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /pockets
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8001-000000000005","pocket_display_name":"OVO","created_at":"2026-01-01T00:00:00Z"}'
+  expect:
+    status: 400
+    body_json: {code: INVALID_JSON_BODY}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets ORDER BY id
+        rows: []
+
+
+- name: pockets - the bare name is an unknown property is INVALID_JSON_BODY
+  issue: "121"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /pockets
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8001-000000000005","name":"OVO"}'
+  expect:
+    status: 400
+    body_json: {code: INVALID_JSON_BODY}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets ORDER BY id
+        rows: []
+
+
+- name: pockets - a null name is INVALID_JSON_BODY
+  issue: "121"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /pockets
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8001-000000000005","pocket_display_name":null}'
+  expect:
+    status: 400
+    body_json: {code: INVALID_JSON_BODY}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets ORDER BY id
+        rows: []
+
+
+- name: pockets - a numeric name is INVALID_JSON_BODY
+  issue: "121"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /pockets
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8001-000000000005","pocket_display_name":5}'
+  expect:
+    status: 400
+    body_json: {code: INVALID_JSON_BODY}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets ORDER BY id
+        rows: []
+
+
+- name: pockets - a numeric id is INVALID_JSON_BODY
+  issue: "121"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /pockets
+    headers:
+      Content-Type: application/json
+    body: '{"id":5,"pocket_display_name":"OVO"}'
+  expect:
+    status: 400
+    body_json: {code: INVALID_JSON_BODY}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets ORDER BY id
+        rows: []
+
+
+- name: pockets - malformed JSON is INVALID_JSON_BODY
+  issue: "121"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /pockets
+    headers:
+      Content-Type: application/json
+    body: '{"id":'
+  expect:
+    status: 400
+    body_json: {code: INVALID_JSON_BODY}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets ORDER BY id
+        rows: []
+
+
+- name: pockets - an array body is INVALID_JSON_BODY
+  issue: "121"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /pockets
+    headers:
+      Content-Type: application/json
+    body: '[]'
+  expect:
+    status: 400
+    body_json: {code: INVALID_JSON_BODY}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets ORDER BY id
+        rows: []
+
+
+- name: pockets - a JSON null body is INVALID_JSON_BODY
+  issue: "121"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /pockets
+    headers:
+      Content-Type: application/json
+    body: 'null'
+  expect:
+    status: 400
+    body_json: {code: INVALID_JSON_BODY}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets ORDER BY id
+        rows: []
+
+
+- name: pockets - a body with no Content-Type is INVALID_JSON_BODY
+  issue: "121"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /pockets
+    body: '{"id":"0192f0a0-0000-7000-8001-000000000005","pocket_display_name":"OVO"}'
+  expect:
+    status: 400
+    body_json: {code: INVALID_JSON_BODY}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets ORDER BY id
+        rows: []
+
+
+- name: pockets - an empty body is INVALID_JSON_BODY
+  issue: "121"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /pockets
+    headers:
+      Content-Type: application/json
+    body: ''
+  expect:
+    status: 400
+    body_json: {code: INVALID_JSON_BODY}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets ORDER BY id
+        rows: []
+
+
+- name: pockets - listing with no cookie is unauthorized
+  issue: "121"
+  request:
+    method: GET
+    path: /pockets
+  expect:
+    status: 401
+    body_json: {code: UNAUTHORIZED}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets ORDER BY id
+        rows: []
+
+
+- name: pockets - creating with no cookie is unauthorized and writes nothing
+  issue: "121"
+  request:
+    method: POST
+    path: /pockets
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8001-000000000005","pocket_display_name":"OVO"}'
+  expect:
+    status: 401
+    body_json: {code: UNAUTHORIZED}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets ORDER BY id
+        rows: []
+
+
+- name: pockets - with no cookie, even a malformed body is unauthorized
+  issue: "114"
+  request:
+    method: POST
+    path: /pockets
+    headers:
+      Content-Type: application/json
+    body: '{"id":'
+  expect:
+    status: 401
+    body_json: {code: UNAUTHORIZED}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets ORDER BY id
+        rows: []
+
+
+- name: pockets - with no cookie, a bad id is unauthorized, not a validation answer
+  issue: "114"
+  request:
+    method: POST
+    path: /pockets
+    headers:
+      Content-Type: application/json
+    body: '{"id":"not-a-uuid"}'
+  expect:
+    status: 401
+    body_json: {code: UNAUTHORIZED}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets ORDER BY id
+        rows: []
+
+
+- name: pockets - listing with an expired session is unauthorized, clears the cookie and writes nothing
+  issue: "121"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+    - sql: |
+        UPDATE sessions SET expires_at = now() - interval '1 minute'
+  request:
+    method: GET
+    path: /pockets
+  expect:
+    status: 401
+    body_json: {code: UNAUTHORIZED}
+    cookies:
+      afloat_session:
+        value: ""
+        path: /
+        max_age: 0
+        http_only: true
+        secure: false
+        same_site: Lax
+        expires: past
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets ORDER BY id
+        rows: []
+
+
+- name: pockets - creating with an expired session is unauthorized, clears the cookie and writes nothing
+  issue: "121"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+    - sql: |
+        UPDATE sessions SET expires_at = now() - interval '1 minute'
+  request:
+    method: POST
+    path: /pockets
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8001-000000000005","pocket_display_name":"OVO"}'
+  expect:
+    status: 401
+    body_json: {code: UNAUTHORIZED}
+    cookies:
+      afloat_session:
+        value: ""
+        path: /
+        max_age: 0
+        http_only: true
+        secure: false
+        same_site: Lax
+        expires: past
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets ORDER BY id
+        rows: []
+
+
+- name: pockets - listing under an outage is 500 and keeps the cookie
+  issue: "27"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+    - outage: true
+  request:
+    method: GET
+    path: /pockets
+  expect:
+    status: 500
+    body_json: {code: INTERNAL}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets ORDER BY id
+        rows: []
+
+
+- name: pockets - creating under an outage is 500 and keeps the cookie
+  issue: "27"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+    - outage: true
+  request:
+    method: POST
+    path: /pockets
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8001-000000000005","pocket_display_name":"OVO"}'
+  expect:
+    status: 500
+    body_json: {code: INTERNAL}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets ORDER BY id
+        rows: []
+
+
+- name: pockets - HEAD answers like GET
+  issue: "66"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: HEAD
+    path: /pockets
+  expect:
+    status: 200
+    body_empty: true
+    headers:
+      Content-Type: application/json
+    cookies: {}
+
+
+- name: pockets - PUT on the collection is method not allowed and nothing changes
+  issue: "66"
+  given:
+    - sql: |
+        INSERT INTO pockets (id, household_id, pocket_display_name, created_at) VALUES
+          ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO', '2026-01-01T00:00:00Z')
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: PUT
+    path: /pockets
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8001-000000000001","pocket_display_name":"Hijacked"}'
+  expect:
+    status: 405
+    body_empty: true
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets ORDER BY id
+        rows:
+          - {id: 0192f0a0-0000-7000-8001-000000000001, household_id: 0192f0a0-0000-7000-8000-000000000001, name: OVO, active: true, deleted: false}
+
+
+- name: pockets - PATCH on the collection is method not allowed and nothing changes
+  issue: "66"
+  given:
+    - sql: |
+        INSERT INTO pockets (id, household_id, pocket_display_name, created_at) VALUES
+          ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO', '2026-01-01T00:00:00Z')
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: PATCH
+    path: /pockets
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8001-000000000001","pocket_display_name":"Hijacked"}'
+  expect:
+    status: 405
+    body_empty: true
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets ORDER BY id
+        rows:
+          - {id: 0192f0a0-0000-7000-8001-000000000001, household_id: 0192f0a0-0000-7000-8000-000000000001, name: OVO, active: true, deleted: false}
+
+
+- name: pockets - DELETE on the collection is method not allowed and nothing changes
+  issue: "66"
+  given:
+    - sql: |
+        INSERT INTO pockets (id, household_id, pocket_display_name, created_at) VALUES
+          ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO', '2026-01-01T00:00:00Z')
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: DELETE
+    path: /pockets
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8001-000000000001","pocket_display_name":"Hijacked"}'
+  expect:
+    status: 405
+    body_empty: true
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets ORDER BY id
+        rows:
+          - {id: 0192f0a0-0000-7000-8001-000000000001, household_id: 0192f0a0-0000-7000-8000-000000000001, name: OVO, active: true, deleted: false}
+

@@ -57,6 +57,16 @@ type OnboardingHandshake struct {
 	ExpiresAt       pgtype.Timestamptz
 }
 
+type Pocket struct {
+	ID                pgtype.UUID
+	HouseholdID       pgtype.UUID
+	PocketDisplayName string
+	Active            bool
+	CreatedAt         pgtype.Timestamptz
+	UpdatedAt         pgtype.Timestamptz
+	DeletedAt         pgtype.Timestamptz
+}
+
 type Session struct {
 	ID         string
 	UserID     pgtype.UUID

@@ -10,6 +10,7 @@ export type ChangeEmailRequest = components["schemas"]["ChangeEmailRequest"];
 export type Pocket = components["schemas"]["Pocket"];
 export type PocketList = components["schemas"]["PocketList"];
 export type CreatePocketRequest = components["schemas"]["CreatePocketRequest"];
+export type UpdatePocketRequest = components["schemas"]["UpdatePocketRequest"];
 export type AuthMethods = components["schemas"]["AuthMethods"];
 export type LocalLoginRequest = components["schemas"]["LocalLoginRequest"];
 export type LocalRegisterRequest = components["schemas"]["LocalRegisterRequest"];
@@ -60,6 +61,7 @@ const errorCodeKnown: Record<ErrorCode, true> = {
   INVALID_CURRENT_PASSWORD: true,
   ID_TAKEN: true,
   NAME_TAKEN: true,
+  NOT_FOUND: true,
   INTERNAL: true,
 };
 export const errorCodes = Object.keys(errorCodeKnown) as ErrorCode[];
@@ -182,6 +184,18 @@ export async function createPocket(body: CreatePocketRequest): Promise<Pocket> {
   return (
     await request("/pockets", {
       method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    })
+  ).json() as Promise<Pocket>;
+}
+
+// Merge update: only the fields sent change. The answer is the Pocket as it
+// now stands. 404 NOT_FOUND covers unknown, another Household's and deleted.
+export async function updatePocket(id: string, body: UpdatePocketRequest): Promise<Pocket> {
+  return (
+    await request(`/pockets/${encodeURIComponent(id)}`, {
+      method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     })

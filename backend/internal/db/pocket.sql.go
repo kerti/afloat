@@ -110,3 +110,49 @@ func (q *Queries) ListPockets(ctx context.Context, householdID pgtype.UUID) ([]P
 	}
 	return items, nil
 }
+
+const updatePocket = `-- name: UpdatePocket :one
+UPDATE pockets SET
+    pocket_display_name = coalesce($1, pocket_display_name),
+    active              = coalesce($2, active),
+    updated_at          = now()
+WHERE id = $3 AND household_id = $4 AND deleted_at IS NULL
+RETURNING id, household_id, pocket_display_name, active, created_at, updated_at, deleted_at
+`
+
+type UpdatePocketParams struct {
+	PocketDisplayName *string
+	Active            *bool
+	ID                pgtype.UUID
+	HouseholdID       pgtype.UUID
+}
+
+// Merge semantics (BOOTSTRAP.md §4): a NULL argument leaves its column alone,
+// in one statement, so a rename and a deactivation sent by two writers both
+// land. Both arguments are sqlc.narg so that a false for active is a value
+// and not "absent". Neither column is nullable, so coalesce cannot be mistaken
+// for "clear". A row that is another Household's, unknown or deleted is no row:
+// the caller answers all three NOT_FOUND. A 23505 on pockets_household_name_idx
+// is a rename into a held name.
+//
+// updated_at is set here because the baseline has no trigger, and from the
+// database's own clock (BOOTSTRAP.md §5.1).
+func (q *Queries) UpdatePocket(ctx context.Context, arg UpdatePocketParams) (Pocket, error) {
+	row := q.db.QueryRow(ctx, updatePocket,
+		arg.PocketDisplayName,
+		arg.Active,
+		arg.ID,
+		arg.HouseholdID,
+	)
+	var i Pocket
+	err := row.Scan(
+		&i.ID,
+		&i.HouseholdID,
+		&i.PocketDisplayName,
+		&i.Active,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.DeletedAt,
+	)
+	return i, err
+}

@@ -104,6 +104,10 @@ func (s *Server) CreatePocket(ctx context.Context, r api.CreatePocketRequestObje
 	return s.pocket.CreatePocket(ctx, r)
 }
 
+func (s *Server) UpdatePocket(ctx context.Context, r api.UpdatePocketRequestObject) (api.UpdatePocketResponseObject, error) {
+	return s.pocket.UpdatePocket(ctx, r)
+}
+
 // New builds the router: the API under the contract's base path (basePath,
 // /api today), with the middleware every request passes through.
 //
@@ -208,13 +212,14 @@ func mountAPI(r chi.Router, srv *Server, d Deps) {
 	// point). RFC 9110 §9.1 requires HEAD of a general-purpose server (#66).
 	apiRouter := chi.NewRouter()
 	apiRouter.Use(headAsGet)
+	required := contractSessionRequirements()
 	r.Mount(basePath, api.HandlerWithOptions(strict, api.ChiServerOptions{
 		BaseRouter:       apiRouter,
-		ErrorHandlerFunc: paramErrorHandler,
+		ErrorHandlerFunc: paramErrorHandlerFor(required),
 		// Per-operation, not r.Use above: these only ever run once chi has
 		// matched a request to a route the contract declares, so an unknown
 		// path or method keeps chi's own 404/405. Order matters:
-		// operationMiddlewares says why.
-		Middlewares: operationMiddlewares(),
+		// operationMiddlewaresFor says why.
+		Middlewares: operationMiddlewaresFor(required),
 	}))
 }

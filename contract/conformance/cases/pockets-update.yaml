@@ -1,0 +1,1121 @@
+# PATCH /pockets/{id} (#121, PR 2 of 3): rename, deactivate and reactivate. Merge
+# semantics as PATCH /household (BOOTSTRAP.md §4): a property left out is
+# unchanged, `{}` is a valid no-op, an unknown property is INVALID_JSON_BODY, the
+# answer is the whole Pocket. Deactivating is not deleting: the Pocket keeps its
+# name, stays in the list and still holds the name (inactive Pockets are
+# listed, the client filters). An id that is unknown, another Household's or
+# deleted is one 404 NOT_FOUND, the same bytes, for every body; validation comes
+# before the lookup.
+#
+# The Pockets a case starts with (the same ids as pockets.yaml):
+#   0192f0a0-0000-7000-8001-000000000001  OVO     Household 1, live, active
+#   0192f0a0-0000-7000-8001-000000000002  Dana    Household 1, live, inactive
+#   0192f0a0-0000-7000-8001-000000000003  Gopay   Household 1, deleted
+#   0192f0a0-0000-7000-8001-000000000009  Theirs  Household 2, live, active
+# `rows:` read every Pocket after the request, so a case also proves what it did
+# NOT touch. Only ASCII case folding is pinned: lower() follows the database's
+# locale.
+#
+# Under an outage the session itself cannot be read, which the session
+# middleware answers 500 with the cookie left alone (#27); it never reaches the
+# handler, whose own 500s the backend's suite covers.
+
+- name: "pocket update - a rename answers the Pocket and changes only the name"
+  issue: "121"
+  given: &seeded
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO pockets (id, household_id, pocket_display_name, active, deleted_at, created_at) VALUES
+          ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO',    true,  NULL,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Dana',   false, NULL,  '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Gopay',  true,  now(), '2026-01-03T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', true,  NULL,  '2026-01-04T00:00:00Z')
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: PATCH
+    path: /pockets/0192f0a0-0000-7000-8001-000000000001
+    headers:
+      Content-Type: application/json
+    body: '{"pocket_display_name":"Cash"}'
+  expect:
+    status: 200
+    body_json: {id: 0192f0a0-0000-7000-8001-000000000001, pocket_display_name: Cash, active: true}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets ORDER BY id
+        rows:
+          - {id: 0192f0a0-0000-7000-8001-000000000001, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Cash, active: true, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000002, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Dana, active: false, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000003, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Gopay, active: true, deleted: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000009, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Theirs, active: true, deleted: false}
+
+
+- name: "pocket update - the name is stored trimmed"
+  issue: "121"
+  given: *seeded
+  request:
+    method: PATCH
+    path: /pockets/0192f0a0-0000-7000-8001-000000000001
+    headers:
+      Content-Type: application/json
+    body: '{"pocket_display_name":"  Cash  "}'
+  expect:
+    status: 200
+    body_json: {id: 0192f0a0-0000-7000-8001-000000000001, pocket_display_name: Cash, active: true}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets ORDER BY id
+        rows:
+          - {id: 0192f0a0-0000-7000-8001-000000000001, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Cash, active: true, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000002, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Dana, active: false, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000003, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Gopay, active: true, deleted: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000009, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Theirs, active: true, deleted: false}
+
+
+- name: "pocket update - a deactivation keeps the name and the Pocket's place"
+  issue: "121"
+  given: *seeded
+  request:
+    method: PATCH
+    path: /pockets/0192f0a0-0000-7000-8001-000000000001
+    headers:
+      Content-Type: application/json
+    body: '{"active":false}'
+  expect:
+    status: 200
+    body_json: {id: 0192f0a0-0000-7000-8001-000000000001, pocket_display_name: OVO, active: false}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets ORDER BY id
+        rows:
+          - {id: 0192f0a0-0000-7000-8001-000000000001, household_id: 0192f0a0-0000-7000-8000-000000000001, name: OVO, active: false, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000002, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Dana, active: false, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000003, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Gopay, active: true, deleted: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000009, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Theirs, active: true, deleted: false}
+
+
+- name: "pocket update - a reactivation"
+  issue: "121"
+  given: *seeded
+  request:
+    method: PATCH
+    path: /pockets/0192f0a0-0000-7000-8001-000000000002
+    headers:
+      Content-Type: application/json
+    body: '{"active":true}'
+  expect:
+    status: 200
+    body_json: {id: 0192f0a0-0000-7000-8001-000000000002, pocket_display_name: Dana, active: true}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets ORDER BY id
+        rows:
+          - {id: 0192f0a0-0000-7000-8001-000000000001, household_id: 0192f0a0-0000-7000-8000-000000000001, name: OVO, active: true, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000002, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Dana, active: true, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000003, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Gopay, active: true, deleted: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000009, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Theirs, active: true, deleted: false}
+
+
+- name: "pocket update - repeating a deactivation is a no-op"
+  issue: "121"
+  given: *seeded
+  request:
+    method: PATCH
+    path: /pockets/0192f0a0-0000-7000-8001-000000000002
+    headers:
+      Content-Type: application/json
+    body: '{"active":false}'
+  expect:
+    status: 200
+    body_json: {id: 0192f0a0-0000-7000-8001-000000000002, pocket_display_name: Dana, active: false}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets ORDER BY id
+        rows:
+          - {id: 0192f0a0-0000-7000-8001-000000000001, household_id: 0192f0a0-0000-7000-8000-000000000001, name: OVO, active: true, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000002, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Dana, active: false, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000003, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Gopay, active: true, deleted: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000009, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Theirs, active: true, deleted: false}
+
+
+- name: "pocket update - an inactive Pocket can be renamed and stays inactive"
+  issue: "121"
+  given: *seeded
+  request:
+    method: PATCH
+    path: /pockets/0192f0a0-0000-7000-8001-000000000002
+    headers:
+      Content-Type: application/json
+    body: '{"pocket_display_name":"Venmo"}'
+  expect:
+    status: 200
+    body_json: {id: 0192f0a0-0000-7000-8001-000000000002, pocket_display_name: Venmo, active: false}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets ORDER BY id
+        rows:
+          - {id: 0192f0a0-0000-7000-8001-000000000001, household_id: 0192f0a0-0000-7000-8000-000000000001, name: OVO, active: true, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000002, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Venmo, active: false, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000003, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Gopay, active: true, deleted: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000009, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Theirs, active: true, deleted: false}
+
+
+- name: "pocket update - a rename and a deactivation in one body"
+  issue: "121"
+  given: *seeded
+  request:
+    method: PATCH
+    path: /pockets/0192f0a0-0000-7000-8001-000000000001
+    headers:
+      Content-Type: application/json
+    body: '{"pocket_display_name":"Cash","active":false}'
+  expect:
+    status: 200
+    body_json: {id: 0192f0a0-0000-7000-8001-000000000001, pocket_display_name: Cash, active: false}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets ORDER BY id
+        rows:
+          - {id: 0192f0a0-0000-7000-8001-000000000001, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Cash, active: false, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000002, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Dana, active: false, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000003, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Gopay, active: true, deleted: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000009, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Theirs, active: true, deleted: false}
+
+
+- name: "pocket update - an empty body is a 200 no-op"
+  issue: "121"
+  given: *seeded
+  request:
+    method: PATCH
+    path: /pockets/0192f0a0-0000-7000-8001-000000000001
+    headers:
+      Content-Type: application/json
+    body: '{}'
+  expect:
+    status: 200
+    body_json: {id: 0192f0a0-0000-7000-8001-000000000001, pocket_display_name: OVO, active: true}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets ORDER BY id
+        rows:
+          - {id: 0192f0a0-0000-7000-8001-000000000001, household_id: 0192f0a0-0000-7000-8000-000000000001, name: OVO, active: true, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000002, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Dana, active: false, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000003, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Gopay, active: true, deleted: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000009, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Theirs, active: true, deleted: false}
+
+
+- name: "pocket update - a rename to its own name in another case is not a clash"
+  issue: "121"
+  given: *seeded
+  request:
+    method: PATCH
+    path: /pockets/0192f0a0-0000-7000-8001-000000000001
+    headers:
+      Content-Type: application/json
+    body: '{"pocket_display_name":"ovo"}'
+  expect:
+    status: 200
+    body_json: {id: 0192f0a0-0000-7000-8001-000000000001, pocket_display_name: ovo, active: true}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets ORDER BY id
+        rows:
+          - {id: 0192f0a0-0000-7000-8001-000000000001, household_id: 0192f0a0-0000-7000-8000-000000000001, name: ovo, active: true, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000002, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Dana, active: false, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000003, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Gopay, active: true, deleted: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000009, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Theirs, active: true, deleted: false}
+
+
+- name: "pocket update - a deleted Pocket's name is free"
+  issue: "121"
+  given: *seeded
+  request:
+    method: PATCH
+    path: /pockets/0192f0a0-0000-7000-8001-000000000001
+    headers:
+      Content-Type: application/json
+    body: '{"pocket_display_name":"gopay"}'
+  expect:
+    status: 200
+    body_json: {id: 0192f0a0-0000-7000-8001-000000000001, pocket_display_name: gopay, active: true}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets ORDER BY id
+        rows:
+          - {id: 0192f0a0-0000-7000-8001-000000000001, household_id: 0192f0a0-0000-7000-8000-000000000001, name: gopay, active: true, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000002, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Dana, active: false, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000003, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Gopay, active: true, deleted: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000009, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Theirs, active: true, deleted: false}
+
+
+- name: "pocket update - another Household may hold the same name"
+  issue: "121"
+  given: *seeded
+  request:
+    method: PATCH
+    path: /pockets/0192f0a0-0000-7000-8001-000000000001
+    headers:
+      Content-Type: application/json
+    body: '{"pocket_display_name":"THEIRS"}'
+  expect:
+    status: 200
+    body_json: {id: 0192f0a0-0000-7000-8001-000000000001, pocket_display_name: THEIRS, active: true}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets ORDER BY id
+        rows:
+          - {id: 0192f0a0-0000-7000-8001-000000000001, household_id: 0192f0a0-0000-7000-8000-000000000001, name: THEIRS, active: true, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000002, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Dana, active: false, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000003, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Gopay, active: true, deleted: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000009, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Theirs, active: true, deleted: false}
+
+
+# The name index: unique among a Household's Pockets that are not deleted,
+# active or inactive, case-insensitively.
+
+- name: "pocket update - a name held by an inactive Pocket is NAME_TAKEN and nothing changes"
+  issue: "121"
+  given: *seeded
+  request:
+    method: PATCH
+    path: /pockets/0192f0a0-0000-7000-8001-000000000001
+    headers:
+      Content-Type: application/json
+    body: '{"pocket_display_name":"DANA"}'
+  expect:
+    status: 409
+    body_json: {code: NAME_TAKEN}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets ORDER BY id
+        rows:
+          - {id: 0192f0a0-0000-7000-8001-000000000001, household_id: 0192f0a0-0000-7000-8000-000000000001, name: OVO, active: true, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000002, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Dana, active: false, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000003, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Gopay, active: true, deleted: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000009, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Theirs, active: true, deleted: false}
+
+
+- name: "pocket update - a name held by a live Pocket is NAME_TAKEN, padded and in any case"
+  issue: "121"
+  given: *seeded
+  request:
+    method: PATCH
+    path: /pockets/0192f0a0-0000-7000-8001-000000000002
+    headers:
+      Content-Type: application/json
+    body: '{"pocket_display_name":"  ovo "}'
+  expect:
+    status: 409
+    body_json: {code: NAME_TAKEN}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets ORDER BY id
+        rows:
+          - {id: 0192f0a0-0000-7000-8001-000000000001, household_id: 0192f0a0-0000-7000-8000-000000000001, name: OVO, active: true, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000002, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Dana, active: false, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000003, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Gopay, active: true, deleted: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000009, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Theirs, active: true, deleted: false}
+
+
+- name: "pocket update - a held name beside a reactivation changes neither"
+  issue: "121"
+  given: *seeded
+  request:
+    method: PATCH
+    path: /pockets/0192f0a0-0000-7000-8001-000000000002
+    headers:
+      Content-Type: application/json
+    body: '{"pocket_display_name":"ovo","active":true}'
+  expect:
+    status: 409
+    body_json: {code: NAME_TAKEN}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets ORDER BY id
+        rows:
+          - {id: 0192f0a0-0000-7000-8001-000000000001, household_id: 0192f0a0-0000-7000-8000-000000000001, name: OVO, active: true, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000002, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Dana, active: false, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000003, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Gopay, active: true, deleted: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000009, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Theirs, active: true, deleted: false}
+
+
+# Contract rules before handler rules (BOOTSTRAP.md §5.2); nothing changes.
+
+- name: "pocket update - a blank name is required"
+  issue: "121"
+  given: *seeded
+  request:
+    method: PATCH
+    path: /pockets/0192f0a0-0000-7000-8001-000000000001
+    headers:
+      Content-Type: application/json
+    body: '{"pocket_display_name":"   "}'
+  expect:
+    status: 400
+    body_json: {code: VALIDATION, args: {field: pocket_display_name, rule: required}}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets ORDER BY id
+        rows:
+          - {id: 0192f0a0-0000-7000-8001-000000000001, household_id: 0192f0a0-0000-7000-8000-000000000001, name: OVO, active: true, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000002, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Dana, active: false, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000003, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Gopay, active: true, deleted: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000009, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Theirs, active: true, deleted: false}
+
+
+- name: "pocket update - an empty name is required"
+  issue: "121"
+  given: *seeded
+  request:
+    method: PATCH
+    path: /pockets/0192f0a0-0000-7000-8001-000000000001
+    headers:
+      Content-Type: application/json
+    body: '{"pocket_display_name":""}'
+  expect:
+    status: 400
+    body_json: {code: VALIDATION, args: {field: pocket_display_name, rule: required}}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets ORDER BY id
+        rows:
+          - {id: 0192f0a0-0000-7000-8001-000000000001, household_id: 0192f0a0-0000-7000-8000-000000000001, name: OVO, active: true, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000002, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Dana, active: false, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000003, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Gopay, active: true, deleted: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000009, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Theirs, active: true, deleted: false}
+
+
+- name: "pocket update - 61 code points is max"
+  issue: "121"
+  given: *seeded
+  request:
+    method: PATCH
+    path: /pockets/0192f0a0-0000-7000-8001-000000000001
+    headers:
+      Content-Type: application/json
+    body: '{"pocket_display_name":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}'
+  expect:
+    status: 400
+    body_json: {code: VALIDATION, args: {field: pocket_display_name, rule: max}}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets ORDER BY id
+        rows:
+          - {id: 0192f0a0-0000-7000-8001-000000000001, household_id: 0192f0a0-0000-7000-8000-000000000001, name: OVO, active: true, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000002, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Dana, active: false, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000003, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Gopay, active: true, deleted: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000009, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Theirs, active: true, deleted: false}
+
+
+- name: "pocket update - 256 characters is max, the contract's outer bound"
+  issue: "121"
+  given: *seeded
+  request:
+    method: PATCH
+    path: /pockets/0192f0a0-0000-7000-8001-000000000001
+    headers:
+      Content-Type: application/json
+    body: '{"pocket_display_name":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}'
+  expect:
+    status: 400
+    body_json: {code: VALIDATION, args: {field: pocket_display_name, rule: max}}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets ORDER BY id
+        rows:
+          - {id: 0192f0a0-0000-7000-8001-000000000001, household_id: 0192f0a0-0000-7000-8000-000000000001, name: OVO, active: true, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000002, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Dana, active: false, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000003, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Gopay, active: true, deleted: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000009, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Theirs, active: true, deleted: false}
+
+
+- name: "pocket update - a NUL in the name is pattern"
+  issue: "121"
+  given: *seeded
+  request:
+    method: PATCH
+    path: /pockets/0192f0a0-0000-7000-8001-000000000001
+    headers:
+      Content-Type: application/json
+    body: '{"pocket_display_name":"O\u0000VO"}'
+  expect:
+    status: 400
+    body_json: {code: VALIDATION, args: {field: pocket_display_name, rule: pattern}}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets ORDER BY id
+        rows:
+          - {id: 0192f0a0-0000-7000-8001-000000000001, household_id: 0192f0a0-0000-7000-8000-000000000001, name: OVO, active: true, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000002, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Dana, active: false, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000003, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Gopay, active: true, deleted: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000009, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Theirs, active: true, deleted: false}
+
+
+- name: "pocket update - a bad name beside a deactivation changes neither"
+  issue: "121"
+  given: *seeded
+  request:
+    method: PATCH
+    path: /pockets/0192f0a0-0000-7000-8001-000000000001
+    headers:
+      Content-Type: application/json
+    body: '{"pocket_display_name":" ","active":false}'
+  expect:
+    status: 400
+    body_json: {code: VALIDATION, args: {field: pocket_display_name, rule: required}}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets ORDER BY id
+        rows:
+          - {id: 0192f0a0-0000-7000-8001-000000000001, household_id: 0192f0a0-0000-7000-8000-000000000001, name: OVO, active: true, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000002, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Dana, active: false, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000003, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Gopay, active: true, deleted: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000009, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Theirs, active: true, deleted: false}
+
+
+- name: "pocket update - a null name is INVALID_JSON_BODY"
+  issue: "121"
+  given: *seeded
+  request:
+    method: PATCH
+    path: /pockets/0192f0a0-0000-7000-8001-000000000001
+    headers:
+      Content-Type: application/json
+    body: '{"pocket_display_name":null}'
+  expect:
+    status: 400
+    body_json: {code: INVALID_JSON_BODY}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets ORDER BY id
+        rows:
+          - {id: 0192f0a0-0000-7000-8001-000000000001, household_id: 0192f0a0-0000-7000-8000-000000000001, name: OVO, active: true, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000002, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Dana, active: false, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000003, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Gopay, active: true, deleted: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000009, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Theirs, active: true, deleted: false}
+
+
+- name: "pocket update - a null active is INVALID_JSON_BODY"
+  issue: "121"
+  given: *seeded
+  request:
+    method: PATCH
+    path: /pockets/0192f0a0-0000-7000-8001-000000000001
+    headers:
+      Content-Type: application/json
+    body: '{"active":null}'
+  expect:
+    status: 400
+    body_json: {code: INVALID_JSON_BODY}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets ORDER BY id
+        rows:
+          - {id: 0192f0a0-0000-7000-8001-000000000001, household_id: 0192f0a0-0000-7000-8000-000000000001, name: OVO, active: true, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000002, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Dana, active: false, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000003, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Gopay, active: true, deleted: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000009, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Theirs, active: true, deleted: false}
+
+
+- name: "pocket update - active as a string is INVALID_JSON_BODY"
+  issue: "121"
+  given: *seeded
+  request:
+    method: PATCH
+    path: /pockets/0192f0a0-0000-7000-8001-000000000001
+    headers:
+      Content-Type: application/json
+    body: '{"active":"false"}'
+  expect:
+    status: 400
+    body_json: {code: INVALID_JSON_BODY}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets ORDER BY id
+        rows:
+          - {id: 0192f0a0-0000-7000-8001-000000000001, household_id: 0192f0a0-0000-7000-8000-000000000001, name: OVO, active: true, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000002, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Dana, active: false, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000003, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Gopay, active: true, deleted: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000009, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Theirs, active: true, deleted: false}
+
+
+- name: "pocket update - the id in the body is an unknown property"
+  issue: "121"
+  given: *seeded
+  request:
+    method: PATCH
+    path: /pockets/0192f0a0-0000-7000-8001-000000000001
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8001-000000000005"}'
+  expect:
+    status: 400
+    body_json: {code: INVALID_JSON_BODY}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets ORDER BY id
+        rows:
+          - {id: 0192f0a0-0000-7000-8001-000000000001, household_id: 0192f0a0-0000-7000-8000-000000000001, name: OVO, active: true, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000002, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Dana, active: false, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000003, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Gopay, active: true, deleted: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000009, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Theirs, active: true, deleted: false}
+
+
+- name: "pocket update - household_id in the body is an unknown property"
+  issue: "121"
+  given: *seeded
+  request:
+    method: PATCH
+    path: /pockets/0192f0a0-0000-7000-8001-000000000001
+    headers:
+      Content-Type: application/json
+    body: '{"household_id":"0192f0a0-0000-7000-8000-000000000002"}'
+  expect:
+    status: 400
+    body_json: {code: INVALID_JSON_BODY}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets ORDER BY id
+        rows:
+          - {id: 0192f0a0-0000-7000-8001-000000000001, household_id: 0192f0a0-0000-7000-8000-000000000001, name: OVO, active: true, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000002, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Dana, active: false, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000003, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Gopay, active: true, deleted: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000009, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Theirs, active: true, deleted: false}
+
+
+- name: "pocket update - deleted_at in the body is an unknown property"
+  issue: "121"
+  given: *seeded
+  request:
+    method: PATCH
+    path: /pockets/0192f0a0-0000-7000-8001-000000000001
+    headers:
+      Content-Type: application/json
+    body: '{"deleted_at":null}'
+  expect:
+    status: 400
+    body_json: {code: INVALID_JSON_BODY}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets ORDER BY id
+        rows:
+          - {id: 0192f0a0-0000-7000-8001-000000000001, household_id: 0192f0a0-0000-7000-8000-000000000001, name: OVO, active: true, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000002, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Dana, active: false, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000003, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Gopay, active: true, deleted: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000009, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Theirs, active: true, deleted: false}
+
+
+- name: "pocket update - the bare name is an unknown property"
+  issue: "121"
+  given: *seeded
+  request:
+    method: PATCH
+    path: /pockets/0192f0a0-0000-7000-8001-000000000001
+    headers:
+      Content-Type: application/json
+    body: '{"name":"Cash"}'
+  expect:
+    status: 400
+    body_json: {code: INVALID_JSON_BODY}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets ORDER BY id
+        rows:
+          - {id: 0192f0a0-0000-7000-8001-000000000001, household_id: 0192f0a0-0000-7000-8000-000000000001, name: OVO, active: true, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000002, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Dana, active: false, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000003, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Gopay, active: true, deleted: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000009, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Theirs, active: true, deleted: false}
+
+
+- name: "pocket update - a bad name beside an unknown property is the unknown property"
+  issue: "121"
+  given: *seeded
+  request:
+    method: PATCH
+    path: /pockets/0192f0a0-0000-7000-8001-000000000001
+    headers:
+      Content-Type: application/json
+    body: '{"pocket_display_name":" ","colour":"red"}'
+  expect:
+    status: 400
+    body_json: {code: INVALID_JSON_BODY}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets ORDER BY id
+        rows:
+          - {id: 0192f0a0-0000-7000-8001-000000000001, household_id: 0192f0a0-0000-7000-8000-000000000001, name: OVO, active: true, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000002, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Dana, active: false, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000003, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Gopay, active: true, deleted: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000009, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Theirs, active: true, deleted: false}
+
+
+- name: "pocket update - malformed JSON is INVALID_JSON_BODY"
+  issue: "121"
+  given: *seeded
+  request:
+    method: PATCH
+    path: /pockets/0192f0a0-0000-7000-8001-000000000001
+    headers:
+      Content-Type: application/json
+    body: '{"active":'
+  expect:
+    status: 400
+    body_json: {code: INVALID_JSON_BODY}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets ORDER BY id
+        rows:
+          - {id: 0192f0a0-0000-7000-8001-000000000001, household_id: 0192f0a0-0000-7000-8000-000000000001, name: OVO, active: true, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000002, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Dana, active: false, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000003, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Gopay, active: true, deleted: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000009, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Theirs, active: true, deleted: false}
+
+
+- name: "pocket update - a JSON null body is INVALID_JSON_BODY"
+  issue: "121"
+  given: *seeded
+  request:
+    method: PATCH
+    path: /pockets/0192f0a0-0000-7000-8001-000000000001
+    headers:
+      Content-Type: application/json
+    body: 'null'
+  expect:
+    status: 400
+    body_json: {code: INVALID_JSON_BODY}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets ORDER BY id
+        rows:
+          - {id: 0192f0a0-0000-7000-8001-000000000001, household_id: 0192f0a0-0000-7000-8000-000000000001, name: OVO, active: true, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000002, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Dana, active: false, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000003, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Gopay, active: true, deleted: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000009, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Theirs, active: true, deleted: false}
+
+
+- name: "pocket update - an empty body is INVALID_JSON_BODY"
+  issue: "121"
+  given: *seeded
+  request:
+    method: PATCH
+    path: /pockets/0192f0a0-0000-7000-8001-000000000001
+    headers:
+      Content-Type: application/json
+    body: ''
+  expect:
+    status: 400
+    body_json: {code: INVALID_JSON_BODY}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets ORDER BY id
+        rows:
+          - {id: 0192f0a0-0000-7000-8001-000000000001, household_id: 0192f0a0-0000-7000-8000-000000000001, name: OVO, active: true, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000002, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Dana, active: false, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000003, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Gopay, active: true, deleted: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000009, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Theirs, active: true, deleted: false}
+
+
+# Unknown, foreign and deleted ids: one 404 NOT_FOUND, `same_as` pinning the
+# relation rather than the bytes, and `{}` is not a way to probe (a no-op does
+# not confirm another Household's id). Nothing of the other Household's, or of
+# the deleted row, changes.
+
+- name: "pocket update - another Household's id is NOT_FOUND exactly as an unknown id is, for a rename"
+  issue: "121"
+  given: *seeded
+  request:
+    method: PATCH
+    path: /pockets/0192f0a0-0000-7000-8001-000000000009
+    headers:
+      Content-Type: application/json
+    body: '{"pocket_display_name":"Mine"}'
+  expect:
+    status: 404
+    body_json: {code: NOT_FOUND}
+    same_as:
+      method: PATCH
+      path: /pockets/0192f0a0-0000-7000-8001-0000000000ff
+      headers:
+        Content-Type: application/json
+      body: '{"pocket_display_name":"Mine"}'
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets ORDER BY id
+        rows:
+          - {id: 0192f0a0-0000-7000-8001-000000000001, household_id: 0192f0a0-0000-7000-8000-000000000001, name: OVO, active: true, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000002, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Dana, active: false, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000003, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Gopay, active: true, deleted: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000009, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Theirs, active: true, deleted: false}
+
+
+- name: "pocket update - a deleted id is NOT_FOUND exactly as an unknown id is, for a rename"
+  issue: "121"
+  given: *seeded
+  request:
+    method: PATCH
+    path: /pockets/0192f0a0-0000-7000-8001-000000000003
+    headers:
+      Content-Type: application/json
+    body: '{"pocket_display_name":"Mine"}'
+  expect:
+    status: 404
+    body_json: {code: NOT_FOUND}
+    same_as:
+      method: PATCH
+      path: /pockets/0192f0a0-0000-7000-8001-0000000000ff
+      headers:
+        Content-Type: application/json
+      body: '{"pocket_display_name":"Mine"}'
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets ORDER BY id
+        rows:
+          - {id: 0192f0a0-0000-7000-8001-000000000001, household_id: 0192f0a0-0000-7000-8000-000000000001, name: OVO, active: true, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000002, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Dana, active: false, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000003, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Gopay, active: true, deleted: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000009, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Theirs, active: true, deleted: false}
+
+
+- name: "pocket update - another Household's id is NOT_FOUND exactly as an unknown id is, for a deactivation"
+  issue: "121"
+  given: *seeded
+  request:
+    method: PATCH
+    path: /pockets/0192f0a0-0000-7000-8001-000000000009
+    headers:
+      Content-Type: application/json
+    body: '{"active":false}'
+  expect:
+    status: 404
+    body_json: {code: NOT_FOUND}
+    same_as:
+      method: PATCH
+      path: /pockets/0192f0a0-0000-7000-8001-0000000000ff
+      headers:
+        Content-Type: application/json
+      body: '{"active":false}'
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets ORDER BY id
+        rows:
+          - {id: 0192f0a0-0000-7000-8001-000000000001, household_id: 0192f0a0-0000-7000-8000-000000000001, name: OVO, active: true, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000002, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Dana, active: false, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000003, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Gopay, active: true, deleted: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000009, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Theirs, active: true, deleted: false}
+
+
+- name: "pocket update - a deleted id is NOT_FOUND exactly as an unknown id is, for a deactivation"
+  issue: "121"
+  given: *seeded
+  request:
+    method: PATCH
+    path: /pockets/0192f0a0-0000-7000-8001-000000000003
+    headers:
+      Content-Type: application/json
+    body: '{"active":false}'
+  expect:
+    status: 404
+    body_json: {code: NOT_FOUND}
+    same_as:
+      method: PATCH
+      path: /pockets/0192f0a0-0000-7000-8001-0000000000ff
+      headers:
+        Content-Type: application/json
+      body: '{"active":false}'
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets ORDER BY id
+        rows:
+          - {id: 0192f0a0-0000-7000-8001-000000000001, household_id: 0192f0a0-0000-7000-8000-000000000001, name: OVO, active: true, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000002, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Dana, active: false, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000003, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Gopay, active: true, deleted: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000009, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Theirs, active: true, deleted: false}
+
+
+- name: "pocket update - another Household's id is NOT_FOUND exactly as an unknown id is, for an empty body"
+  issue: "121"
+  given: *seeded
+  request:
+    method: PATCH
+    path: /pockets/0192f0a0-0000-7000-8001-000000000009
+    headers:
+      Content-Type: application/json
+    body: '{}'
+  expect:
+    status: 404
+    body_json: {code: NOT_FOUND}
+    same_as:
+      method: PATCH
+      path: /pockets/0192f0a0-0000-7000-8001-0000000000ff
+      headers:
+        Content-Type: application/json
+      body: '{}'
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets ORDER BY id
+        rows:
+          - {id: 0192f0a0-0000-7000-8001-000000000001, household_id: 0192f0a0-0000-7000-8000-000000000001, name: OVO, active: true, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000002, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Dana, active: false, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000003, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Gopay, active: true, deleted: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000009, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Theirs, active: true, deleted: false}
+
+
+- name: "pocket update - a deleted id is NOT_FOUND exactly as an unknown id is, for an empty body"
+  issue: "121"
+  given: *seeded
+  request:
+    method: PATCH
+    path: /pockets/0192f0a0-0000-7000-8001-000000000003
+    headers:
+      Content-Type: application/json
+    body: '{}'
+  expect:
+    status: 404
+    body_json: {code: NOT_FOUND}
+    same_as:
+      method: PATCH
+      path: /pockets/0192f0a0-0000-7000-8001-0000000000ff
+      headers:
+        Content-Type: application/json
+      body: '{}'
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets ORDER BY id
+        rows:
+          - {id: 0192f0a0-0000-7000-8001-000000000001, household_id: 0192f0a0-0000-7000-8000-000000000001, name: OVO, active: true, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000002, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Dana, active: false, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000003, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Gopay, active: true, deleted: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000009, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Theirs, active: true, deleted: false}
+
+
+- name: "pocket update - an unknown id is NOT_FOUND with no args"
+  issue: "121"
+  given: *seeded
+  request:
+    method: PATCH
+    path: /pockets/0192f0a0-0000-7000-8001-0000000000ff
+    headers:
+      Content-Type: application/json
+    body: '{"active":false}'
+  expect:
+    status: 404
+    body_json: {code: NOT_FOUND}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets ORDER BY id
+        rows:
+          - {id: 0192f0a0-0000-7000-8001-000000000001, household_id: 0192f0a0-0000-7000-8000-000000000001, name: OVO, active: true, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000002, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Dana, active: false, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000003, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Gopay, active: true, deleted: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000009, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Theirs, active: true, deleted: false}
+
+
+# A bad body on an id that is not the caller's answers what a bad body on any
+# other id does: validation before lookup.
+
+- name: "pocket update - a bad body on another Household's id is the bad body's 400, as on an unknown id"
+  issue: "121"
+  given: *seeded
+  request:
+    method: PATCH
+    path: /pockets/0192f0a0-0000-7000-8001-000000000009
+    headers:
+      Content-Type: application/json
+    body: '{"pocket_display_name":" "}'
+  expect:
+    status: 400
+    body_json: {code: VALIDATION, args: {field: pocket_display_name, rule: required}}
+    same_as:
+      method: PATCH
+      path: /pockets/0192f0a0-0000-7000-8001-0000000000ff
+      headers:
+        Content-Type: application/json
+      body: '{"pocket_display_name":" "}'
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets ORDER BY id
+        rows:
+          - {id: 0192f0a0-0000-7000-8001-000000000001, household_id: 0192f0a0-0000-7000-8000-000000000001, name: OVO, active: true, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000002, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Dana, active: false, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000003, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Gopay, active: true, deleted: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000009, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Theirs, active: true, deleted: false}
+
+
+- name: "pocket update - a bad body on a deleted id is the bad body's 400, as on an unknown id"
+  issue: "121"
+  given: *seeded
+  request:
+    method: PATCH
+    path: /pockets/0192f0a0-0000-7000-8001-000000000003
+    headers:
+      Content-Type: application/json
+    body: '{"pocket_display_name":" "}'
+  expect:
+    status: 400
+    body_json: {code: VALIDATION, args: {field: pocket_display_name, rule: required}}
+    same_as:
+      method: PATCH
+      path: /pockets/0192f0a0-0000-7000-8001-0000000000ff
+      headers:
+        Content-Type: application/json
+      body: '{"pocket_display_name":" "}'
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets ORDER BY id
+        rows:
+          - {id: 0192f0a0-0000-7000-8001-000000000001, household_id: 0192f0a0-0000-7000-8000-000000000001, name: OVO, active: true, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000002, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Dana, active: false, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000003, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Gopay, active: true, deleted: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000009, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Theirs, active: true, deleted: false}
+
+
+- name: "pocket update - no session is 401 first, whatever the id and body: a valid request"
+  issue: "121"
+  given:
+    - sql: |
+        INSERT INTO pockets (id, household_id, pocket_display_name) VALUES ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO')
+  request:
+    method: PATCH
+    path: /pockets/0192f0a0-0000-7000-8001-000000000001
+    headers:
+      Content-Type: application/json
+    body: '{"active":false}'
+  expect:
+    status: 401
+    body_json: {code: UNAUTHORIZED}
+    cookies: {}
+    rows:
+      - sql: SELECT pocket_display_name AS name, active FROM pockets
+        rows: [{name: OVO, active: true}]
+
+
+- name: "pocket update - no session is 401 first, whatever the id and body: a bad id"
+  issue: "121"
+  given:
+    - sql: |
+        INSERT INTO pockets (id, household_id, pocket_display_name) VALUES ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO')
+  request:
+    method: PATCH
+    path: /pockets/not-a-uuid
+    headers:
+      Content-Type: application/json
+    body: '{"active":false}'
+  expect:
+    status: 401
+    body_json: {code: UNAUTHORIZED}
+    cookies: {}
+    rows:
+      - sql: SELECT pocket_display_name AS name, active FROM pockets
+        rows: [{name: OVO, active: true}]
+
+
+- name: "pocket update - no session is 401 first, whatever the id and body: a bad body"
+  issue: "121"
+  given:
+    - sql: |
+        INSERT INTO pockets (id, household_id, pocket_display_name) VALUES ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO')
+  request:
+    method: PATCH
+    path: /pockets/0192f0a0-0000-7000-8001-000000000001
+    headers:
+      Content-Type: application/json
+    body: '{"active":'
+  expect:
+    status: 401
+    body_json: {code: UNAUTHORIZED}
+    cookies: {}
+    rows:
+      - sql: SELECT pocket_display_name AS name, active FROM pockets
+        rows: [{name: OVO, active: true}]
+
+
+- name: "pocket update - no session is 401 first, whatever the id and body: a bad id and a bad body"
+  issue: "121"
+  given:
+    - sql: |
+        INSERT INTO pockets (id, household_id, pocket_display_name) VALUES ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO')
+  request:
+    method: PATCH
+    path: /pockets/not-a-uuid
+    headers:
+      Content-Type: application/json
+    body: '{"active":'
+  expect:
+    status: 401
+    body_json: {code: UNAUTHORIZED}
+    cookies: {}
+    rows:
+      - sql: SELECT pocket_display_name AS name, active FROM pockets
+        rows: [{name: OVO, active: true}]
+
+
+- name: "pocket update - no session is 401 first, whatever the id and body: an unknown id"
+  issue: "121"
+  given:
+    - sql: |
+        INSERT INTO pockets (id, household_id, pocket_display_name) VALUES ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO')
+  request:
+    method: PATCH
+    path: /pockets/0192f0a0-0000-7000-8001-0000000000ff
+    headers:
+      Content-Type: application/json
+    body: '{}'
+  expect:
+    status: 401
+    body_json: {code: UNAUTHORIZED}
+    cookies: {}
+    rows:
+      - sql: SELECT pocket_display_name AS name, active FROM pockets
+        rows: [{name: OVO, active: true}]
+
+
+- name: "pocket update - an unreadable session is 500 first, cookie untouched: a valid id"
+  issue: "121"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+    - outage: true
+  request:
+    method: PATCH
+    path: /pockets/0192f0a0-0000-7000-8001-000000000001
+    headers:
+      Content-Type: application/json
+    body: '{"active":false}'
+  expect:
+    status: 500
+    body_json: {code: INTERNAL}
+    cookies: {}
+
+
+- name: "pocket update - an unreadable session is 500 first, cookie untouched: a malformed id"
+  issue: "121"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+    - outage: true
+  request:
+    method: PATCH
+    path: /pockets/not-a-uuid
+    headers:
+      Content-Type: application/json
+    body: '{"active":false}'
+  expect:
+    status: 500
+    body_json: {code: INTERNAL}
+    cookies: {}

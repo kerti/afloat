@@ -11,14 +11,16 @@ import (
 
 // A path parameter is percent-decoded exactly once (#65).
 //
-// The contract has no path parameter yet, so this binds the way generated code
-// does. The call below is oapi-codegen v2.8.0's chi-middleware.tmpl, verbatim
-// but for the names: ValueIsUnescaped tells the runtime that chi already
-// decoded the value, which it did whenever RawPath is empty, since chi routes
-// on RawPath when there is one. Before runtime v1.9.0 (#89) the binder decoded
-// unconditionally, a second time. routeOnDecodedPath is mounted as in New, but
-// the invariant does not depend on it. Step 9's first {id} route takes over
-// with conformance cases (#106).
+// This binds the way generated code does, on a route of its own, so the
+// invariant is pinned without a contract in the way. The call below is
+// oapi-codegen v2.8.0's chi-middleware.tmpl, verbatim but for the names:
+// ValueIsUnescaped tells the runtime that chi already decoded the value, which
+// it did whenever RawPath is empty, since chi routes on RawPath when there is
+// one. Before runtime v1.9.0 (#89) the binder decoded unconditionally, a second
+// time. routeOnDecodedPath is mounted as in New, but the invariant does not
+// depend on it. The contract's first {id} route, PATCH /pockets/{id}, runs the
+// same shapes through the real router and binder (pocket_update_test.go, and
+// cases/pocket-paths.yaml for the black-box side, #106).
 func TestPathParametersAreDecodedOnce(t *testing.T) {
 	api := chi.NewRouter()
 	api.Get("/things/{id}", func(w http.ResponseWriter, r *http.Request) {

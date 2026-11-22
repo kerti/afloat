@@ -262,6 +262,57 @@
       - sql: SELECT count(*)::int AS n FROM pockets
         rows: [{n: 0}]
 
+# PATCH /pockets/{id} (#121): a cross-site page must not be able to rename or
+# deactivate a Pocket of the signed-in Household. The guard runs before the
+# session and the binder, so even an id that would not bind is refused first.
+- name: csrf - cross-site pocket update is blocked and the Pocket is unchanged
+  issue: "121"
+  given:
+    - sql: INSERT INTO pockets (id, household_id, pocket_display_name) VALUES ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO')
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: PATCH
+    path: /pockets/0192f0a0-0000-7000-8001-000000000001
+    headers:
+      Content-Type: application/json
+      Sec-Fetch-Site: cross-site
+    body: '{"pocket_display_name":"Hijacked","active":false}'
+  expect:
+    status: 403
+    body_json: {code: CROSS_SITE_REQUEST_BLOCKED}
+    cookies: {}
+    rows:
+      - sql: SELECT pocket_display_name AS name, active FROM pockets
+        rows: [{name: OVO, active: true}]
+
+- name: csrf - a foreign Origin on a pocket update with a malformed id is blocked before the binder
+  issue: "121"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: PATCH
+    path: /pockets/not-a-uuid
+    headers:
+      Content-Type: application/json
+      Origin: http://evil.example
+    body: '{"active":false}'
+  expect:
+    status: 403
+    body_json: {code: CROSS_SITE_REQUEST_BLOCKED}
+    cookies: {}
+
 - name: csrf - a safe method is never blocked
   request:
     method: GET

@@ -67,7 +67,8 @@
       "breached": "That password is too common. Pick another."
     },
     "FOUNDING_DISABLED": "This instance isn't accepting new Households. Ask whoever runs it.",
-    "INVALID_CURRENT_PASSWORD": "That isn't your current password."
+    "INVALID_CURRENT_PASSWORD": "That isn't your current password.",
+    "NOT_FOUND": "Afloat couldn't find that. It may have been removed."
   },
   "register": {
     "title": "Create your account",
@@ -91,11 +92,24 @@
   "pockets": {
     "title": "Pockets",
     "back": "Back",
-    "empty": "No Pockets yet.",
+    "empty": "Your Pockets will appear here.",
     "addHeading": "Add a Pocket",
     "namePlaceholder": "For example: Cash, OVO, BCA debit",
     "add": "Add",
-    "adding": "Adding…"
+    "adding": "Adding…",
+    "editFor": "Edit {{name}}",
+    "editForInactive": "Edit {{name}}, inactive",
+    "save": "Save",
+    "saving": "Saving…",
+    "cancel": "Cancel",
+    "deactivate": "Deactivate",
+    "reactivate": "Reactivate",
+    "inactive": "Inactive",
+    "showInactive": "Show inactive Pockets ({{count}})",
+    "allInactive_one": "No active Pockets. {{count}} inactive Pocket hidden. Tick “Show inactive Pockets” to see it.",
+    "allInactive_other": "No active Pockets. {{count}} inactive Pockets hidden. Tick “Show inactive Pockets” to see them.",
+    "editHeading": "Edit Pocket",
+    "nameRequired": "Enter a Pocket name."
   },
   "settings": {
     "household": {
@@ -142,5 +156,15 @@
         "saved": "Password changed."
       }
     }
+  },
+  "toast": {
+    "added": "Added {{name}}.",
+    "saved": "Saved.",
+    "deactivated": "Deactivated {{name}}.",
+    "reactivated": "Reactivated {{name}}.",
+    "undo": "Undo"
+  },
+  "dialog": {
+    "close": "Close"
   }
 }

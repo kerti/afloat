@@ -1,17 +1,34 @@
-import { describe, expect, it } from "vitest";
-import { screen, within } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
+import { toast } from "sonner";
 import { alice, defaultHandlers, envelope, server, type State } from "@/test/server";
 import { renderApp } from "@/test/render";
+import enGB from "@/locales/en-GB.json";
+import idID from "@/locales/id-ID.json";
+
+vi.mock("sonner", async () => (await import("@/test/sonnerMock")).sonnerMock());
 
 const v7 = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$/;
 const pocket = (id: string, name: string) => ({ id, pocket_display_name: name, active: true });
-
 const signedIn = (extra: Partial<State> = {}): State => ({ signedIn: true, me: alice, ...extra });
+const toastMock = vi.mocked(toast);
+const p = enGB.pockets;
 
-describe("pockets", () => {
-  it("is reached from the shell and lists Pockets in server order", async () => {
+// The page's Add button opens the dialog; its submit button is named "Add".
+async function openCreate(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(await screen.findByRole("button", { name: p.addHeading }));
+  return screen.findByRole("dialog", { name: p.addHeading });
+}
+const submit = () => screen.getByRole("button", { name: p.add });
+
+beforeEach(() => {
+  vi.clearAllMocks();
+});
+
+describe("pockets list", () => {
+  it("is reached from the shell and lists Pockets in server order, with no chevron or row buttons", async () => {
     const state = signedIn({
       pockets: [pocket("a", "Cash"), pocket("b", "BCA debit"), pocket("c", "OVO")],
     });
@@ -23,32 +40,86 @@ describe("pockets", () => {
 
     const rows = await screen.findAllByRole("listitem");
     expect(rows.map((r) => r.textContent)).toEqual(["Cash", "BCA debit", "OVO"]);
+    // One button per row, named for the Pocket: no Edit/Deactivate pair.
+    expect(screen.getAllByRole("button", { name: /^(Edit|Deactivate|Reactivate) / })).toHaveLength(
+      3,
+    );
+    expect(screen.getByRole("button", { name: "Edit OVO" })).toBeInTheDocument();
   });
 
-  it("shows the empty state when there are none", async () => {
-    server.use(...defaultHandlers(signedIn()));
+  it("shows a spinner with text while loading", async () => {
+    server.use(
+      http.get("/api/pockets", async () => {
+        await new Promise((r) => setTimeout(r, 50));
+        return HttpResponse.json({ items: [] });
+      }),
+      ...defaultHandlers(signedIn()),
+    );
     renderApp("/pockets");
-    expect(await screen.findByText("No Pockets yet.")).toBeInTheDocument();
-    expect(screen.queryByRole("list")).not.toBeInTheDocument();
+    expect(await screen.findByRole("status")).toHaveTextContent(enGB.app.loading);
+    expect(await screen.findByText(p.empty)).toBeInTheDocument();
   });
 
-  it("sends exactly {id, pocket_display_name} with a v7 id, then shows the new Pocket and clears the form", async () => {
-    const state = signedIn();
-    server.use(...defaultHandlers(state));
+  it("shows the empty state with the create action when there are none", async () => {
+    server.use(...defaultHandlers(signedIn()));
+    const user = userEvent.setup();
+    const view = renderApp("/pockets");
+    expect(await screen.findByText(p.empty)).toBeInTheDocument();
+    expect(screen.queryByRole("list")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: p.addHeading }));
+    expect(await screen.findByRole("dialog", { name: p.addHeading })).toBeInTheDocument();
+    expect(view.param("new")).toBe("pocket");
+  });
+
+  it("shows a load failure as an alert with a full-width Retry that refetches", async () => {
+    let fail = true;
+    server.use(
+      http.get("/api/pockets", () =>
+        fail ? HttpResponse.json(envelope("INTERNAL"), { status: 500 }) : undefined,
+      ),
+      ...defaultHandlers(signedIn({ pockets: [pocket("a", "Cash")] })),
+    );
     const user = userEvent.setup();
     renderApp("/pockets");
 
-    const field = await screen.findByLabelText("Pocket name");
-    expect(field).toHaveAttribute("maxlength", "60");
-    await user.type(field, "Cash");
-    await user.click(screen.getByRole("button", { name: "Add" }));
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(enGB.errors.INTERNAL);
+    const retry = within(alert).getByRole("button", { name: enGB.app.retry });
+    expect(retry).toHaveClass("w-full");
 
-    expect(await screen.findByRole("listitem")).toHaveTextContent("Cash");
+    fail = false;
+    await user.click(retry);
+    expect(await screen.findByRole("button", { name: "Edit Cash" })).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+});
+
+describe("creating a Pocket", () => {
+  it("sends exactly {id, pocket_display_name} with a v7 id, closes the dialog, and raises one toast naming it", async () => {
+    const state = signedIn();
+    server.use(...defaultHandlers(state));
+    const user = userEvent.setup();
+    const view = renderApp("/pockets");
+
+    const dialog = await openCreate(user);
+    expect(view.param("new")).toBe("pocket");
+    const field = within(dialog).getByLabelText(enGB.fields.pocketDisplayName);
+    expect(field).toHaveAttribute("maxlength", "60");
+    expect(field).toHaveFocus();
+    await user.type(field, "Cash");
+    await user.click(submit());
+
+    expect(await screen.findByRole("button", { name: "Edit Cash" })).toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(view.param("new")).toBeNull();
     expect(state.pocketPosts).toHaveLength(1);
     expect(Object.keys(state.pocketPosts![0]!).sort()).toEqual(["id", "pocket_display_name"]);
     expect(state.pocketPosts![0]!.pocket_display_name).toBe("Cash");
     expect(state.pocketPosts![0]!.id).toMatch(v7);
-    expect(field).toHaveValue("");
+    expect(toastMock).toHaveBeenCalledTimes(1);
+    expect(toastMock.mock.calls[0]![0]).toBe("Added Cash.");
+    expect(toastMock.mock.calls[0]![1]).toMatchObject({ duration: 4000 });
   });
 
   it("sends a different id for the next Add", async () => {
@@ -57,20 +128,19 @@ describe("pockets", () => {
     const user = userEvent.setup();
     renderApp("/pockets");
 
-    const field = await screen.findByLabelText("Pocket name");
-    await user.type(field, "Cash");
-    await user.click(screen.getByRole("button", { name: "Add" }));
-    await screen.findByText("Cash");
-    await user.type(field, "OVO");
-    await user.click(screen.getByRole("button", { name: "Add" }));
-    await screen.findByText("OVO");
+    for (const name of ["Cash", "OVO"]) {
+      const dialog = await openCreate(user);
+      await user.type(within(dialog).getByLabelText(enGB.fields.pocketDisplayName), name);
+      await user.click(submit());
+      await screen.findByRole("button", { name: `Edit ${name}` });
+    }
 
     const [first, second] = state.pocketPosts!;
     expect(first!.id).not.toBe(second!.id);
     expect(second!.id).toMatch(v7);
   });
 
-  it("resends the same id when a retry follows a network failure", async () => {
+  it("resends the same id when a retry follows a network failure, even after closing and reopening", async () => {
     const state = signedIn();
     let fail = true;
     server.use(
@@ -86,18 +156,26 @@ describe("pockets", () => {
     const user = userEvent.setup();
     renderApp("/pockets");
 
-    await user.type(await screen.findByLabelText("Pocket name"), "Cash");
-    await user.click(screen.getByRole("button", { name: "Add" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("Can't reach Afloat.");
-    expect(screen.getByLabelText("Pocket name")).toHaveValue("Cash");
+    const dialog = await openCreate(user);
+    await user.type(within(dialog).getByLabelText(enGB.fields.pocketDisplayName), "Cash");
+    await user.click(submit());
+    // Not a field's code, so it sits in the form above the footer.
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent("Can't reach Afloat.");
+    expect(within(dialog).getByLabelText(enGB.fields.pocketDisplayName)).not.toHaveAttribute(
+      "aria-invalid",
+    );
+    expect(within(dialog).getByLabelText(enGB.fields.pocketDisplayName)).toHaveValue("Cash");
+    expect(toastMock).not.toHaveBeenCalled();
 
+    await user.click(within(dialog).getByRole("button", { name: p.cancel }));
     fail = false;
-    await user.click(screen.getByRole("button", { name: "Add" }));
-    expect(await screen.findByRole("listitem")).toHaveTextContent("Cash");
+    const again = await openCreate(user);
+    await user.type(within(again).getByLabelText(enGB.fields.pocketDisplayName), "Cash");
+    await user.click(submit());
+    expect(await screen.findByRole("button", { name: "Edit Cash" })).toBeInTheDocument();
 
     expect(state.pocketPosts).toHaveLength(2);
     expect(state.pocketPosts![0]!.id).toBe(state.pocketPosts![1]!.id);
-    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
   it("sends a fresh id on the retry after an ID_TAKEN", async () => {
@@ -117,19 +195,20 @@ describe("pockets", () => {
     const user = userEvent.setup();
     renderApp("/pockets");
 
-    await user.type(await screen.findByLabelText("Pocket name"), "Cash");
-    await user.click(screen.getByRole("button", { name: "Add" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent(/Try again in a moment\./);
+    const dialog = await openCreate(user);
+    await user.type(within(dialog).getByLabelText(enGB.fields.pocketDisplayName), "Cash");
+    await user.click(submit());
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent(/Try again in a moment\./);
 
-    await user.click(screen.getByRole("button", { name: "Add" }));
-    expect(await screen.findByRole("listitem")).toHaveTextContent("Cash");
+    await user.click(submit());
+    expect(await screen.findByRole("button", { name: "Edit Cash" })).toBeInTheDocument();
 
     expect(state.pocketPosts).toHaveLength(2);
     expect(state.pocketPosts![1]!.id).not.toBe(state.pocketPosts![0]!.id);
     expect(state.pocketPosts![1]!.id).toMatch(v7);
   });
 
-  it("treats a 200 replay as a success and clears the form", async () => {
+  it("treats a 200 replay as a success", async () => {
     const state = signedIn();
     server.use(
       http.post("/api/pockets", async ({ request }) => {
@@ -142,57 +221,164 @@ describe("pockets", () => {
     const user = userEvent.setup();
     renderApp("/pockets");
 
-    const field = await screen.findByLabelText("Pocket name");
-    await user.type(field, "Cash");
-    await user.click(screen.getByRole("button", { name: "Add" }));
+    const dialog = await openCreate(user);
+    await user.type(within(dialog).getByLabelText(enGB.fields.pocketDisplayName), "Cash");
+    await user.click(submit());
 
-    expect(await screen.findByRole("listitem")).toHaveTextContent("Cash");
-    expect(field).toHaveValue("");
+    expect(await screen.findByRole("button", { name: "Edit Cash" })).toBeInTheDocument();
+    expect(toastMock).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps NAME_TAKEN on the input", async () => {
+  it("disables the inputs and says Adding… while the write is in flight", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    server.use(
+      http.post("/api/pockets", async () => {
+        await gate;
+        return undefined;
+      }),
+      ...defaultHandlers(signedIn()),
+    );
+    const user = userEvent.setup();
+    renderApp("/pockets");
+
+    const dialog = await openCreate(user);
+    await user.type(within(dialog).getByLabelText(enGB.fields.pocketDisplayName), "Cash");
+    await user.click(submit());
+
+    const pending = await within(dialog).findByRole("button", { name: p.adding });
+    expect(pending).toBeDisabled();
+    expect(within(dialog).getByLabelText(enGB.fields.pocketDisplayName)).toBeDisabled();
+    release();
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  });
+
+  it("stays on /pockets when the dialog is dismissed while the write is in flight", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    server.use(
+      http.post("/api/pockets", async () => {
+        await gate;
+        return undefined;
+      }),
+      ...defaultHandlers(signedIn()),
+    );
+    const user = userEvent.setup();
+    // Arrive from Home, so there is an entry behind /pockets for a stray
+    // second back to land on.
+    renderApp("/");
+    await user.click(await screen.findByRole("link", { name: "Pockets" }));
+
+    const dialog = await openCreate(user);
+    await user.type(within(dialog).getByLabelText(enGB.fields.pocketDisplayName), "Cash");
+    await user.click(submit());
+    await within(dialog).findByRole("button", { name: p.adding });
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+
+    release();
+    await waitFor(() => expect(toastMock).toHaveBeenCalledTimes(1));
+    // The success must not close the dialog a second time and go back past /pockets.
+    expect(screen.getByTestId("location")).toHaveTextContent(/^\/pockets$/);
+  });
+
+  it("keeps NAME_TAKEN under the field, the dialog open, and raises no toast", async () => {
     server.use(...defaultHandlers(signedIn({ pockets: [pocket("a", "Cash")] })));
     const user = userEvent.setup();
     renderApp("/pockets");
 
-    const field = await screen.findByLabelText("Pocket name");
+    const dialog = await openCreate(user);
+    const field = within(dialog).getByLabelText(enGB.fields.pocketDisplayName);
     await user.type(field, "cash");
-    await user.click(screen.getByRole("button", { name: "Add" }));
+    await user.click(submit());
 
-    expect(await screen.findByRole("alert")).toHaveTextContent("That name is already in use.");
+    const alert = await within(dialog).findByRole("alert");
+    expect(alert).toHaveTextContent(enGB.errors.NAME_TAKEN);
     expect(field).toHaveAttribute("aria-invalid", "true");
+    expect(field).toHaveAccessibleDescription(enGB.errors.NAME_TAKEN);
     expect(field).toHaveValue("cash");
+    expect(toastMock).not.toHaveBeenCalled();
   });
 
-  it("keeps a VALIDATION on pocket_display_name on the input", async () => {
+  it("keeps a server VALIDATION on pocket_display_name under the field", async () => {
+    server.use(
+      http.post("/api/pockets", () =>
+        HttpResponse.json(envelope("VALIDATION", { field: "pocket_display_name", rule: "max" }), {
+          status: 400,
+        }),
+      ),
+      ...defaultHandlers(signedIn()),
+    );
+    const user = userEvent.setup();
+    renderApp("/pockets");
+
+    const dialog = await openCreate(user);
+    const field = within(dialog).getByLabelText(enGB.fields.pocketDisplayName);
+    await user.type(field, "Cash");
+    await user.click(submit());
+
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent(
+      "Check the Pocket name field.",
+    );
+    expect(field).toHaveAttribute("aria-invalid", "true");
+  });
+
+  it("leaves Add enabled when blank: submitting shows the error and sends nothing", async () => {
+    const state = signedIn();
+    server.use(...defaultHandlers(state));
+    const user = userEvent.setup();
+    renderApp("/pockets");
+
+    const dialog = await openCreate(user);
+    expect(submit()).toBeEnabled();
+    await user.type(within(dialog).getByLabelText(enGB.fields.pocketDisplayName), "   ");
+    await user.click(submit());
+
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent(p.nameRequired);
+    expect(within(dialog).getByLabelText(enGB.fields.pocketDisplayName)).toHaveAttribute(
+      "aria-invalid",
+      "true",
+    );
+    expect(state.pocketPosts).toBeUndefined();
+    expect(submit()).toBeEnabled();
+  });
+
+  it("shows the blank error on blur, before any submit", async () => {
     server.use(...defaultHandlers(signedIn()));
     const user = userEvent.setup();
     renderApp("/pockets");
 
-    await user.type(await screen.findByLabelText("Pocket name"), "   ");
-    await user.click(screen.getByRole("button", { name: "Add" }));
+    const dialog = await openCreate(user);
+    expect(within(dialog).queryByRole("alert")).not.toBeInTheDocument();
+    await user.tab();
 
-    expect(await screen.findByRole("alert")).toHaveTextContent("Check the Pocket name field.");
-    expect(screen.getByLabelText("Pocket name")).toHaveAttribute("aria-invalid", "true");
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent(p.nameRequired);
   });
 
-  it.each(["ID_TAKEN", "INTERNAL"] as const)(
-    "shows %s as the generic string, not on the input",
+  it.each(["INTERNAL", "NETWORK"] as const)(
+    "shows %s inside the dialog above the footer, not on the field",
     async (code) => {
       server.use(
         http.post("/api/pockets", () =>
-          HttpResponse.json(envelope(code), { status: code === "ID_TAKEN" ? 409 : 500 }),
+          code === "NETWORK"
+            ? HttpResponse.error()
+            : HttpResponse.json(envelope(code), { status: 500 }),
         ),
         ...defaultHandlers(signedIn()),
       );
       const user = userEvent.setup();
       renderApp("/pockets");
 
-      await user.type(await screen.findByLabelText("Pocket name"), "Cash");
-      await user.click(screen.getByRole("button", { name: "Add" }));
+      const dialog = await openCreate(user);
+      await user.type(within(dialog).getByLabelText(enGB.fields.pocketDisplayName), "Cash");
+      await user.click(submit());
 
-      expect(await screen.findByRole("alert")).toHaveTextContent(/Try again in a moment\./);
-      expect(screen.getByLabelText("Pocket name")).not.toHaveAttribute("aria-invalid");
+      const alert = await within(dialog).findByRole("alert");
+      expect(alert).toHaveTextContent(enGB.errors[code]);
+      expect(within(dialog).getByLabelText(enGB.fields.pocketDisplayName)).not.toHaveAttribute(
+        "aria-invalid",
+      );
+      expect(toastMock.error).not.toHaveBeenCalled();
     },
   );
 
@@ -204,13 +390,63 @@ describe("pockets", () => {
     const user = userEvent.setup();
     const { client } = renderApp("/pockets");
 
-    await user.type(await screen.findByLabelText("Pocket name"), "Cash");
-    await user.click(screen.getByRole("button", { name: "Add" }));
+    const dialog = await openCreate(user);
+    await user.type(within(dialog).getByLabelText(enGB.fields.pocketDisplayName), "Cash");
+    await user.click(submit());
 
     expect(await screen.findByRole("heading", { name: "Sign in" })).toBeInTheDocument();
     expect(client.getQueryData(["me"])).toBeNull();
   });
+});
 
+describe("closing a writing dialog", () => {
+  it("closes by Cancel, the labelled X, Esc and back, and clears the param", async () => {
+    server.use(...defaultHandlers(signedIn()));
+    const user = userEvent.setup();
+    const view = renderApp("/pockets");
+
+    let dialog = await openCreate(user);
+    await user.click(within(dialog).getByRole("button", { name: p.cancel }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(view.param("new")).toBeNull();
+
+    dialog = await openCreate(user);
+    await user.click(within(dialog).getByRole("button", { name: enGB.dialog.close }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(view.param("new")).toBeNull();
+
+    await openCreate(user);
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(view.param("new")).toBeNull();
+
+    await openCreate(user);
+    expect(view.param("new")).toBe("pocket");
+    act(() => view.navigate(-1));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(view.param("new")).toBeNull();
+  });
+
+  it("closes on a tap on the backdrop: it records no money (Uruni ADR-046)", async () => {
+    server.use(...defaultHandlers(signedIn()));
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    const view = renderApp("/pockets");
+
+    await openCreate(user);
+    await user.click(document.querySelector('[data-slot="dialog-overlay"]')!);
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(view.param("new")).toBeNull();
+  });
+
+  it("opens from a link to ?new=pocket", async () => {
+    server.use(...defaultHandlers(signedIn()));
+    renderApp("/pockets?new=pocket");
+    expect(await screen.findByRole("dialog", { name: p.addHeading })).toBeInTheDocument();
+  });
+});
+
+describe("session and locale", () => {
   it("does not show one User's Pockets to another on the same device after sign-out", async () => {
     const state = signedIn({ pockets: [pocket("a", "Cash")] });
     server.use(...defaultHandlers(state));
@@ -232,7 +468,7 @@ describe("pockets", () => {
     await user.click(screen.getByRole("button", { name: "Sign in" }));
     await user.click(await screen.findByRole("link", { name: "Pockets" }));
 
-    expect(await screen.findByText("No Pockets yet.")).toBeInTheDocument();
+    expect(await screen.findByText(p.empty)).toBeInTheDocument();
     expect(screen.queryByText("Cash")).not.toBeInTheDocument();
   });
 
@@ -242,13 +478,19 @@ describe("pockets", () => {
         signedIn({ me: { ...alice, locale: "id-ID" }, pockets: [pocket("a", "Tunai")] }),
       ),
     );
+    const user = userEvent.setup();
     renderApp("/pockets");
+    const ip = idID.pockets;
 
     expect(await screen.findByRole("heading", { name: "Kantong" })).toBeInTheDocument();
-    expect(await within(await screen.findByRole("list")).findByText("Tunai")).toBeInTheDocument();
-    expect(screen.getByLabelText("Nama Kantong")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Tambah" })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Kembali" })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Ubah Tunai" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: ip.back })).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: ip.addHeading }));
+    const dialog = await screen.findByRole("dialog", { name: ip.addHeading });
+    expect(within(dialog).getByLabelText("Nama Kantong")).toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: idID.dialog.close })).toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: ip.add })).toBeInTheDocument();
   });
 
   it("sends a signed-out visitor to sign in", async () => {

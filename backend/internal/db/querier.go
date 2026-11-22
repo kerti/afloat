@@ -110,6 +110,17 @@ type Querier interface {
 	// updated_at is set here because the baseline has no trigger, and from the
 	// database's own clock (BOOTSTRAP.md §5.1).
 	UpdateHousehold(ctx context.Context, arg UpdateHouseholdParams) (Household, error)
+	// Merge semantics (BOOTSTRAP.md §4): a NULL argument leaves its column alone,
+	// in one statement, so a rename and a deactivation sent by two writers both
+	// land. Both arguments are sqlc.narg so that a false for active is a value
+	// and not "absent". Neither column is nullable, so coalesce cannot be mistaken
+	// for "clear". A row that is another Household's, unknown or deleted is no row:
+	// the caller answers all three NOT_FOUND. A 23505 on pockets_household_name_idx
+	// is a rename into a held name.
+	//
+	// updated_at is set here because the baseline has no trigger, and from the
+	// database's own clock (BOOTSTRAP.md §5.1).
+	UpdatePocket(ctx context.Context, arg UpdatePocketParams) (Pocket, error)
 	// User settings (PRD S4). A User changes only their own row, so every statement
 	// here filters on BOTH ids in SQL: users is Household-scoped, and a query that
 	// filtered on household_id alone would rewrite every member's row once a

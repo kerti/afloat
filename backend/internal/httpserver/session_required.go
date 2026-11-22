@@ -96,14 +96,9 @@ func sessionRequirements(spec *openapi3.T) (map[string]bool, error) {
 	return required, nil
 }
 
-// operationMiddlewares is the per-operation chain mountAPI hands the generated
-// router, built from the embedded contract.
-//
-// The generated wrapper applies the list in order, each entry wrapping the
-// last, so the LAST entry runs FIRST. sessionRequired is last on purpose: an
-// unauthenticated caller is refused before the validator can tell them
-// anything about their body (#114).
-func operationMiddlewares() []api.MiddlewareFunc {
+// contractSessionRequirements is sessionRequirements over the embedded
+// contract, which the server cannot start without.
+func contractSessionRequirements() map[string]bool {
 	spec, err := api.GetSpec()
 	if err != nil {
 		panic("httpserver: load embedded openapi spec: " + err.Error())
@@ -112,14 +107,24 @@ func operationMiddlewares() []api.MiddlewareFunc {
 	if err != nil {
 		panic("httpserver: " + err.Error())
 	}
-	return operationMiddlewaresFor(required)
+	return required
 }
 
+// operationMiddlewaresFor is the per-operation chain mountAPI hands the
+// generated router.
+//
+// The generated wrapper applies the list in order, each entry wrapping the
+// last, so the LAST entry runs FIRST. sessionRequired is last on purpose: an
+// unauthenticated caller is refused before the validator can tell them
+// anything about their body (#114). Path parameters are bound before any of
+// this runs, which is why paramErrorHandlerFor asks the same question.
 func operationMiddlewaresFor(required map[string]bool) []api.MiddlewareFunc {
 	return []api.MiddlewareFunc{openapiRequestValidator(), sessionRequired(required)}
 }
 
-// sessionRequired is the one place a session is enforced. It reads the
+// sessionRequired is where a session is enforced, as per-operation middleware
+// (refusedForSession is the decision, which paramErrorHandlerFor asks too, for
+// the one thing that runs ahead of this: path parameter binding). It reads the
 // matched operation's effective `security` from the contract and answers 401
 // UNAUTHORIZED when that requires a session and SessionMiddleware attached no
 // User (500 INTERNAL instead when it could not read the session at all, an
@@ -138,33 +143,46 @@ func operationMiddlewaresFor(required map[string]bool) []api.MiddlewareFunc {
 func sessionRequired(required map[string]bool) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// chi's pattern is the mount point plus the generated route, and
-			// its {name} parameters are OpenAPI's own syntax. headAsGet has
-			// already rewritten a HEAD to the GET it is answered by.
-			pattern := strings.TrimPrefix(chi.RouteContext(r.Context()).RoutePattern(), basePath)
-			needsSession, known := required[r.Method+" "+pattern]
-			if !known {
-				// Every generated route is a contract operation, so this is
-				// our fault, not the client's - and "allow" would make a
-				// mismatch silently unprotected.
-				slog.Error("session check: no contract operation for route", "method", r.Method, "pattern", pattern)
-				httperr.Write(w, http.StatusInternalServerError, httperr.CodeInternal, nil)
+			if refusedForSession(w, r, required) {
 				return
-			}
-			if needsSession {
-				if _, ok := auth.UserFromContext(r.Context()); !ok {
-					// A session that could not be read is not one that is
-					// invalid: 401 would tell the client to sign in again over
-					// an outage. The cookie was left alone (#27).
-					if auth.SessionUnresolved(r.Context()) {
-						httperr.Write(w, http.StatusInternalServerError, httperr.CodeInternal, nil)
-						return
-					}
-					httperr.Write(w, http.StatusUnauthorized, httperr.CodeUnauthorized, nil)
-					return
-				}
 			}
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+// refusedForSession answers the request itself, and reports true, when the
+// matched operation needs a session the request does not have: 401, or 500 for
+// a session that could not be read. It is the one place that decision is made,
+// shared by sessionRequired and by paramErrorHandler (see there for why).
+//
+// chi's pattern is the mount point plus the generated route, and its {name}
+// parameters are OpenAPI's own syntax. headAsGet has already rewritten a HEAD
+// to the GET it is answered by.
+func refusedForSession(w http.ResponseWriter, r *http.Request, required map[string]bool) bool {
+	pattern := strings.TrimPrefix(chi.RouteContext(r.Context()).RoutePattern(), basePath)
+	needsSession, known := required[r.Method+" "+pattern]
+	if !known {
+		// Every generated route is a contract operation, so this is our
+		// fault, not the client's - and "allow" would make a mismatch
+		// silently unprotected.
+		slog.Error("session check: no contract operation for route", "method", r.Method, "pattern", pattern)
+		httperr.Write(w, http.StatusInternalServerError, httperr.CodeInternal, nil)
+		return true
+	}
+	if !needsSession {
+		return false
+	}
+	if _, ok := auth.UserFromContext(r.Context()); ok {
+		return false
+	}
+	// A session that could not be read is not one that is invalid: 401 would
+	// tell the client to sign in again over an outage. The cookie was left
+	// alone (#27).
+	if auth.SessionUnresolved(r.Context()) {
+		httperr.Write(w, http.StatusInternalServerError, httperr.CodeInternal, nil)
+		return true
+	}
+	httperr.Write(w, http.StatusUnauthorized, httperr.CodeUnauthorized, nil)
+	return true
 }

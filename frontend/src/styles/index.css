@@ -21,6 +21,37 @@
   --radius-lg: var(--radius);
 }
 
+/* Dialog entrance (components/ui/dialog.tsx): opacity and scale only, 150ms
+   ease-out, none under reduced motion. */
+@theme {
+  --animate-dialog-in: dialog-in 150ms ease-out;
+  --animate-overlay-in: overlay-in 150ms ease-out;
+  @keyframes dialog-in {
+    from {
+      opacity: 0;
+      scale: 0.95;
+    }
+    to {
+      opacity: 1;
+      scale: 1;
+    }
+  }
+  @keyframes overlay-in {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-slot="dialog-content"],
+  [data-slot="dialog-overlay"] {
+    animation: none;
+  }
+}
+
 @layer base {
   * {
     @apply border-border;
@@ -29,5 +60,38 @@
     @apply bg-background text-foreground antialiased;
     padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom)
       env(safe-area-inset-left);
+  }
+}
+
+/* Undo toast countdown (lib/undoToast.ts), as in Balances: a bar that shrinks
+   over the toast's life. sonner uses the toast's own ::before/::after, so the
+   bar hangs off [data-content]. It pauses on [data-expanded=true], which is
+   when sonner pauses its timer for hover. Hidden under reduced motion. */
+@keyframes undo-countdown {
+  from {
+    transform: scaleX(1);
+  }
+  to {
+    transform: scaleX(0);
+  }
+}
+[data-sonner-toast].undo-countdown [data-content]::after {
+  content: "";
+  position: absolute;
+  bottom: 0;
+  left: var(--border-radius);
+  right: var(--border-radius);
+  height: 2px;
+  border-radius: 1px;
+  background: var(--muted-foreground);
+  transform-origin: left;
+  animation: undo-countdown var(--undo-countdown-ms) linear forwards;
+}
+[data-sonner-toast].undo-countdown[data-expanded="true"] [data-content]::after {
+  animation-play-state: paused;
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-sonner-toast].undo-countdown [data-content]::after {
+    display: none;
   }
 }

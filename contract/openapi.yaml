@@ -21,7 +21,8 @@ info:
 
     Health check, authentication, the founding gate (BOOTSTRAP.md §5.1), the
     Household's settings (PRD S3), the User's own (PRD S4: profile, email and
-    password) and the Household's Pockets (PRD S10: list and create). Invitation
+    password) and the Household's Pockets (PRD S10: list, create, rename and
+    deactivate). Invitation
     acceptance and the remaining domain resources land in step 9 and are
     deliberately absent here.
   license:
@@ -481,6 +482,62 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
 
+  /pockets/{id}:
+    patch:
+      tags: [pocket]
+      operationId: updatePocket
+      summary: Rename, deactivate or reactivate a Pocket.
+      description: |
+        Merge-style, as `PATCH /household`: a property left out is unchanged,
+        none is required, and `{}` is a no-op that answers the Pocket as it
+        stands. Two writers of different properties both land. The answer is the
+        whole Pocket.
+
+        `pocket_display_name` follows the same name rules as at creation
+        (BOOTSTRAP.md §5.1.1): trimmed, not blank, at most 60 code points. A name
+        already held, case-insensitively, by another Pocket of the Household
+        that is not deleted (active or inactive) is `409 NAME_TAKEN`, with
+        nothing changed; a rename to its own name in another case is not a
+        clash.
+
+        `active: false` deactivates: the Pocket keeps its name, its place in the
+        list and everything it labels, and is no longer offered for new capture.
+        `active: true` reactivates. Deactivating is not deleting. An inactive
+        Pocket can be renamed like any other, and is still listed by
+        `GET /pockets` (the client filters).
+
+        An id that is unknown, that belongs to another Household, or that is
+        deleted is `404 NOT_FOUND`, the same answer in every case, and it is
+        given even for `{}`: no request confirms another Household's id. The
+        Household is the caller's own, from the session, never from the request.
+        The id's shape and the body are checked before the lookup, so a foreign
+        id with a bad body answers what an unknown one does.
+      parameters:
+        - $ref: '#/components/parameters/PocketId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdatePocketRequest'
+      responses:
+        '200':
+          description: The Pocket as it now stands.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Pocket'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
   /onboarding/options:
     get:
       tags: [onboarding]
@@ -567,6 +624,21 @@ components:
       # The handshake token, hashed at rest like a session's. Its own name, so
       # holding one is never mistaken for holding the other.
       name: afloat_onboarding
+
+  parameters:
+    PocketId:
+      name: id
+      in: path
+      required: true
+      description: |
+        A Pocket's id. Deliberately no `pattern` and no `maxLength`: the spec
+        validator checks a path on its encoded form and the binder reads the
+        decoded one (#106), so a pattern here would refuse `%30192f...`, the
+        percent-encoded spelling of a valid id. A value that is not a UUID is
+        `400 VALIDATION {field: id, rule: invalid}`, from the binder.
+      schema:
+        type: string
+        format: uuid
 
   schemas:
     Health:
@@ -858,6 +930,24 @@ components:
           maxLength: 255
       additionalProperties: false
 
+    UpdatePocketRequest:
+      type: object
+      description: |
+        What a Pocket may change, merge-style: a property left out is unchanged,
+        and none is required. `id`, `household_id` and any other property are
+        not accepted, and `null` is not accepted for either listed one.
+      properties:
+        pocket_display_name:
+          type: string
+          # An outer bound that counts padding; the handler's 60 code points
+          # applies to the trimmed name.
+          maxLength: 255
+        active:
+          type: boolean
+          description: |
+            `false` deactivates the Pocket, `true` reactivates it.
+      additionalProperties: false
+
     ChangePasswordRequest:
       type: object
       required: [current_password, new_password]
@@ -968,7 +1058,10 @@ components:
         deleted). `NAME_TAKEN` is a name already held, case-insensitively, by
         another row of the Household that is not deleted. Neither carries
         `args`; `NAME_TAKEN` names no entity, so every entity with a name
-        shares it.
+        shares it. `NOT_FOUND` is an `{id}` that names no live row of the
+        caller's own Household: unknown, another Household's and deleted all
+        answer it, with no `args`, so one cannot be told from another. A path
+        that matches no route at all is not this: it answers a bare `404`.
       enum:
         - VALIDATION
         - INVALID_JSON_BODY
@@ -982,6 +1075,7 @@ components:
         - FOUNDING_DISABLED
         - ID_TAKEN
         - NAME_TAKEN
+        - NOT_FOUND
         - INTERNAL
 
   responses:
@@ -1021,13 +1115,23 @@ components:
         application/json:
           schema:
             $ref: '#/components/schemas/Error'
+    NotFound:
+      description: |
+        `NOT_FOUND`: the `{id}` names no live row of the caller's own
+        Household. An unknown id, another Household's and a deleted one answer
+        the same bytes. A path that matches no route is a bare `404` with no
+        body, not this.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
     Conflict:
       description: |
         `EMAIL_TAKEN`: a live User already holds the address, at registration, at
         the commit or at an email change. `ID_TAKEN`: a create's client-supplied
         id is held by another Household's row, or by the caller's own deleted
         one. `NAME_TAKEN`: another row of the Household that is not deleted
-        already holds the name, case-insensitively.
+        already holds the name, case-insensitively, at a create or a rename.
       content:
         application/json:
           schema:

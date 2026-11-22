@@ -1,5 +1,5 @@
-// Package pocket owns the Household's Pockets (PRD S10): listing them and
-// creating one. Handlers live with their domain (docs/adr/go/0001).
+// Package pocket owns the Household's Pockets (PRD S10): listing them,
+// creating one, and renaming, deactivating or reactivating one. Handlers live with their domain (docs/adr/go/0001).
 //
 // The dependency runs one way: this package imports auth, for the User in the
 // request context and for the shared name rule, and auth never imports this
@@ -155,6 +155,77 @@ func (h *Handlers) replayOr(ctx context.Context, user db.User, id pgtype.UUID, c
 	default:
 		slog.Error("create pocket: read back", "err", err)
 		return createInternalError()
+	}
+}
+
+// UpdatePocket renames, deactivates or reactivates a Pocket. Merge semantics,
+// one statement, last write wins per field (BOOTSTRAP.md §4): a field left out
+// is not touched, and two writers of different fields both land. Deactivating
+// keeps the name and the Pocket's place in the list; it is not a delete.
+//
+// The Household is the authenticated User's, taken from the context and never
+// from the request, and the UPDATE filters on it in SQL. An id that is unknown,
+// another Household's or deleted is no row and answers one NOT_FOUND, `{}`
+// included: nothing here confirms another Household's id. The contract's rules
+// and the name rule run before the statement, so a foreign id with a bad body
+// answers what an unknown one does. No transaction: the answer is the row the
+// UPDATE returns.
+func (h *Handlers) UpdatePocket(ctx context.Context, request api.UpdatePocketRequestObject) (api.UpdatePocketResponseObject, error) {
+	user, ok := auth.UserFromContext(ctx)
+	if !ok {
+		// Unreachable through the router: httpserver's sessionRequired answers
+		// 401 for this operation first. Kept so a router change that lost the
+		// check degrades to the contract's 401, not an UPDATE with a zero
+		// household_id.
+		return api.UpdatePocket401JSONResponse{
+			UnauthorizedJSONResponse: api.UnauthorizedJSONResponse{Code: api.UNAUTHORIZED},
+		}, nil
+	}
+	body := request.Body
+	if body == nil {
+		// Unreachable: the contract's body is required, and the validator
+		// refuses an absent one first.
+		return api.UpdatePocket400JSONResponse{
+			BadRequestJSONResponse: api.BadRequestJSONResponse{Code: api.INVALIDJSONBODY},
+		}, nil
+	}
+
+	params := db.UpdatePocketParams{
+		ID:          pgtype.UUID{Bytes: request.Id, Valid: true},
+		HouseholdID: user.HouseholdID,
+		Active:      body.Active,
+	}
+	if body.PocketDisplayName != nil {
+		name, rule := auth.CheckBoundedName(*body.PocketDisplayName, maxPocketDisplayNameCodePoints)
+		if rule != "" {
+			return api.UpdatePocket400JSONResponse{
+				BadRequestJSONResponse: api.BadRequestJSONResponse{
+					Code: api.VALIDATION,
+					Args: &map[string]interface{}{"field": "pocket_display_name", "rule": rule},
+				},
+			}, nil
+		}
+		params.PocketDisplayName = &name
+	}
+
+	row, err := h.q.UpdatePocket(ctx, params)
+	switch {
+	case err == nil:
+		return api.UpdatePocket200JSONResponse(response(row)), nil
+	case errors.Is(err, pgx.ErrNoRows):
+		return api.UpdatePocket404JSONResponse{
+			NotFoundJSONResponse: api.NotFoundJSONResponse{Code: api.NOTFOUND},
+		}, nil
+	case isNameTaken(err):
+		return api.UpdatePocket409JSONResponse{
+			ConflictJSONResponse: api.ConflictJSONResponse{Code: api.NAMETAKEN},
+		}, nil
+	default:
+		// Never the request's body: a Pocket's name is user content.
+		slog.Error("update pocket", "err", err)
+		return api.UpdatePocket500JSONResponse{
+			InternalErrorJSONResponse: api.InternalErrorJSONResponse{Code: api.INTERNAL},
+		}, nil
 	}
 }
 

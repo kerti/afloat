@@ -11,6 +11,7 @@ type ChangeEmailBody = components["schemas"]["ChangeEmailRequest"];
 type ChangePasswordBody = components["schemas"]["ChangePasswordRequest"];
 type Pocket = components["schemas"]["Pocket"];
 type CreatePocketBody = components["schemas"]["CreatePocketRequest"];
+type UpdatePocketBody = components["schemas"]["UpdatePocketRequest"];
 type ChoiceBody = components["schemas"]["OnboardingChoiceRequest"];
 
 // The handshake a registration opens, as the fake server holds it.
@@ -35,6 +36,8 @@ export type State = {
   // it was sent, for a test to assert on.
   pockets?: Pocket[];
   pocketPosts?: CreatePocketBody[];
+  // Every PATCH /pockets/{id} body, in order.
+  pocketPatches?: UpdatePocketBody[];
   // The one password the fake server accepts as "current". Defaults to the
   // login fixture's.
   password?: string;
@@ -196,6 +199,33 @@ export function defaultHandlers(state: State = { signedIn: false, me: alice }) {
       const pocket: Pocket = { id: body.id, pocket_display_name: name, active: true };
       list.push(pocket);
       return HttpResponse.json(pocket, { status: 201 });
+    }),
+    http.patch("/api/pockets/:id", async ({ request, params }) => {
+      if (!state.signedIn) return HttpResponse.json(envelope("UNAUTHORIZED"), { status: 401 });
+      const body = (await request.json()) as UpdatePocketBody;
+      (state.pocketPatches ??= []).push(body);
+      const list = (state.pockets ??= []);
+      const held = list.find((p) => p.id === params.id);
+      if (!held) return HttpResponse.json(envelope("NOT_FOUND"), { status: 404 });
+      if (body.pocket_display_name !== undefined) {
+        const name = body.pocket_display_name.trim();
+        if (name === "") {
+          return HttpResponse.json(
+            envelope("VALIDATION", { field: "pocket_display_name", rule: "required" }),
+            { status: 400 },
+          );
+        }
+        if (
+          list.some(
+            (p) => p.id !== held.id && p.pocket_display_name.toLowerCase() === name.toLowerCase(),
+          )
+        ) {
+          return HttpResponse.json(envelope("NAME_TAKEN"), { status: 409 });
+        }
+        held.pocket_display_name = name;
+      }
+      if (body.active !== undefined) held.active = body.active;
+      return HttpResponse.json(held);
     }),
     http.post("/api/auth/logout", () => {
       state.signedIn = false;

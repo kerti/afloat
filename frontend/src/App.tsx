@@ -1,5 +1,6 @@
 import { Navigate, Route, Routes } from "react-router";
 import { RequireSession } from "@/components/RequireSession";
+import { Toaster } from "@/components/ui/sonner";
 import { UpdatePrompt } from "@/components/UpdatePrompt";
 import { HomePage } from "@/pages/HomePage";
 import { HouseholdSettingsPage } from "@/pages/HouseholdSettingsPage";
@@ -29,6 +30,7 @@ export function App() {
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
       <UpdatePrompt />
+      <Toaster />
     </>
   );
 }

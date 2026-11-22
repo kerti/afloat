@@ -339,7 +339,33 @@ export interface paths {
         get?: never;
         put?: never;
         post?: never;
-        delete?: never;
+        /**
+         * Delete a Pocket.
+         * @description A **soft** delete: the verb is `DELETE` and the effect is not. The row
+         *     stays, with `deleted_at` set; nothing is ever removed from the database
+         *     by this API. A deleted Pocket is gone from `GET /pockets`, gives up its
+         *     name (a new Pocket may take it at once) and answers `404` to `PATCH`.
+         *     Only this operation and `POST /pockets/{id}/restore` can still see it.
+         *
+         *     Idempotent on the caller's own Pocket: deleting one that is already
+         *     deleted is `204` again and keeps the **first** deletion instant. An
+         *     inactive Pocket can be deleted too. No body, no confirmation: the act is
+         *     immediate and `POST /pockets/{id}/restore` is its Undo.
+         *
+         *     An id that is unknown or that belongs to another Household is `404
+         *     NOT_FOUND`, the same answer in both cases, so no request confirms
+         *     another Household's id. (A deleted Pocket of the caller's own is not
+         *     `404` here: deleting it again is the idempotent `204`.) The Household is
+         *     the caller's own, from the session, never from the request. The id's
+         *     shape is checked before the lookup.
+         *
+         *     Deleting is not deactivating: a Pocket that history labels is retired
+         *     with `PATCH {active: false}`, which keeps it listed, named and
+         *     labelling. A Pocket that any Expense references will be refused here
+         *     (`409 POCKET_IN_USE`) once Expenses exist; no Expense can reference a
+         *     Pocket yet, so that code is not in this contract.
+         */
+        delete: operations["deletePocket"];
         options?: never;
         head?: never;
         /**
@@ -370,6 +396,40 @@ export interface paths {
          *     id with a bad body answers what an unknown one does.
          */
         patch: operations["updatePocket"];
+        trace?: never;
+    };
+    "/pockets/{id}/restore": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Restore a deleted Pocket.
+         * @description Undoes `DELETE /pockets/{id}`: clears `deleted_at` and answers `200`
+         *     with the Pocket, `active` as it was before the delete (a Pocket that was
+         *     inactive comes back inactive). No body. Idempotent: restoring a Pocket
+         *     that is not deleted is `200` with the Pocket as it stands, and changes
+         *     nothing.
+         *
+         *     A Pocket whose name another Pocket of the Household that is not deleted
+         *     (active or inactive) now holds, case-insensitively, is `409 NAME_TAKEN`
+         *     and stays deleted: a delete gave up the name, and a new Pocket may have
+         *     taken it. Rename the other Pocket, or leave this one deleted.
+         *
+         *     An id that is unknown or that belongs to another Household is `404
+         *     NOT_FOUND`, the same answer in both cases. The Household is the
+         *     caller's own, from the session, never from the request. The id's shape
+         *     is checked before the lookup.
+         */
+        post: operations["restorePocket"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/onboarding/options": {
@@ -692,7 +752,9 @@ export interface components {
          *     `args`; `NAME_TAKEN` names no entity, so every entity with a name
          *     shares it. `NOT_FOUND` is an `{id}` that names no live row of the
          *     caller's own Household: unknown, another Household's and deleted all
-         *     answer it, with no `args`, so one cannot be told from another. A path
+         *     answer it, with no `args`, so one cannot be told from another (delete
+         *     and restore, which may act on a deleted row, answer it for unknown and
+         *     foreign ids only). A path
          *     that matches no route at all is not this: it answers a bare `404`.
          * @enum {string}
          */
@@ -750,8 +812,9 @@ export interface components {
         /**
          * @description `NOT_FOUND`: the `{id}` names no live row of the caller's own
          *     Household. An unknown id, another Household's and a deleted one answer
-         *     the same bytes. A path that matches no route is a bare `404` with no
-         *     body, not this.
+         *     the same bytes. The two operations that can see a deleted row (delete
+         *     and restore) answer it for an unknown or another Household's id only.
+         *     A path that matches no route is a bare `404` with no body, not this.
          */
         NotFound: {
             headers: {
@@ -766,7 +829,8 @@ export interface components {
          *     the commit or at an email change. `ID_TAKEN`: a create's client-supplied
          *     id is held by another Household's row, or by the caller's own deleted
          *     one. `NAME_TAKEN`: another row of the Household that is not deleted
-         *     already holds the name, case-insensitively, at a create or a rename.
+         *     already holds the name, case-insensitively, at a create, a rename or a
+         *     restore.
          */
         Conflict: {
             headers: {
@@ -1141,6 +1205,37 @@ export interface operations {
             500: components["responses"]["InternalError"];
         };
     };
+    deletePocket: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description A Pocket's id. Deliberately no `pattern` and no `maxLength`: the spec
+                 *     validator checks a path on its encoded form and the binder reads the
+                 *     decoded one (#106), so a pattern here would refuse `%30192f...`, the
+                 *     percent-encoded spelling of a valid id. A value that is not a UUID is
+                 *     `400 VALIDATION {field: id, rule: invalid}`, from the binder.
+                 */
+                id: components["parameters"]["PocketId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The Pocket is deleted, as it already was or as of this request. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+            500: components["responses"]["InternalError"];
+        };
+    };
     updatePocket: {
         parameters: {
             query?: never;
@@ -1164,6 +1259,40 @@ export interface operations {
         };
         responses: {
             /** @description The Pocket as it now stands. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Pocket"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    restorePocket: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description A Pocket's id. Deliberately no `pattern` and no `maxLength`: the spec
+                 *     validator checks a path on its encoded form and the binder reads the
+                 *     decoded one (#106), so a pattern here would refuse `%30192f...`, the
+                 *     percent-encoded spelling of a valid id. A value that is not a UUID is
+                 *     `400 VALIDATION {field: id, rule: invalid}`, from the binder.
+                 */
+                id: components["parameters"]["PocketId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The Pocket, live again (or as it already was). */
             200: {
                 headers: {
                     [name: string]: unknown;

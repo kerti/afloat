@@ -43,3 +43,38 @@ UPDATE pockets SET
     updated_at          = now()
 WHERE id = sqlc.arg(id) AND household_id = sqlc.arg(household_id) AND deleted_at IS NULL
 RETURNING *;
+
+-- A soft delete (BOOTSTRAP.md §4): the row stays. Idempotent on the caller's own
+-- Pocket and keeping the FIRST deletion instant, in one statement: coalesce
+-- leaves an existing deleted_at alone, and updated_at moves only when this
+-- statement is the one that deleted (a repeat changes no column). A row that
+-- is another Household's or unknown is no row, and the caller answers NOT_FOUND;
+-- a deleted one of the caller's own is a row, which is what makes a repeat a
+-- success. No hard-delete statement exists in this directory, on purpose.
+--
+-- The in-use guard (PRD R1, #121) is NOT here. When the Expenses slice adds
+-- the expenses table, a Pocket that any Expense row references, live or
+-- soft-deleted, must answer 409 POCKET_IN_USE from this very statement (a
+-- NOT EXISTS in the WHERE, with the Expense write taking FOR SHARE on the
+-- Pocket row), because a check-then-delete would race an Expense create under
+-- READ COMMITTED. See issue #121, P8 point 3.
+-- name: SoftDeletePocket :execrows
+UPDATE pockets SET
+    deleted_at = coalesce(deleted_at, now()),
+    updated_at = CASE WHEN deleted_at IS NULL THEN now() ELSE updated_at END
+WHERE id = sqlc.arg(id) AND household_id = sqlc.arg(household_id);
+
+-- The Undo of SoftDeletePocket: clears deleted_at and returns the row, active
+-- as it was. Idempotent: a Pocket that is not deleted is a row and comes back
+-- unchanged (updated_at moves only when this statement restored). A row that is
+-- another Household's or unknown is no row. Re-entering the partial unique
+-- index is what a held name trips: 23505 on pockets_household_name_idx, which
+-- the caller answers NAME_TAKEN with the row still deleted. The index, not a
+-- lookup, decides it, so two concurrent restores into one name cannot both
+-- win and cannot 500.
+-- name: RestorePocket :one
+UPDATE pockets SET
+    deleted_at = NULL,
+    updated_at = CASE WHEN deleted_at IS NOT NULL THEN now() ELSE updated_at END
+WHERE id = sqlc.arg(id) AND household_id = sqlc.arg(household_id)
+RETURNING *;

@@ -97,7 +97,18 @@ tag each, so it has components only. A missing element is proposed first (see Ho
 no form open) and `lib/undoToast.ts` (`toastUndoable`), all tap-to-dismiss (`lib/tapToDismiss.ts`)
 and all through the one `Toaster` (`components/ui/sonner.tsx`).
 
-**Primitives** (`components/ui/`): `Button` (`default` / `outline` / `ghost`, sizes `default` and
+**Dialog actions** (`components/DetailActions.tsx`)
+
+- `DetailActions`: the record-level acts of an edit dialog (Deactivate or Reactivate, Delete), in a
+  two-column grid of outline buttons below a hairline (`border-t`), above the footer. The destructive
+  act comes last, in the destructive text colour; an odd one out spans both columns (`fullRow`). No
+  icons (Afloat has no icon library). (Uruni `web/src/components/DetailActions.tsx`, #768; ruled 22 Nov.)
+- **The destructive tone**: `Button` `variant="destructive"` (tinted background, destructive text),
+  and DetailActions' destructive act, an outline button with destructive text. For a Delete and
+  nothing else. (Uruni `web/src/components/ui/button.tsx`, `DetailActions.tsx` `ActionButton`; ruled
+  22 Nov.)
+
+**Primitives** (`components/ui/`): `Button` (`default` / `outline` / `ghost` / `destructive`, sizes `default` and
 `sm`, both `h-11`), `Input`, `Label` (the field label), `NativeSelect` and the Radix `Select`
 (`select.tsx`), `Dialog` with `DialogContent`, `DialogHeader`, `DialogTitle`, `DialogFooter`
 (`dialog.tsx`), `Toaster` (`sonner.tsx`).
@@ -115,6 +126,7 @@ role table follows Uruni `docs/Design-System.md` § Typography.)
 | Body | 16px (base) | regular | foreground | `BodyText`, a list row's title, inputs, select values |
 | Muted body | 16px | regular | muted-foreground | `MutedText`, `EmptyState`, `Loading`, `BackLink`, an inactive row's title |
 | Label | 14px (`text-sm`) | medium | foreground | `Label`, buttons |
+| Destructive label | 14px | medium | destructive | the `destructive` Button, DetailActions' Delete (ruled 22 Nov) |
 | Hint | 14px | regular | muted-foreground | `FieldHint`, `SectionDescription`, `CheckboxRow` |
 | Error | 14px | regular | attention | `FieldError` |
 | Load failure | 16px | regular | attention | `ErrorState` |
@@ -169,11 +181,13 @@ role table follows Uruni `docs/Design-System.md` § Typography.)
   in a chevron; a row that opens a dialog does not. (Uruni `TransactionList`, list cards.)
 - **The create action** is one full-width button below the list ("Add a Pocket"), the same button the
   empty state offers. No header "+" and no floating button. (Uruni Locations.)
-- **Record-level acts live in the dialog's footer**: Deactivate/Reactivate, later Delete. Deactivate
-  still closes the dialog at once and raises the Undo toast.
-- **Footer:** two buttons side by side, half a row each, primary on the right. A screen with more
-  than three buttons needs a reason. Create: [Cancel | Add]. Edit: [record-level act | Save], with no
-  Cancel; the X, Esc, back and an outside tap close it. (Uruni `Locations.tsx`.)
+- **Record-level acts live in `DetailActions`**, not the footer: Deactivate or Reactivate, then
+  Delete, in a two-column grid below a hairline and above the footer. Deactivate and Delete both close
+  the dialog at once and raise the Undo toast; Delete has no confirm (R3, P6). (Uruni #768; ruled 22 Nov.)
+- **Footer:** holds only the dialog's decision. Create: [Cancel | Add]. Edit: [Save] alone, with no
+  Cancel; the X, Esc, back and an outside tap close it. So the edit dialog reads: field, hairline,
+  [Deactivate or Reactivate | Delete], footer [Save]. A screen with more than three buttons needs a
+  reason. (Uruni `Locations.tsx`, `DetailActions.tsx`; ruled 22 Nov.)
 - **Outside tap:** only a dialog that **records money** ignores a tap outside it (`posts` on
   `DialogContent`); it closes by its X, Esc or its buttons. Every other dialog, a Pocket's create and
   edit included, closes on an outside tap. Uruni's reason: a money record dismissible by a stray tap is
@@ -265,7 +279,8 @@ role table follows Uruni `docs/Design-System.md` § Typography.)
 ## Colour and type
 
 - **Errors and warnings use `--attention`, never red.** `--destructive` is reserved for a Delete
-  button. Nothing is coloured good/bad red/green (PRD §9). The attention colour itself is the brand
+  (the `destructive` Button tone and DetailActions' last act); provisional, like `--attention`:
+  light `#b4453c`, dark `#ec8b80`, until the brand session. Nothing is coloured good/bad red/green (PRD §9). The attention colour itself is the brand
   session's; until then `--attention` (`styles/theme.css`) holds a provisional terracotta, AA for text
   on the background, card and muted surfaces in both themes. (Uruni.)
 - **Raw Tailwind palette classes** (`text-red-500`, `bg-green-…`, `bg-white`, `bg-[#…]`) are banned in

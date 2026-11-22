@@ -1,5 +1,6 @@
 // Package pocket owns the Household's Pockets (PRD S10): listing them,
-// creating one, and renaming, deactivating or reactivating one. Handlers live with their domain (docs/adr/go/0001).
+// creating one, renaming, deactivating or reactivating one, and deleting and
+// restoring one. Handlers live with their domain (docs/adr/go/0001).
 //
 // The dependency runs one way: this package imports auth, for the User in the
 // request context and for the shared name rule, and auth never imports this
@@ -224,6 +225,87 @@ func (h *Handlers) UpdatePocket(ctx context.Context, request api.UpdatePocketReq
 		// Never the request's body: a Pocket's name is user content.
 		slog.Error("update pocket", "err", err)
 		return api.UpdatePocket500JSONResponse{
+			InternalErrorJSONResponse: api.InternalErrorJSONResponse{Code: api.INTERNAL},
+		}, nil
+	}
+}
+
+// DeletePocket soft-deletes a Pocket (BOOTSTRAP.md §4): the row stays with
+// deleted_at set, and the Pocket is gone from the list, from PATCH, and from
+// the name index, which frees its name. One statement, idempotent on the
+// caller's own Pocket and keeping the first deletion instant, so deleting a
+// deleted one is 204 again. An id that is unknown or another Household's is
+// the one NOT_FOUND. The Household is the authenticated User's, taken from the
+// context and never from the request, and the UPDATE filters on it in SQL.
+//
+// The in-use guard (PRD R1: 409 POCKET_IN_USE while any Expense references the
+// Pocket) arrives with the Expenses slice and belongs in this statement, not
+// in a check before it; see queries/pocket.sql. There is no Expense table yet,
+// so there is nothing to refuse and no code for it in the contract.
+func (h *Handlers) DeletePocket(ctx context.Context, request api.DeletePocketRequestObject) (api.DeletePocketResponseObject, error) {
+	user, ok := auth.UserFromContext(ctx)
+	if !ok {
+		// Unreachable through the router: httpserver's sessionRequired answers
+		// 401 for this operation first. Kept so a router change that lost the
+		// check degrades to the contract's 401, not an UPDATE with a zero
+		// household_id.
+		return api.DeletePocket401JSONResponse{
+			UnauthorizedJSONResponse: api.UnauthorizedJSONResponse{Code: api.UNAUTHORIZED},
+		}, nil
+	}
+
+	n, err := h.q.SoftDeletePocket(ctx, db.SoftDeletePocketParams{
+		ID:          pgtype.UUID{Bytes: request.Id, Valid: true},
+		HouseholdID: user.HouseholdID,
+	})
+	switch {
+	case err != nil:
+		slog.Error("delete pocket", "err", err)
+		return api.DeletePocket500JSONResponse{
+			InternalErrorJSONResponse: api.InternalErrorJSONResponse{Code: api.INTERNAL},
+		}, nil
+	case n == 0:
+		return api.DeletePocket404JSONResponse{
+			NotFoundJSONResponse: api.NotFoundJSONResponse{Code: api.NOTFOUND},
+		}, nil
+	default:
+		return api.DeletePocket204Response{}, nil
+	}
+}
+
+// RestorePocket is the Undo of DeletePocket: it clears deleted_at and answers
+// the Pocket, active as it was. One statement, idempotent (a live Pocket is
+// 200, unchanged). An id that is unknown or another Household's is the one
+// NOT_FOUND. A name that another live Pocket of the Household now holds is a
+// 23505 on the name index, which is NAME_TAKEN with the Pocket still deleted:
+// the index decides it, so two concurrent restores into one name answer one 200
+// and one 409, never a 500.
+func (h *Handlers) RestorePocket(ctx context.Context, request api.RestorePocketRequestObject) (api.RestorePocketResponseObject, error) {
+	user, ok := auth.UserFromContext(ctx)
+	if !ok {
+		return api.RestorePocket401JSONResponse{
+			UnauthorizedJSONResponse: api.UnauthorizedJSONResponse{Code: api.UNAUTHORIZED},
+		}, nil
+	}
+
+	row, err := h.q.RestorePocket(ctx, db.RestorePocketParams{
+		ID:          pgtype.UUID{Bytes: request.Id, Valid: true},
+		HouseholdID: user.HouseholdID,
+	})
+	switch {
+	case err == nil:
+		return api.RestorePocket200JSONResponse(response(row)), nil
+	case errors.Is(err, pgx.ErrNoRows):
+		return api.RestorePocket404JSONResponse{
+			NotFoundJSONResponse: api.NotFoundJSONResponse{Code: api.NOTFOUND},
+		}, nil
+	case isNameTaken(err):
+		return api.RestorePocket409JSONResponse{
+			ConflictJSONResponse: api.ConflictJSONResponse{Code: api.NAMETAKEN},
+		}, nil
+	default:
+		slog.Error("restore pocket", "err", err)
+		return api.RestorePocket500JSONResponse{
 			InternalErrorJSONResponse: api.InternalErrorJSONResponse{Code: api.INTERNAL},
 		}, nil
 	}

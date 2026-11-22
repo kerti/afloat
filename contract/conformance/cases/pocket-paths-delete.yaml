@@ -1,0 +1,453 @@
+# The path-parameter table of #106 item 1, run against DELETE /pockets/{id}: the
+# mutating verb a mis-decoded id would hurt (pocket-paths.yaml runs the same
+# shapes against PATCH), through the real router and the generated binder. #65
+# ruled that a parameter is percent-decoded exactly once, so every odd shape
+# reaches the handler, and for a uuid the binder refuses all that is not one.
+#
+# Observed, and pinned here (the same answers as PATCH gives):
+#   - %2541, %25, 100%25 bind %41, %, 100%: 400 VALIDATION {field: id, rule: invalid}.
+#   - %2F, %2f, ;, %3B, %2e%2e, %5C, %00 and a literal backslash: also 400
+#     invalid, the binder's answer where {id} matches (#56's "a path that does
+#     not exist" is for shapes no route can match).
+#   - A trailing slash and an empty parameter match no route: a bare 404.
+#   - The spellings uuid.Parse accepts (upper case, urn:uuid:, braces, 32 hex, a
+#     percent-encoded first digit) name the same Pocket and are accepted: the
+#     Pocket is deleted.
+#   - HEAD is not repeated here: no GET exists on this path, and pocket-paths.yaml
+#     pins its 405.
+# Every row asserts the Pocket row after the request: a refusal leaves it live
+# and untouched, an accepted spelling deletes it.
+#
+# The restore route has its own binder call; the last rows run the shapes that
+# differ there. One is a SURPRISE against the issue's inference (P10): an empty
+# parameter, /pockets//restore, is not "a path that does not exist": {id} matches
+# the empty segment and the binder refuses it, 400 invalid.
+#
+# The Pocket every case starts with: 0192f0a0-0000-7000-8001-000000000001, OVO,
+# Household 1, active.
+
+- name: "pocket paths delete - %2541 binds %41, which is not a uuid is a malformed id"
+  issue: "106"
+  given: &seeded
+    - sql: INSERT INTO pockets (id, household_id, pocket_display_name, created_at, updated_at) VALUES ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: DELETE
+    path: /pockets/%2541
+  expect:
+    status: 400
+    body_json: {code: VALIDATION, args: {field: id, rule: invalid}}
+    cookies: {}
+    rows:
+      - sql: SELECT pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted, (updated_at = created_at) AS untouched FROM pockets
+        rows: [{name: OVO, active: true, deleted: false, untouched: true}]
+
+
+- name: "pocket paths delete - %25 binds a bare percent sign is a malformed id"
+  issue: "106"
+  given: *seeded
+  request:
+    method: DELETE
+    path: /pockets/%25
+  expect:
+    status: 400
+    body_json: {code: VALIDATION, args: {field: id, rule: invalid}}
+    cookies: {}
+    rows:
+      - sql: SELECT pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted, (updated_at = created_at) AS untouched FROM pockets
+        rows: [{name: OVO, active: true, deleted: false, untouched: true}]
+
+
+- name: "pocket paths delete - 100%25 binds 100% is a malformed id"
+  issue: "106"
+  given: *seeded
+  request:
+    method: DELETE
+    path: /pockets/100%25
+  expect:
+    status: 400
+    body_json: {code: VALIDATION, args: {field: id, rule: invalid}}
+    cookies: {}
+    rows:
+      - sql: SELECT pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted, (updated_at = created_at) AS untouched FROM pockets
+        rows: [{name: OVO, active: true, deleted: false, untouched: true}]
+
+
+- name: "pocket paths delete - an encoded slash inside the id is part of the value is a malformed id"
+  issue: "106"
+  given: *seeded
+  request:
+    method: DELETE
+    path: /pockets/0192f0a0-0000-7000-8001-000000000001%2F
+  expect:
+    status: 400
+    body_json: {code: VALIDATION, args: {field: id, rule: invalid}}
+    cookies: {}
+    rows:
+      - sql: SELECT pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted, (updated_at = created_at) AS untouched FROM pockets
+        rows: [{name: OVO, active: true, deleted: false, untouched: true}]
+
+
+- name: "pocket paths delete - a lower-case encoded slash is a malformed id"
+  issue: "106"
+  given: *seeded
+  request:
+    method: DELETE
+    path: /pockets/a%2fb
+  expect:
+    status: 400
+    body_json: {code: VALIDATION, args: {field: id, rule: invalid}}
+    cookies: {}
+    rows:
+      - sql: SELECT pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted, (updated_at = created_at) AS untouched FROM pockets
+        rows: [{name: OVO, active: true, deleted: false, untouched: true}]
+
+
+- name: "pocket paths delete - a semicolon is a malformed id"
+  issue: "106"
+  given: *seeded
+  request:
+    method: DELETE
+    path: /pockets/a;b
+  expect:
+    status: 400
+    body_json: {code: VALIDATION, args: {field: id, rule: invalid}}
+    cookies: {}
+    rows:
+      - sql: SELECT pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted, (updated_at = created_at) AS untouched FROM pockets
+        rows: [{name: OVO, active: true, deleted: false, untouched: true}]
+
+
+- name: "pocket paths delete - an encoded semicolon is a malformed id"
+  issue: "106"
+  given: *seeded
+  request:
+    method: DELETE
+    path: /pockets/a%3Bb
+  expect:
+    status: 400
+    body_json: {code: VALIDATION, args: {field: id, rule: invalid}}
+    cookies: {}
+    rows:
+      - sql: SELECT pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted, (updated_at = created_at) AS untouched FROM pockets
+        rows: [{name: OVO, active: true, deleted: false, untouched: true}]
+
+
+- name: "pocket paths delete - an encoded dot-dot is a malformed id"
+  issue: "106"
+  given: *seeded
+  request:
+    method: DELETE
+    path: /pockets/%2e%2e
+  expect:
+    status: 400
+    body_json: {code: VALIDATION, args: {field: id, rule: invalid}}
+    cookies: {}
+    rows:
+      - sql: SELECT pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted, (updated_at = created_at) AS untouched FROM pockets
+        rows: [{name: OVO, active: true, deleted: false, untouched: true}]
+
+
+- name: "pocket paths delete - an encoded backslash is a malformed id"
+  issue: "106"
+  given: *seeded
+  request:
+    method: DELETE
+    path: /pockets/a%5Cb
+  expect:
+    status: 400
+    body_json: {code: VALIDATION, args: {field: id, rule: invalid}}
+    cookies: {}
+    rows:
+      - sql: SELECT pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted, (updated_at = created_at) AS untouched FROM pockets
+        rows: [{name: OVO, active: true, deleted: false, untouched: true}]
+
+
+- name: "pocket paths delete - an encoded NUL is a malformed id"
+  issue: "106"
+  given: *seeded
+  request:
+    method: DELETE
+    path: /pockets/a%00b
+  expect:
+    status: 400
+    body_json: {code: VALIDATION, args: {field: id, rule: invalid}}
+    cookies: {}
+    rows:
+      - sql: SELECT pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted, (updated_at = created_at) AS untouched FROM pockets
+        rows: [{name: OVO, active: true, deleted: false, untouched: true}]
+
+
+- name: "pocket paths delete - not a uuid at all is a malformed id"
+  issue: "106"
+  given: *seeded
+  request:
+    method: DELETE
+    path: /pockets/not-a-uuid
+  expect:
+    status: 400
+    body_json: {code: VALIDATION, args: {field: id, rule: invalid}}
+    cookies: {}
+    rows:
+      - sql: SELECT pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted, (updated_at = created_at) AS untouched FROM pockets
+        rows: [{name: OVO, active: true, deleted: false, untouched: true}]
+
+
+- name: "pocket paths delete - a uuid one digit short is a malformed id"
+  issue: "106"
+  given: *seeded
+  request:
+    method: DELETE
+    path: /pockets/0192f0a0-0000-7000-8001-00000000000
+  expect:
+    status: 400
+    body_json: {code: VALIDATION, args: {field: id, rule: invalid}}
+    cookies: {}
+    rows:
+      - sql: SELECT pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted, (updated_at = created_at) AS untouched FROM pockets
+        rows: [{name: OVO, active: true, deleted: false, untouched: true}]
+
+
+- name: "pocket paths delete - a literal backslash is a malformed id"
+  issue: "106"
+  given: *seeded
+  request:
+    method: DELETE
+    raw_target: /pockets/a\b
+  expect:
+    status: 400
+    body_json: {code: VALIDATION, args: {field: id, rule: invalid}}
+    cookies: {}
+    rows:
+      - sql: SELECT pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted, (updated_at = created_at) AS untouched FROM pockets
+        rows: [{name: OVO, active: true, deleted: false, untouched: true}]
+
+
+- name: "pocket paths delete - a trailing slash is a path that does not exist"
+  issue: "106"
+  given: *seeded
+  request:
+    method: DELETE
+    path: /pockets/0192f0a0-0000-7000-8001-000000000001/
+  expect:
+    status: 404
+    same_as:
+      method: GET
+      path: /no-such-route
+    cookies: {}
+    rows:
+      - sql: SELECT pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted, (updated_at = created_at) AS untouched FROM pockets
+        rows: [{name: OVO, active: true, deleted: false, untouched: true}]
+
+
+- name: "pocket paths delete - an empty parameter is a path that does not exist"
+  issue: "106"
+  given: *seeded
+  request:
+    method: DELETE
+    path: /pockets/
+  expect:
+    status: 404
+    same_as:
+      method: GET
+      path: /no-such-route
+    cookies: {}
+    rows:
+      - sql: SELECT pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted, (updated_at = created_at) AS untouched FROM pockets
+        rows: [{name: OVO, active: true, deleted: false, untouched: true}]
+
+
+- name: "pocket paths delete - an upper-case id names the same Pocket"
+  issue: "106"
+  given: *seeded
+  request:
+    method: DELETE
+    path: /pockets/0192F0A0-0000-7000-8001-000000000001
+  expect:
+    status: 204
+    body_empty: true
+    cookies: {}
+    rows:
+      - sql: SELECT pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets
+        rows: [{name: OVO, active: true, deleted: true}]
+
+
+- name: "pocket paths delete - a percent-encoded first digit names the same Pocket"
+  issue: "106"
+  given: *seeded
+  request:
+    method: DELETE
+    path: /pockets/%30192f0a0-0000-7000-8001-000000000001
+  expect:
+    status: 204
+    body_empty: true
+    cookies: {}
+    rows:
+      - sql: SELECT pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets
+        rows: [{name: OVO, active: true, deleted: true}]
+
+
+- name: "pocket paths delete - a urn:uuid: prefixed id names the same Pocket"
+  issue: "106"
+  given: *seeded
+  request:
+    method: DELETE
+    path: /pockets/urn:uuid:0192f0a0-0000-7000-8001-000000000001
+  expect:
+    status: 204
+    body_empty: true
+    cookies: {}
+    rows:
+      - sql: SELECT pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets
+        rows: [{name: OVO, active: true, deleted: true}]
+
+
+- name: "pocket paths delete - a braced id names the same Pocket"
+  issue: "106"
+  given: *seeded
+  request:
+    method: DELETE
+    path: /pockets/%7B0192f0a0-0000-7000-8001-000000000001%7D
+  expect:
+    status: 204
+    body_empty: true
+    cookies: {}
+    rows:
+      - sql: SELECT pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets
+        rows: [{name: OVO, active: true, deleted: true}]
+
+
+- name: "pocket paths delete - 32 hex digits without dashes names the same Pocket"
+  issue: "106"
+  given: *seeded
+  request:
+    method: DELETE
+    path: /pockets/0192f0a0000070008001000000000001
+  expect:
+    status: 204
+    body_empty: true
+    cookies: {}
+    rows:
+      - sql: SELECT pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets
+        rows: [{name: OVO, active: true, deleted: true}]
+
+
+- name: "pocket paths restore - %2541 binds %41, which is not a uuid is a malformed id"
+  issue: "106"
+  given: &seeded_deleted
+    - sql: INSERT INTO pockets (id, household_id, pocket_display_name, created_at, updated_at, deleted_at) VALUES ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', '2026-01-02T00:00:00Z')
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /pockets/%2541/restore
+  expect:
+    status: 400
+    body_json: {code: VALIDATION, args: {field: id, rule: invalid}}
+    cookies: {}
+    rows:
+      - sql: SELECT pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted, (updated_at = '2026-01-01T00:00:00Z') AS untouched FROM pockets
+        rows: [{name: OVO, active: true, deleted: true, untouched: true}]
+
+
+- name: "pocket paths restore - an encoded slash is a malformed id"
+  issue: "106"
+  given: *seeded_deleted
+  request:
+    method: POST
+    path: /pockets/a%2fb/restore
+  expect:
+    status: 400
+    body_json: {code: VALIDATION, args: {field: id, rule: invalid}}
+    cookies: {}
+    rows:
+      - sql: SELECT pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted, (updated_at = '2026-01-01T00:00:00Z') AS untouched FROM pockets
+        rows: [{name: OVO, active: true, deleted: true, untouched: true}]
+
+
+- name: "pocket paths restore - a semicolon is a malformed id"
+  issue: "106"
+  given: *seeded_deleted
+  request:
+    method: POST
+    path: /pockets/a;b/restore
+  expect:
+    status: 400
+    body_json: {code: VALIDATION, args: {field: id, rule: invalid}}
+    cookies: {}
+    rows:
+      - sql: SELECT pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted, (updated_at = '2026-01-01T00:00:00Z') AS untouched FROM pockets
+        rows: [{name: OVO, active: true, deleted: true, untouched: true}]
+
+
+- name: "pocket paths restore - not a uuid at all is a malformed id"
+  issue: "106"
+  given: *seeded_deleted
+  request:
+    method: POST
+    path: /pockets/not-a-uuid/restore
+  expect:
+    status: 400
+    body_json: {code: VALIDATION, args: {field: id, rule: invalid}}
+    cookies: {}
+    rows:
+      - sql: SELECT pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted, (updated_at = '2026-01-01T00:00:00Z') AS untouched FROM pockets
+        rows: [{name: OVO, active: true, deleted: true, untouched: true}]
+
+
+- name: "pocket paths restore - an empty parameter is a malformed id, not a missing path"
+  issue: "106"
+  given: *seeded_deleted
+  request:
+    method: POST
+    path: /pockets//restore
+  expect:
+    status: 400
+    body_json: {code: VALIDATION, args: {field: id, rule: invalid}}
+    cookies: {}
+    rows:
+      - sql: SELECT pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted, (updated_at = '2026-01-01T00:00:00Z') AS untouched FROM pockets
+        rows: [{name: OVO, active: true, deleted: true, untouched: true}]
+
+
+- name: "pocket paths restore - a trailing slash is a path that does not exist"
+  issue: "106"
+  given: *seeded_deleted
+  request:
+    method: POST
+    path: /pockets/0192f0a0-0000-7000-8001-000000000001/restore/
+  expect:
+    status: 404
+    same_as:
+      method: GET
+      path: /no-such-route
+    cookies: {}
+    rows:
+      - sql: SELECT pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted, (updated_at = '2026-01-01T00:00:00Z') AS untouched FROM pockets
+        rows: [{name: OVO, active: true, deleted: true, untouched: true}]
+
+
+- name: "pocket paths restore - an upper-case id names the same Pocket"
+  issue: "106"
+  given: *seeded_deleted
+  request:
+    method: POST
+    path: /pockets/0192F0A0-0000-7000-8001-000000000001/restore
+  expect:
+    status: 200
+    body_json: {id: 0192f0a0-0000-7000-8001-000000000001, pocket_display_name: OVO, active: true}
+    cookies: {}
+    rows:
+      - sql: SELECT pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets
+        rows: [{name: OVO, active: true, deleted: false}]

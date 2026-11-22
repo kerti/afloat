@@ -111,6 +111,76 @@ func (q *Queries) ListPockets(ctx context.Context, householdID pgtype.UUID) ([]P
 	return items, nil
 }
 
+const restorePocket = `-- name: RestorePocket :one
+UPDATE pockets SET
+    deleted_at = NULL,
+    updated_at = CASE WHEN deleted_at IS NOT NULL THEN now() ELSE updated_at END
+WHERE id = $1 AND household_id = $2
+RETURNING id, household_id, pocket_display_name, active, created_at, updated_at, deleted_at
+`
+
+type RestorePocketParams struct {
+	ID          pgtype.UUID
+	HouseholdID pgtype.UUID
+}
+
+// The Undo of SoftDeletePocket: clears deleted_at and returns the row, active
+// as it was. Idempotent: a Pocket that is not deleted is a row and comes back
+// unchanged (updated_at moves only when this statement restored). A row that is
+// another Household's or unknown is no row. Re-entering the partial unique
+// index is what a held name trips: 23505 on pockets_household_name_idx, which
+// the caller answers NAME_TAKEN with the row still deleted. The index, not a
+// lookup, decides it, so two concurrent restores into one name cannot both
+// win and cannot 500.
+func (q *Queries) RestorePocket(ctx context.Context, arg RestorePocketParams) (Pocket, error) {
+	row := q.db.QueryRow(ctx, restorePocket, arg.ID, arg.HouseholdID)
+	var i Pocket
+	err := row.Scan(
+		&i.ID,
+		&i.HouseholdID,
+		&i.PocketDisplayName,
+		&i.Active,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.DeletedAt,
+	)
+	return i, err
+}
+
+const softDeletePocket = `-- name: SoftDeletePocket :execrows
+UPDATE pockets SET
+    deleted_at = coalesce(deleted_at, now()),
+    updated_at = CASE WHEN deleted_at IS NULL THEN now() ELSE updated_at END
+WHERE id = $1 AND household_id = $2
+`
+
+type SoftDeletePocketParams struct {
+	ID          pgtype.UUID
+	HouseholdID pgtype.UUID
+}
+
+// A soft delete (BOOTSTRAP.md §4): the row stays. Idempotent on the caller's own
+// Pocket and keeping the FIRST deletion instant, in one statement: coalesce
+// leaves an existing deleted_at alone, and updated_at moves only when this
+// statement is the one that deleted (a repeat changes no column). A row that
+// is another Household's or unknown is no row, and the caller answers NOT_FOUND;
+// a deleted one of the caller's own is a row, which is what makes a repeat a
+// success. No hard-delete statement exists in this directory, on purpose.
+//
+// The in-use guard (PRD R1, #121) is NOT here. When the Expenses slice adds
+// the expenses table, a Pocket that any Expense row references, live or
+// soft-deleted, must answer 409 POCKET_IN_USE from this very statement (a
+// NOT EXISTS in the WHERE, with the Expense write taking FOR SHARE on the
+// Pocket row), because a check-then-delete would race an Expense create under
+// READ COMMITTED. See issue #121, P8 point 3.
+func (q *Queries) SoftDeletePocket(ctx context.Context, arg SoftDeletePocketParams) (int64, error) {
+	result, err := q.db.Exec(ctx, softDeletePocket, arg.ID, arg.HouseholdID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const updatePocket = `-- name: UpdatePocket :one
 UPDATE pockets SET
     pocket_display_name = coalesce($1, pocket_display_name),

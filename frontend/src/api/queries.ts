@@ -5,6 +5,7 @@ import {
   changePassword,
   commitOnboardingChoice,
   createPocket,
+  deletePocket,
   getAuthMethods,
   getMe,
   getOnboardingOptions,
@@ -167,6 +168,19 @@ export function useUpdatePocket() {
   const qc = useQueryClient();
   return useMutation<Pocket, ApiError, { id: string; body: UpdatePocketRequest }>({
     mutationFn: ({ id, body }) => updatePocket(id, body),
+    onSuccess: () => qc.invalidateQueries({ queryKey: pocketsKey }),
+    onError: (err) => {
+      if (err.code === "NOT_FOUND") void qc.invalidateQueries({ queryKey: pocketsKey });
+    },
+  });
+}
+
+// Deleting is a soft delete the server can reverse (restorePocket, the Undo).
+// A NOT_FOUND means the list is stale, so it is refetched.
+export function useDeletePocket() {
+  const qc = useQueryClient();
+  return useMutation<void, ApiError, string>({
+    mutationFn: deletePocket,
     onSuccess: () => qc.invalidateQueries({ queryKey: pocketsKey }),
     onError: (err) => {
       if (err.code === "NOT_FOUND") void qc.invalidateQueries({ queryKey: pocketsKey });

@@ -201,3 +201,17 @@ export async function updatePocket(id: string, body: UpdatePocketRequest): Promi
     })
   ).json() as Promise<Pocket>;
 }
+
+// A soft delete, answered with an empty 204. Deleting a Pocket that is already
+// deleted is a 204 too; 404 NOT_FOUND covers unknown and another Household's.
+export async function deletePocket(id: string): Promise<void> {
+  await request(`/pockets/${encodeURIComponent(id)}`, { method: "DELETE" });
+}
+
+// The Undo of a delete: 200 with the Pocket, 409 NAME_TAKEN when another Pocket
+// has taken its name meanwhile, 404 NOT_FOUND when it is not deleted.
+export async function restorePocket(id: string): Promise<Pocket> {
+  return (
+    await request(`/pockets/${encodeURIComponent(id)}/restore`, { method: "POST" })
+  ).json() as Promise<Pocket>;
+}

@@ -92,6 +92,30 @@ type Querier interface {
 	// at a database the role cannot read fails here and passes a bare Ping.
 	Ping(ctx context.Context) (int32, error)
 	RecordLoginFailure(ctx context.Context, arg RecordLoginFailureParams) error
+	// The Undo of SoftDeletePocket: clears deleted_at and returns the row, active
+	// as it was. Idempotent: a Pocket that is not deleted is a row and comes back
+	// unchanged (updated_at moves only when this statement restored). A row that is
+	// another Household's or unknown is no row. Re-entering the partial unique
+	// index is what a held name trips: 23505 on pockets_household_name_idx, which
+	// the caller answers NAME_TAKEN with the row still deleted. The index, not a
+	// lookup, decides it, so two concurrent restores into one name cannot both
+	// win and cannot 500.
+	RestorePocket(ctx context.Context, arg RestorePocketParams) (Pocket, error)
+	// A soft delete (BOOTSTRAP.md §4): the row stays. Idempotent on the caller's own
+	// Pocket and keeping the FIRST deletion instant, in one statement: coalesce
+	// leaves an existing deleted_at alone, and updated_at moves only when this
+	// statement is the one that deleted (a repeat changes no column). A row that
+	// is another Household's or unknown is no row, and the caller answers NOT_FOUND;
+	// a deleted one of the caller's own is a row, which is what makes a repeat a
+	// success. No hard-delete statement exists in this directory, on purpose.
+	//
+	// The in-use guard (PRD R1, #121) is NOT here. When the Expenses slice adds
+	// the expenses table, a Pocket that any Expense row references, live or
+	// soft-deleted, must answer 409 POCKET_IN_USE from this very statement (a
+	// NOT EXISTS in the WHERE, with the Expense write taking FOR SHARE on the
+	// Pocket row), because a check-then-delete would race an Expense create under
+	// READ COMMITTED. See issue #121, P8 point 3.
+	SoftDeletePocket(ctx context.Context, arg SoftDeletePocketParams) (int64, error)
 	// Compare-and-swap, for a password change: the new hash is written only if the
 	// stored one is still the hash the current password was verified against. Zero
 	// rows means another change landed since, so two concurrent submissions of the

@@ -103,6 +103,7 @@
     "cancel": "Cancel",
     "deactivate": "Deactivate",
     "reactivate": "Reactivate",
+    "delete": "Delete",
     "inactive": "Inactive",
     "showInactive": "Show inactive Pockets ({{count}})",
     "allInactive_one": "No active Pockets. {{count}} inactive Pocket hidden. Tick “Show inactive Pockets” to see it.",
@@ -155,6 +156,7 @@
     "saved": "Saved.",
     "deactivated": "Deactivated {{name}}.",
     "reactivated": "Reactivated {{name}}.",
+    "deleted": "Deleted {{name}}.",
     "undo": "Undo"
   },
   "dialog": {

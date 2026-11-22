@@ -18,9 +18,11 @@ import (
 // it did whenever RawPath is empty, since chi routes on RawPath when there is
 // one. Before runtime v1.9.0 (#89) the binder decoded unconditionally, a second
 // time. routeOnDecodedPath is mounted as in New, but the invariant does not
-// depend on it. The contract's first {id} route, PATCH /pockets/{id}, runs the
-// same shapes through the real router and binder (pocket_update_test.go, and
-// cases/pocket-paths.yaml for the black-box side, #106).
+// depend on it. The contract's {id} routes, PATCH and DELETE /pockets/{id} and
+// POST /pockets/{id}/restore, run the same shapes through the real router and
+// binder (pocket_update_test.go and pocket_delete_test.go, and
+// cases/pocket-paths.yaml and cases/pocket-paths-delete.yaml for the
+// black-box side, #106).
 func TestPathParametersAreDecodedOnce(t *testing.T) {
 	api := chi.NewRouter()
 	api.Get("/things/{id}", func(w http.ResponseWriter, r *http.Request) {

@@ -179,6 +179,26 @@ with zoneinfo answers from it, so a case-insensitive filesystem (a Mac) also acc
   a delete** (#121, R1): a row that history references is retired with an `active` boolean, changed by
   an ordinary merge `PATCH`. It stays visible and in the list (the client filters), keeps its name and
   keeps labelling what it labels. Only a delete gives up the name and disappears.
+  - *The wire* (#121, the first one; every later entity copies it): `DELETE /<entities>/{id}` sets
+    `deleted_at` and answers `204`; the row stays, and the contract's description says so in plain
+    words, because the verb is `DELETE` and the effect is not. `POST /<entities>/{id}/restore` clears
+    it and answers `200` with the entity, `active` as it was. **Both are idempotent on the caller's
+    own row**, each in one statement scoped by `household_id`: a delete keeps the **first**
+    `deleted_at` (`coalesce(deleted_at, now())`), and a repeat of either changes no column at all
+    (`updated_at` moves only for the statement that did the work). No confirmation: restore is the
+    Undo. A deleted row is invisible to the list and to `PATCH` (`404`); only these two see it.
+    Unknown or another Household's is `404 NOT_FOUND` for both, so a foreign id is never confirmed.
+  - **A restore into a held name is `409 NAME_TAKEN`** and the row stays deleted. The partial unique
+    index decides it, mapped by constraint name as a create's is, never a lookup before the
+    `UPDATE`: two concurrent restores into one name answer one `200` and one `409`, never a `500`.
+  - **An entity that history references cannot be deleted while it is referenced (#121, R1):**
+    `409 POCKET_IN_USE` for a Pocket, soft-deleted Expenses included. It is built by the slice that
+    adds the referencing table, **inside the delete statement** (a `NOT EXISTS` in its `WHERE`, with
+    the referencing write taking `FOR SHARE` on the row), because a check before the delete races
+    a concurrent create under `READ COMMITTED`. Until that table exists nothing can reference a Pocket,
+    so the code is not in the contract.
+  - The cross-site guard (§5) covers `DELETE` like every non-safe method; it was first exercised by
+    `DELETE /pockets/{id}`, and a refused request deletes nothing.
   - *Scope: Household-scoped domain data.* Instance-local auth state — `sessions`, `credentials`,
     `invitations` — is exempt and hard-deletes. Session revocation **is** the row delete; a
     soft-deleted session is a live session that merely looks dead, and every read of the table would
@@ -208,7 +228,10 @@ with zoneinfo answers from it, so a case-insensitive filesystem (a Mac) also acc
   `WHERE` does not match is no row, and the answer is `404 NOT_FOUND` (next bullet).
 - **Tenancy on a path id** (#121, the first `{id}` route): an id that is **unknown, another
   Household's, or soft-deleted** answers one `404 NOT_FOUND`, a code with no `args`, the same bytes in
-  every case and for every body, `{}` included (a no-op must not confirm another Household's id). Not
+  every case and for every body, `{}` included (a no-op must not confirm another Household's id).
+  The two operations that are *for* a deleted row, delete and restore, answer it for an unknown or
+  another Household's id only: the caller's own deleted row is a row to them, and the idempotent
+  success. Not
   `403`, which says "exists, not yours". The order in which a request can fail, each step reached only
   if the earlier ones passed: the cross-site guard (`403`), the session (`401`), the id's shape (`400`
   from the binder), the body (`400`: the contract's rules, then the handler's), the statement (`404`,
@@ -620,9 +643,14 @@ The error envelope is Balances ADR-0027 exactly: `{"code": "SCREAMING_SNAKE", "a
 `message` field, `args` values JSON primitives only. `VALIDATION` carries `{field, rule}` and reports
 the first failing field only. The vocabulary is the contract's `ErrorCode` enum, closed and extended as
 endpoints land. `ID_TAKEN` (#121) is a create whose client-supplied id is held by something other than a
-live row of the caller's own Household, and `NAME_TAKEN` a name another live row already holds; both are
+live row of the caller's own Household, and `NAME_TAKEN` a name another live row already holds, at a create,
+a rename or a restore; both are
 `409`, carry no `args`, and name no entity. `NOT_FOUND` (#121) is an `{id}` that names no live row of
-the caller's own Household (`404`, no `args`; see *Tenancy on a path id*, §4).
+the caller's own Household (`404`, no `args`; see *Tenancy on a path id*, §4). An **empty** `{id}`
+segment on a route that still matches, such as `/pockets//restore`, is a malformed id like any other:
+`400 VALIDATION {field: id, rule: invalid}`, after the session check, as the binder refuses it
+(ratified by the maintainer, 22 Nov, #121 PR 3). Only a path no route matches is the bare `404`: the
+collection's `/pockets/` with a trailing slash, for one.
 
 **Which request-body failure gets reported (#18).** The login tests drive this table:
 

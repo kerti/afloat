@@ -1,0 +1,785 @@
+# POST /pockets/{id}/restore (#121, PR 3 of 3): the Undo of a delete. Clears
+# deleted_at and answers the Pocket with `active` as it was. Idempotent: a Pocket
+# that is not deleted is 200, unchanged. A name another Pocket that is not
+# deleted now holds (active or inactive, in any case) is 409 NAME_TAKEN and the
+# Pocket stays deleted. An id that is unknown or another Household's is one 404
+# NOT_FOUND, byte for byte; the id's shape is checked before the lookup.
+#
+# Under an outage the session itself cannot be read, which the session
+# middleware answers 500 with the cookie left alone (#27).
+
+# The Pockets a case starts with (every case, so a case also proves what it did
+# NOT touch). Every updated_at is the same fixed instant, and a deleted Pocket's
+# deleted_at is too, so `untouched` and `stamp_kept` say whether a request moved
+# either:
+#   0192f0a0-0000-7000-8001-000000000001  OVO     Household 1, live, active
+#   0192f0a0-0000-7000-8001-000000000002  Dana    Household 1, live, inactive
+#   0192f0a0-0000-7000-8001-000000000003  Gopay   Household 1, deleted, active
+#   0192f0a0-0000-7000-8001-000000000004  Venmo   Household 1, deleted, inactive
+#   0192f0a0-0000-7000-8001-000000000005  ovo     Household 1, deleted (OVO holds its name)
+#   0192f0a0-0000-7000-8001-000000000006  DANA    Household 1, deleted (Dana, inactive, holds its name)
+#   0192f0a0-0000-7000-8001-000000000007  theirs  Household 1, deleted (Household 2's live Theirs does not hold its name)
+#   0192f0a0-0000-7000-8001-000000000008  Gone    Household 2, deleted
+#   0192f0a0-0000-7000-8001-000000000009  Theirs  Household 2, live, active
+# Only ASCII case folding is pinned: lower() follows the database's locale.
+
+- name: "pocket restore - a deleted Pocket comes back as it was"
+  issue: "121"
+  given: &seeded
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO pockets (id, household_id, pocket_display_name, active, deleted_at, created_at, updated_at) VALUES
+          ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO', true, NULL, '2026-01-01T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Dana', false, NULL, '2026-01-02T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Gopay', true, '2026-01-05T00:00:00Z', '2026-01-03T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000004', '0192f0a0-0000-7000-8000-000000000001', 'Venmo', false, '2026-01-05T00:00:00Z', '2026-01-04T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000005', '0192f0a0-0000-7000-8000-000000000001', 'ovo', true, '2026-01-05T00:00:00Z', '2026-01-05T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000006', '0192f0a0-0000-7000-8000-000000000001', 'DANA', true, '2026-01-05T00:00:00Z', '2026-01-06T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000007', '0192f0a0-0000-7000-8000-000000000001', 'theirs', true, '2026-01-05T00:00:00Z', '2026-01-07T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000008', '0192f0a0-0000-7000-8000-000000000002', 'Gone', true, '2026-01-05T00:00:00Z', '2026-01-08T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', true, NULL, '2026-01-09T00:00:00Z', '2026-01-05T00:00:00Z')
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /pockets/0192f0a0-0000-7000-8001-000000000003/restore
+  expect:
+    status: 200
+    body_json: {id: 0192f0a0-0000-7000-8001-000000000003, pocket_display_name: Gopay, active: true}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted, coalesce(deleted_at = '2026-01-05T00:00:00Z', false) AS stamp_kept, (updated_at = '2026-01-05T00:00:00Z') AS untouched FROM pockets ORDER BY id
+        rows:
+          - {id: 0192f0a0-0000-7000-8001-000000000001, household_id: 0192f0a0-0000-7000-8000-000000000001, name: OVO, active: true, deleted: false, stamp_kept: false, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000002, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Dana, active: false, deleted: false, stamp_kept: false, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000003, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Gopay, active: true, deleted: false, stamp_kept: false, untouched: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000004, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Venmo, active: false, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000005, household_id: 0192f0a0-0000-7000-8000-000000000001, name: ovo, active: true, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000006, household_id: 0192f0a0-0000-7000-8000-000000000001, name: DANA, active: true, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000007, household_id: 0192f0a0-0000-7000-8000-000000000001, name: theirs, active: true, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000008, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Gone, active: true, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000009, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Theirs, active: true, deleted: false, stamp_kept: false, untouched: true}
+
+
+- name: "pocket restore - an inactive Pocket comes back still inactive"
+  issue: "121"
+  given: *seeded
+  request:
+    method: POST
+    path: /pockets/0192f0a0-0000-7000-8001-000000000004/restore
+  expect:
+    status: 200
+    body_json: {id: 0192f0a0-0000-7000-8001-000000000004, pocket_display_name: Venmo, active: false}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted, coalesce(deleted_at = '2026-01-05T00:00:00Z', false) AS stamp_kept, (updated_at = '2026-01-05T00:00:00Z') AS untouched FROM pockets ORDER BY id
+        rows:
+          - {id: 0192f0a0-0000-7000-8001-000000000001, household_id: 0192f0a0-0000-7000-8000-000000000001, name: OVO, active: true, deleted: false, stamp_kept: false, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000002, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Dana, active: false, deleted: false, stamp_kept: false, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000003, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Gopay, active: true, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000004, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Venmo, active: false, deleted: false, stamp_kept: false, untouched: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000005, household_id: 0192f0a0-0000-7000-8000-000000000001, name: ovo, active: true, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000006, household_id: 0192f0a0-0000-7000-8000-000000000001, name: DANA, active: true, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000007, household_id: 0192f0a0-0000-7000-8000-000000000001, name: theirs, active: true, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000008, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Gone, active: true, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000009, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Theirs, active: true, deleted: false, stamp_kept: false, untouched: true}
+
+
+- name: "pocket restore - a Pocket that is not deleted is 200 and nothing changes"
+  issue: "121"
+  given: *seeded
+  request:
+    method: POST
+    path: /pockets/0192f0a0-0000-7000-8001-000000000001/restore
+  expect:
+    status: 200
+    body_json: {id: 0192f0a0-0000-7000-8001-000000000001, pocket_display_name: OVO, active: true}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted, coalesce(deleted_at = '2026-01-05T00:00:00Z', false) AS stamp_kept, (updated_at = '2026-01-05T00:00:00Z') AS untouched FROM pockets ORDER BY id
+        rows:
+          - {id: 0192f0a0-0000-7000-8001-000000000001, household_id: 0192f0a0-0000-7000-8000-000000000001, name: OVO, active: true, deleted: false, stamp_kept: false, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000002, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Dana, active: false, deleted: false, stamp_kept: false, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000003, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Gopay, active: true, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000004, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Venmo, active: false, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000005, household_id: 0192f0a0-0000-7000-8000-000000000001, name: ovo, active: true, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000006, household_id: 0192f0a0-0000-7000-8000-000000000001, name: DANA, active: true, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000007, household_id: 0192f0a0-0000-7000-8000-000000000001, name: theirs, active: true, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000008, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Gone, active: true, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000009, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Theirs, active: true, deleted: false, stamp_kept: false, untouched: true}
+
+
+- name: "pocket restore - an inactive Pocket that is not deleted is 200, still inactive, nothing changes"
+  issue: "121"
+  given: *seeded
+  request:
+    method: POST
+    path: /pockets/0192f0a0-0000-7000-8001-000000000002/restore
+  expect:
+    status: 200
+    body_json: {id: 0192f0a0-0000-7000-8001-000000000002, pocket_display_name: Dana, active: false}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted, coalesce(deleted_at = '2026-01-05T00:00:00Z', false) AS stamp_kept, (updated_at = '2026-01-05T00:00:00Z') AS untouched FROM pockets ORDER BY id
+        rows:
+          - {id: 0192f0a0-0000-7000-8001-000000000001, household_id: 0192f0a0-0000-7000-8000-000000000001, name: OVO, active: true, deleted: false, stamp_kept: false, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000002, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Dana, active: false, deleted: false, stamp_kept: false, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000003, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Gopay, active: true, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000004, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Venmo, active: false, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000005, household_id: 0192f0a0-0000-7000-8000-000000000001, name: ovo, active: true, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000006, household_id: 0192f0a0-0000-7000-8000-000000000001, name: DANA, active: true, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000007, household_id: 0192f0a0-0000-7000-8000-000000000001, name: theirs, active: true, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000008, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Gone, active: true, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000009, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Theirs, active: true, deleted: false, stamp_kept: false, untouched: true}
+
+
+- name: "pocket restore - restoring twice is 200 twice"
+  issue: "121"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO pockets (id, household_id, pocket_display_name, active, deleted_at, created_at, updated_at) VALUES
+          ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO', true, NULL, '2026-01-01T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Dana', false, NULL, '2026-01-02T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Gopay', true, '2026-01-05T00:00:00Z', '2026-01-03T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000004', '0192f0a0-0000-7000-8000-000000000001', 'Venmo', false, '2026-01-05T00:00:00Z', '2026-01-04T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000005', '0192f0a0-0000-7000-8000-000000000001', 'ovo', true, '2026-01-05T00:00:00Z', '2026-01-05T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000006', '0192f0a0-0000-7000-8000-000000000001', 'DANA', true, '2026-01-05T00:00:00Z', '2026-01-06T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000007', '0192f0a0-0000-7000-8000-000000000001', 'theirs', true, '2026-01-05T00:00:00Z', '2026-01-07T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000008', '0192f0a0-0000-7000-8000-000000000002', 'Gone', true, '2026-01-05T00:00:00Z', '2026-01-08T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', true, NULL, '2026-01-09T00:00:00Z', '2026-01-05T00:00:00Z')
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+    - request:
+        method: POST
+        path: /pockets/0192f0a0-0000-7000-8001-000000000003/restore
+      status: 200
+  request:
+    method: POST
+    path: /pockets/0192f0a0-0000-7000-8001-000000000003/restore
+  expect:
+    status: 200
+    body_json: {id: 0192f0a0-0000-7000-8001-000000000003, pocket_display_name: Gopay, active: true}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted, coalesce(deleted_at = '2026-01-05T00:00:00Z', false) AS stamp_kept, (updated_at = '2026-01-05T00:00:00Z') AS untouched FROM pockets ORDER BY id
+        rows:
+          - {id: 0192f0a0-0000-7000-8001-000000000001, household_id: 0192f0a0-0000-7000-8000-000000000001, name: OVO, active: true, deleted: false, stamp_kept: false, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000002, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Dana, active: false, deleted: false, stamp_kept: false, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000003, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Gopay, active: true, deleted: false, stamp_kept: false, untouched: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000004, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Venmo, active: false, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000005, household_id: 0192f0a0-0000-7000-8000-000000000001, name: ovo, active: true, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000006, household_id: 0192f0a0-0000-7000-8000-000000000001, name: DANA, active: true, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000007, household_id: 0192f0a0-0000-7000-8000-000000000001, name: theirs, active: true, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000008, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Gone, active: true, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000009, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Theirs, active: true, deleted: false, stamp_kept: false, untouched: true}
+
+
+- name: "pocket restore - a delete and its restore round-trip the Pocket"
+  issue: "121"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO pockets (id, household_id, pocket_display_name, active, deleted_at, created_at, updated_at) VALUES
+          ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO', true, NULL, '2026-01-01T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Dana', false, NULL, '2026-01-02T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Gopay', true, '2026-01-05T00:00:00Z', '2026-01-03T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000004', '0192f0a0-0000-7000-8000-000000000001', 'Venmo', false, '2026-01-05T00:00:00Z', '2026-01-04T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000005', '0192f0a0-0000-7000-8000-000000000001', 'ovo', true, '2026-01-05T00:00:00Z', '2026-01-05T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000006', '0192f0a0-0000-7000-8000-000000000001', 'DANA', true, '2026-01-05T00:00:00Z', '2026-01-06T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000007', '0192f0a0-0000-7000-8000-000000000001', 'theirs', true, '2026-01-05T00:00:00Z', '2026-01-07T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000008', '0192f0a0-0000-7000-8000-000000000002', 'Gone', true, '2026-01-05T00:00:00Z', '2026-01-08T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', true, NULL, '2026-01-09T00:00:00Z', '2026-01-05T00:00:00Z')
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+    - request:
+        method: DELETE
+        path: /pockets/0192f0a0-0000-7000-8001-000000000001
+      status: 204
+  request:
+    method: POST
+    path: /pockets/0192f0a0-0000-7000-8001-000000000001/restore
+  expect:
+    status: 200
+    body_json: {id: 0192f0a0-0000-7000-8001-000000000001, pocket_display_name: OVO, active: true}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted, coalesce(deleted_at = '2026-01-05T00:00:00Z', false) AS stamp_kept, (updated_at = '2026-01-05T00:00:00Z') AS untouched FROM pockets ORDER BY id
+        rows:
+          - {id: 0192f0a0-0000-7000-8001-000000000001, household_id: 0192f0a0-0000-7000-8000-000000000001, name: OVO, active: true, deleted: false, stamp_kept: false, untouched: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000002, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Dana, active: false, deleted: false, stamp_kept: false, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000003, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Gopay, active: true, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000004, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Venmo, active: false, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000005, household_id: 0192f0a0-0000-7000-8000-000000000001, name: ovo, active: true, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000006, household_id: 0192f0a0-0000-7000-8000-000000000001, name: DANA, active: true, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000007, household_id: 0192f0a0-0000-7000-8000-000000000001, name: theirs, active: true, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000008, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Gone, active: true, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000009, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Theirs, active: true, deleted: false, stamp_kept: false, untouched: true}
+
+
+- name: "pocket restore - a restored Pocket is back in the list in its creation-order place"
+  issue: "121"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO pockets (id, household_id, pocket_display_name, active, deleted_at, created_at, updated_at) VALUES
+          ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO', true, NULL, '2026-01-01T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Dana', false, NULL, '2026-01-02T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Gopay', true, '2026-01-05T00:00:00Z', '2026-01-03T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000004', '0192f0a0-0000-7000-8000-000000000001', 'Venmo', false, '2026-01-05T00:00:00Z', '2026-01-04T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000005', '0192f0a0-0000-7000-8000-000000000001', 'ovo', true, '2026-01-05T00:00:00Z', '2026-01-05T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000006', '0192f0a0-0000-7000-8000-000000000001', 'DANA', true, '2026-01-05T00:00:00Z', '2026-01-06T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000007', '0192f0a0-0000-7000-8000-000000000001', 'theirs', true, '2026-01-05T00:00:00Z', '2026-01-07T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000008', '0192f0a0-0000-7000-8000-000000000002', 'Gone', true, '2026-01-05T00:00:00Z', '2026-01-08T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', true, NULL, '2026-01-09T00:00:00Z', '2026-01-05T00:00:00Z')
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+    - request:
+        method: POST
+        path: /pockets/0192f0a0-0000-7000-8001-000000000003/restore
+      status: 200
+  request:
+    method: GET
+    path: /pockets
+  expect:
+    status: 200
+    body_json:
+      items:
+        - {id: 0192f0a0-0000-7000-8001-000000000001, pocket_display_name: OVO, active: true}
+        - {id: 0192f0a0-0000-7000-8001-000000000002, pocket_display_name: Dana, active: false}
+        - {id: 0192f0a0-0000-7000-8001-000000000003, pocket_display_name: Gopay, active: true}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted, coalesce(deleted_at = '2026-01-05T00:00:00Z', false) AS stamp_kept, (updated_at = '2026-01-05T00:00:00Z') AS untouched FROM pockets ORDER BY id
+        rows:
+          - {id: 0192f0a0-0000-7000-8001-000000000001, household_id: 0192f0a0-0000-7000-8000-000000000001, name: OVO, active: true, deleted: false, stamp_kept: false, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000002, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Dana, active: false, deleted: false, stamp_kept: false, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000003, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Gopay, active: true, deleted: false, stamp_kept: false, untouched: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000004, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Venmo, active: false, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000005, household_id: 0192f0a0-0000-7000-8000-000000000001, name: ovo, active: true, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000006, household_id: 0192f0a0-0000-7000-8000-000000000001, name: DANA, active: true, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000007, household_id: 0192f0a0-0000-7000-8000-000000000001, name: theirs, active: true, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000008, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Gone, active: true, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000009, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Theirs, active: true, deleted: false, stamp_kept: false, untouched: true}
+
+
+- name: "pocket restore - a restored Pocket can be edited again"
+  issue: "121"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO pockets (id, household_id, pocket_display_name, active, deleted_at, created_at, updated_at) VALUES
+          ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO', true, NULL, '2026-01-01T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Dana', false, NULL, '2026-01-02T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Gopay', true, '2026-01-05T00:00:00Z', '2026-01-03T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000004', '0192f0a0-0000-7000-8000-000000000001', 'Venmo', false, '2026-01-05T00:00:00Z', '2026-01-04T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000005', '0192f0a0-0000-7000-8000-000000000001', 'ovo', true, '2026-01-05T00:00:00Z', '2026-01-05T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000006', '0192f0a0-0000-7000-8000-000000000001', 'DANA', true, '2026-01-05T00:00:00Z', '2026-01-06T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000007', '0192f0a0-0000-7000-8000-000000000001', 'theirs', true, '2026-01-05T00:00:00Z', '2026-01-07T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000008', '0192f0a0-0000-7000-8000-000000000002', 'Gone', true, '2026-01-05T00:00:00Z', '2026-01-08T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', true, NULL, '2026-01-09T00:00:00Z', '2026-01-05T00:00:00Z')
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+    - request:
+        method: POST
+        path: /pockets/0192f0a0-0000-7000-8001-000000000003/restore
+      status: 200
+  request:
+    method: PATCH
+    path: /pockets/0192f0a0-0000-7000-8001-000000000003
+    headers:
+      Content-Type: application/json
+    body: '{"pocket_display_name":"GoPay"}'
+  expect:
+    status: 200
+    body_json: {id: 0192f0a0-0000-7000-8001-000000000003, pocket_display_name: GoPay, active: true}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted, coalesce(deleted_at = '2026-01-05T00:00:00Z', false) AS stamp_kept, (updated_at = '2026-01-05T00:00:00Z') AS untouched FROM pockets ORDER BY id
+        rows:
+          - {id: 0192f0a0-0000-7000-8001-000000000001, household_id: 0192f0a0-0000-7000-8000-000000000001, name: OVO, active: true, deleted: false, stamp_kept: false, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000002, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Dana, active: false, deleted: false, stamp_kept: false, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000003, household_id: 0192f0a0-0000-7000-8000-000000000001, name: GoPay, active: true, deleted: false, stamp_kept: false, untouched: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000004, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Venmo, active: false, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000005, household_id: 0192f0a0-0000-7000-8000-000000000001, name: ovo, active: true, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000006, household_id: 0192f0a0-0000-7000-8000-000000000001, name: DANA, active: true, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000007, household_id: 0192f0a0-0000-7000-8000-000000000001, name: theirs, active: true, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000008, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Gone, active: true, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000009, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Theirs, active: true, deleted: false, stamp_kept: false, untouched: true}
+
+
+- name: "pocket restore - a name held by a live Pocket is NAME_TAKEN, in any case, and the Pocket stays deleted"
+  issue: "121"
+  given: *seeded
+  request:
+    method: POST
+    path: /pockets/0192f0a0-0000-7000-8001-000000000005/restore
+  expect:
+    status: 409
+    body_json: {code: NAME_TAKEN}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted, coalesce(deleted_at = '2026-01-05T00:00:00Z', false) AS stamp_kept, (updated_at = '2026-01-05T00:00:00Z') AS untouched FROM pockets ORDER BY id
+        rows:
+          - {id: 0192f0a0-0000-7000-8001-000000000001, household_id: 0192f0a0-0000-7000-8000-000000000001, name: OVO, active: true, deleted: false, stamp_kept: false, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000002, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Dana, active: false, deleted: false, stamp_kept: false, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000003, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Gopay, active: true, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000004, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Venmo, active: false, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000005, household_id: 0192f0a0-0000-7000-8000-000000000001, name: ovo, active: true, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000006, household_id: 0192f0a0-0000-7000-8000-000000000001, name: DANA, active: true, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000007, household_id: 0192f0a0-0000-7000-8000-000000000001, name: theirs, active: true, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000008, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Gone, active: true, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000009, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Theirs, active: true, deleted: false, stamp_kept: false, untouched: true}
+
+
+- name: "pocket restore - a name held by an inactive Pocket is NAME_TAKEN"
+  issue: "121"
+  given: *seeded
+  request:
+    method: POST
+    path: /pockets/0192f0a0-0000-7000-8001-000000000006/restore
+  expect:
+    status: 409
+    body_json: {code: NAME_TAKEN}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted, coalesce(deleted_at = '2026-01-05T00:00:00Z', false) AS stamp_kept, (updated_at = '2026-01-05T00:00:00Z') AS untouched FROM pockets ORDER BY id
+        rows:
+          - {id: 0192f0a0-0000-7000-8001-000000000001, household_id: 0192f0a0-0000-7000-8000-000000000001, name: OVO, active: true, deleted: false, stamp_kept: false, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000002, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Dana, active: false, deleted: false, stamp_kept: false, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000003, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Gopay, active: true, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000004, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Venmo, active: false, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000005, household_id: 0192f0a0-0000-7000-8000-000000000001, name: ovo, active: true, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000006, household_id: 0192f0a0-0000-7000-8000-000000000001, name: DANA, active: true, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000007, household_id: 0192f0a0-0000-7000-8000-000000000001, name: theirs, active: true, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000008, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Gone, active: true, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000009, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Theirs, active: true, deleted: false, stamp_kept: false, untouched: true}
+
+
+- name: "pocket restore - a name taken by a new Pocket since the delete is NAME_TAKEN"
+  issue: "121"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO pockets (id, household_id, pocket_display_name, active, deleted_at, created_at, updated_at) VALUES
+          ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO', true, NULL, '2026-01-01T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Dana', false, NULL, '2026-01-02T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Gopay', true, '2026-01-05T00:00:00Z', '2026-01-03T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000004', '0192f0a0-0000-7000-8000-000000000001', 'Venmo', false, '2026-01-05T00:00:00Z', '2026-01-04T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000005', '0192f0a0-0000-7000-8000-000000000001', 'ovo', true, '2026-01-05T00:00:00Z', '2026-01-05T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000006', '0192f0a0-0000-7000-8000-000000000001', 'DANA', true, '2026-01-05T00:00:00Z', '2026-01-06T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000007', '0192f0a0-0000-7000-8000-000000000001', 'theirs', true, '2026-01-05T00:00:00Z', '2026-01-07T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000008', '0192f0a0-0000-7000-8000-000000000002', 'Gone', true, '2026-01-05T00:00:00Z', '2026-01-08T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', true, NULL, '2026-01-09T00:00:00Z', '2026-01-05T00:00:00Z')
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+    - request:
+        method: DELETE
+        path: /pockets/0192f0a0-0000-7000-8001-000000000001
+      status: 204
+    - request:
+        method: POST
+        path: /pockets
+        headers:
+          Content-Type: application/json
+        body: '{"id":"0192f0a0-0000-7000-8001-000000000011","pocket_display_name":"ovo"}'
+      status: 201
+  request:
+    method: POST
+    path: /pockets/0192f0a0-0000-7000-8001-000000000001/restore
+  expect:
+    status: 409
+    body_json: {code: NAME_TAKEN}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted, coalesce(deleted_at = '2026-01-05T00:00:00Z', false) AS stamp_kept, (updated_at = '2026-01-05T00:00:00Z') AS untouched FROM pockets ORDER BY id
+        rows:
+          - {id: 0192f0a0-0000-7000-8001-000000000001, household_id: 0192f0a0-0000-7000-8000-000000000001, name: OVO, active: true, deleted: true, stamp_kept: false, untouched: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000002, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Dana, active: false, deleted: false, stamp_kept: false, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000003, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Gopay, active: true, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000004, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Venmo, active: false, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000005, household_id: 0192f0a0-0000-7000-8000-000000000001, name: ovo, active: true, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000006, household_id: 0192f0a0-0000-7000-8000-000000000001, name: DANA, active: true, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000007, household_id: 0192f0a0-0000-7000-8000-000000000001, name: theirs, active: true, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000008, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Gone, active: true, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000009, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Theirs, active: true, deleted: false, stamp_kept: false, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000011, household_id: 0192f0a0-0000-7000-8000-000000000001, name: ovo, active: true, deleted: false, stamp_kept: false, untouched: false}
+
+
+- name: "pocket restore - another Household's Pocket does not hold the name"
+  issue: "121"
+  given: *seeded
+  request:
+    method: POST
+    path: /pockets/0192f0a0-0000-7000-8001-000000000007/restore
+  expect:
+    status: 200
+    body_json: {id: 0192f0a0-0000-7000-8001-000000000007, pocket_display_name: theirs, active: true}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted, coalesce(deleted_at = '2026-01-05T00:00:00Z', false) AS stamp_kept, (updated_at = '2026-01-05T00:00:00Z') AS untouched FROM pockets ORDER BY id
+        rows:
+          - {id: 0192f0a0-0000-7000-8001-000000000001, household_id: 0192f0a0-0000-7000-8000-000000000001, name: OVO, active: true, deleted: false, stamp_kept: false, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000002, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Dana, active: false, deleted: false, stamp_kept: false, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000003, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Gopay, active: true, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000004, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Venmo, active: false, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000005, household_id: 0192f0a0-0000-7000-8000-000000000001, name: ovo, active: true, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000006, household_id: 0192f0a0-0000-7000-8000-000000000001, name: DANA, active: true, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000007, household_id: 0192f0a0-0000-7000-8000-000000000001, name: theirs, active: true, deleted: false, stamp_kept: false, untouched: false}
+          - {id: 0192f0a0-0000-7000-8001-000000000008, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Gone, active: true, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000009, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Theirs, active: true, deleted: false, stamp_kept: false, untouched: true}
+
+
+- name: "pocket restore - another Household's live id is NOT_FOUND exactly as an unknown id is, and their Pocket is untouched"
+  issue: "121"
+  given: *seeded
+  request:
+    method: POST
+    path: /pockets/0192f0a0-0000-7000-8001-000000000009/restore
+  expect:
+    status: 404
+    body_json: {code: NOT_FOUND}
+    same_as:
+      method: POST
+      path: /pockets/0192f0a0-0000-7000-8001-0000000000ff/restore
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted, coalesce(deleted_at = '2026-01-05T00:00:00Z', false) AS stamp_kept, (updated_at = '2026-01-05T00:00:00Z') AS untouched FROM pockets ORDER BY id
+        rows:
+          - {id: 0192f0a0-0000-7000-8001-000000000001, household_id: 0192f0a0-0000-7000-8000-000000000001, name: OVO, active: true, deleted: false, stamp_kept: false, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000002, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Dana, active: false, deleted: false, stamp_kept: false, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000003, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Gopay, active: true, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000004, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Venmo, active: false, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000005, household_id: 0192f0a0-0000-7000-8000-000000000001, name: ovo, active: true, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000006, household_id: 0192f0a0-0000-7000-8000-000000000001, name: DANA, active: true, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000007, household_id: 0192f0a0-0000-7000-8000-000000000001, name: theirs, active: true, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000008, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Gone, active: true, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000009, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Theirs, active: true, deleted: false, stamp_kept: false, untouched: true}
+
+
+- name: "pocket restore - another Household's deleted id is NOT_FOUND exactly as an unknown id is, and their Pocket is untouched"
+  issue: "121"
+  given: *seeded
+  request:
+    method: POST
+    path: /pockets/0192f0a0-0000-7000-8001-000000000008/restore
+  expect:
+    status: 404
+    body_json: {code: NOT_FOUND}
+    same_as:
+      method: POST
+      path: /pockets/0192f0a0-0000-7000-8001-0000000000ff/restore
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted, coalesce(deleted_at = '2026-01-05T00:00:00Z', false) AS stamp_kept, (updated_at = '2026-01-05T00:00:00Z') AS untouched FROM pockets ORDER BY id
+        rows:
+          - {id: 0192f0a0-0000-7000-8001-000000000001, household_id: 0192f0a0-0000-7000-8000-000000000001, name: OVO, active: true, deleted: false, stamp_kept: false, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000002, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Dana, active: false, deleted: false, stamp_kept: false, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000003, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Gopay, active: true, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000004, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Venmo, active: false, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000005, household_id: 0192f0a0-0000-7000-8000-000000000001, name: ovo, active: true, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000006, household_id: 0192f0a0-0000-7000-8000-000000000001, name: DANA, active: true, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000007, household_id: 0192f0a0-0000-7000-8000-000000000001, name: theirs, active: true, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000008, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Gone, active: true, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000009, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Theirs, active: true, deleted: false, stamp_kept: false, untouched: true}
+
+
+- name: "pocket restore - an unknown id is NOT_FOUND with no args"
+  issue: "121"
+  given: *seeded
+  request:
+    method: POST
+    path: /pockets/0192f0a0-0000-7000-8001-0000000000ff/restore
+  expect:
+    status: 404
+    body_json: {code: NOT_FOUND}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted, coalesce(deleted_at = '2026-01-05T00:00:00Z', false) AS stamp_kept, (updated_at = '2026-01-05T00:00:00Z') AS untouched FROM pockets ORDER BY id
+        rows:
+          - {id: 0192f0a0-0000-7000-8001-000000000001, household_id: 0192f0a0-0000-7000-8000-000000000001, name: OVO, active: true, deleted: false, stamp_kept: false, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000002, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Dana, active: false, deleted: false, stamp_kept: false, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000003, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Gopay, active: true, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000004, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Venmo, active: false, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000005, household_id: 0192f0a0-0000-7000-8000-000000000001, name: ovo, active: true, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000006, household_id: 0192f0a0-0000-7000-8000-000000000001, name: DANA, active: true, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000007, household_id: 0192f0a0-0000-7000-8000-000000000001, name: theirs, active: true, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000008, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Gone, active: true, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000009, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Theirs, active: true, deleted: false, stamp_kept: false, untouched: true}
+
+
+- name: "pocket restore - NOT_FOUND is the same answer as DELETE gives for a foreign id"
+  issue: "121"
+  given: *seeded
+  request:
+    method: POST
+    path: /pockets/0192f0a0-0000-7000-8001-000000000009/restore
+  expect:
+    status: 404
+    body_json: {code: NOT_FOUND}
+    same_as:
+      method: DELETE
+      path: /pockets/0192f0a0-0000-7000-8001-000000000009
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted, coalesce(deleted_at = '2026-01-05T00:00:00Z', false) AS stamp_kept, (updated_at = '2026-01-05T00:00:00Z') AS untouched FROM pockets ORDER BY id
+        rows:
+          - {id: 0192f0a0-0000-7000-8001-000000000001, household_id: 0192f0a0-0000-7000-8000-000000000001, name: OVO, active: true, deleted: false, stamp_kept: false, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000002, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Dana, active: false, deleted: false, stamp_kept: false, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000003, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Gopay, active: true, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000004, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Venmo, active: false, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000005, household_id: 0192f0a0-0000-7000-8000-000000000001, name: ovo, active: true, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000006, household_id: 0192f0a0-0000-7000-8000-000000000001, name: DANA, active: true, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000007, household_id: 0192f0a0-0000-7000-8000-000000000001, name: theirs, active: true, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000008, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Gone, active: true, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000009, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Theirs, active: true, deleted: false, stamp_kept: false, untouched: true}
+
+
+- name: "pocket restore - a malformed id is a 400 and changes nothing"
+  issue: "121"
+  given: *seeded
+  request:
+    method: POST
+    path: /pockets/not-a-uuid/restore
+  expect:
+    status: 400
+    body_json: {code: VALIDATION, args: {field: id, rule: invalid}}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted, coalesce(deleted_at = '2026-01-05T00:00:00Z', false) AS stamp_kept, (updated_at = '2026-01-05T00:00:00Z') AS untouched FROM pockets ORDER BY id
+        rows:
+          - {id: 0192f0a0-0000-7000-8001-000000000001, household_id: 0192f0a0-0000-7000-8000-000000000001, name: OVO, active: true, deleted: false, stamp_kept: false, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000002, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Dana, active: false, deleted: false, stamp_kept: false, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000003, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Gopay, active: true, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000004, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Venmo, active: false, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000005, household_id: 0192f0a0-0000-7000-8000-000000000001, name: ovo, active: true, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000006, household_id: 0192f0a0-0000-7000-8000-000000000001, name: DANA, active: true, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000007, household_id: 0192f0a0-0000-7000-8000-000000000001, name: theirs, active: true, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000008, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Gone, active: true, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000009, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Theirs, active: true, deleted: false, stamp_kept: false, untouched: true}
+
+
+- name: "pocket restore - no session is 401 and restores nothing"
+  issue: "121"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO pockets (id, household_id, pocket_display_name, active, deleted_at, created_at, updated_at) VALUES
+          ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO', true, NULL, '2026-01-01T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Dana', false, NULL, '2026-01-02T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Gopay', true, '2026-01-05T00:00:00Z', '2026-01-03T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000004', '0192f0a0-0000-7000-8000-000000000001', 'Venmo', false, '2026-01-05T00:00:00Z', '2026-01-04T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000005', '0192f0a0-0000-7000-8000-000000000001', 'ovo', true, '2026-01-05T00:00:00Z', '2026-01-05T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000006', '0192f0a0-0000-7000-8000-000000000001', 'DANA', true, '2026-01-05T00:00:00Z', '2026-01-06T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000007', '0192f0a0-0000-7000-8000-000000000001', 'theirs', true, '2026-01-05T00:00:00Z', '2026-01-07T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000008', '0192f0a0-0000-7000-8000-000000000002', 'Gone', true, '2026-01-05T00:00:00Z', '2026-01-08T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', true, NULL, '2026-01-09T00:00:00Z', '2026-01-05T00:00:00Z')
+  request:
+    method: POST
+    path: /pockets/0192f0a0-0000-7000-8001-000000000003/restore
+  expect:
+    status: 401
+    body_json: {code: UNAUTHORIZED}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted, coalesce(deleted_at = '2026-01-05T00:00:00Z', false) AS stamp_kept, (updated_at = '2026-01-05T00:00:00Z') AS untouched FROM pockets ORDER BY id
+        rows:
+          - {id: 0192f0a0-0000-7000-8001-000000000001, household_id: 0192f0a0-0000-7000-8000-000000000001, name: OVO, active: true, deleted: false, stamp_kept: false, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000002, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Dana, active: false, deleted: false, stamp_kept: false, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000003, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Gopay, active: true, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000004, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Venmo, active: false, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000005, household_id: 0192f0a0-0000-7000-8000-000000000001, name: ovo, active: true, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000006, household_id: 0192f0a0-0000-7000-8000-000000000001, name: DANA, active: true, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000007, household_id: 0192f0a0-0000-7000-8000-000000000001, name: theirs, active: true, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000008, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Gone, active: true, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000009, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Theirs, active: true, deleted: false, stamp_kept: false, untouched: true}
+
+
+- name: "pocket restore - no session is 401 first, even for a malformed id"
+  issue: "114"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO pockets (id, household_id, pocket_display_name, active, deleted_at, created_at, updated_at) VALUES
+          ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO', true, NULL, '2026-01-01T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Dana', false, NULL, '2026-01-02T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Gopay', true, '2026-01-05T00:00:00Z', '2026-01-03T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000004', '0192f0a0-0000-7000-8000-000000000001', 'Venmo', false, '2026-01-05T00:00:00Z', '2026-01-04T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000005', '0192f0a0-0000-7000-8000-000000000001', 'ovo', true, '2026-01-05T00:00:00Z', '2026-01-05T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000006', '0192f0a0-0000-7000-8000-000000000001', 'DANA', true, '2026-01-05T00:00:00Z', '2026-01-06T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000007', '0192f0a0-0000-7000-8000-000000000001', 'theirs', true, '2026-01-05T00:00:00Z', '2026-01-07T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000008', '0192f0a0-0000-7000-8000-000000000002', 'Gone', true, '2026-01-05T00:00:00Z', '2026-01-08T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', true, NULL, '2026-01-09T00:00:00Z', '2026-01-05T00:00:00Z')
+  request:
+    method: POST
+    path: /pockets/not-a-uuid/restore
+  expect:
+    status: 401
+    body_json: {code: UNAUTHORIZED}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted, coalesce(deleted_at = '2026-01-05T00:00:00Z', false) AS stamp_kept, (updated_at = '2026-01-05T00:00:00Z') AS untouched FROM pockets ORDER BY id
+        rows:
+          - {id: 0192f0a0-0000-7000-8001-000000000001, household_id: 0192f0a0-0000-7000-8000-000000000001, name: OVO, active: true, deleted: false, stamp_kept: false, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000002, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Dana, active: false, deleted: false, stamp_kept: false, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000003, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Gopay, active: true, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000004, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Venmo, active: false, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000005, household_id: 0192f0a0-0000-7000-8000-000000000001, name: ovo, active: true, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000006, household_id: 0192f0a0-0000-7000-8000-000000000001, name: DANA, active: true, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000007, household_id: 0192f0a0-0000-7000-8000-000000000001, name: theirs, active: true, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000008, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Gone, active: true, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000009, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Theirs, active: true, deleted: false, stamp_kept: false, untouched: true}
+
+
+- name: "pocket restore - no session is 401 first, even for an unknown id"
+  issue: "121"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO pockets (id, household_id, pocket_display_name, active, deleted_at, created_at, updated_at) VALUES
+          ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO', true, NULL, '2026-01-01T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Dana', false, NULL, '2026-01-02T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Gopay', true, '2026-01-05T00:00:00Z', '2026-01-03T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000004', '0192f0a0-0000-7000-8000-000000000001', 'Venmo', false, '2026-01-05T00:00:00Z', '2026-01-04T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000005', '0192f0a0-0000-7000-8000-000000000001', 'ovo', true, '2026-01-05T00:00:00Z', '2026-01-05T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000006', '0192f0a0-0000-7000-8000-000000000001', 'DANA', true, '2026-01-05T00:00:00Z', '2026-01-06T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000007', '0192f0a0-0000-7000-8000-000000000001', 'theirs', true, '2026-01-05T00:00:00Z', '2026-01-07T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000008', '0192f0a0-0000-7000-8000-000000000002', 'Gone', true, '2026-01-05T00:00:00Z', '2026-01-08T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', true, NULL, '2026-01-09T00:00:00Z', '2026-01-05T00:00:00Z')
+  request:
+    method: POST
+    path: /pockets/0192f0a0-0000-7000-8001-0000000000ff/restore
+  expect:
+    status: 401
+    body_json: {code: UNAUTHORIZED}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted, coalesce(deleted_at = '2026-01-05T00:00:00Z', false) AS stamp_kept, (updated_at = '2026-01-05T00:00:00Z') AS untouched FROM pockets ORDER BY id
+        rows:
+          - {id: 0192f0a0-0000-7000-8001-000000000001, household_id: 0192f0a0-0000-7000-8000-000000000001, name: OVO, active: true, deleted: false, stamp_kept: false, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000002, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Dana, active: false, deleted: false, stamp_kept: false, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000003, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Gopay, active: true, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000004, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Venmo, active: false, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000005, household_id: 0192f0a0-0000-7000-8000-000000000001, name: ovo, active: true, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000006, household_id: 0192f0a0-0000-7000-8000-000000000001, name: DANA, active: true, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000007, household_id: 0192f0a0-0000-7000-8000-000000000001, name: theirs, active: true, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000008, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Gone, active: true, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000009, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Theirs, active: true, deleted: false, stamp_kept: false, untouched: true}
+
+
+- name: "pocket restore - under an outage is 500 and keeps the cookie, restoring nothing"
+  issue: "27"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO pockets (id, household_id, pocket_display_name, active, deleted_at, created_at, updated_at) VALUES
+          ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO', true, NULL, '2026-01-01T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Dana', false, NULL, '2026-01-02T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Gopay', true, '2026-01-05T00:00:00Z', '2026-01-03T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000004', '0192f0a0-0000-7000-8000-000000000001', 'Venmo', false, '2026-01-05T00:00:00Z', '2026-01-04T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000005', '0192f0a0-0000-7000-8000-000000000001', 'ovo', true, '2026-01-05T00:00:00Z', '2026-01-05T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000006', '0192f0a0-0000-7000-8000-000000000001', 'DANA', true, '2026-01-05T00:00:00Z', '2026-01-06T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000007', '0192f0a0-0000-7000-8000-000000000001', 'theirs', true, '2026-01-05T00:00:00Z', '2026-01-07T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000008', '0192f0a0-0000-7000-8000-000000000002', 'Gone', true, '2026-01-05T00:00:00Z', '2026-01-08T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', true, NULL, '2026-01-09T00:00:00Z', '2026-01-05T00:00:00Z')
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+    - outage: true
+  request:
+    method: POST
+    path: /pockets/0192f0a0-0000-7000-8001-000000000003/restore
+  expect:
+    status: 500
+    body_json: {code: INTERNAL}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted, coalesce(deleted_at = '2026-01-05T00:00:00Z', false) AS stamp_kept, (updated_at = '2026-01-05T00:00:00Z') AS untouched FROM pockets ORDER BY id
+        rows:
+          - {id: 0192f0a0-0000-7000-8001-000000000001, household_id: 0192f0a0-0000-7000-8000-000000000001, name: OVO, active: true, deleted: false, stamp_kept: false, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000002, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Dana, active: false, deleted: false, stamp_kept: false, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000003, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Gopay, active: true, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000004, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Venmo, active: false, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000005, household_id: 0192f0a0-0000-7000-8000-000000000001, name: ovo, active: true, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000006, household_id: 0192f0a0-0000-7000-8000-000000000001, name: DANA, active: true, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000007, household_id: 0192f0a0-0000-7000-8000-000000000001, name: theirs, active: true, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000008, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Gone, active: true, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000009, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Theirs, active: true, deleted: false, stamp_kept: false, untouched: true}
+
+
+- name: "pocket restore - under an outage a malformed id is still 500, the session being unreadable"
+  issue: "27"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO pockets (id, household_id, pocket_display_name, active, deleted_at, created_at, updated_at) VALUES
+          ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO', true, NULL, '2026-01-01T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Dana', false, NULL, '2026-01-02T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Gopay', true, '2026-01-05T00:00:00Z', '2026-01-03T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000004', '0192f0a0-0000-7000-8000-000000000001', 'Venmo', false, '2026-01-05T00:00:00Z', '2026-01-04T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000005', '0192f0a0-0000-7000-8000-000000000001', 'ovo', true, '2026-01-05T00:00:00Z', '2026-01-05T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000006', '0192f0a0-0000-7000-8000-000000000001', 'DANA', true, '2026-01-05T00:00:00Z', '2026-01-06T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000007', '0192f0a0-0000-7000-8000-000000000001', 'theirs', true, '2026-01-05T00:00:00Z', '2026-01-07T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000008', '0192f0a0-0000-7000-8000-000000000002', 'Gone', true, '2026-01-05T00:00:00Z', '2026-01-08T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', true, NULL, '2026-01-09T00:00:00Z', '2026-01-05T00:00:00Z')
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+    - outage: true
+  request:
+    method: POST
+    path: /pockets/not-a-uuid/restore
+  expect:
+    status: 500
+    body_json: {code: INTERNAL}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted, coalesce(deleted_at = '2026-01-05T00:00:00Z', false) AS stamp_kept, (updated_at = '2026-01-05T00:00:00Z') AS untouched FROM pockets ORDER BY id
+        rows:
+          - {id: 0192f0a0-0000-7000-8001-000000000001, household_id: 0192f0a0-0000-7000-8000-000000000001, name: OVO, active: true, deleted: false, stamp_kept: false, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000002, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Dana, active: false, deleted: false, stamp_kept: false, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000003, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Gopay, active: true, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000004, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Venmo, active: false, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000005, household_id: 0192f0a0-0000-7000-8000-000000000001, name: ovo, active: true, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000006, household_id: 0192f0a0-0000-7000-8000-000000000001, name: DANA, active: true, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000007, household_id: 0192f0a0-0000-7000-8000-000000000001, name: theirs, active: true, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000008, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Gone, active: true, deleted: true, stamp_kept: true, untouched: true}
+          - {id: 0192f0a0-0000-7000-8001-000000000009, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Theirs, active: true, deleted: false, stamp_kept: false, untouched: true}

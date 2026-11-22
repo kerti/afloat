@@ -18,7 +18,8 @@ whole scaffold sheet. If the two ever disagree, `BOOTSTRAP.md` wins and this fil
 - **Path ids:** an `{id}` that is unknown, another Household's or deleted is one `404 NOT_FOUND` (no
   `args`, same bytes for every body, `{}` included); validation comes before the lookup. A path
   parameter is `format: uuid` with no `pattern` and no `maxLength` (#106). A `PATCH` boolean that a
-  `false` must set is `sqlc.narg` and a `*bool`. Deactivating (`active`) is not a delete.
+  `false` must set is `sqlc.narg` and a `*bool`. Deactivating (`active`) is not a delete. Delete and
+  restore alone see a deleted row: for them only an unknown or foreign id is the `404`.
 - **Collections:** `{"items": [...]}`, empty is `{"items": []}` never `null`, ordered by `created_at, id`.
 - **Tenancy:** `household_id` filtered in SQL on every Household-scoped query, never only in
   middleware.
@@ -28,6 +29,12 @@ whole scaffold sheet. If the two ever disagree, `BOOTSTRAP.md` wins and this fil
 - **Soft delete everywhere:** nullable `deleted_at`. No hard-delete endpoint. Scoped to
   Household-scoped domain data — instance-local auth state (`sessions`, `credentials`,
   `invitations`) is exempt and hard-deletes, because session revocation *is* the row delete.
+  `DELETE /<entity>/{id}` is soft (`204`), `POST /<entity>/{id}/restore` is its Undo (`200` with the
+  entity); both idempotent on the caller's own row in one `household_id`-scoped statement, a repeat
+  changes no column, and a delete keeps the first `deleted_at`. A restore into a held name is
+  `409 NAME_TAKEN` (the unique index decides it, never a lookup). An entity that history references
+  cannot be deleted while referenced (`409 <ENTITY>_IN_USE`, built with the referencing table, inside
+  the delete statement). Deactivating is not deleting.
 - **Constraints:** `CHECK (amount <> 0)` on expenses. Negative amounts are valid (refunds with no
   recorded original); zero is not.
 - **Error envelope:** one shape, identical to Balances ADR-0027:

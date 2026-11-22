@@ -456,10 +456,11 @@
       - sql: SELECT (SELECT count(*) FROM sessions)::int AS sessions, (SELECT count(*) FROM login_attempts)::int AS attempts
         rows: [{sessions: 0, attempts: 0}]
 
-# PATCH is the only verb /pockets/{id} serves today (#121, PR 2). The other
-# verbs answer chi's own 405, as an unregistered route does to a method it does
-# not serve, and write nothing. (DELETE and the restore route arrive in PR 3,
-# which pins them in its own cases.)
+# PATCH and DELETE are the verbs /pockets/{id} serves (#121, PRs 2 and 3), and
+# POST is the only one /pockets/{id}/restore serves. The other verbs answer
+# chi's own 405, as an unregistered route does to a method it does not serve,
+# and write nothing. There is no GET /pockets/{id} and no hard delete, so
+# nothing here may remove a row.
 - name: http methods - GET on a Pocket is method not allowed
   issue: "121"
   request:
@@ -492,3 +493,104 @@
     rows:
       - sql: SELECT pocket_display_name AS name, active FROM pockets
         rows: [{name: OVO, active: true}]
+
+
+- name: http methods - GET on restore is method not allowed
+  issue: "121"
+  request:
+    method: GET
+    path: /pockets/0192f0a0-0000-7000-8001-000000000001/restore
+  expect:
+    status: 405
+    body_empty: true
+
+- name: http methods - PUT on restore is method not allowed and writes nothing
+  issue: "121"
+  given:
+    - sql: INSERT INTO pockets (id, household_id, pocket_display_name, deleted_at) VALUES ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO', now())
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: PUT
+    path: /pockets/0192f0a0-0000-7000-8001-000000000001/restore
+  expect:
+    status: 405
+    body_empty: true
+    rows:
+      - sql: SELECT pocket_display_name AS name, (deleted_at IS NOT NULL) AS deleted FROM pockets
+        rows: [{name: OVO, deleted: true}]
+
+- name: http methods - PATCH on restore is method not allowed and writes nothing
+  issue: "121"
+  given:
+    - sql: INSERT INTO pockets (id, household_id, pocket_display_name, deleted_at) VALUES ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO', now())
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: PATCH
+    path: /pockets/0192f0a0-0000-7000-8001-000000000001/restore
+    headers:
+      Content-Type: application/json
+    body: '{"active":false}'
+  expect:
+    status: 405
+    body_empty: true
+    rows:
+      - sql: SELECT pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets
+        rows: [{name: OVO, active: true, deleted: true}]
+
+# A DELETE on restore must not delete anything, and in particular must not be
+# read as a DELETE of the Pocket: the row is live and stays live.
+- name: http methods - DELETE on restore is method not allowed and deletes nothing
+  issue: "121"
+  given:
+    - sql: INSERT INTO pockets (id, household_id, pocket_display_name) VALUES ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO')
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: DELETE
+    path: /pockets/0192f0a0-0000-7000-8001-000000000001/restore
+  expect:
+    status: 405
+    body_empty: true
+    rows:
+      - sql: SELECT pocket_display_name AS name, (deleted_at IS NOT NULL) AS deleted FROM pockets
+        rows: [{name: OVO, deleted: false}]
+
+# POST on the Pocket itself is not create (that is POST /pockets) and not
+# restore: 405, and the row is as it was.
+- name: http methods - POST on a Pocket is method not allowed and writes nothing
+  issue: "121"
+  given:
+    - sql: INSERT INTO pockets (id, household_id, pocket_display_name, deleted_at) VALUES ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO', now())
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /pockets/0192f0a0-0000-7000-8001-000000000001
+  expect:
+    status: 405
+    body_empty: true
+    rows:
+      - sql: SELECT pocket_display_name AS name, (deleted_at IS NOT NULL) AS deleted FROM pockets
+        rows: [{name: OVO, deleted: true}]

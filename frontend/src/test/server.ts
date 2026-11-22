@@ -38,6 +38,10 @@ export type State = {
   pocketPosts?: CreatePocketBody[];
   // Every PATCH /pockets/{id} body, in order.
   pocketPatches?: UpdatePocketBody[];
+  // Pockets the fake server has soft-deleted, and the ids of every DELETE and restore, in order.
+  deletedPockets?: Pocket[];
+  pocketDeletes?: string[];
+  pocketRestores?: string[];
   // The one password the fake server accepts as "current". Defaults to the
   // login fixture's.
   password?: string;
@@ -226,6 +230,31 @@ export function defaultHandlers(state: State = { signedIn: false, me: alice }) {
       }
       if (body.active !== undefined) held.active = body.active;
       return HttpResponse.json(held);
+    }),
+    // Soft delete: the Pocket leaves the list but is kept, so restore can bring it back.
+    http.delete("/api/pockets/:id", ({ params }) => {
+      if (!state.signedIn) return HttpResponse.json(envelope("UNAUTHORIZED"), { status: 401 });
+      const list = (state.pockets ??= []);
+      const held = list.find((p) => p.id === params.id);
+      if (!held) return HttpResponse.json(envelope("NOT_FOUND"), { status: 404 });
+      state.pocketDeletes = [...(state.pocketDeletes ?? []), held.id];
+      (state.deletedPockets ??= []).push(held);
+      state.pockets = list.filter((p) => p !== held);
+      return new HttpResponse(null, { status: 204 });
+    }),
+    http.post("/api/pockets/:id/restore", ({ params }) => {
+      if (!state.signedIn) return HttpResponse.json(envelope("UNAUTHORIZED"), { status: 401 });
+      const gone = state.deletedPockets?.find((p) => p.id === params.id);
+      if (!gone) return HttpResponse.json(envelope("NOT_FOUND"), { status: 404 });
+      state.pocketRestores = [...(state.pocketRestores ?? []), gone.id];
+      const list = (state.pockets ??= []);
+      const taken = list.some(
+        (p) => p.pocket_display_name.toLowerCase() === gone.pocket_display_name.toLowerCase(),
+      );
+      if (taken) return HttpResponse.json(envelope("NAME_TAKEN"), { status: 409 });
+      state.deletedPockets = state.deletedPockets!.filter((p) => p !== gone);
+      list.push(gone);
+      return HttpResponse.json(gone);
     }),
     http.post("/api/auth/logout", () => {
       state.signedIn = false;

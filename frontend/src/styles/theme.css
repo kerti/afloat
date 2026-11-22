@@ -17,6 +17,10 @@
  * text sits on. Light #a34a28: 5.57:1 on --background, 5.89:1 on --card, 5.11:1
  * on --muted. Dark #e8946f: 7.62:1, 6.88:1 and 5.43:1 on the same three.
  *
+ * --destructive is the colour of a Delete and nothing else (the destructive Button
+ * tone and DetailActions' last action). PROVISIONAL, like --attention: the brand
+ * session owns the final value. Light #b4453c, dark #ec8b80.
+ *
  * Typeface: Figtree, variable weight, self-hosted (no runtime fetch, no npm
  * dependency). Files from @fontsource-variable/figtree@5.3.0, SIL OFL 1.1
  * (fonts/OFL.txt); the latin subset covers en-GB and id-ID, latin-ext the rest.
@@ -60,7 +64,7 @@
   --primary: #1f74ac;
   --primary-foreground: #ffffff;
   --attention: #a34a28;
-  --destructive: oklch(0.577 0.245 27.3);
+  --destructive: #b4453c;
   --destructive-foreground: oklch(0.985 0 0);
   --scrim: rgb(0 0 0 / 0.1);
   /* The top bar's glass (Uruni header-glass): a bright rim on the edge facing
@@ -85,7 +89,7 @@
     --primary: #5db2e8;
     --primary-foreground: #06131c;
     --attention: #e8946f;
-    --destructive: oklch(0.704 0.191 22.2);
+    --destructive: #ec8b80;
     --destructive-foreground: oklch(0.985 0 0);
     /* Uruni is light-only; dark keeps the rim and glow faint, or the bar
        would wear a white line. */

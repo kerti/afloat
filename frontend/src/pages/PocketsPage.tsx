@@ -1,12 +1,19 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { useQueryClient } from "@tanstack/react-query";
-import { updatePocket, type ApiError, type Pocket } from "@/api/client";
-import { pocketsKey, useCreatePocket, usePockets, useUpdatePocket } from "@/api/queries";
+import { restorePocket, updatePocket, type ApiError, type Pocket } from "@/api/client";
+import {
+  pocketsKey,
+  useCreatePocket,
+  useDeletePocket,
+  usePockets,
+  useUpdatePocket,
+} from "@/api/queries";
 import { errorMessage } from "@/api/errors";
 import { BackLink } from "@/components/BackLink";
 import { Badge } from "@/components/Badge";
 import { CheckboxRow } from "@/components/CheckboxRow";
+import { DetailActions } from "@/components/DetailActions";
 import { Field, Form } from "@/components/Form";
 import { ListCard, ListRow } from "@/components/List";
 import { ErrorState, Loading } from "@/components/states";
@@ -38,9 +45,18 @@ type PocketFormProps = {
   newAttemptId?: () => void;
   close: () => void;
   onToggle?: (p: Pocket) => void;
+  onDelete?: (p: Pocket) => void;
 };
 
-function PocketForm({ mode, pocket, attemptId, newAttemptId, close, onToggle }: PocketFormProps) {
+function PocketForm({
+  mode,
+  pocket,
+  attemptId,
+  newAttemptId,
+  close,
+  onToggle,
+  onDelete,
+}: PocketFormProps) {
   const { t } = useTranslation();
   const create = useCreatePocket();
   const update = useUpdatePocket();
@@ -127,19 +143,29 @@ function PocketForm({ mode, pocket, attemptId, newAttemptId, close, onToggle }: 
         {fieldMessage && <FieldError id="pocket-name-error">{fieldMessage}</FieldError>}
       </Field>
       {formMessage && <FieldError>{formMessage}</FieldError>}
+      {mode === "edit" && (
+        <DetailActions
+          actions={[
+            {
+              key: "toggle",
+              label: t(pocket!.active ? "pockets.deactivate" : "pockets.reactivate"),
+              disabled: pending,
+              onClick: () => onToggle?.(pocket!),
+            },
+            {
+              key: "delete",
+              label: t("pockets.delete"),
+              tone: "destructive",
+              disabled: pending,
+              onClick: () => onDelete?.(pocket!),
+            },
+          ]}
+        />
+      )}
       <DialogFooter>
-        {mode === "create" ? (
+        {mode === "create" && (
           <Button type="button" variant="outline" disabled={pending} onClick={close}>
             {t("pockets.cancel")}
-          </Button>
-        ) : (
-          <Button
-            type="button"
-            variant="outline"
-            disabled={pending}
-            onClick={() => onToggle?.(pocket!)}
-          >
-            {t(pocket!.active ? "pockets.deactivate" : "pockets.reactivate")}
           </Button>
         )}
         <Button type="submit" disabled={pending || unchanged}>
@@ -157,6 +183,7 @@ export function PocketsPage() {
   const qc = useQueryClient();
   const pockets = usePockets();
   const toggle = useUpdatePocket();
+  const remove = useDeletePocket();
   const editParam = useDialogParam("edit");
   const newParam = useDialogParam("new");
   // Page state, not stored: unticked again on every visit (R7).
@@ -181,6 +208,26 @@ export function PocketsPage() {
         toastUndoable({
           message: t(p.active ? "toast.deactivated" : "toast.reactivated", { name }),
           undo: () => updatePocket(p.id, { active: p.active }),
+          qc,
+          invalidate: pocketsKey,
+        });
+      })
+      .catch((e: ApiError) => {
+        toastError(errorMessage(t, e));
+      });
+  }
+
+  // Delete is immediate, with no confirmation, and its Undo restores (R3, P6).
+  function onDelete(p: Pocket) {
+    if (remove.isPending) return;
+    const name = p.pocket_display_name;
+    editParam.close();
+    remove
+      .mutateAsync(p.id)
+      .then(() => {
+        toastUndoable({
+          message: t("toast.deleted", { name }),
+          undo: () => restorePocket(p.id),
           qc,
           invalidate: pocketsKey,
         });
@@ -271,6 +318,7 @@ export function PocketsPage() {
               pocket={editing}
               close={editParam.close}
               onToggle={onToggle}
+              onDelete={onDelete}
             />
           </DialogContent>
         </Dialog>

@@ -108,6 +108,14 @@ func (s *Server) UpdatePocket(ctx context.Context, r api.UpdatePocketRequestObje
 	return s.pocket.UpdatePocket(ctx, r)
 }
 
+func (s *Server) DeletePocket(ctx context.Context, r api.DeletePocketRequestObject) (api.DeletePocketResponseObject, error) {
+	return s.pocket.DeletePocket(ctx, r)
+}
+
+func (s *Server) RestorePocket(ctx context.Context, r api.RestorePocketRequestObject) (api.RestorePocketResponseObject, error) {
+	return s.pocket.RestorePocket(ctx, r)
+}
+
 // New builds the router: the API under the contract's base path (basePath,
 // /api today), with the middleware every request passes through.
 //

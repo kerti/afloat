@@ -102,6 +102,7 @@
     "cancel": "Batal",
     "deactivate": "Nonaktifkan",
     "reactivate": "Aktifkan kembali",
+    "delete": "Hapus",
     "inactive": "Nonaktif",
     "showInactive": "Tampilkan kantong nonaktif ({{count}})",
     "allInactive_other": "Tidak ada kantong aktif. {{count}} kantong nonaktif disembunyikan. Centang “Tampilkan kantong nonaktif” untuk melihatnya.",
@@ -153,6 +154,7 @@
     "saved": "Tersimpan.",
     "deactivated": "{{name}} dinonaktifkan.",
     "reactivated": "{{name}} diaktifkan kembali.",
+    "deleted": "{{name}} dihapus.",
     "undo": "Urungkan"
   },
   "dialog": {

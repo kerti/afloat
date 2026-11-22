@@ -10,6 +10,9 @@ const buttonVariants = cva(
         default: "bg-primary text-primary-foreground hover:bg-primary/90",
         outline: "border border-input bg-background hover:bg-muted",
         ghost: "hover:bg-muted",
+        // Tinted, destructive text (Uruni web/src/components/ui/button.tsx).
+        destructive:
+          "bg-destructive/10 text-destructive hover:bg-destructive/20 focus-visible:ring-destructive/40",
       },
       size: {
         default: "h-11 px-4 py-2",

@@ -111,7 +111,7 @@ Household's Pockets that are not deleted, case-insensitively), `active`. _Avoid_
 list, keeps its name, keeps labelling its Expenses and keeps its place in breakdowns; it is only not
 offered for new capture, and deactivating is reversible. It is not a delete: a deleted Pocket is a
 soft-deleted row, gone from the UI, that gives up its name and is refused while any Expense
-references it. Neither act edits, moves or removes an Expense, or changes a figure. _Avoid_: Archive,
+references it; it can be restored (the Undo of a delete) unless another Pocket has taken the name. Neither act edits, moves or removes an Expense, or changes a figure. _Avoid_: Archive,
 Close, Disable (each leaves it unclear whether history survives).
 
 > **A Pocket is not a Balances Asset.** The same real-world OVO account may be a bank-account Asset in
@@ -162,6 +162,7 @@ JSON. Blank means not yet in the UI.
 | User | | |
 | Pocket | kantong | approved 22 Nov 2026 (#121) |
 | Deactivate / Inactive | nonaktifkan / nonaktif | Pockets PR 2 (#125) |
+| Delete | hapus | Pockets PR 3 (#121) |
 | Home (the screen) | Beranda | UI retrofit |
 | Period | periode anggaran | Household settings (#117) |
 | Expense | | |

@@ -66,7 +66,8 @@
       "breached": "Kata sandi itu terlalu umum. Pilih yang lain."
     },
     "FOUNDING_DISABLED": "Instans ini tidak menerima rumah tangga baru. Tanyakan kepada pengelolanya.",
-    "INVALID_CURRENT_PASSWORD": "Itu bukan kata sandi Anda saat ini."
+    "INVALID_CURRENT_PASSWORD": "Itu bukan kata sandi Anda saat ini.",
+    "NOT_FOUND": "Afloat tidak dapat menemukannya. Mungkin sudah dihapus."
   },
   "register": {
     "title": "Buat akun Anda",
@@ -94,7 +95,20 @@
     "addHeading": "Tambah Kantong",
     "namePlaceholder": "Misalnya: Tunai, OVO, debit BCA",
     "add": "Tambah",
-    "adding": "Menambahkan…"
+    "adding": "Menambahkan…",
+    "edit": "Ubah",
+    "editFor": "Ubah {{name}}",
+    "save": "Simpan",
+    "saving": "Menyimpan…",
+    "cancel": "Batal",
+    "saved": "Tersimpan.",
+    "deactivate": "Nonaktifkan",
+    "deactivateFor": "Nonaktifkan {{name}}",
+    "reactivate": "Aktifkan kembali",
+    "reactivateFor": "Aktifkan kembali {{name}}",
+    "inactive": "Nonaktif",
+    "showInactive": "Tampilkan Kantong nonaktif ({{count}})",
+    "allInactive_other": "Tidak ada Kantong aktif. {{count}} Kantong nonaktif disembunyikan. Centang “Tampilkan Kantong nonaktif” untuk melihatnya."
   },
   "settings": {
     "household": {
@@ -141,5 +155,9 @@
         "saved": "Kata sandi diubah."
       }
     }
+  },
+  "toast": {
+    "deactivated": "Dinonaktifkan.",
+    "undo": "Urungkan"
   }
 }

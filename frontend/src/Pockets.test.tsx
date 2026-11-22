@@ -22,7 +22,7 @@ describe("pockets", () => {
     await user.click(await screen.findByRole("link", { name: "Pockets" }));
 
     const rows = await screen.findAllByRole("listitem");
-    expect(rows.map((r) => r.textContent)).toEqual(["Cash", "BCA debit", "OVO"]);
+    expect(rows.map((r) => r.firstElementChild?.textContent)).toEqual(["Cash", "BCA debit", "OVO"]);
   });
 
   it("shows the empty state when there are none", async () => {

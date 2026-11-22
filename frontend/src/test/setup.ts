@@ -6,6 +6,22 @@ import { i18n, initI18n } from "@/i18n";
 
 initI18n("en-GB");
 
+// sonner captures the pointer on a toast press; jsdom has no pointer capture.
+Element.prototype.setPointerCapture ??= () => {};
+Element.prototype.releasePointerCapture ??= () => {};
+
+// jsdom has no matchMedia; sonner reads it to follow the OS colour scheme.
+window.matchMedia ??= (query: string) =>
+  ({
+    matches: false,
+    media: query,
+    addEventListener() {},
+    removeEventListener() {},
+    addListener() {},
+    removeListener() {},
+    dispatchEvent: () => false,
+  }) as unknown as MediaQueryList;
+
 // MSW's onUnhandledFrame: "error" only prints: the request then rejects, and
 // the API client reports any rejected fetch as NETWORK, so a test missing a
 // handler would pass on a quiet "Can't reach Afloat". Recording the request

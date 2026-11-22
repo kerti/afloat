@@ -41,25 +41,35 @@ func responseErrorHandler(w http.ResponseWriter, r *http.Request, err error) {
 	httperr.Write(w, http.StatusInternalServerError, httperr.CodeInternal, nil)
 }
 
-// paramErrorHandler covers path, query, header and cookie binding. No endpoint
-// in the contract declares such a parameter yet, so this is unreachable today
-// and wired anyway: the first one that lands must not reopen the plain-text
-// default, and this is not the kind of thing anyone remembers to revisit.
+// paramErrorHandlerFor covers path, query, header and cookie binding. The
+// generated wrapper binds these at the top of each operation, BEFORE the
+// per-operation middlewares run (oapi-codegen's chi-middleware.tmpl), so without
+// the check below a malformed {id} would answer 400 ahead of sessionRequired's
+// 401 and an unauthenticated caller would learn what the binder accepts. The
+// session is therefore asked first, with the same decision sessionRequired makes
+// (refusedForSession), and the parameter is reported only to a caller who may
+// make the request (#121, BOOTSTRAP.md §6).
 //
 // The errors carry the parameter name, so the envelope can name the field the
-// same way a body validation failure does.
-func paramErrorHandler(w http.ResponseWriter, r *http.Request, err error) {
-	slog.Warn("request parameter rejected", "path", r.URL.Path, "err", err)
+// same way a body validation failure does. required is sessionRequirements' map
+// of the contract.
+func paramErrorHandlerFor(required map[string]bool) func(http.ResponseWriter, *http.Request, error) {
+	return func(w http.ResponseWriter, r *http.Request, err error) {
+		if refusedForSession(w, r, required) {
+			return
+		}
+		slog.Warn("request parameter rejected", "path", r.URL.Path, "err", err)
 
-	field, rule := paramFieldAndRule(err)
-	if field == "" {
-		httperr.Write(w, http.StatusBadRequest, httperr.CodeValidation, nil)
-		return
+		field, rule := paramFieldAndRule(err)
+		if field == "" {
+			httperr.Write(w, http.StatusBadRequest, httperr.CodeValidation, nil)
+			return
+		}
+		httperr.Write(w, http.StatusBadRequest, httperr.CodeValidation, map[string]any{
+			"field": field,
+			"rule":  rule,
+		})
 	}
-	httperr.Write(w, http.StatusBadRequest, httperr.CodeValidation, map[string]any{
-		"field": field,
-		"rule":  rule,
-	})
 }
 
 // paramFieldAndRule reports the offending parameter and the rule vocabulary the

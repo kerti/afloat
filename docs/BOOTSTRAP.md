@@ -175,7 +175,10 @@ with zoneinfo answers from it, so a case-insensitive filesystem (a Mac) also acc
   else that is an instant is `timestamptz`.
 - **Period Day is computed server-side only.** `day_starts_at` plus per-User `time_zone` is real
   arithmetic; if the frontend also derives it, the two disagree at 03:59.
-- **Soft delete everywhere:** nullable `deleted_at`. Hard delete is not exposed.
+- **Soft delete everywhere:** nullable `deleted_at`. Hard delete is not exposed. **Deactivating is not
+  a delete** (#121, R1): a row that history references is retired with an `active` boolean, changed by
+  an ordinary merge `PATCH`. It stays visible and in the list (the client filters), keeps its name and
+  keeps labelling what it labels. Only a delete gives up the name and disappears.
   - *Scope: Household-scoped domain data.* Instance-local auth state — `sessions`, `credentials`,
     `invitations` — is exempt and hard-deletes. Session revocation **is** the row delete; a
     soft-deleted session is a live session that merely looks dead, and every read of the table would
@@ -199,7 +202,22 @@ with zoneinfo answers from it, so a case-insensitive filesystem (a Mac) also acc
   client-supplied id and does not apply; a `PATCH` of absolute values is idempotent on its own, so a
   retry is safe. A domain update is tenant-scoped in SQL (`WHERE id = <household_id from the session>`,
   never from the request), sets `updated_at` itself from the database's `now()` (no trigger does), and
-  is rejected before it runs by the contract's own rules, then by the handler's.
+  is rejected before it runs by the contract's own rules, then by the handler's. **A boolean that a
+  `false` must be able to set is `sqlc.narg` and a Go `*bool`** (`PATCH /pockets/{id}`'s `active`): a
+  plain `bool` zero value would read as "absent" and silently drop every deactivation. A row that the
+  `WHERE` does not match is no row, and the answer is `404 NOT_FOUND` (next bullet).
+- **Tenancy on a path id** (#121, the first `{id}` route): an id that is **unknown, another
+  Household's, or soft-deleted** answers one `404 NOT_FOUND`, a code with no `args`, the same bytes in
+  every case and for every body, `{}` included (a no-op must not confirm another Household's id). Not
+  `403`, which says "exists, not yours". The order in which a request can fail, each step reached only
+  if the earlier ones passed: the cross-site guard (`403`), the session (`401`), the id's shape (`400`
+  from the binder), the body (`400`: the contract's rules, then the handler's), the statement (`404`,
+  `409`). **Validation before lookup**, so a foreign id with a bad body answers what an unknown one
+  does. This `404` is the first with an envelope: a path that matches no route is still a bare `404`
+  (#56). A path parameter is a `format: uuid` with **no `pattern` and no `maxLength`**: the validator
+  checks a path on its encoded form and the binder reads the decoded one (#106), and a `pattern` would
+  refuse `%30192f...`, the percent-encoded spelling of a valid id. The spellings `uuid.Parse` accepts
+  (upper case, `urn:uuid:`, braces, 32 hex) name the same row and are accepted.
 
 ## 5. Authentication
 
@@ -603,7 +621,8 @@ The error envelope is Balances ADR-0027 exactly: `{"code": "SCREAMING_SNAKE", "a
 the first failing field only. The vocabulary is the contract's `ErrorCode` enum, closed and extended as
 endpoints land. `ID_TAKEN` (#121) is a create whose client-supplied id is held by something other than a
 live row of the caller's own Household, and `NAME_TAKEN` a name another live row already holds; both are
-`409`, carry no `args`, and name no entity.
+`409`, carry no `args`, and name no entity. `NOT_FOUND` (#121) is an `{id}` that names no live row of
+the caller's own Household (`404`, no `args`; see *Tenancy on a path id*, §4).
 
 **Which request-body failure gets reported (#18).** The login tests drive this table:
 
@@ -728,7 +747,12 @@ an entry it cannot mount at.
 `security: [sessionCookie]` protects every operation by default; a public one says so with
 `security: []`; optional auth, as `logout` has, is `[{sessionCookie: []}, {}]`. Operations that
 need only `onboardingCookie` are checked by their own handlers, which own that 401's shape.
-Enforcement is `httpserver`'s `sessionRequired`, which runs ahead of request validation. At startup
+Enforcement is `httpserver`'s `sessionRequired`, which runs ahead of request validation. **Path
+parameters are the one thing that runs ahead of it:** oapi-codegen's generated wrapper binds them
+before any per-operation middleware, so a malformed `{id}` reaches `paramErrorHandlerFor` first. That
+handler asks the same question (`refusedForSession`, one decision for both) and answers `401` (or
+`500` for an unreadable session) before it reports the parameter, so a caller without a session still
+learns nothing about what the binder accepts (#121). At startup
 it refuses a scheme name it does not know, and an operation naming both cookies: it cannot check a
 handshake, so that shape needs a ruling first.
 When the session cookie was presented but the lookup itself failed (an outage, not `pgx.ErrNoRows`),

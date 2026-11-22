@@ -15,6 +15,10 @@ whole scaffold sheet. If the two ever disagree, `BOOTSTRAP.md` wins and this fil
 - **Names:** `<entity>_display_name` everywhere. One shared rule (`auth.CheckBoundedName`: trimmed,
   `required` / `max` / `pattern`), a per-entity cap (60 for Household and Pocket). Unique among live
   rows via a partial index on `lower(name)`; a clash is `409 NAME_TAKEN`. Pin only ASCII case folds.
+- **Path ids:** an `{id}` that is unknown, another Household's or deleted is one `404 NOT_FOUND` (no
+  `args`, same bytes for every body, `{}` included); validation comes before the lookup. A path
+  parameter is `format: uuid` with no `pattern` and no `maxLength` (#106). A `PATCH` boolean that a
+  `false` must set is `sqlc.narg` and a `*bool`. Deactivating (`active`) is not a delete.
 - **Collections:** `{"items": [...]}`, empty is `{"items": []}` never `null`, ordered by `created_at, id`.
 - **Tenancy:** `household_id` filtered in SQL on every Household-scoped query, never only in
   middleware.

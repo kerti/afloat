@@ -12,6 +12,7 @@ import {
   localLogin,
   localRegister,
   logout,
+  updatePocket,
   updateHousehold,
   updateMe,
   type ChangeEmailRequest,
@@ -26,6 +27,7 @@ import {
   type PocketList,
   type UpdateHouseholdRequest,
   type UpdateMeRequest,
+  type UpdatePocketRequest,
 } from "./client";
 import { clearSession, meKey } from "./queryClient";
 
@@ -156,5 +158,18 @@ export function useCreatePocket() {
   return useMutation<Pocket, ApiError, CreatePocketRequest>({
     mutationFn: createPocket,
     onSuccess: () => qc.invalidateQueries({ queryKey: pocketsKey }),
+  });
+}
+
+// A NOT_FOUND means the list is stale (another member deleted the Pocket), so
+// it is refetched whichever way the write went.
+export function useUpdatePocket() {
+  const qc = useQueryClient();
+  return useMutation<Pocket, ApiError, { id: string; body: UpdatePocketRequest }>({
+    mutationFn: ({ id, body }) => updatePocket(id, body),
+    onSuccess: () => qc.invalidateQueries({ queryKey: pocketsKey }),
+    onError: (err) => {
+      if (err.code === "NOT_FOUND") void qc.invalidateQueries({ queryKey: pocketsKey });
+    },
   });
 }

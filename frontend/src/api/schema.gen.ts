@@ -329,6 +329,49 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/pockets/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Rename, deactivate or reactivate a Pocket.
+         * @description Merge-style, as `PATCH /household`: a property left out is unchanged,
+         *     none is required, and `{}` is a no-op that answers the Pocket as it
+         *     stands. Two writers of different properties both land. The answer is the
+         *     whole Pocket.
+         *
+         *     `pocket_display_name` follows the same name rules as at creation
+         *     (BOOTSTRAP.md §5.1.1): trimmed, not blank, at most 60 code points. A name
+         *     already held, case-insensitively, by another Pocket of the Household
+         *     that is not deleted (active or inactive) is `409 NAME_TAKEN`, with
+         *     nothing changed; a rename to its own name in another case is not a
+         *     clash.
+         *
+         *     `active: false` deactivates: the Pocket keeps its name, its place in the
+         *     list and everything it labels, and is no longer offered for new capture.
+         *     `active: true` reactivates. Deactivating is not deleting. An inactive
+         *     Pocket can be renamed like any other, and is still listed by
+         *     `GET /pockets` (the client filters).
+         *
+         *     An id that is unknown, that belongs to another Household, or that is
+         *     deleted is `404 NOT_FOUND`, the same answer in every case, and it is
+         *     given even for `{}`: no request confirms another Household's id. The
+         *     Household is the caller's own, from the session, never from the request.
+         *     The id's shape and the body are checked before the lookup, so a foreign
+         *     id with a bad body answers what an unknown one does.
+         */
+        patch: operations["updatePocket"];
+        trace?: never;
+    };
     "/onboarding/options": {
         parameters: {
             query?: never;
@@ -562,6 +605,16 @@ export interface components {
             id: string;
             pocket_display_name: string;
         };
+        /**
+         * @description What a Pocket may change, merge-style: a property left out is unchanged,
+         *     and none is required. `id`, `household_id` and any other property are
+         *     not accepted, and `null` is not accepted for either listed one.
+         */
+        UpdatePocketRequest: {
+            pocket_display_name?: string;
+            /** @description `false` deactivates the Pocket, `true` reactivates it. */
+            active?: boolean;
+        };
         ChangePasswordRequest: {
             /** Format: password */
             current_password: string;
@@ -637,10 +690,13 @@ export interface components {
          *     deleted). `NAME_TAKEN` is a name already held, case-insensitively, by
          *     another row of the Household that is not deleted. Neither carries
          *     `args`; `NAME_TAKEN` names no entity, so every entity with a name
-         *     shares it.
+         *     shares it. `NOT_FOUND` is an `{id}` that names no live row of the
+         *     caller's own Household: unknown, another Household's and deleted all
+         *     answer it, with no `args`, so one cannot be told from another. A path
+         *     that matches no route at all is not this: it answers a bare `404`.
          * @enum {string}
          */
-        ErrorCode: "VALIDATION" | "INVALID_JSON_BODY" | "INVALID_CREDENTIALS" | "TOO_MANY_ATTEMPTS" | "UNAUTHORIZED" | "CROSS_SITE_REQUEST_BLOCKED" | "EMAIL_TAKEN" | "WEAK_PASSWORD" | "INVALID_CURRENT_PASSWORD" | "FOUNDING_DISABLED" | "ID_TAKEN" | "NAME_TAKEN" | "INTERNAL";
+        ErrorCode: "VALIDATION" | "INVALID_JSON_BODY" | "INVALID_CREDENTIALS" | "TOO_MANY_ATTEMPTS" | "UNAUTHORIZED" | "CROSS_SITE_REQUEST_BLOCKED" | "EMAIL_TAKEN" | "WEAK_PASSWORD" | "INVALID_CURRENT_PASSWORD" | "FOUNDING_DISABLED" | "ID_TAKEN" | "NAME_TAKEN" | "NOT_FOUND" | "INTERNAL";
     };
     responses: {
         /**
@@ -692,11 +748,25 @@ export interface components {
             };
         };
         /**
+         * @description `NOT_FOUND`: the `{id}` names no live row of the caller's own
+         *     Household. An unknown id, another Household's and a deleted one answer
+         *     the same bytes. A path that matches no route is a bare `404` with no
+         *     body, not this.
+         */
+        NotFound: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /**
          * @description `EMAIL_TAKEN`: a live User already holds the address, at registration, at
          *     the commit or at an email change. `ID_TAKEN`: a create's client-supplied
          *     id is held by another Household's row, or by the caller's own deleted
          *     one. `NAME_TAKEN`: another row of the Household that is not deleted
-         *     already holds the name, case-insensitively.
+         *     already holds the name, case-insensitively, at a create or a rename.
          */
         Conflict: {
             headers: {
@@ -732,7 +802,16 @@ export interface components {
             };
         };
     };
-    parameters: never;
+    parameters: {
+        /**
+         * @description A Pocket's id. Deliberately no `pattern` and no `maxLength`: the spec
+         *     validator checks a path on its encoded form and the binder reads the
+         *     decoded one (#106), so a pattern here would refuse `%30192f...`, the
+         *     percent-encoded spelling of a valid id. A value that is not a UUID is
+         *     `400 VALIDATION {field: id, rule: invalid}`, from the binder.
+         */
+        PocketId: string;
+    };
     requestBodies: never;
     headers: never;
     pathItems: never;
@@ -1058,6 +1137,44 @@ export interface operations {
             };
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
+            409: components["responses"]["Conflict"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    updatePocket: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description A Pocket's id. Deliberately no `pattern` and no `maxLength`: the spec
+                 *     validator checks a path on its encoded form and the binder reads the
+                 *     decoded one (#106), so a pattern here would refuse `%30192f...`, the
+                 *     percent-encoded spelling of a valid id. A value that is not a UUID is
+                 *     `400 VALIDATION {field: id, rule: invalid}`, from the binder.
+                 */
+                id: components["parameters"]["PocketId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdatePocketRequest"];
+            };
+        };
+        responses: {
+            /** @description The Pocket as it now stands. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Pocket"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
             500: components["responses"]["InternalError"];
         };

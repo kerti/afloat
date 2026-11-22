@@ -49,6 +49,12 @@ const (
 	// entity (Pockets now, Categories later) shares it.
 	CodeNameTaken Code = "NAME_TAKEN"
 
+	// CodeNotFound is an {id} that names no live row of the caller's own
+	// Household. Unknown, another Household's and deleted all answer it, with
+	// the same bytes, so one cannot be told from another. A path that matches no
+	// route is not this: it answers a bare 404 (#56).
+	CodeNotFound Code = "NOT_FOUND"
+
 	// CodeInternal is the only code an unexpected failure may produce. The cause
 	// is logged; the response says nothing about it.
 	CodeInternal Code = "INTERNAL"

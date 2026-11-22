@@ -22,6 +22,8 @@ Work the checklist and skip loudly anything the diff doesn't touch:
 - No feature/screen/setting beyond what `PRD.md` §4 asks for.
 - Error responses carry codes, not user-facing messages; new copy is centralized and covers both
   `en-GB` and `id-ID`.
+- Frontend changes follow `docs/agents/ui-conventions.md`. A UI choice the file doesn't cover must
+  be confirmed by the maintainer and added to the file in the same diff. Flag any that isn't.
 - Tests exist for what actually changed, and none were weakened to pass.
 
 Report findings as a short list, most severe first. Say what you didn't check.

@@ -49,3 +49,4 @@ whole scaffold sheet. If the two ever disagree, `BOOTSTRAP.md` wins and this fil
   format with `-- +goose Up` and `-- +goose Down` in one file. The binary embeds them; sqlc reads
   their Up sections as the schema. `BOOTSTRAP.md` §7.
 - **i18n:** `en-GB` and `id-ID` both real from day one, centralized strings, no hardcoded UI copy.
+- **Frontend UI and UX:** `ui-conventions.md`, beside this file.

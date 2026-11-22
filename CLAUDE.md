@@ -31,6 +31,11 @@ building anything that isn't obviously capture, dashboard, or setup.
   contract tooling. Read it before writing backend code.
 - `docs/adr/go/` — backend-specific technical decisions. Scaffold-wide decisions belong in
   `BOOTSTRAP.md`, not an ADR.
+- `docs/agents/ui-conventions.md` — the frontend's house rules (editing surfaces, forms, feedback,
+  copy, a11y), drawn from Uruni then Balances. A UI choice it covers is decided. One it doesn't
+  cover takes the nearest Uruni, then Balances, precedent as a **proposal**. The orchestrator
+  **always confirms it with the maintainer** before the PR, and the PR adds the confirmed rule to
+  the file.
 
 ## One backend, one contract
 

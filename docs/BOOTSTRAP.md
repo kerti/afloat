@@ -509,7 +509,7 @@ that goes away does not turn "created or rolled back" into a coin flip. Requests
 (a body that is not a found choice, a bad name) are answered without spending the handshake.
 
 **The Household name is the client's string — a departure.** The SPA pre-fills it from its own
-catalogue (en-GB `{{name}}'s Household`, id-ID `Rumah Tangga {{name}}`) and the person edits it. The
+catalogue (en-GB `{{name}}'s Household`, id-ID `Rumah tangga {{name}}`) and the person edits it. The
 server stores what was submitted, trimmed, not blank, at most **60 code points** (Balances' cap):
 `VALIDATION` with `rule: required` or `max`. **Editing runs the same rules** (`PATCH /household`,
 #113): founding and editing call one function, `auth.CheckHouseholdDisplayName`, so neither can store

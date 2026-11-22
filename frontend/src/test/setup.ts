@@ -9,6 +9,9 @@ initI18n("en-GB");
 // sonner captures the pointer on a toast press; jsdom has no pointer capture.
 Element.prototype.setPointerCapture ??= () => {};
 Element.prototype.releasePointerCapture ??= () => {};
+// Radix Select (components/ui/select.tsx) reads both when it opens.
+Element.prototype.hasPointerCapture ??= () => false;
+Element.prototype.scrollIntoView ??= () => {};
 
 // jsdom has no matchMedia; sonner reads it to follow the OS colour scheme.
 window.matchMedia ??= (query: string) =>

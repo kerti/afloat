@@ -1,12 +1,16 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
-import { Link } from "react-router";
 import { useQueryClient } from "@tanstack/react-query";
-import { toast } from "sonner";
 import { updatePocket, type ApiError, type Pocket } from "@/api/client";
 import { pocketsKey, useCreatePocket, usePockets, useUpdatePocket } from "@/api/queries";
 import { errorMessage } from "@/api/errors";
+import { BackLink } from "@/components/BackLink";
+import { Badge } from "@/components/Badge";
+import { CheckboxRow } from "@/components/CheckboxRow";
+import { Field, Form } from "@/components/Form";
+import { ListCard, ListRow } from "@/components/List";
 import { ErrorState, Loading } from "@/components/states";
+import { EmptyState, FieldError, PageTitle } from "@/components/Text";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -17,12 +21,11 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { toastError, toastPlain, toastSaved } from "@/lib/plainToast";
+import { routes } from "@/lib/routes";
 import { toastUndoable } from "@/lib/undoToast";
 import { useDialogParam } from "@/lib/useDialogParam";
 import { uuidv7 } from "@/lib/uuid";
-
-// A plain toast lasts 4 s; one with an Undo lasts 8 s (lib/undoToast.ts).
-const PLAIN_TOAST_MS = 4000;
 
 const EDIT_PREFIX = "pocket:";
 
@@ -79,7 +82,7 @@ function PocketForm({ mode, pocket, attemptId, newAttemptId, close, onToggle }: 
           // Replaced only after a success, so a retry after a lost response
           // resends the id and meets the server's 200 replay, never a duplicate.
           newAttemptId?.();
-          toast(t("toast.added", { name: p.pocket_display_name }), { duration: PLAIN_TOAST_MS });
+          toastPlain(t("toast.added", { name: p.pocket_display_name }));
           close();
         })
         .catch((e: unknown) => {
@@ -92,20 +95,20 @@ function PocketForm({ mode, pocket, attemptId, newAttemptId, close, onToggle }: 
     update
       .mutateAsync({ id: pocket!.id, body: { pocket_display_name: name } })
       .then(() => {
-        toast(t("toast.saved"), { duration: PLAIN_TOAST_MS });
+        toastSaved();
         close();
       })
       .catch(() => {});
   }
 
   return (
-    <form onSubmit={onSubmit} className="grid grid-cols-1 gap-4" noValidate>
+    <Form onSubmit={onSubmit}>
       <DialogHeader>
         <DialogTitle>
           {t(mode === "create" ? "pockets.addHeading" : "pockets.editHeading")}
         </DialogTitle>
       </DialogHeader>
-      <div className="flex flex-col gap-2">
+      <Field>
         <Label htmlFor="pocket-display-name">{t("fields.pocketDisplayName")}</Label>
         <Input
           id="pocket-display-name"
@@ -121,17 +124,9 @@ function PocketForm({ mode, pocket, attemptId, newAttemptId, close, onToggle }: 
           aria-invalid={fieldMessage ? true : undefined}
           aria-describedby={fieldMessage ? "pocket-name-error" : undefined}
         />
-        {fieldMessage && (
-          <p id="pocket-name-error" role="alert" className="text-sm text-destructive">
-            {fieldMessage}
-          </p>
-        )}
-      </div>
-      {formMessage && (
-        <p role="alert" className="text-sm text-destructive">
-          {formMessage}
-        </p>
-      )}
+        {fieldMessage && <FieldError id="pocket-name-error">{fieldMessage}</FieldError>}
+      </Field>
+      {formMessage && <FieldError>{formMessage}</FieldError>}
       <DialogFooter>
         {mode === "create" ? (
           <Button type="button" variant="outline" disabled={pending} onClick={close}>
@@ -153,7 +148,7 @@ function PocketForm({ mode, pocket, attemptId, newAttemptId, close, onToggle }: 
             : t(mode === "create" ? "pockets.add" : "pockets.save")}
         </Button>
       </DialogFooter>
-    </form>
+    </Form>
   );
 }
 
@@ -191,7 +186,7 @@ export function PocketsPage() {
         });
       })
       .catch((e: ApiError) => {
-        toast.error(errorMessage(t, e));
+        toastError(errorMessage(t, e));
       });
   }
 
@@ -212,13 +207,9 @@ export function PocketsPage() {
   }, [staleEdit, clearEdit]);
 
   return (
-    <main className="mx-auto flex min-h-dvh w-full max-w-md flex-col gap-6 px-4 py-8">
-      <header className="flex items-center justify-between gap-4">
-        <h1 className="text-xl font-semibold">{t("pockets.title")}</h1>
-        <Link to="/" className="inline-flex min-h-11 items-center text-sm underline">
-          {t("pockets.back")}
-        </Link>
-      </header>
+    <>
+      <BackLink to={routes.home} label={t("home.title")} />
+      <PageTitle>{t("pockets.title")}</PageTitle>
       {pockets.error ? (
         <ErrorState error={pockets.error} onRetry={() => void pockets.refetch()} />
       ) : !items ? (
@@ -226,47 +217,33 @@ export function PocketsPage() {
       ) : (
         <>
           {inactiveCount > 0 && (
-            <label className="flex min-h-11 items-center justify-end gap-2 text-sm text-muted-foreground">
-              <input
-                type="checkbox"
-                className="size-5"
-                checked={showInactive}
-                onChange={(e) => setShowInactive(e.target.checked)}
-              />
+            <CheckboxRow checked={showInactive} onChange={setShowInactive}>
               {t("pockets.showInactive", { count: inactiveCount })}
-            </label>
+            </CheckboxRow>
           )}
           {items.length === 0 ? (
-            <p className="text-muted-foreground">
+            <EmptyState>
               {inactiveCount > 0
                 ? t("pockets.allInactive", { count: inactiveCount })
                 : t("pockets.empty")}
-            </p>
+            </EmptyState>
           ) : (
-            <ul className="flex flex-col divide-y rounded-md border">
+            <ListCard>
               {items.map((p) => (
-                <li key={p.id}>
-                  {/* The whole row opens its edit dialog, so no chevron. */}
-                  <button
-                    type="button"
-                    aria-label={t(p.active ? "pockets.editFor" : "pockets.editForInactive", {
-                      name: p.pocket_display_name,
-                    })}
-                    onClick={() => editParam.open(EDIT_PREFIX + p.id)}
-                    className="flex min-h-11 w-full items-center gap-3 px-3 py-2 text-left hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                  >
-                    <span className={p.active ? "mr-auto" : "mr-auto text-muted-foreground"}>
-                      {p.pocket_display_name}
-                    </span>
-                    {!p.active && (
-                      <span className="rounded-md bg-muted px-2 py-0.5 text-xs text-muted-foreground">
-                        {t("pockets.inactive")}
-                      </span>
-                    )}
-                  </button>
-                </li>
+                // The whole row opens its edit dialog, so no chevron.
+                <ListRow
+                  key={p.id}
+                  label={t(p.active ? "pockets.editFor" : "pockets.editForInactive", {
+                    name: p.pocket_display_name,
+                  })}
+                  onClick={() => editParam.open(EDIT_PREFIX + p.id)}
+                  muted={!p.active}
+                  badge={!p.active && <Badge>{t("pockets.inactive")}</Badge>}
+                >
+                  {p.pocket_display_name}
+                </ListRow>
               ))}
-            </ul>
+            </ListCard>
           )}
           <Button className="w-full" onClick={() => newParam.open("pocket")}>
             {t("pockets.addHeading")}
@@ -298,6 +275,6 @@ export function PocketsPage() {
           </DialogContent>
         </Dialog>
       )}
-    </main>
+    </>
   );
 }

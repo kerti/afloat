@@ -20,7 +20,7 @@
     "password": "password",
     "user_display_name": "name",
     "pocket_display_name": "Pocket name",
-    "household_display_name": "household name",
+    "household_display_name": "Household name",
     "time_zone": "time zone",
     "locale": "language",
     "current_password": "current password",
@@ -34,13 +34,13 @@
     "createAccount": "Create account"
   },
   "home": {
-    "signedInAs": "Signed in as {{name}}",
+    "title": "Home",
+    "signedInAs": "Signed in as {{name}}.",
     "household": "Household: {{name}}",
     "comingSoon": "Your dashboard will appear here.",
     "settingsLink": "Household settings",
     "userSettingsLink": "Your settings",
-    "pocketsLink": "Pockets",
-    "signOut": "Sign out"
+    "pocketsLink": "Pockets"
   },
   "pwa": {
     "updateReady": "A new version of Afloat is ready.",
@@ -91,7 +91,6 @@
   },
   "pockets": {
     "title": "Pockets",
-    "back": "Back",
     "empty": "Your Pockets will appear here.",
     "addHeading": "Add a Pocket",
     "namePlaceholder": "For example: Cash, OVO, BCA debit",
@@ -112,25 +111,19 @@
     "nameRequired": "Enter a Pocket name."
   },
   "settings": {
+    "save": "Save",
+    "saving": "Saving…",
     "household": {
       "title": "Household settings",
-      "save": "Save",
-      "saving": "Saving…",
-      "saved": "Saved.",
-      "back": "Back",
       "periodStartDayHint": "Each Budget Period starts on this day, from 1 to 28. Changing it re-dates your Budget Periods straight away."
     },
     "user": {
       "title": "Your settings",
-      "back": "Back",
       "profile": {
         "heading": "Profile",
         "name": "Your name",
         "language": "Language",
-        "timeZone": "Time zone",
-        "save": "Save",
-        "saving": "Saving…",
-        "saved": "Saved."
+        "timeZone": "Time zone"
       },
       "languages": {
         "enGB": "English (UK)",
@@ -166,5 +159,8 @@
   },
   "dialog": {
     "close": "Close"
+  },
+  "shell": {
+    "signOut": "Sign out"
   }
 }

@@ -8,6 +8,15 @@ disagree, they win and this file is out of date.
 **How to use it.**
 
 - **A choice this file covers** is already decided. Follow it.
+- **Never invent an element.** Every visual element (a title, a section label, a card, a badge, a
+  row, a link style, a spacing) comes from the catalogue below, as its shared component or class
+  module. Only those carry looks; a page composes them and adds layout only, and never restyles one
+  with its own type, colour, radius or padding classes. Changing an element is then one edit, and it
+  changes everywhere. An element the catalogue lacks is **proposed to the maintainer first**, with
+  its nearest Uruni (else Balances) precedent, before anyone builds it. That holds even when the
+  precedent is obvious. This is stricter than the rule for other uncovered choices below, which may
+  be built first and confirmed before the PR. (Uruni `cardClasses.ts`, `SectionLabel.tsx`,
+  `Design-System.md` § Typography; ruled 22 Nov.)
 - **A choice it doesn't cover** is a proposal until the maintainer confirms it:
   1. The builder takes the nearest [Uruni](https://github.com/kerti/uruni) precedent (`web/src`,
      `docs/Design-System.md`, `docs/ADR/`), else the nearest
@@ -26,6 +35,100 @@ they disagree, the code is the precedent.
 Already ruled for Afloat and not reopened here: the Undo toast (8 s, sonner, #121 R3/R9), inactive
 items hidden behind "Show inactive … (N)" (R7), deactivate is immediate with Undo, no confirm (R3).
 
+## Catalogue
+
+Every element Afloat renders is one entry here: one shared component, or one class module where an
+element can be several tags. **Pages carry layout classes only** (flex, grid, gap, margin, width,
+order, min-height): never their own type size, weight, colour, radius, padding or border for a
+catalogued element. A test fails a page that does (`components/pagesCarryLayoutOnly.test.ts`).
+Components take a `className` for layout. Uruni's mechanism: one component per repeated element
+(`web/src/components/SectionLabel.tsx`, `SubsectionLabel.tsx`, `Badge.tsx`), class constants where
+the tag varies (`web/src/components/cardClasses.ts`, `segmented.ts`). Afloat's elements are always one
+tag each, so it has components only. A missing element is proposed first (see How to use it).
+
+**Text** (`components/Text.tsx`; roles in the table below)
+
+- `PageTitle`: the screen's one `h1`.
+- `SectionTitle`: the `h2` that opens a section.
+- `SectionDescription`: the sentence under a section title saying what it is for.
+- `FieldHint`: the sentence under a field saying what it takes. Also the small muted note below a
+  form's submit ("Already have an account? Sign in").
+- `FieldError`: a failure, under its field or above a form's footer. `role="alert"`, attention
+  colour. Raised in a form only; with no form open it is a `toastError` (§ Feedback).
+- `BodyText`: a plain body sentence ("Signed in as …").
+- `MutedText`: a muted body sentence: an intro, a status message (`role="status"`), a note.
+- `EmptyState`: what a list says when it has nothing, naming what will appear.
+- `TextLink` (`components/TextLink.tsx`): the body link, small and underlined, standalone (the Home
+  links) or inside a sentence.
+
+**Layout and forms**
+
+- `Shell` (`components/Shell.tsx`): top bar and the one column; § Layout and navigation. The top
+  bar wears `header-glass` (`styles/index.css`), Uruni's liquid glass: the page colour at 60% over a
+  `blur(20px) saturate(1.6)` backdrop, a bright 1px rim inside the edge facing the content and a soft
+  glow falling from it. Its colours are the `--glass-rim`, `--glass-glow` and `--glass-shadow`
+  tokens in `theme.css`. The light values are Uruni's; the dark values are faint, since Uruni has no
+  dark mode. (Uruni `index.css` `header-glass`; ruled 22 Nov.)
+- `LogoMark` (`components/LogoMark.tsx`): the mark, `size-7`, left of the "Afloat" link in the top
+  bar. It is a second way home for a thumb, but hidden from keyboards and screen readers, since the
+  name link beside it already is that. (Uruni `Shell.tsx`, #356.)
+- **The mark itself** is `public/icon.svg`, a **placeholder** until the brand session (PRD §9): a
+  neutral disc above a waterline. One file serves the favicon, the PWA manifest and `LogoMark`, so a
+  new mark changes all three.
+- `AuthCard` (`components/AuthCard.tsx`): the `max-w-sm` frame outside the Shell.
+- `BackLink` (`components/BackLink.tsx`): the sub-screen's way back.
+- `Form`, `Field`, `Section` (`components/Form.tsx`): a `noValidate` form with its fields stacked
+  (`gap-4`); one field with its label, control, hint and error stacked (`gap-2`); a screen section
+  with an optional title and description, its content at `gap-4`. Sections stack at the Shell's
+  `gap-6`.
+- `TextSetting` (`components/TextSetting.tsx`): a typed setting with its own Save and inline error.
+- `CheckboxRow` (`components/CheckboxRow.tsx`): a 20px checkbox in a 44px label ("Show inactive …").
+
+**Lists**
+
+- `ListCard`, `ListRow` (`components/List.tsx`): the bordered divided list, and its 44px tappable
+  row that opens an edit dialog (muted title when inactive, a trailing badge slot).
+- `Badge` (`components/Badge.tsx`): the "Inactive" pill. Neutral only.
+
+**States** (`components/states.tsx`): `Loading`, `ErrorState`. `UpdatePrompt`
+(`components/UpdatePrompt.tsx`): the update banner.
+
+**Toasts**: `lib/plainToast.ts` (`toastPlain`, `toastSaved`, and `toastError` for a failure with
+no form open) and `lib/undoToast.ts` (`toastUndoable`), all tap-to-dismiss (`lib/tapToDismiss.ts`)
+and all through the one `Toaster` (`components/ui/sonner.tsx`).
+
+**Primitives** (`components/ui/`): `Button` (`default` / `outline` / `ghost`, sizes `default` and
+`sm`, both `h-11`), `Input`, `Label` (the field label), `NativeSelect` and the Radix `Select`
+(`select.tsx`), `Dialog` with `DialogContent`, `DialogHeader`, `DialogTitle`, `DialogFooter`
+(`dialog.tsx`), `Toaster` (`sonner.tsx`).
+
+## Typography and spacing
+
+One font, Figtree (`--font-ui`). Sizes and weights come from these roles, never per screen. (The
+role table follows Uruni `docs/Design-System.md` § Typography.)
+
+| Role | Size | Weight | Colour | Used for |
+|---|---|---|---|---|
+| Page title | 20px (`text-xl`) | semibold | foreground | `PageTitle`; every screen, auth included |
+| Section and dialog title | 18px (`text-lg`) | semibold | foreground | `SectionTitle`, `DialogTitle`: one look (Uruni H2, 600; ruled 22 Nov) |
+| Brand | 18px (`text-lg`) | semibold | foreground | the top bar's "Afloat" link |
+| Body | 16px (base) | regular | foreground | `BodyText`, a list row's title, inputs, select values |
+| Muted body | 16px | regular | muted-foreground | `MutedText`, `EmptyState`, `Loading`, `BackLink`, an inactive row's title |
+| Label | 14px (`text-sm`) | medium | foreground | `Label`, buttons |
+| Hint | 14px | regular | muted-foreground | `FieldHint`, `SectionDescription`, `CheckboxRow` |
+| Error | 14px | regular | attention | `FieldError` |
+| Load failure | 16px | regular | attention | `ErrorState` |
+| Link | 14px | regular, underlined | foreground | `TextLink` |
+| Badge | 12px (`text-xs`) | regular | muted-foreground on muted | `Badge` |
+
+- **Radius:** `rounded-md` for controls, the list card, the badge and the back link (`--radius` is
+  0.625rem); `rounded-lg` for the dialog and the update banner; `rounded-sm` for a select item;
+  `rounded-full` for the dialog's close button.
+- **Spacing steps:** `gap-2` inside a field; `gap-4` inside a form or section, and a dialog's body;
+  `gap-6` between a screen's sections (the Shell's column) and inside an auth card; `gap-1` between
+  two lines of one block (Home's signed-in lines); `gap-3` in a row. Row padding `px-3 py-2`;
+  dialog padding `p-4`; the Shell's side gutters 1rem plus the safe-area inset.
+
 ## Layout and navigation
 
 - **One Shell.** A **fixed** top bar and, once the app has tabs, a **fixed** bottom tab bar (at most
@@ -33,13 +136,19 @@ items hidden behind "Show inactive … (N)" (R7), deactivate is immediate with U
   not sticky: a sticky header rides iOS's overscroll bounce while a fixed footer stays put. Both bars
   pad for `env(safe-area-inset-*)`; `main` reserves their height. (Uruni `Shell.tsx`.) The tab list is
   decided when the dashboard and capture slices land; until then, the Shell has no bottom bar.
+  - The top bar is 3.5rem plus the top safe-area inset, in `header-glass` (Catalogue, `Shell`).
+    It holds the "Afloat" link home on the left and Sign out on the right; a failed sign-out is an
+    error toast. (Uruni `Shell.tsx`, without its measured `--shell-header` and banner slot.)
+  - The session check's Loading and ErrorState render in the auth card, before the Shell, so Sign
+    out is never offered on a screen about to redirect to login.
 - **One column, set once in the Shell:** `max-w-xl` (576px), centred. Screens never set their own
   width. Auth screens (login, register, onboarding) are the exception: a `max-w-sm` card. (Uruni.)
-- **Screen title:** one `h1`, 20px (`text-xl font-semibold`), sentence case.
-- **Sub-screen back:** a quiet link, top-left above the title, naming its destination ("← Pockets"),
-  at least 44px tall. (Uruni `BackLink`.)
-- **Routes come from one builder module**, `lib/routes.ts`; no path literals in components.
-  (Balances.)
+- **Screen title:** one `h1`, 20px (`text-xl font-semibold`), sentence case, on every screen, Home
+  included ("Home", "Beranda"): the top bar's "Afloat" is a link, not a heading. (Uruni.)
+- **Sub-screen back:** a quiet link, top-left above the title, naming its destination ("← Home"),
+  at least 44px tall: a router `Link` with an inline-SVG arrow, never a button. (Uruni `BackLink`.)
+- **Routes come from one builder module**, `lib/routes.ts`; no path literals in components (an ESLint
+  rule fails a `to="/…"` or `navigate("/…")` literal). (Balances.)
 - **Tabs, filters and an open dialog live in the URL** (search params), so a link and Android's back
   button both work. (Uruni ADR-032/046.)
 
@@ -79,7 +188,7 @@ items hidden behind "Show inactive … (N)" (R7), deactivate is immediate with U
 
 ## Forms
 
-- Every form is `noValidate`; Afloat renders its own errors.
+- Every form is the `Form` component, which is `noValidate`; Afloat renders its own errors.
 - **Submit is disabled only while the write is in flight, or when nothing has changed.** Invalid input
   leaves it enabled: submitting shows why. Field errors appear on blur and, all at once, on submit.
   (Hybrid, ruled: Uruni's no-op rule, Balances' validation timing.)
@@ -97,17 +206,26 @@ items hidden behind "Show inactive … (N)" (R7), deactivate is immediate with U
   footer. With no form open (a failed Undo, deactivate from a toast) it is a toast. The wire's text is
   never shown; the copy comes from the code. Never a generic "Something went wrong" when a code came
   back. (Balances ADR-0058 §5, Uruni.)
-- **Pickers:** Radix Select for short lists, full width, `h-11`. Long lists (currency, time zone) stay
-  native `<select>` until a searchable combobox is built. A picker starts blank unless there is only
-  one choice. The capture date field is decided in that slice. (Uruni, adapted.)
+- **Pickers:** Radix Select for short lists, full width, `h-11`. Long lists stay native `<select>`,
+  also `h-11`, until a searchable combobox is built: currency, time zone, and the period start day
+  (1 to 28). Language is a Radix Select. A picker starts blank unless there is only one choice. The
+  capture date field is decided in that slice. (Uruni, adapted.)
 - **Money input** groups digits live, in the app locale, as the user types, and keeps the caret after
   the same digit when separators come and go (Uruni `AmountInput`, #749). A typed `.` or `,` is the
   decimal point; paste goes through a strict locale parser; the value on the wire is a canonical
   decimal string, never a float (Balances `NumericInput`, ADR-0056). `inputmode="decimal"`, or
   `numeric` for a zero-decimal currency.
-- **Settings save by control kind.** A choice (select, switch, theme) saves on change, raises a
-  "Saved" toast and rolls back on failure. A typed value keeps an explicit Save, enabled when changed;
-  Enter saves, Esc reverts; a failure is inline on that field. (Balances ADR-0058 §7.)
+- **Settings save by control kind.** (Balances ADR-0058 §7.)
+  - **A choice** (select, switch, theme) saves on change. The new value shows at once
+    (optimistic). Success is a "Saved." toast. A failure rolls the value back and raises an error
+    toast, since no form is open. A language change applies before its toast, so the toast reads
+    in the language just chosen.
+  - **A typed value** is its own small form: the input with its Save beside it, enabled when
+    changed. Enter saves and Esc reverts. Inputs are disabled while pending. A failure is inline on
+    that field, and typing clears it. The settings name fields have no client-side blank check: the
+    server's `VALIDATION` already shows inline.
+  - **Email and password changes** are typed forms with an explicit submit. Each success is a toast
+    in its own words ("Saved. Sign in with {{email}} from now on."), not a bare "Saved.".
 
 ## Feedback
 
@@ -116,6 +234,16 @@ items hidden behind "Show inactive … (N)" (R7), deactivate is immediate with U
   "Deactivated OVO." and "Reactivated OVO." each get the 8 s Undo, even though the reverse is one tap
   away in the dialog. Consistency wins over "it's cheap to redo". Failure with no form open: an error
   toast with the code's copy. (Balances ADR-0058 §4; Uruni "the one way to say saved"; ruled 22 Nov.)
+- **An error toast** is the card surface with attention-coloured text and border, never a solid
+  red fill.
+- **A tap on a toast hides it**, as Uruni's do (`web/src/components/toast/`: "the whole toast is the
+  dismiss button"). sonner has no tap-to-dismiss, and a tap there only focuses the toast, which
+  pauses it. So every toast carries an id (`lib/tapToDismiss.ts`), and the Toaster dismisses the
+  one tapped. A tap on a button inside it (Undo) is the button's. **Toasts are raised only through
+  the helpers** `toastPlain`, `toastSaved` and `toastError` (`lib/plainToast.ts`) and
+  `toastUndoable` (`lib/undoToast.ts`), never by importing sonner; a test enforces it
+  (`lib/toastsThroughHelpers.test.ts`). Afloat keeps sonner (#121 R9) where Uruni hand-builds its
+  provider. (Ruled 22 Nov.)
 - **Durations:** 4 s plain, 8 s with an action; an action toast pauses on hover and shows the
   countdown bar. One `<Toaster>`, bottom-centre (a phone's thumb zone), mounted at the root so a
   toast survives navigation.
@@ -138,19 +266,26 @@ items hidden behind "Show inactive … (N)" (R7), deactivate is immediate with U
 
 - **Errors and warnings use `--attention`, never red.** `--destructive` is reserved for a Delete
   button. Nothing is coloured good/bad red/green (PRD §9). The attention colour itself is the brand
-  session's; until then the token exists with a provisional value. (Uruni.)
-- **Raw Tailwind palette classes** (`text-red-500`, `bg-green-…`) are banned in components; use the
-  theme tokens. (Balances.)
+  session's; until then `--attention` (`styles/theme.css`) holds a provisional terracotta, AA for text
+  on the background, card and muted surfaces in both themes. (Uruni.)
+- **Raw Tailwind palette classes** (`text-red-500`, `bg-green-…`, `bg-white`, `bg-[#…]`) are banned in
+  components; use the theme tokens. A test enforces it (`components/noRawColours.test.ts`). (Balances.)
 - **Light and dark** both real (PRD §9), via the tokens in `theme.css`; the picker is #124.
+- **The dialog overlay** is `--scrim` (10% black) plus `backdrop-blur-xs` where supported, the same
+  in both themes. (Uruni `dialog.tsx`, Balances `dialog.tsx`: identical.)
 - **Weight marks the figure, not the name:** a row's title is regular weight; its amount is
   `tabular-nums`, medium. Money is always `tabular-nums`. (Uruni.)
 - **Motion** 150–250ms ease-out, and none under `prefers-reduced-motion`. (Uruni.)
-- Body text at least 16px.
+- Body text is 16px. Labels, hints, errors and links are 14px, and the badge 12px (§ Typography and
+  spacing); no running text is smaller than 14px.
 
 ## Copy
 
-- **Sentence case everywhere**: titles, buttons, labels, nav. Domain nouns from `CONTEXT.md` keep
-  their capital when they mean the modelled thing (Pocket, Household, Expense). (Uruni.)
+- **Sentence case everywhere**: titles, buttons, labels, nav. In **en-GB**, domain nouns from
+  `CONTEXT.md` keep their capital when they mean the modelled thing (Pocket, Household, Expense). In
+  **id-ID**, domain nouns are lowercase mid-sentence ("kantong", "periode anggaran", "rumah
+  tangga") and capitalised only where the sentence or label starts. (Uruni copy: "amplop",
+  "kategori"; ruled 22 Nov.)
 - Plain, warm, specific; written for a household, not an engineer. A failure is described as what
   happened and what to do, never as an "error". (Uruni, Balances.)
 - **Name the object** in confirms and in create and reversible-act toasts ("Added OVO.",
@@ -178,8 +313,13 @@ items hidden behind "Show inactive … (N)" (R7), deactivate is immediate with U
 ## Accessibility and touch
 
 - **44px minimum tap target**, built into the primitives (`Button`, `Input`, icon sizes), not
-  remembered per screen: `Button` (default and `sm`) and `Input` are `h-11` app-wide. (Uruni,
-  Balances.)
+  remembered per screen: `Button` (default and `sm`) and `Input` are `h-11` app-wide. A control drawn
+  smaller than 44px (`TextLink`) gets its target from the `touch-target` utility (`styles/index.css`),
+  an invisible 44px box centred on it, so its look and the layout don't change. (Uruni `index.css`
+  `touch-target`, Balances; ruled 22 Nov.)
+- **Text contrast is AA (4.5:1) on every surface it sits on**, the muted badge included: the light
+  `--muted-foreground` is `#566a78` (4.89:1 on `--muted`), a step darker than the Shallows study's
+  `#5e7280`. (Ruled 22 Nov.)
 - Colour is never the only signal; decorative icons are `aria-hidden`.
 - Radix owns focus trap and restore; a dialog's close button has a label; the dialog sits above the
   on-screen keyboard.
@@ -194,8 +334,10 @@ items hidden behind "Show inactive … (N)" (R7), deactivate is immediate with U
   name, using the locale strings, not literals.
 - Toasts: `test/sonnerMock.ts`, asserting one toast per write, its duration and its action; fake
   timers where real sonner runs.
-- **Meta-tests** guard the rules above: no em dash in copy; every `ErrorCode` in
-  `contract/openapi.yaml` has copy in both locales; no device clock and no `new Date("YYYY-MM-DD")`
-  in business-date code.
+- **Meta-tests** guard the rules above: no em dash and no `...` in copy, and no catalogue key that
+  nothing reads (`locales/locales.test.ts`); every `ErrorCode` in `contract/openapi.yaml` has copy in
+  both locales (same file); no device clock and no `new Date("YYYY-MM-DD")` in src, with `lib/uuid.ts`
+  allowed (`lib/noDeviceClock.test.ts`); no raw palette colour (`components/noRawColours.test.ts`); no type, colour, radius, padding or
+  border utility in a page (`components/pagesCarryLayoutOnly.test.ts`).
 - Later, with Playwright: one journey per screen and an axe scan (WCAG 2.1 A/AA, failing on serious
   and critical).

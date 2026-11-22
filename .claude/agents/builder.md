@@ -19,6 +19,11 @@ is already made: follow it. A choice it doesn't cover:
   is added to `ui-conventions.md` in the same PR.
 - Never present it as settled.
 
+**Never invent a visual element.** Titles, labels, cards, badges, rows, links and spacing come only from
+the catalogue in `ui-conventions.md`, as their shared component or class module. A page adds layout,
+never its own look. If you need an element the catalogue lacks, stop and report it as a proposal,
+with its Uruni (else Balances) precedent. Don't build it.
+
 Stop outright for anything touching scope, `VISION.md` or the PRD.
 
 - **The rules in `CLAUDE.md` bind you** — string-serialised `DECIMAL(20,4)` money, client-generated

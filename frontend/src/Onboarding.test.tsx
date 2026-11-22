@@ -72,7 +72,7 @@ describe("create account", () => {
     await user.click(screen.getByRole("button", { name: "Create Household" }));
 
     // /me was invalidated, so the shell answers as the new User.
-    expect(await screen.findByText("Signed in as Dewi Putri")).toBeInTheDocument();
+    expect(await screen.findByText("Signed in as Dewi Putri.")).toBeInTheDocument();
     expect(screen.getByText("Household: Dewi Putri's Household")).toBeInTheDocument();
     expect(state.committed).toEqual({
       found: true,
@@ -105,7 +105,7 @@ describe("create account", () => {
     await user.type(screen.getByLabelText("Nama Anda (opsional)"), "Dewi");
     await user.click(screen.getByRole("button", { name: "Lanjut" }));
 
-    expect(await screen.findByLabelText("Nama rumah tangga")).toHaveValue("Rumah Tangga Dewi");
+    expect(await screen.findByLabelText("Nama rumah tangga")).toHaveValue("Rumah tangga Dewi");
     // The locale sent is the language the form was read in.
     expect(state.registered?.locale).toBe("id-ID");
   });
@@ -292,13 +292,13 @@ describe("the onboarding gate", () => {
     await user.clear(await screen.findByLabelText("Household name"));
     await user.click(screen.getByRole("button", { name: "Create Household" }));
 
-    expect(await screen.findByRole("alert")).toHaveTextContent("Check the household name field.");
+    expect(await screen.findByRole("alert")).toHaveTextContent("Check the Household name field.");
     expect(screen.getByLabelText("Household name")).toBeInTheDocument();
   });
 
   it("leaves the gate for the shell when already signed in", async () => {
     server.use(...defaultHandlers({ signedIn: true, me: alice }));
     renderApp("/onboarding");
-    expect(await screen.findByText("Signed in as Alice")).toBeInTheDocument();
+    expect(await screen.findByText("Signed in as Alice.")).toBeInTheDocument();
   });
 });

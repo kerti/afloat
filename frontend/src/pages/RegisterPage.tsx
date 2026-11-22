@@ -1,8 +1,13 @@
 import { useState, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
-import { Link, Navigate, useNavigate } from "react-router";
+import { Navigate, useNavigate } from "react-router";
 import { useAuthMethods, useMe, useRegister } from "@/api/queries";
 import { errorMessage } from "@/api/errors";
+import { AuthCard } from "@/components/AuthCard";
+import { Field, Form } from "@/components/Form";
+import { FieldError, FieldHint, MutedText, PageTitle } from "@/components/Text";
+import { TextLink } from "@/components/TextLink";
+import { routes } from "@/lib/routes";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -20,7 +25,7 @@ export function RegisterPage() {
   const [password, setPassword] = useState("");
   const [userDisplayName, setUserDisplayName] = useState("");
 
-  if (me.data) return <Navigate to="/" replace />;
+  if (me.data) return <Navigate to={routes.home} replace />;
 
   function onSubmit(e: FormEvent) {
     e.preventDefault();
@@ -34,7 +39,7 @@ export function RegisterPage() {
         // their locale, and falls back to en-GB for anything it does not know.
         locale: i18n.language,
       },
-      { onSuccess: () => void navigate("/onboarding") },
+      { onSuccess: () => void navigate(routes.onboarding) },
     );
   }
 
@@ -47,20 +52,18 @@ export function RegisterPage() {
     (register.error && codes.includes(register.error.code)) || undefined;
 
   return (
-    <main className="mx-auto flex min-h-dvh w-full max-w-sm flex-col justify-center gap-6 px-4">
-      <h1 className="text-2xl font-semibold">{t("register.title")}</h1>
+    <AuthCard>
+      <PageTitle>{t("register.title")}</PageTitle>
       {localOff || closed ? (
         <>
-          <p role="status" className="text-muted-foreground">
+          <MutedText role="status">
             {localOff ? t("register.unavailable") : t("register.closed")}
-          </p>
-          <Link to="/login" className="text-sm underline">
-            {t("register.signIn")}
-          </Link>
+          </MutedText>
+          <TextLink to={routes.login}>{t("register.signIn")}</TextLink>
         </>
       ) : (
-        <form onSubmit={onSubmit} className="flex flex-col gap-4" noValidate>
-          <div className="flex flex-col gap-2">
+        <Form onSubmit={onSubmit}>
+          <Field>
             <Label htmlFor="email">{t("fields.email")}</Label>
             <Input
               id="email"
@@ -72,8 +75,8 @@ export function RegisterPage() {
               onChange={(e) => setEmail(e.target.value)}
               aria-invalid={invalid("EMAIL_TAKEN")}
             />
-          </div>
-          <div className="flex flex-col gap-2">
+          </Field>
+          <Field>
             <Label htmlFor="password">{t("fields.password")}</Label>
             <Input
               id="password"
@@ -85,11 +88,9 @@ export function RegisterPage() {
               aria-invalid={invalid("WEAK_PASSWORD")}
               aria-describedby="password-hint"
             />
-            <p id="password-hint" className="text-sm text-muted-foreground">
-              {t("register.passwordHint")}
-            </p>
-          </div>
-          <div className="flex flex-col gap-2">
+            <FieldHint id="password-hint">{t("register.passwordHint")}</FieldHint>
+          </Field>
+          <Field>
             <Label htmlFor="user-display-name">{t("fields.userDisplayName")}</Label>
             <Input
               id="user-display-name"
@@ -97,23 +98,17 @@ export function RegisterPage() {
               value={userDisplayName}
               onChange={(e) => setUserDisplayName(e.target.value)}
             />
-          </div>
-          {failed && (
-            <p role="alert" className="text-sm text-destructive">
-              {failed}
-            </p>
-          )}
+          </Field>
+          {failed && <FieldError>{failed}</FieldError>}
           <Button type="submit" disabled={register.isPending}>
             {register.isPending ? t("register.submitting") : t("register.submit")}
           </Button>
-          <p className="text-sm text-muted-foreground">
+          <FieldHint>
             {t("register.haveAccount")}{" "}
-            <Link to="/login" className="underline">
-              {t("register.signIn")}
-            </Link>
-          </p>
-        </form>
+            <TextLink to={routes.login}>{t("register.signIn")}</TextLink>
+          </FieldHint>
+        </Form>
       )}
-    </main>
+    </AuthCard>
   );
 }

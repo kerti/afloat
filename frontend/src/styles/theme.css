@@ -9,6 +9,14 @@
  * #2E8BC9 is 3.7:1, below WCAG AA's 4.5:1 for button text, and #1F74AC is 5.1:1.
  * The study's accent is kept as the focus ring.
  *
+ * --attention is the colour of every error, warning and failed-load message
+ * (docs/agents/ui-conventions.md; Uruni web/src/index.css, github.com/kerti/uruni).
+ * Terracotta, not red: nothing is coloured good or bad (PRD §9), and --destructive
+ * is reserved for a Delete button. PROVISIONAL: the brand session owns the final
+ * value. It is used as text, so it is held at WCAG AA (4.5:1) on every surface
+ * text sits on. Light #a34a28: 5.57:1 on --background, 5.89:1 on --card, 5.11:1
+ * on --muted. Dark #e8946f: 7.62:1, 6.88:1 and 5.43:1 on the same three.
+ *
  * Typeface: Figtree, variable weight, self-hosted (no runtime fetch, no npm
  * dependency). Files from @fontsource-variable/figtree@5.3.0, SIL OFL 1.1
  * (fonts/OFL.txt); the latin subset covers en-GB and id-ID, latin-ext the rest.
@@ -41,7 +49,9 @@
   --background: #f7f9fa;
   --foreground: #14232e;
   --muted: #e3f1fa;
-  --muted-foreground: #5e7280;
+  /* #566a78, not the study's #5e7280: the muted badge text on --muted was
+     4.35:1, under AA; this is 4.89:1 there and 5.33:1 on the background. */
+  --muted-foreground: #566a78;
   --card: #ffffff;
   --card-foreground: #14232e;
   --border: #d8e4eb;
@@ -49,8 +59,15 @@
   --ring: #2e8bc9;
   --primary: #1f74ac;
   --primary-foreground: #ffffff;
+  --attention: #a34a28;
   --destructive: oklch(0.577 0.245 27.3);
   --destructive-foreground: oklch(0.985 0 0);
+  --scrim: rgb(0 0 0 / 0.1);
+  /* The top bar's glass (Uruni header-glass): a bright rim on the edge facing
+     the content, a soft glow falling from it, and a light ink shadow. */
+  --glass-rim: rgb(255 255 255 / 0.85);
+  --glass-glow: rgb(255 255 255 / 0.7);
+  --glass-shadow: rgb(20 35 46 / 0.08);
   --radius: 0.625rem;
 }
 
@@ -67,8 +84,14 @@
     --ring: #5db2e8;
     --primary: #5db2e8;
     --primary-foreground: #06131c;
+    --attention: #e8946f;
     --destructive: oklch(0.704 0.191 22.2);
     --destructive-foreground: oklch(0.985 0 0);
+    /* Uruni is light-only; dark keeps the rim and glow faint, or the bar
+       would wear a white line. */
+    --glass-rim: rgb(255 255 255 / 0.1);
+    --glass-glow: rgb(255 255 255 / 0.05);
+    --glass-shadow: rgb(0 0 0 / 0.35);
     color-scheme: dark;
   }
 }

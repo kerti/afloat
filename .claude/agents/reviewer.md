@@ -24,6 +24,8 @@ Work the checklist and skip loudly anything the diff doesn't touch:
   `en-GB` and `id-ID`.
 - Frontend changes follow `docs/agents/ui-conventions.md`. A UI choice the file doesn't cover must
   be confirmed by the maintainer and added to the file in the same diff. Flag any that isn't.
+  Flag any visual element that isn't in the file's catalogue, and any page that restyles a
+  catalogue element with its own type, colour, radius or padding classes.
 - Tests exist for what actually changed, and none were weakened to pass.
 
 Report findings as a short list, most severe first. Say what you didn't check.

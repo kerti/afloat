@@ -91,24 +91,23 @@
   "pockets": {
     "title": "Kantong",
     "back": "Kembali",
-    "empty": "Belum ada Kantong.",
+    "empty": "Kantong Anda akan tampil di sini.",
     "addHeading": "Tambah Kantong",
     "namePlaceholder": "Misalnya: Tunai, OVO, debit BCA",
     "add": "Tambah",
     "adding": "Menambahkan…",
-    "edit": "Ubah",
     "editFor": "Ubah {{name}}",
+    "editForInactive": "Ubah {{name}}, nonaktif",
     "save": "Simpan",
     "saving": "Menyimpan…",
     "cancel": "Batal",
-    "saved": "Tersimpan.",
     "deactivate": "Nonaktifkan",
-    "deactivateFor": "Nonaktifkan {{name}}",
     "reactivate": "Aktifkan kembali",
-    "reactivateFor": "Aktifkan kembali {{name}}",
     "inactive": "Nonaktif",
     "showInactive": "Tampilkan Kantong nonaktif ({{count}})",
-    "allInactive_other": "Tidak ada Kantong aktif. {{count}} Kantong nonaktif disembunyikan. Centang “Tampilkan Kantong nonaktif” untuk melihatnya."
+    "allInactive_other": "Tidak ada Kantong aktif. {{count}} Kantong nonaktif disembunyikan. Centang “Tampilkan Kantong nonaktif” untuk melihatnya.",
+    "editHeading": "Ubah Kantong",
+    "nameRequired": "Masukkan nama Kantong."
   },
   "settings": {
     "household": {
@@ -157,7 +156,13 @@
     }
   },
   "toast": {
-    "deactivated": "Dinonaktifkan.",
+    "added": "{{name}} ditambahkan.",
+    "saved": "Tersimpan.",
+    "deactivated": "{{name}} dinonaktifkan.",
+    "reactivated": "{{name}} diaktifkan kembali.",
     "undo": "Urungkan"
+  },
+  "dialog": {
+    "close": "Tutup"
   }
 }

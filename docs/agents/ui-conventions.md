@@ -46,19 +46,34 @@ items hidden behind "Show inactive … (N)" (R7), deactivate is immediate with U
 ## Editing surfaces
 
 - **Editing one record is a dialog**, never an inline form. The dialog is URL-driven
-  (`?edit=pocket:<id>`) so back closes it. Create uses the same form body (`mode: "create" | "edit"`).
-  (Uruni ADR-032/046, Balances conventions.)
+  (`?edit=pocket:<id>`) so back closes it. Create uses the same form body (`mode: "create" | "edit"`)
+  under its own parameter (`?new=pocket`). (Uruni ADR-032/046, Balances conventions.)
+- **A dialog in the URL** (`lib/useDialogParam.ts`): opening pushes a history entry tagged as the
+  dialog's. Closing goes back when that entry is the dialog's, and otherwise strips the parameter in
+  place, so closing never stacks history. A link to a record that doesn't exist clears the parameter.
+  (Uruni.)
 - **A form that builds a big record or types an amount** (Expense capture) is a full route, not a
   dialog. No nested dialogs, no mode-switching dialogs, no unbounded list inside a dialog. (Uruni.)
-- **Tapping a row opens its edit dialog.** The whole card is the target; no per-row pencil, trash or
-  ⋮ menu. A row that navigates to another screen ends in a chevron; a row that opens a dialog does
-  not. (Uruni.)
+- **Tapping a row opens its edit dialog.** The row is one full-width button, at least 44px, with a
+  hover tint and a focus ring; its badges (Inactive) sit inside it; its accessible name names the
+  record ("Edit OVO"). No per-row pencil, trash or ⋮ menu. A row that navigates to another screen ends
+  in a chevron; a row that opens a dialog does not. (Uruni `TransactionList`, list cards.)
+- **The create action** is one full-width button below the list ("Add a Pocket"), the same button the
+  empty state offers. No header "+" and no floating button. (Uruni Locations.)
 - **Record-level acts live in the dialog's footer**: Deactivate/Reactivate, later Delete. Deactivate
   still closes the dialog at once and raises the Undo toast.
 - **Footer:** two buttons side by side, half a row each, primary on the right. A screen with more
-  than three buttons needs a reason. (Uruni.)
-- **A dialog that writes** closes only by its X, Esc or its buttons, never by a backdrop tap. A dialog
-  that writes nothing may close on an outside tap. (Uruni ADR-046.)
+  than three buttons needs a reason. Create: [Cancel | Add]. Edit: [record-level act | Save], with no
+  Cancel; the X, Esc, back and an outside tap close it. (Uruni `Locations.tsx`.)
+- **Outside tap:** only a dialog that **records money** ignores a tap outside it (`posts` on
+  `DialogContent`); it closes by its X, Esc or its buttons. Every other dialog, a Pocket's create and
+  edit included, closes on an outside tap. Uruni's reason: a money record dismissible by a stray tap is
+  the wrong shape for the one thing the app must not get wrong. (Uruni ADR-046, `dialog.tsx` `posts`.)
+- **Dialog chrome:** the card is inset 1rem from the screen edge, with a plain header, a muted footer
+  strip and a 44px close button whose label the caller translates. On open, focus lands in the first
+  field with the caret at the end and nothing selected. The dialog centres in the space the on-screen
+  keyboard leaves (`lib/useKeyboardInset.ts`). Entrance: opacity and scale, 150ms ease-out; no exit
+  animation (the dialog unmounts with its parameter); none under reduced motion. (Uruni `dialog.tsx`.)
 - Edit-form state is initialised from the record (`useState(() => toForm(record))` plus
   `key={record.id}`), never reset in a `useEffect`. (Balances.)
 
@@ -68,7 +83,15 @@ items hidden behind "Show inactive … (N)" (R7), deactivate is immediate with U
 - **Submit is disabled only while the write is in flight, or when nothing has changed.** Invalid input
   leaves it enabled: submitting shows why. Field errors appear on blur and, all at once, on submit.
   (Hybrid, ruled: Uruni's no-op rule, Balances' validation timing.)
+- **Unchanged** compares trimmed text to the stored value, so a trailing space doesn't enable Save.
+  The value is sent as typed; the server trims. (Uruni's no-op rule.)
+- **Client checks mirror the server's**, with the server's code winning: a required field shows its
+  own message ("Enter a Pocket name.") on blur once touched and on submit; typing clears a server
+  error. (Balances validation timing.)
 - **Pending:** the label changes ("Saving…", "Adding…") and the inputs are disabled.
+- **A create keeps one client id per attempt**, in page state: closing and reopening the dialog after
+  a failure resends the same UUIDv7, so a retry meets the `200` replay. Replaced only after a success
+  or an `ID_TAKEN`. (#121 R5.)
 - **Errors go where the user is looking.** A server code that belongs to a field shows under that
   field (one code→field map). Any other failure while a form is open shows inside the form, above the
   footer. With no form open (a failed Undo, deactivate from a toast) it is a toast. The wire's text is
@@ -88,9 +111,11 @@ items hidden behind "Show inactive … (N)" (R7), deactivate is immediate with U
 
 ## Feedback
 
-- **Every write the user starts ends in exactly one toast.** Create: "Added …". Edit: "Saved." A
-  reversible act names the object and carries Undo ("Deactivated OVO."). Failure with no form open:
-  an error toast with the code's copy. (Balances ADR-0058 §4; Uruni "the one way to say saved".)
+- **Every write the user starts ends in exactly one toast.** Create: "Added OVO.". Edit: "Saved."
+  **Every reversible act's toast names the object and carries Undo, both directions alike**:
+  "Deactivated OVO." and "Reactivated OVO." each get the 8 s Undo, even though the reverse is one tap
+  away in the dialog. Consistency wins over "it's cheap to redo". Failure with no form open: an error
+  toast with the code's copy. (Balances ADR-0058 §4; Uruni "the one way to say saved"; ruled 22 Nov.)
 - **Durations:** 4 s plain, 8 s with an action; an action toast pauses on hover and shows the
   countdown bar. One `<Toaster>`, bottom-centre (a phone's thumb zone), mounted at the root so a
   toast survives navigation.
@@ -101,11 +126,13 @@ items hidden behind "Show inactive … (N)" (R7), deactivate is immediate with U
 
 ## States
 
-- **Loading:** a small inline spinner plus text, `role="status"`. No skeletons. (Uruni.)
+- **Loading:** a small inline spinner plus text, `role="status"`. No skeletons. (Uruni `Loading.tsx`.)
+  `components/states.tsx` holds `Loading` and `ErrorState`. Icons are inline SVG, `aria-hidden`;
+  there is no icon library.
 - **Empty:** a plain sentence naming what will appear here, plus the create action. A separate string
   when a filter hides everything ("No active Pockets. 3 inactive hidden…"). (Uruni, Balances.)
 - **Load failure:** an alert in the attention colour with an icon, `role="alert"`, and a full-width
-  Retry button. (Uruni `ErrorState`.)
+  Retry button in the primary (default) variant. (Uruni `ErrorState`.)
 
 ## Colour and type
 
@@ -126,8 +153,9 @@ items hidden behind "Show inactive … (N)" (R7), deactivate is immediate with U
   their capital when they mean the modelled thing (Pocket, Household, Expense). (Uruni.)
 - Plain, warm, specific; written for a household, not an engineer. A failure is described as what
   happened and what to do, never as an "error". (Uruni, Balances.)
-- **Name the object** in confirms and toasts ("Deactivated OVO."). Per-row accessible labels name it
-  too ("Edit OVO").
+- **Name the object** in confirms and in create and reversible-act toasts ("Added OVO.",
+  "Deactivated OVO."). An edit's toast is just "Saved." (§ Feedback). Per-row accessible labels name
+  it too, with any badge the row shows ("Edit OVO", "Edit OVO, inactive").
 - Punctuation: "…" (one character) for pending; sentences end with a full stop, buttons and titles
   don't; **no em dash** in copy (a test enforces it). (Uruni, Balances.)
 - **Plurals** use i18next `_one` / `_other` keys; `id-ID` needs only `_other`.
@@ -150,11 +178,14 @@ items hidden behind "Show inactive … (N)" (R7), deactivate is immediate with U
 ## Accessibility and touch
 
 - **44px minimum tap target**, built into the primitives (`Button`, `Input`, icon sizes), not
-  remembered per screen. (Uruni, Balances.)
+  remembered per screen: `Button` (default and `sm`) and `Input` are `h-11` app-wide. (Uruni,
+  Balances.)
 - Colour is never the only signal; decorative icons are `aria-hidden`.
 - Radix owns focus trap and restore; a dialog's close button has a label; the dialog sits above the
   on-screen keyboard.
 - Live regions are mounted before they are needed.
+- A checkbox is 20px inside a label at least 44px tall; "Show inactive …" is a checkbox, never a
+  switch. (Balances `ShowInactiveToggle`.)
 - Focus order follows visual order.
 
 ## Testing

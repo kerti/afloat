@@ -92,25 +92,24 @@
   "pockets": {
     "title": "Pockets",
     "back": "Back",
-    "empty": "No Pockets yet.",
+    "empty": "Your Pockets will appear here.",
     "addHeading": "Add a Pocket",
     "namePlaceholder": "For example: Cash, OVO, BCA debit",
     "add": "Add",
     "adding": "Adding…",
-    "edit": "Edit",
     "editFor": "Edit {{name}}",
+    "editForInactive": "Edit {{name}}, inactive",
     "save": "Save",
     "saving": "Saving…",
     "cancel": "Cancel",
-    "saved": "Saved.",
     "deactivate": "Deactivate",
-    "deactivateFor": "Deactivate {{name}}",
     "reactivate": "Reactivate",
-    "reactivateFor": "Reactivate {{name}}",
     "inactive": "Inactive",
     "showInactive": "Show inactive Pockets ({{count}})",
     "allInactive_one": "No active Pockets. {{count}} inactive Pocket hidden. Tick “Show inactive Pockets” to see it.",
-    "allInactive_other": "No active Pockets. {{count}} inactive Pockets hidden. Tick “Show inactive Pockets” to see them."
+    "allInactive_other": "No active Pockets. {{count}} inactive Pockets hidden. Tick “Show inactive Pockets” to see them.",
+    "editHeading": "Edit Pocket",
+    "nameRequired": "Enter a Pocket name."
   },
   "settings": {
     "household": {
@@ -159,7 +158,13 @@
     }
   },
   "toast": {
-    "deactivated": "Deactivated.",
+    "added": "Added {{name}}.",
+    "saved": "Saved.",
+    "deactivated": "Deactivated {{name}}.",
+    "reactivated": "Reactivated {{name}}.",
     "undo": "Undo"
+  },
+  "dialog": {
+    "close": "Close"
   }
 }

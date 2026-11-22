@@ -1,9 +1,10 @@
 import { toast } from "sonner";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { act, screen, waitFor } from "@testing-library/react";
+import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { alice, defaultHandlers, server, type State } from "@/test/server";
 import { renderApp } from "@/test/render";
+import enGB from "@/locales/en-GB.json";
 
 // The real <Toaster> and the real sonner, no mock: the viewport is mounted at
 // the app root, so the toast outlives the page that raised it.
@@ -19,6 +20,12 @@ afterEach(() => {
   toast.dismiss();
 });
 
+async function deactivateCash(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(await screen.findByRole("button", { name: "Edit Cash" }));
+  const dialog = await screen.findByRole("dialog", { name: enGB.pockets.editHeading });
+  await user.click(within(dialog).getByRole("button", { name: enGB.pockets.deactivate }));
+}
+
 describe("the Undo toast, for real", () => {
   it("survives navigating away from /pockets, and its Undo still works there", async () => {
     const s = state();
@@ -26,12 +33,12 @@ describe("the Undo toast, for real", () => {
     const user = userEvent.setup();
     renderApp("/pockets");
 
-    await user.click(await screen.findByRole("button", { name: "Deactivate Cash" }));
-    expect(await screen.findByText("Deactivated.")).toBeInTheDocument();
+    await deactivateCash(user);
+    expect(await screen.findByText("Deactivated Cash.")).toBeInTheDocument();
 
     await user.click(screen.getByRole("link", { name: "Back" }));
     expect(await screen.findByRole("link", { name: "Pockets" })).toBeInTheDocument();
-    expect(screen.getByText("Deactivated.")).toBeInTheDocument();
+    expect(screen.getByText("Deactivated Cash.")).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Undo" }));
     await waitFor(() => expect(s.pocketPatches).toEqual([{ active: false }, { active: true }]));
@@ -43,16 +50,16 @@ describe("the Undo toast, for real", () => {
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     renderApp("/pockets");
 
-    await user.click(await screen.findByRole("button", { name: "Deactivate Cash" }));
-    expect(await screen.findByText("Deactivated.")).toBeInTheDocument();
+    await deactivateCash(user);
+    expect(await screen.findByText("Deactivated Cash.")).toBeInTheDocument();
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(7000);
     });
-    expect(screen.getByText("Deactivated.")).toBeInTheDocument();
+    expect(screen.getByText("Deactivated Cash.")).toBeInTheDocument();
     await act(async () => {
       await vi.advanceTimersByTimeAsync(2000);
     });
-    await waitFor(() => expect(screen.queryByText("Deactivated.")).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByText("Deactivated Cash.")).not.toBeInTheDocument());
   });
 });

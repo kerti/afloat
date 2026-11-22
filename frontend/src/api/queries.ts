@@ -4,9 +4,11 @@ import {
   changeEmail,
   changePassword,
   commitOnboardingChoice,
+  createPocket,
   getAuthMethods,
   getMe,
   getOnboardingOptions,
+  listPockets,
   localLogin,
   localRegister,
   logout,
@@ -14,11 +16,14 @@ import {
   updateMe,
   type ChangeEmailRequest,
   type ChangePasswordRequest,
+  type CreatePocketRequest,
   type Household,
   type LocalRegisterRequest,
   type Me,
   type OnboardingChoiceRequest,
   type OnboardingOptions,
+  type Pocket,
+  type PocketList,
   type UpdateHouseholdRequest,
   type UpdateMeRequest,
 } from "./client";
@@ -136,5 +141,20 @@ export function useLogout() {
   return useMutation<void, ApiError>({
     mutationFn: logout,
     onSuccess: () => clearSession(qc),
+  });
+}
+
+export const pocketsKey = ["pockets"] as const;
+
+export function usePockets() {
+  return useQuery<PocketList, ApiError>({ queryKey: pocketsKey, queryFn: listPockets });
+}
+
+// The list is the one read path, as /me is: invalidate, never patch the cache.
+export function useCreatePocket() {
+  const qc = useQueryClient();
+  return useMutation<Pocket, ApiError, CreatePocketRequest>({
+    mutationFn: createPocket,
+    onSuccess: () => qc.invalidateQueries({ queryKey: pocketsKey }),
   });
 }

@@ -5,6 +5,7 @@ import { HomePage } from "@/pages/HomePage";
 import { HouseholdSettingsPage } from "@/pages/HouseholdSettingsPage";
 import { LoginPage } from "@/pages/LoginPage";
 import { OnboardingPage } from "@/pages/OnboardingPage";
+import { PocketsPage } from "@/pages/PocketsPage";
 import { RegisterPage } from "@/pages/RegisterPage";
 import { UserSettingsPage } from "@/pages/UserSettingsPage";
 
@@ -24,6 +25,7 @@ export function App() {
           path="/settings/user"
           element={<RequireSession>{(me) => <UserSettingsPage me={me} />}</RequireSession>}
         />
+        <Route path="/pockets" element={<RequireSession>{() => <PocketsPage />}</RequireSession>} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
       <UpdatePrompt />

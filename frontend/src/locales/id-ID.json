@@ -10,6 +10,7 @@
     "email": "Email",
     "password": "Kata sandi",
     "userDisplayName": "Nama Anda (opsional)",
+    "pocketDisplayName": "Nama Kantong",
     "householdDisplayName": "Nama rumah tangga"
   },
   "fieldNames": {
@@ -18,6 +19,7 @@
     "email": "email",
     "password": "kata sandi",
     "user_display_name": "nama",
+    "pocket_display_name": "nama Kantong",
     "household_display_name": "nama rumah tangga",
     "time_zone": "zona waktu",
     "locale": "bahasa",
@@ -37,6 +39,7 @@
     "comingSoon": "Dasbor Anda akan muncul di sini.",
     "settingsLink": "Pengaturan rumah tangga",
     "userSettingsLink": "Pengaturan Anda",
+    "pocketsLink": "Kantong",
     "signOut": "Keluar"
   },
   "pwa": {
@@ -53,6 +56,8 @@
     "UNAUTHORIZED": "Sesi Anda telah berakhir. Silakan masuk lagi.",
     "CROSS_SITE_REQUEST_BLOCKED": "Permintaan itu diblokir karena berasal dari situs lain. Muat ulang Afloat lalu coba lagi.",
     "INTERNAL": "Afloat tidak dapat menyelesaikannya. Coba beberapa saat lagi.",
+    "ID_TAKEN": "Afloat tidak dapat menyimpannya. Coba beberapa saat lagi.",
+    "NAME_TAKEN": "Nama itu sudah dipakai.",
     "NETWORK": "Tidak dapat menghubungi Afloat. Periksa koneksi Anda lalu coba lagi.",
     "UNKNOWN": "Terjadi kesalahan. Coba beberapa saat lagi.",
     "EMAIL_TAKEN": "Sudah ada akun dengan email itu. Silakan masuk.",
@@ -81,6 +86,15 @@
     "submitting": "Membuat…",
     "closed": "Instans ini sedang tidak menerima rumah tangga baru. Minta pengelolanya untuk membukanya, atau masuk ke akun yang sudah ada.",
     "backToSignIn": "Kembali ke halaman masuk"
+  },
+  "pockets": {
+    "title": "Kantong",
+    "back": "Kembali",
+    "empty": "Belum ada Kantong.",
+    "addHeading": "Tambah Kantong",
+    "namePlaceholder": "Misalnya: Tunai, OVO, debit BCA",
+    "add": "Tambah",
+    "adding": "Menambahkan…"
   },
   "settings": {
     "household": {

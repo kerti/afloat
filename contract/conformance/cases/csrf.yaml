@@ -210,6 +210,58 @@
       - sql: SELECT household_display_name FROM households
         rows: [{household_display_name: Conformance Household}]
 
+# The first domain write (#121): a cross-site page must not be able to create a
+# Pocket in the signed-in Household.
+- name: csrf - cross-site pocket create is blocked and nothing is written
+  issue: "121"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /pockets
+    headers:
+      Content-Type: application/json
+      Sec-Fetch-Site: cross-site
+    body: '{"id":"0192f0a0-0000-7000-8001-000000000005","pocket_display_name":"Hijacked"}'
+  expect:
+    status: 403
+    body_json: {code: CROSS_SITE_REQUEST_BLOCKED}
+    cookies: {}
+    rows:
+      - sql: SELECT count(*)::int AS n FROM pockets
+        rows: [{n: 0}]
+
+- name: csrf - a foreign Origin on a pocket create is blocked
+  issue: "121"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /pockets
+    headers:
+      Content-Type: application/json
+      Origin: http://evil.example
+    body: '{"id":"0192f0a0-0000-7000-8001-000000000005","pocket_display_name":"Hijacked"}'
+  expect:
+    status: 403
+    body_json: {code: CROSS_SITE_REQUEST_BLOCKED}
+    cookies: {}
+    rows:
+      - sql: SELECT count(*)::int AS n FROM pockets
+        rows: [{n: 0}]
+
 - name: csrf - a safe method is never blocked
   request:
     method: GET

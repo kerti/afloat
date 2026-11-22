@@ -29,6 +29,10 @@ type Querier interface {
 	// tests it against the same clock (BOOTSTRAP.md §5.1: an instant the database
 	// evaluates comes from the database).
 	CreateOnboardingHandshake(ctx context.Context, arg CreateOnboardingHandshakeParams) (OnboardingHandshake, error)
+	// ON CONFLICT (id) arbitrates the primary key only: a row back is a create, no
+	// row is the id already being held (see GetLivePocket). A name clash is not
+	// arbitrated and still raises 23505 on pockets_household_name_idx.
+	CreatePocket(ctx context.Context, arg CreatePocketParams) (Pocket, error)
 	CreateSession(ctx context.Context, arg CreateSessionParams) (Session, error)
 	CreateUser(ctx context.Context, arg CreateUserParams) (User, error)
 	DeleteExpiredOnboardingHandshakes(ctx context.Context) error
@@ -47,6 +51,10 @@ type Querier interface {
 	// A read, not a claim: it lets a request be refused (400, 403) without
 	// spending the handshake. The commit's own claim is ClaimOnboardingHandshake.
 	GetLiveOnboardingHandshake(ctx context.Context, id string) (OnboardingHandshake, error)
+	// The read-back of a create that found its id taken: a replay when the row is
+	// the caller's own live Pocket, and no row for anything else (another
+	// Household's, or a deleted one).
+	GetLivePocket(ctx context.Context, arg GetLivePocketParams) (Pocket, error)
 	// sessions.id is the SHA-256 of the bearer token, never the token. Callers hash
 	// before every read and write.
 	//
@@ -71,6 +79,13 @@ type Querier interface {
 	// what the index considers a duplicate. Soft-deleted Users are invisible here.
 	GetUserByEmail(ctx context.Context, email string) (User, error)
 	GetUserByID(ctx context.Context, id pgtype.UUID) (User, error)
+	// Pockets (PRD S10). Tenant-scoped in SQL: every statement filters on the
+	// authenticated User's household_id, never anything the request supplied
+	// (BOOTSTRAP.md §4).
+	// Every Pocket not deleted, inactive ones included. created_at then id: a
+	// rename or a deactivation must not reshuffle the list, and the order is
+	// independent of the database's collation.
+	ListPockets(ctx context.Context, householdID pgtype.UUID) ([]Pocket, error)
 	// Readiness probe for GET /health. A round-trip through the pool proves more
 	// than pgx's own Ping: it takes a connection from the pool, executes, and scans,
 	// which is the path every real query takes. A pool that is exhausted or pointed

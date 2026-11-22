@@ -9,6 +9,8 @@ type UpdateHouseholdBody = components["schemas"]["UpdateHouseholdRequest"];
 type UpdateMeBody = components["schemas"]["UpdateMeRequest"];
 type ChangeEmailBody = components["schemas"]["ChangeEmailRequest"];
 type ChangePasswordBody = components["schemas"]["ChangePasswordRequest"];
+type Pocket = components["schemas"]["Pocket"];
+type CreatePocketBody = components["schemas"]["CreatePocketRequest"];
 type ChoiceBody = components["schemas"]["OnboardingChoiceRequest"];
 
 // The handshake a registration opens, as the fake server holds it.
@@ -29,6 +31,10 @@ export type State = {
   mePatches?: UpdateMeBody[];
   emailChanges?: ChangeEmailBody[];
   passwordChanges?: ChangePasswordBody[];
+  // The fake server's Pockets in creation order, and every POST /pockets body
+  // it was sent, for a test to assert on.
+  pockets?: Pocket[];
+  pocketPosts?: CreatePocketBody[];
   // The one password the fake server accepts as "current". Defaults to the
   // login fixture's.
   password?: string;
@@ -164,6 +170,32 @@ export function defaultHandlers(state: State = { signedIn: false, me: alice }) {
       }
       state.password = body.new_password;
       return new HttpResponse(null, { status: 204 });
+    }),
+    http.get("/api/pockets", () => {
+      if (!state.signedIn) return HttpResponse.json(envelope("UNAUTHORIZED"), { status: 401 });
+      return HttpResponse.json({ items: state.pockets ?? [] });
+    }),
+    http.post("/api/pockets", async ({ request }) => {
+      if (!state.signedIn) return HttpResponse.json(envelope("UNAUTHORIZED"), { status: 401 });
+      const body = (await request.json()) as CreatePocketBody;
+      (state.pocketPosts ??= []).push(body);
+      const list = (state.pockets ??= []);
+      // As the server: the body is validated before the id is considered.
+      const name = body.pocket_display_name.trim();
+      if (name === "") {
+        return HttpResponse.json(
+          envelope("VALIDATION", { field: "pocket_display_name", rule: "required" }),
+          { status: 400 },
+        );
+      }
+      const held = list.find((p) => p.id === body.id);
+      if (held) return HttpResponse.json(held, { status: 200 });
+      if (list.some((p) => p.pocket_display_name.toLowerCase() === name.toLowerCase())) {
+        return HttpResponse.json(envelope("NAME_TAKEN"), { status: 409 });
+      }
+      const pocket: Pocket = { id: body.id, pocket_display_name: name, active: true };
+      list.push(pocket);
+      return HttpResponse.json(pocket, { status: 201 });
     }),
     http.post("/api/auth/logout", () => {
       state.signedIn = false;

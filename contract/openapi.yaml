@@ -20,9 +20,10 @@ info:
     Household spending-trajectory API.
 
     Health check, authentication, the founding gate (BOOTSTRAP.md §5.1), the
-    Household's settings (PRD S3) and the User's own (PRD S4: profile, email and
-    password). Invitation acceptance and the remaining
-    domain resources land in step 9 and are deliberately absent here.
+    Household's settings (PRD S3), the User's own (PRD S4: profile, email and
+    password) and the Household's Pockets (PRD S10: list and create). Invitation
+    acceptance and the remaining domain resources land in step 9 and are
+    deliberately absent here.
   license:
     name: AGPL-3.0-only
     url: https://www.gnu.org/licenses/agpl-3.0.html
@@ -37,6 +38,8 @@ tags:
     description: Local email + password sessions (BOOTSTRAP.md §5).
   - name: household
     description: The caller's own Household and its settings (PRD S3).
+  - name: pocket
+    description: The Household's Pockets (PRD S10), the containers it spends from.
   - name: onboarding
     description: |
       The gate between a registered credential and an account: a person who has
@@ -401,6 +404,83 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
 
+  /pockets:
+    get:
+      tags: [pocket]
+      operationId: listPockets
+      summary: The caller's Household's Pockets.
+      description: |
+        Every Pocket of the caller's Household that is not deleted, active or
+        inactive (an inactive one carries `active: false`), in creation order
+        (`created_at`, then `id`). A rename or a deactivation never moves a
+        Pocket in the order, and the client does not re-sort. Never paginated:
+        a Household holds a handful. An empty Household answers
+        `{"items": []}`. The Household is the caller's own, from the session;
+        nothing in the request names one.
+      responses:
+        '200':
+          description: The Pockets, in creation order.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PocketList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    post:
+      tags: [pocket]
+      operationId: createPocket
+      summary: Create a Pocket.
+      description: |
+        The client supplies the id (a UUIDv7) and it is the idempotency key
+        (BOOTSTRAP.md §4): the first write answers `201` with the Pocket, and a
+        repeat of the same id answers `200` with the Pocket **as it stands now**.
+        The rest of a repeated body is neither compared nor applied, so a retry
+        after a lost `201` that meets another member's rename sees the stored
+        name, not an error.
+
+        An id that is held by something other than a live Pocket of the caller's
+        own Household is `409 ID_TAKEN`: another Household's Pocket, or the
+        caller's own deleted one (an id names one Pocket for ever). The two are
+        one answer on purpose. A name already held, case-insensitively, by
+        another Pocket of the Household that is not deleted (active or
+        inactive) is `409 NAME_TAKEN`.
+
+        A body that is invalid is refused whatever the id holds. A new Pocket is
+        always active: `active` is not a property of this request. The Household
+        is the caller's own, from the session, never from the body.
+
+        `pocket_display_name` follows the Household's name rules (BOOTSTRAP.md
+        §5.1.1): trimmed, not blank, at most 60 code points.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreatePocketRequest'
+      responses:
+        '200':
+          description: The id already names a live Pocket of this Household, returned as stored.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Pocket'
+        '201':
+          description: The Pocket was created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Pocket'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
   /onboarding/options:
     get:
       tags: [onboarding]
@@ -717,6 +797,67 @@ components:
           maximum: 28
       additionalProperties: false
 
+    Pocket:
+      type: object
+      description: |
+        A practical container the Household spends from (PRD S10, CONTEXT.md):
+        a name, and no balance. A Pocket on the wire is never deleted, but it
+        may be inactive: kept for the history it labels, and not offered for
+        new capture.
+      required:
+        - id
+        - pocket_display_name
+        - active
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: UUIDv7, supplied by the client at creation.
+        pocket_display_name:
+          type: string
+          minLength: 1
+          maxLength: 255
+        active:
+          type: boolean
+          description: |
+            `false` for a Pocket that has been deactivated. A new Pocket is
+            always active.
+      additionalProperties: false
+
+    PocketList:
+      type: object
+      description: |
+        The Household's Pockets in creation order. An object rather than a bare
+        array so it can grow without breaking a client.
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Pocket'
+      additionalProperties: false
+
+    CreatePocketRequest:
+      type: object
+      required:
+        - id
+        - pocket_display_name
+      properties:
+        id:
+          type: string
+          format: uuid
+          # kin-openapi does not enforce format: uuid, and the generated decode
+          # accepts four spellings, so the pattern is the one gate on the
+          # canonical dashed form and on version 7 (RFC variant).
+          pattern: '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$'
+          description: UUIDv7, generated by the client. The idempotency key.
+        pocket_display_name:
+          type: string
+          # An outer bound that counts padding; the handler's 60 code points
+          # applies to the trimmed name.
+          maxLength: 255
+      additionalProperties: false
+
     ChangePasswordRequest:
       type: object
       required: [current_password, new_password]
@@ -815,12 +956,19 @@ components:
 
         `VALIDATION` carries `{field, rule}` in `args` and reports only the
         first failing field, as in Balances. `field` is the wire name of the
-        property, so a Household's name (`household_display_name`) and a User's
-        (`user_display_name`) are never confused. `WEAK_PASSWORD` carries
+        property, so a Household's name (`household_display_name`), a User's
+        (`user_display_name`) and a Pocket's (`pocket_display_name`) are never
+        confused; a Pocket's `id` is `id`. `WEAK_PASSWORD` carries
         `{reason}`, `min` or `breached`, at registration and at a password
         change. `INVALID_CURRENT_PASSWORD` is the password change's and the
         email change's own: the current password sent with the request is not
-        the User's. It carries no `args`.
+        the User's. It carries no `args`. `ID_TAKEN` is a create whose
+        client-supplied id is held by something other than a live row of the
+        caller's own Household (another Household's, or one of its own that is
+        deleted). `NAME_TAKEN` is a name already held, case-insensitively, by
+        another row of the Household that is not deleted. Neither carries
+        `args`; `NAME_TAKEN` names no entity, so every entity with a name
+        shares it.
       enum:
         - VALIDATION
         - INVALID_JSON_BODY
@@ -832,6 +980,8 @@ components:
         - WEAK_PASSWORD
         - INVALID_CURRENT_PASSWORD
         - FOUNDING_DISABLED
+        - ID_TAKEN
+        - NAME_TAKEN
         - INTERNAL
 
   responses:
@@ -874,7 +1024,10 @@ components:
     Conflict:
       description: |
         `EMAIL_TAKEN`: a live User already holds the address, at registration, at
-        the commit or at an email change.
+        the commit or at an email change. `ID_TAKEN`: a create's client-supplied
+        id is held by another Household's row, or by the caller's own deleted
+        one. `NAME_TAKEN`: another row of the Household that is not deleted
+        already holds the name, case-insensitively.
       content:
         application/json:
           schema:

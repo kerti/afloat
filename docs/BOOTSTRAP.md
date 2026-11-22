@@ -121,7 +121,49 @@ with zoneinfo answers from it, so a case-insensitive filesystem (a Mac) also acc
   (§5.1.1). The rule above stands for every domain `POST`.
 - **Idempotent create:** `POST` accepts the client-supplied id; a replay returns **200** with the
   existing resource, a first write returns **201**. Implemented as `INSERT ... ON CONFLICT (id) DO
-  NOTHING` plus a read-back.
+  NOTHING RETURNING *` plus a read-back (#121, the first one; every later create copies it):
+  - **The id is a UUIDv7 and the contract enforces it:** `format: uuid` plus a `pattern` for the
+    canonical dashed form, version 7, RFC variant. kin-openapi does not check `format: uuid`, and the
+    generated decode accepts four spellings, so without the pattern a `crypto.randomUUID()` (a v4) is
+    stored and "UUIDv7" quietly is not one. A wrong one is `VALIDATION {field: id, rule: pattern}`.
+    No database `CHECK` on the version.
+  - **A replay answers the row as stored now, and the rest of the body is neither compared nor
+    applied.** A retry after a lost `201` that meets another member's rename must not become an
+    error. The read-back is scoped by id, `household_id` and `deleted_at IS NULL`; a live row of the
+    caller's own Household, active or inactive, is the `200`.
+  - **An id held by anything else is `409 ID_TAKEN`:** another Household's row, or the caller's own
+    soft-deleted one, in one answer so a foreign id cannot be told from a deleted one. A deleted id
+    is never reused: an id names one row for ever.
+  - **A body that is invalid is refused whatever the id holds**, so a taken id with a bad name
+    answers what a free id with a bad name does.
+  - **Only `pgx.ErrNoRows` means "the id is held".** Apart from the name clash below, any other error
+    from either statement is `500` with nothing written (§5.1).
+  - **`ON CONFLICT (id)` arbitrates the primary key only.** A name clash still raises `23505` on the
+    name index and is `NAME_TAKEN`, mapped by the constraint's name, never by the code alone. A
+    replay of an id that is already committed never reaches the name index, but a *concurrent* replay
+    can, when the first insert has not committed: the second passes the arbiter's pre-check, inserts
+    its tuple and trips over the first's name-index entry. So a name-index `23505` is read back by
+    id first: a live row of the caller's own Household under that id is the `200`, and only no row
+    is `NAME_TAKEN`. Without it a double tap answers the loser "name taken" for its own Pocket.
+  - **No transaction and no detached context:** it is one statement, and retrying with the same id
+    is the recovery.
+- **Names are `<entity>_display_name`** on the wire, in SQL, in Go and in i18n keys (#113 D5, #121):
+  `household_display_name`, `user_display_name`, `pocket_display_name`. A bare `name` would be one
+  `VALIDATION` `args.field` meaning several things. **A bounded name follows one rule:** trimmed;
+  nothing visible (blank, or only whitespace and Unicode Cf) is `required`; more than the entity's cap
+  in code points is `max`; U+0000 is `pattern`; a Cf character inside a visible name is kept. It is one
+  function (`auth.CheckBoundedName`), so no two entities can disagree about what a name is; only the
+  cap differs (60 for a Household and a Pocket). The contract's `maxLength: 255` is an outer bound that
+  counts padding. **A name may be unique among an entity's live rows** (a Pocket's is): a partial
+  unique index on `(household_id, lower(name)) WHERE deleted_at IS NULL`, so a deleted row releases its
+  name and an inactive one keeps it. A clash is `409 NAME_TAKEN`, one entity-free code that every
+  named entity shares. `lower()` follows the database's locale, so no fixture pins a non-ASCII fold.
+- **Collections** are listed as an object, `{"items": [...]}`, never a bare array (so it can grow a
+  `next` without breaking a client), empty as `{"items": []}` and never `null`. A small, bounded
+  collection is not paginated, and the Household's Pockets are one. Order is declared, never left to
+  the database: `ORDER BY created_at, id`, so a rename does not reshuffle a picker and the order does
+  not depend on a collation. The list holds every row that is not soft-deleted; whether an inactive
+  one appears is the entity's call, and the client filters what it already holds.
 - **Money:** `DECIMAL(20,4)`, serialised as **strings** on the wire, at exactly the storage scale —
   4 decimal places, always, never trimmed and never exponent notation. `"25000000"` and `"2.5e7"` are
   both wrong for a `25000000.0000` row; `"25000000.0000"` is the only correct rendering. In Go, use
@@ -558,7 +600,10 @@ apps behind one hostname on different paths would have them silently overwrite e
 
 The error envelope is Balances ADR-0027 exactly: `{"code": "SCREAMING_SNAKE", "args": {...}}`, no
 `message` field, `args` values JSON primitives only. `VALIDATION` carries `{field, rule}` and reports
-the first failing field only.
+the first failing field only. The vocabulary is the contract's `ErrorCode` enum, closed and extended as
+endpoints land. `ID_TAKEN` (#121) is a create whose client-supplied id is held by something other than a
+live row of the caller's own Household, and `NAME_TAKEN` a name another live row already holds; both are
+`409`, carry no `args`, and name no entity.
 
 **Which request-body failure gets reported (#18).** The login tests drive this table:
 

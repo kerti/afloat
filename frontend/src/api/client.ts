@@ -7,6 +7,9 @@ export type UpdateHouseholdRequest = components["schemas"]["UpdateHouseholdReque
 export type UpdateMeRequest = components["schemas"]["UpdateMeRequest"];
 export type ChangePasswordRequest = components["schemas"]["ChangePasswordRequest"];
 export type ChangeEmailRequest = components["schemas"]["ChangeEmailRequest"];
+export type Pocket = components["schemas"]["Pocket"];
+export type PocketList = components["schemas"]["PocketList"];
+export type CreatePocketRequest = components["schemas"]["CreatePocketRequest"];
 export type AuthMethods = components["schemas"]["AuthMethods"];
 export type LocalLoginRequest = components["schemas"]["LocalLoginRequest"];
 export type LocalRegisterRequest = components["schemas"]["LocalRegisterRequest"];
@@ -55,6 +58,8 @@ const errorCodeKnown: Record<ErrorCode, true> = {
   WEAK_PASSWORD: true,
   FOUNDING_DISABLED: true,
   INVALID_CURRENT_PASSWORD: true,
+  ID_TAKEN: true,
+  NAME_TAKEN: true,
   INTERNAL: true,
 };
 export const errorCodes = Object.keys(errorCodeKnown) as ErrorCode[];
@@ -165,4 +170,20 @@ export async function changePassword(body: ChangePasswordRequest): Promise<void>
 
 export async function logout(): Promise<void> {
   await request("/auth/logout", { method: "POST" });
+}
+
+export async function listPockets(): Promise<PocketList> {
+  return (await request("/pockets")).json() as Promise<PocketList>;
+}
+
+// Idempotent on the client's id: 201 the first time, 200 with the Pocket as it
+// stands on a replay. Both are a success and both resolve to the Pocket.
+export async function createPocket(body: CreatePocketRequest): Promise<Pocket> {
+  return (
+    await request("/pockets", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    })
+  ).json() as Promise<Pocket>;
 }

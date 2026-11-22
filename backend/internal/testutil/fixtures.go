@@ -44,3 +44,17 @@ func (tdb *TestDB) CreateUser(t *testing.T, householdID pgtype.UUID, email, user
 	}
 	return id
 }
+
+// CreatePocket inserts an active, live Pocket into a Household and returns its
+// id. A test that needs an inactive or deleted one updates the row.
+func (tdb *TestDB) CreatePocket(t *testing.T, householdID pgtype.UUID, pocketDisplayName string) pgtype.UUID {
+	t.Helper()
+	id := NewUUID(t)
+	_, err := tdb.Pool.Exec(context.Background(),
+		`INSERT INTO pockets (id, household_id, pocket_display_name) VALUES ($1, $2, $3)`,
+		id, householdID, pocketDisplayName)
+	if err != nil {
+		t.Fatalf("testutil: create pocket: %v", err)
+	}
+	return id
+}

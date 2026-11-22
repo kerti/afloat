@@ -38,6 +38,17 @@ const (
 	// site, refused before it reaches a handler.
 	CodeCrossSiteRequestBlocked Code = "CROSS_SITE_REQUEST_BLOCKED"
 
+	// CodeIDTaken is a create whose client-supplied id is held by something other
+	// than a live row of the caller's own Household: another Household's, or one
+	// of its own that is deleted. One answer for both, so a foreign id cannot be
+	// told from a deleted one.
+	CodeIDTaken Code = "ID_TAKEN"
+
+	// CodeNameTaken is a name another row of the Household that is not deleted
+	// already holds, case-insensitively. Entity-free on purpose: every named
+	// entity (Pockets now, Categories later) shares it.
+	CodeNameTaken Code = "NAME_TAKEN"
+
 	// CodeInternal is the only code an unexpected failure may produce. The cause
 	// is logged; the response says nothing about it.
 	CodeInternal Code = "INTERNAL"

@@ -6,7 +6,9 @@ import type { ApiError } from "./client";
 export function errorMessage(t: TFunction, err: ApiError): string {
   switch (err.code) {
     case "VALIDATION": {
-      const field = typeof err.args.field === "string" ? err.args.field : "";
+      // A nested path ("allocations.0.allocation") is named by its last part.
+      const field =
+        typeof err.args.field === "string" ? err.args.field.replace(/^allocations\.\d+\./, "") : "";
       // fieldNames, not fields: fields are the form's capitalised labels, and
       // this name sits mid-sentence.
       return t("errors.VALIDATION", { field: t(`fieldNames.${field}`, { defaultValue: field }) });

@@ -1,6 +1,6 @@
 // Package budget owns the Household's Budget for the Budget Period it is in
-// (PRD S9, S12, S13): reading it, changing its Monthly Budget, and bringing a
-// Period into being on its first read. Handlers live with their domain
+// (PRD S9, S12, S13): reading it, changing its Monthly Budget and its
+// Categories' allocations, and bringing a Period into being on its first read. Handlers live with their domain
 // (docs/adr/go/0001).
 //
 // The dependency runs one way: this package imports auth, for the User in the
@@ -8,10 +8,12 @@
 package budget
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -27,9 +29,11 @@ import (
 
 // Beginner is the slice of the pool this package needs to run a transaction,
 // as auth's is: it keeps the handlers testable without a pool and makes the
-// two places that need atomicity obvious.
+// places that need atomicity or one snapshot obvious. Begin is for a write;
+// BeginTx is for the one read that must see a single snapshot (see GetBudget).
 type Beginner interface {
 	Begin(ctx context.Context) (pgx.Tx, error)
+	BeginTx(ctx context.Context, opts pgx.TxOptions) (pgx.Tx, error)
 }
 
 // Handlers implements the Budget half of api.StrictServerInterface.
@@ -58,6 +62,7 @@ func New(d Deps) *Handlers {
 // GetBudget answers the Budget of the Period the caller is in now. The first
 // request to find the Period missing brings it into being (PRD S13), in one
 // transaction with what it carries forward; every later one only reads. The
+// answer is always read from one snapshot (readSnapshot). The
 // Household is the authenticated User's, taken from the context and never from
 // the request, and every statement filters on it in SQL.
 func (h *Handlers) GetBudget(ctx context.Context, _ api.GetBudgetRequestObject) (api.GetBudgetResponseObject, error) {
@@ -83,18 +88,18 @@ func (h *Handlers) GetBudget(ctx context.Context, _ api.GetBudgetRequestObject) 
 		slog.Error("get budget: look up the period", "err", err)
 		return getInternalError(), nil
 	}
-	var out api.Budget
-	if exists {
-		out, err = read(ctx, h.q, user.HouseholdID, where)
-	} else {
+	if !exists {
+		// Only the marker and its copy, committed together. The answer is read
+		// afterwards, below, as every answer is.
 		err = h.inTx(ctx, func(q *db.Queries) error {
-			if err := Materialise(ctx, q, user.HouseholdID, where.Period); err != nil {
-				return err
-			}
-			out, err = read(ctx, q, user.HouseholdID, where)
-			return err
+			return Materialise(ctx, q, user.HouseholdID, where.Period)
 		})
+		if err != nil {
+			slog.Error("get budget: materialise the period", "err", err)
+			return getInternalError(), nil
+		}
 	}
+	out, err := h.readSnapshot(ctx, user.HouseholdID, where)
 	if err != nil {
 		slog.Error("get budget", "err", err)
 		return getInternalError(), nil
@@ -102,15 +107,41 @@ func (h *Handlers) GetBudget(ctx context.Context, _ api.GetBudgetRequestObject) 
 	return api.GetBudget200JSONResponse(out), nil
 }
 
-// UpdateBudget changes the current Period's Monthly Budget. Merge semantics
-// (BOOTSTRAP.md §4): a field left out is not touched and `{}` is a no-op that
-// still answers the Budget, and still materialises a Period nobody had read.
+// readSnapshot answers the Budget from one snapshot. The answer is built from
+// several statements (the Monthly Budget's versions, then the allocations as of
+// a day the versions decide), and a concurrent edit that commits between two of
+// them would otherwise be half in the answer: the old Monthly Budget with the
+// new allocations, a Budget that never existed. REPEATABLE READ gives every
+// statement of the transaction the first one's snapshot, and READ ONLY means it
+// can never fail to serialise or hold a lock a writer would wait on.
+func (h *Handlers) readSnapshot(ctx context.Context, householdID pgtype.UUID, at Position) (api.Budget, error) {
+	tx, err := h.tx.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
+	if err != nil {
+		return api.Budget{}, fmt.Errorf("begin: %w", err)
+	}
+	// Nothing was written, so ending it is the same either way; the rollback is
+	// detached from ctx so a cancelled request still releases the connection.
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	return read(ctx, db.New(tx), householdID, at)
+}
+
+// UpdateBudget changes the current Period's Monthly Budget and allocations.
+// Merge semantics (BOOTSTRAP.md §4): a field left out is not touched and `{}` is
+// a no-op that still answers the Budget, and still materialises a Period nobody
+// had read. Allocations change the current Period only (#130 R1, R2): earlier
+// Periods are never touched, and the following ones carry the latest state
+// forward when first read.
 //
 // A change is a version dated the writer's Today. One upsert on its key, so a
 // second change the same Period Day overwrites the first and two writers of
 // different fields both land; the Period before the change is never redrawn.
-// Materialising, the write and the read that answers are one transaction, so a
-// failure at any step changes nothing.
+// What can be refused is refused before anything is written (checkAllocations).
+// Materialising, the Monthly Budget and every allocation are one transaction, so
+// a failure at any of them changes nothing. The answer is read afterwards, from
+// a snapshot of its own, the one GET reads from (readSnapshot): the maintainer's
+// ruling on #130, so that no answer can be half of a concurrent edit. A failure
+// of that read answers 500 with the change committed; the save stands, and
+// repeating the request is safe (a PATCH of absolute values).
 func (h *Handlers) UpdateBudget(ctx context.Context, request api.UpdateBudgetRequestObject) (api.UpdateBudgetResponseObject, error) {
 	user, ok := auth.UserFromContext(ctx)
 	if !ok {
@@ -142,13 +173,21 @@ func (h *Handlers) UpdateBudget(ctx context.Context, request api.UpdateBudgetReq
 		monthly = &d
 	}
 
+	changes, refusal, err := h.checkAllocations(ctx, user, body.Allocations)
+	if err != nil {
+		slog.Error("update budget: check the allocations", "err", err)
+		return updateInternalError(), nil
+	}
+	if refusal != nil {
+		return refusal, nil
+	}
+
 	where, err := h.where(ctx, user)
 	if err != nil {
 		slog.Error("update budget: resolve the period", "err", err)
 		return updateInternalError(), nil
 	}
 
-	var out api.Budget
 	err = h.inTx(ctx, func(q *db.Queries) error {
 		if err := Materialise(ctx, q, user.HouseholdID, where.Period); err != nil {
 			return err
@@ -163,15 +202,100 @@ func (h *Handlers) UpdateBudget(ctx context.Context, request api.UpdateBudgetReq
 				return fmt.Errorf("upsert monthly budget: %w", err)
 			}
 		}
-		out, err = read(ctx, q, user.HouseholdID, where)
-		return err
+		for _, c := range changes {
+			if err := ChangeAllocation(ctx, q, user.HouseholdID, where, c.categoryID, c.amount); err != nil {
+				return err
+			}
+		}
+		return nil
 	})
-	if err != nil {
+	switch {
+	case errors.Is(err, ErrCategoryNotLive):
+		// A Category that was live when it was checked is not now (deleted in
+		// between), and the transaction has rolled back. The same answer as
+		// one that was never live.
+		return updateValidation("category_id", "invalid"), nil
+	case err != nil:
 		// Never the request's body or an amount in the log.
 		slog.Error("update budget", "err", err)
 		return updateInternalError(), nil
 	}
+	out, err := h.readSnapshot(ctx, user.HouseholdID, where)
+	if err != nil {
+		// The change is committed. Not a rollback, and not a 200 either: the
+		// caller is told the answer failed and may repeat the request.
+		slog.Error("update budget: read the answer", "err", err)
+		return updateInternalError(), nil
+	}
 	return api.UpdateBudget200JSONResponse(out), nil
+}
+
+// allocationChange is one checked item of a request: a Category and what it is
+// now planned at, none being an invalid NullDecimal.
+type allocationChange struct {
+	categoryID pgtype.UUID
+	amount     decimal.NullDecimal
+}
+
+// checkAllocations is the handler's half of the request's rules, run after the
+// contract's and before anything is written, so a refused request changes
+// nothing, not even by materialising a Period. A category_id listed twice is
+// `unique`; then, item by item in the order sent, a Category that is not a live
+// one of this Household is `invalid` (unknown, another Household's and deleted
+// are one answer), and `null` for a Commitment is `required` (PRD S8: a
+// Commitment always has an allocation; the bucket is fixed at creation, so what
+// is read here cannot change before the write). The checked changes come back
+// sorted by Category id, the order the transaction writes them in: two requests
+// that touch the same Categories in opposite orders would otherwise each hold
+// a row the other is waiting on. Exactly one of changes, refusal and err is
+// meaningful.
+func (h *Handlers) checkAllocations(ctx context.Context, user db.User, items *[]api.AllocationChange) ([]allocationChange, api.UpdateBudgetResponseObject, error) {
+	if items == nil || len(*items) == 0 {
+		return nil, nil, nil
+	}
+
+	seen := make(map[[16]byte]bool, len(*items))
+	for _, item := range *items {
+		if seen[item.CategoryId] {
+			return nil, updateValidation("category_id", "unique"), nil
+		}
+		seen[item.CategoryId] = true
+	}
+
+	categories, err := h.q.ListCategories(ctx, user.HouseholdID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("list categories: %w", err)
+	}
+	bucketOf := make(map[[16]byte]string, len(categories))
+	for _, c := range categories {
+		bucketOf[c.ID.Bytes] = c.Bucket
+	}
+
+	changes := make([]allocationChange, 0, len(*items))
+	for _, item := range *items {
+		bucket, live := bucketOf[item.CategoryId]
+		if !live {
+			return nil, updateValidation("category_id", "invalid"), nil
+		}
+		change := allocationChange{categoryID: pgtype.UUID{Bytes: item.CategoryId, Valid: true}}
+		if item.Allocation == nil {
+			if api.Bucket(bucket) == api.Commitment {
+				return nil, updateValidation("allocation", "required"), nil
+			}
+		} else {
+			d, err := decimal.NewFromString(*item.Allocation)
+			if err != nil {
+				// Unreachable: the contract's pattern admits only what parses.
+				return nil, updateValidation("allocation", "pattern"), nil
+			}
+			change.amount = decimal.NullDecimal{Decimal: d, Valid: true}
+		}
+		changes = append(changes, change)
+	}
+	slices.SortFunc(changes, func(a, b allocationChange) int {
+		return bytes.Compare(a.categoryID.Bytes[:], b.categoryID.Bytes[:])
+	})
+	return changes, nil, nil
 }
 
 // Position is the Household's current position: the Period Day it is on and the
@@ -279,17 +403,25 @@ func Materialise(ctx context.Context, q *db.Queries, householdID pgtype.UUID, p 
 
 // SetAllocation records a Category's allocation as a version dated the writer's
 // Today in the Period they are in, which the caller has materialised in the same
-// transaction. One upsert on its key: a second change the same Period Day
-// overwrites the first, and two writers of different Categories both land. The
-// statement checks the Category is the Household's own and live, and share-locks
-// it; zero rows is a Category that is not.
+// transaction: ChangeAllocation for an amount.
 func SetAllocation(ctx context.Context, q *db.Queries, householdID pgtype.UUID, at Position, categoryID pgtype.UUID, amount decimal.Decimal) error {
+	return ChangeAllocation(ctx, q, householdID, at, categoryID, decimal.NullDecimal{Decimal: amount, Valid: true})
+}
+
+// ChangeAllocation records what a Category is planned at as a version dated the
+// writer's Today in the Period they are in, which the caller has materialised
+// in the same transaction; an invalid amount is "none from that day". One upsert
+// on its key: a second change the same Period Day overwrites the first, and two
+// writers of different Categories both land. The statement checks the Category
+// is the Household's own and live, and share-locks it; zero rows is a Category
+// that is not.
+func ChangeAllocation(ctx context.Context, q *db.Queries, householdID pgtype.UUID, at Position, categoryID pgtype.UUID, amount decimal.NullDecimal) error {
 	n, err := q.UpsertAllocation(ctx, db.UpsertAllocationParams{
 		HouseholdID: householdID,
 		YearMonth:   at.Period.YearMonth,
 		EffectiveOn: pgDate(at.Today),
 		CategoryID:  categoryID,
-		Allocation:  decimal.NullDecimal{Decimal: amount, Valid: true},
+		Allocation:  amount,
 	})
 	if err != nil {
 		return fmt.Errorf("upsert allocation: %w", err)
@@ -390,6 +522,15 @@ func pgDate(d period.Date) pgtype.Date {
 func getInternalError() api.GetBudgetResponseObject {
 	return api.GetBudget500JSONResponse{
 		InternalErrorJSONResponse: api.InternalErrorJSONResponse{Code: api.INTERNAL},
+	}
+}
+
+func updateValidation(field, rule string) api.UpdateBudgetResponseObject {
+	return api.UpdateBudget400JSONResponse{
+		BadRequestJSONResponse: api.BadRequestJSONResponse{
+			Code: api.VALIDATION,
+			Args: &map[string]interface{}{"field": field, "rule": rule},
+		},
 	}
 }
 

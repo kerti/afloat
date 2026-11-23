@@ -1,0 +1,1036 @@
+# PATCH /categories/{id} (#130, PR 3 of 4): rename, deactivate and reactivate a
+# Category. Merge semantics as PATCH /pockets/{id} (BOOTSTRAP.md §4): a property
+# left out is unchanged, `{}` is a valid no-op, an unknown property is
+# INVALID_JSON_BODY, the answer is the whole Category. `bucket` is fixed at
+# creation, so it is not a property of the request. What a Category is planned at
+# is the Budget's, so no rename or deactivation touches an allocation: the `rows:`
+# of every case read the allocations too, and the Budget's figures cannot move.
+# Names are unique across both buckets, active or inactive, never deleted ones
+# (409 NAME_TAKEN). An id that is unknown, another Household's or deleted is one
+# 404 NOT_FOUND, the same bytes, for every body; validation comes before the
+# lookup. Only ASCII case folding is pinned: lower() follows the database's locale.
+#
+# The Categories a case starts with, and the Budget they are in (the Household's
+# Monthly Budget 9.000.000, the current Period, dated Today by the database's own
+# clock in Jakarta less four hours, as budget.yaml):
+#   0192f0a0-0000-7000-8003-000000000001  Rent       commitment  active    allocated 3.000.000
+#   0192f0a0-0000-7000-8003-000000000002  Groceries  daily       active    allocated 2.000.000
+#   0192f0a0-0000-7000-8003-000000000003  Gym        commitment  inactive  allocated 500.000
+#   0192f0a0-0000-7000-8003-000000000004  Typo       daily       deleted
+#   0192f0a0-0000-7000-8003-000000000009  Theirs     commitment  Household 2
+#
+# Under an outage the session itself cannot be read, which the session middleware
+# answers 500 with the cookie left alone (#27); it never reaches the handler,
+# whose own 500s the backend's suite covers.
+
+
+- name: "category update - a rename answers the Category and changes only the name"
+  issue: "130"
+  given: &seeded
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO categories (id, household_id, category_display_name, bucket, active, deleted_at, created_at) VALUES
+          ('0192f0a0-0000-7000-8003-000000000001',   '0192f0a0-0000-7000-8000-000000000001', 'Rent',      'commitment', true,  NULL,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000002',   '0192f0a0-0000-7000-8000-000000000001', 'Groceries', 'daily',      true,  NULL,  '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000003',    '0192f0a0-0000-7000-8000-000000000001', 'Gym',       'commitment', false, NULL,  '2026-01-03T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000004',   '0192f0a0-0000-7000-8000-000000000001', 'Typo',      'daily',      true,  now(), '2026-01-04T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs',    'commitment', true,  NULL,  '2026-01-05T00:00:00Z');
+        INSERT INTO budgets (household_id, year_month) VALUES ('0192f0a0-0000-7000-8000-000000000001', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'));
+        INSERT INTO monthly_budgets (household_id, year_month, effective_on, monthly_budget) VALUES ('0192f0a0-0000-7000-8000-000000000001', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'), ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date, 9000000);
+        INSERT INTO allocations (household_id, year_month, effective_on, category_id, allocation) VALUES
+          ('0192f0a0-0000-7000-8000-000000000001', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'), ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date, '0192f0a0-0000-7000-8003-000000000001', 3000000),
+          ('0192f0a0-0000-7000-8000-000000000001', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'), ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date, '0192f0a0-0000-7000-8003-000000000002', 2000000),
+          ('0192f0a0-0000-7000-8000-000000000001', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'), ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date, '0192f0a0-0000-7000-8003-000000000003', 500000)
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: PATCH
+    path: /categories/0192f0a0-0000-7000-8003-000000000001
+    headers:
+      Content-Type: application/json
+    body: '{"category_display_name":"Housing"}'
+  expect:
+    status: 200
+    body_json: {"id": "0192f0a0-0000-7000-8003-000000000001", "category_display_name": "Housing", "bucket": "commitment", "active": true}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, category_display_name AS name, bucket, active, (deleted_at IS NOT NULL) AS deleted FROM categories ORDER BY id
+        rows: [{"id": "0192f0a0-0000-7000-8003-000000000001", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Housing", "bucket": "commitment", "active": true, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000002", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Groceries", "bucket": "daily", "active": true, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000003", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Gym", "bucket": "commitment", "active": false, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000004", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Typo", "bucket": "daily", "active": true, "deleted": true}, {"id": "0192f0a0-0000-7000-8003-000000000009", "household_id": "0192f0a0-0000-7000-8000-000000000002", "name": "Theirs", "bucket": "commitment", "active": true, "deleted": false}]
+      - sql: SELECT category_id::text AS category_id, allocation::text AS amount, effective_on = ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date AS dated_today FROM allocations ORDER BY category_id
+        rows: [{"category_id": "0192f0a0-0000-7000-8003-000000000001", "amount": "3000000.0000", "dated_today": true}, {"category_id": "0192f0a0-0000-7000-8003-000000000002", "amount": "2000000.0000", "dated_today": true}, {"category_id": "0192f0a0-0000-7000-8003-000000000003", "amount": "500000.0000", "dated_today": true}]
+
+
+- name: "category update - the name is stored trimmed"
+  issue: "130"
+  given: *seeded
+  request:
+    method: PATCH
+    path: /categories/0192f0a0-0000-7000-8003-000000000001
+    headers:
+      Content-Type: application/json
+    body: '{"category_display_name":"  Housing  "}'
+  expect:
+    status: 200
+    body_json: {"id": "0192f0a0-0000-7000-8003-000000000001", "category_display_name": "Housing", "bucket": "commitment", "active": true}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, category_display_name AS name, bucket, active, (deleted_at IS NOT NULL) AS deleted FROM categories ORDER BY id
+        rows: [{"id": "0192f0a0-0000-7000-8003-000000000001", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Housing", "bucket": "commitment", "active": true, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000002", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Groceries", "bucket": "daily", "active": true, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000003", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Gym", "bucket": "commitment", "active": false, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000004", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Typo", "bucket": "daily", "active": true, "deleted": true}, {"id": "0192f0a0-0000-7000-8003-000000000009", "household_id": "0192f0a0-0000-7000-8000-000000000002", "name": "Theirs", "bucket": "commitment", "active": true, "deleted": false}]
+      - sql: SELECT category_id::text AS category_id, allocation::text AS amount, effective_on = ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date AS dated_today FROM allocations ORDER BY category_id
+        rows: [{"category_id": "0192f0a0-0000-7000-8003-000000000001", "amount": "3000000.0000", "dated_today": true}, {"category_id": "0192f0a0-0000-7000-8003-000000000002", "amount": "2000000.0000", "dated_today": true}, {"category_id": "0192f0a0-0000-7000-8003-000000000003", "amount": "500000.0000", "dated_today": true}]
+
+
+- name: "category update - a deactivation keeps the name, the bucket and the allocation"
+  issue: "130"
+  given: *seeded
+  request:
+    method: PATCH
+    path: /categories/0192f0a0-0000-7000-8003-000000000001
+    headers:
+      Content-Type: application/json
+    body: '{"active":false}'
+  expect:
+    status: 200
+    body_json: {"id": "0192f0a0-0000-7000-8003-000000000001", "category_display_name": "Rent", "bucket": "commitment", "active": false}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, category_display_name AS name, bucket, active, (deleted_at IS NOT NULL) AS deleted FROM categories ORDER BY id
+        rows: [{"id": "0192f0a0-0000-7000-8003-000000000001", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Rent", "bucket": "commitment", "active": false, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000002", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Groceries", "bucket": "daily", "active": true, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000003", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Gym", "bucket": "commitment", "active": false, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000004", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Typo", "bucket": "daily", "active": true, "deleted": true}, {"id": "0192f0a0-0000-7000-8003-000000000009", "household_id": "0192f0a0-0000-7000-8000-000000000002", "name": "Theirs", "bucket": "commitment", "active": true, "deleted": false}]
+      - sql: SELECT category_id::text AS category_id, allocation::text AS amount, effective_on = ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date AS dated_today FROM allocations ORDER BY category_id
+        rows: [{"category_id": "0192f0a0-0000-7000-8003-000000000001", "amount": "3000000.0000", "dated_today": true}, {"category_id": "0192f0a0-0000-7000-8003-000000000002", "amount": "2000000.0000", "dated_today": true}, {"category_id": "0192f0a0-0000-7000-8003-000000000003", "amount": "500000.0000", "dated_today": true}]
+
+
+- name: "category update - a reactivation"
+  issue: "130"
+  given: *seeded
+  request:
+    method: PATCH
+    path: /categories/0192f0a0-0000-7000-8003-000000000003
+    headers:
+      Content-Type: application/json
+    body: '{"active":true}'
+  expect:
+    status: 200
+    body_json: {"id": "0192f0a0-0000-7000-8003-000000000003", "category_display_name": "Gym", "bucket": "commitment", "active": true}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, category_display_name AS name, bucket, active, (deleted_at IS NOT NULL) AS deleted FROM categories ORDER BY id
+        rows: [{"id": "0192f0a0-0000-7000-8003-000000000001", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Rent", "bucket": "commitment", "active": true, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000002", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Groceries", "bucket": "daily", "active": true, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000003", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Gym", "bucket": "commitment", "active": true, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000004", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Typo", "bucket": "daily", "active": true, "deleted": true}, {"id": "0192f0a0-0000-7000-8003-000000000009", "household_id": "0192f0a0-0000-7000-8000-000000000002", "name": "Theirs", "bucket": "commitment", "active": true, "deleted": false}]
+      - sql: SELECT category_id::text AS category_id, allocation::text AS amount, effective_on = ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date AS dated_today FROM allocations ORDER BY category_id
+        rows: [{"category_id": "0192f0a0-0000-7000-8003-000000000001", "amount": "3000000.0000", "dated_today": true}, {"category_id": "0192f0a0-0000-7000-8003-000000000002", "amount": "2000000.0000", "dated_today": true}, {"category_id": "0192f0a0-0000-7000-8003-000000000003", "amount": "500000.0000", "dated_today": true}]
+
+
+- name: "category update - repeating a deactivation is a no-op"
+  issue: "130"
+  given: *seeded
+  request:
+    method: PATCH
+    path: /categories/0192f0a0-0000-7000-8003-000000000003
+    headers:
+      Content-Type: application/json
+    body: '{"active":false}'
+  expect:
+    status: 200
+    body_json: {"id": "0192f0a0-0000-7000-8003-000000000003", "category_display_name": "Gym", "bucket": "commitment", "active": false}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, category_display_name AS name, bucket, active, (deleted_at IS NOT NULL) AS deleted FROM categories ORDER BY id
+        rows: [{"id": "0192f0a0-0000-7000-8003-000000000001", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Rent", "bucket": "commitment", "active": true, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000002", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Groceries", "bucket": "daily", "active": true, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000003", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Gym", "bucket": "commitment", "active": false, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000004", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Typo", "bucket": "daily", "active": true, "deleted": true}, {"id": "0192f0a0-0000-7000-8003-000000000009", "household_id": "0192f0a0-0000-7000-8000-000000000002", "name": "Theirs", "bucket": "commitment", "active": true, "deleted": false}]
+      - sql: SELECT category_id::text AS category_id, allocation::text AS amount, effective_on = ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date AS dated_today FROM allocations ORDER BY category_id
+        rows: [{"category_id": "0192f0a0-0000-7000-8003-000000000001", "amount": "3000000.0000", "dated_today": true}, {"category_id": "0192f0a0-0000-7000-8003-000000000002", "amount": "2000000.0000", "dated_today": true}, {"category_id": "0192f0a0-0000-7000-8003-000000000003", "amount": "500000.0000", "dated_today": true}]
+
+
+- name: "category update - an inactive Category can be renamed and stays inactive"
+  issue: "130"
+  given: *seeded
+  request:
+    method: PATCH
+    path: /categories/0192f0a0-0000-7000-8003-000000000003
+    headers:
+      Content-Type: application/json
+    body: '{"category_display_name":"Fitness"}'
+  expect:
+    status: 200
+    body_json: {"id": "0192f0a0-0000-7000-8003-000000000003", "category_display_name": "Fitness", "bucket": "commitment", "active": false}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, category_display_name AS name, bucket, active, (deleted_at IS NOT NULL) AS deleted FROM categories ORDER BY id
+        rows: [{"id": "0192f0a0-0000-7000-8003-000000000001", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Rent", "bucket": "commitment", "active": true, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000002", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Groceries", "bucket": "daily", "active": true, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000003", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Fitness", "bucket": "commitment", "active": false, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000004", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Typo", "bucket": "daily", "active": true, "deleted": true}, {"id": "0192f0a0-0000-7000-8003-000000000009", "household_id": "0192f0a0-0000-7000-8000-000000000002", "name": "Theirs", "bucket": "commitment", "active": true, "deleted": false}]
+      - sql: SELECT category_id::text AS category_id, allocation::text AS amount, effective_on = ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date AS dated_today FROM allocations ORDER BY category_id
+        rows: [{"category_id": "0192f0a0-0000-7000-8003-000000000001", "amount": "3000000.0000", "dated_today": true}, {"category_id": "0192f0a0-0000-7000-8003-000000000002", "amount": "2000000.0000", "dated_today": true}, {"category_id": "0192f0a0-0000-7000-8003-000000000003", "amount": "500000.0000", "dated_today": true}]
+
+
+- name: "category update - a rename and a deactivation in one body"
+  issue: "130"
+  given: *seeded
+  request:
+    method: PATCH
+    path: /categories/0192f0a0-0000-7000-8003-000000000002
+    headers:
+      Content-Type: application/json
+    body: '{"category_display_name":"Food","active":false}'
+  expect:
+    status: 200
+    body_json: {"id": "0192f0a0-0000-7000-8003-000000000002", "category_display_name": "Food", "bucket": "daily", "active": false}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, category_display_name AS name, bucket, active, (deleted_at IS NOT NULL) AS deleted FROM categories ORDER BY id
+        rows: [{"id": "0192f0a0-0000-7000-8003-000000000001", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Rent", "bucket": "commitment", "active": true, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000002", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Food", "bucket": "daily", "active": false, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000003", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Gym", "bucket": "commitment", "active": false, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000004", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Typo", "bucket": "daily", "active": true, "deleted": true}, {"id": "0192f0a0-0000-7000-8003-000000000009", "household_id": "0192f0a0-0000-7000-8000-000000000002", "name": "Theirs", "bucket": "commitment", "active": true, "deleted": false}]
+      - sql: SELECT category_id::text AS category_id, allocation::text AS amount, effective_on = ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date AS dated_today FROM allocations ORDER BY category_id
+        rows: [{"category_id": "0192f0a0-0000-7000-8003-000000000001", "amount": "3000000.0000", "dated_today": true}, {"category_id": "0192f0a0-0000-7000-8003-000000000002", "amount": "2000000.0000", "dated_today": true}, {"category_id": "0192f0a0-0000-7000-8003-000000000003", "amount": "500000.0000", "dated_today": true}]
+
+
+- name: "category update - an empty body is a no-op that answers the Category as it stands"
+  issue: "130"
+  given: *seeded
+  request:
+    method: PATCH
+    path: /categories/0192f0a0-0000-7000-8003-000000000001
+    headers:
+      Content-Type: application/json
+    body: '{}'
+  expect:
+    status: 200
+    body_json: {"id": "0192f0a0-0000-7000-8003-000000000001", "category_display_name": "Rent", "bucket": "commitment", "active": true}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, category_display_name AS name, bucket, active, (deleted_at IS NOT NULL) AS deleted FROM categories ORDER BY id
+        rows: [{"id": "0192f0a0-0000-7000-8003-000000000001", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Rent", "bucket": "commitment", "active": true, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000002", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Groceries", "bucket": "daily", "active": true, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000003", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Gym", "bucket": "commitment", "active": false, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000004", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Typo", "bucket": "daily", "active": true, "deleted": true}, {"id": "0192f0a0-0000-7000-8003-000000000009", "household_id": "0192f0a0-0000-7000-8000-000000000002", "name": "Theirs", "bucket": "commitment", "active": true, "deleted": false}]
+      - sql: SELECT category_id::text AS category_id, allocation::text AS amount, effective_on = ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date AS dated_today FROM allocations ORDER BY category_id
+        rows: [{"category_id": "0192f0a0-0000-7000-8003-000000000001", "amount": "3000000.0000", "dated_today": true}, {"category_id": "0192f0a0-0000-7000-8003-000000000002", "amount": "2000000.0000", "dated_today": true}, {"category_id": "0192f0a0-0000-7000-8003-000000000003", "amount": "500000.0000", "dated_today": true}]
+
+
+- name: "category update - a name held by a live Category of the other bucket is NAME_TAKEN, in any case and padded"
+  issue: "130"
+  given: *seeded
+  request:
+    method: PATCH
+    path: /categories/0192f0a0-0000-7000-8003-000000000002
+    headers:
+      Content-Type: application/json
+    body: '{"category_display_name":"  rENT "}'
+  expect:
+    status: 409
+    body_json: {"code": "NAME_TAKEN"}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, category_display_name AS name, bucket, active, (deleted_at IS NOT NULL) AS deleted FROM categories ORDER BY id
+        rows: [{"id": "0192f0a0-0000-7000-8003-000000000001", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Rent", "bucket": "commitment", "active": true, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000002", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Groceries", "bucket": "daily", "active": true, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000003", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Gym", "bucket": "commitment", "active": false, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000004", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Typo", "bucket": "daily", "active": true, "deleted": true}, {"id": "0192f0a0-0000-7000-8003-000000000009", "household_id": "0192f0a0-0000-7000-8000-000000000002", "name": "Theirs", "bucket": "commitment", "active": true, "deleted": false}]
+      - sql: SELECT category_id::text AS category_id, allocation::text AS amount, effective_on = ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date AS dated_today FROM allocations ORDER BY category_id
+        rows: [{"category_id": "0192f0a0-0000-7000-8003-000000000001", "amount": "3000000.0000", "dated_today": true}, {"category_id": "0192f0a0-0000-7000-8003-000000000002", "amount": "2000000.0000", "dated_today": true}, {"category_id": "0192f0a0-0000-7000-8003-000000000003", "amount": "500000.0000", "dated_today": true}]
+
+
+- name: "category update - an inactive Category still holds its name"
+  issue: "130"
+  given: *seeded
+  request:
+    method: PATCH
+    path: /categories/0192f0a0-0000-7000-8003-000000000002
+    headers:
+      Content-Type: application/json
+    body: '{"category_display_name":"gym"}'
+  expect:
+    status: 409
+    body_json: {"code": "NAME_TAKEN"}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, category_display_name AS name, bucket, active, (deleted_at IS NOT NULL) AS deleted FROM categories ORDER BY id
+        rows: [{"id": "0192f0a0-0000-7000-8003-000000000001", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Rent", "bucket": "commitment", "active": true, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000002", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Groceries", "bucket": "daily", "active": true, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000003", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Gym", "bucket": "commitment", "active": false, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000004", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Typo", "bucket": "daily", "active": true, "deleted": true}, {"id": "0192f0a0-0000-7000-8003-000000000009", "household_id": "0192f0a0-0000-7000-8000-000000000002", "name": "Theirs", "bucket": "commitment", "active": true, "deleted": false}]
+      - sql: SELECT category_id::text AS category_id, allocation::text AS amount, effective_on = ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date AS dated_today FROM allocations ORDER BY category_id
+        rows: [{"category_id": "0192f0a0-0000-7000-8003-000000000001", "amount": "3000000.0000", "dated_today": true}, {"category_id": "0192f0a0-0000-7000-8003-000000000002", "amount": "2000000.0000", "dated_today": true}, {"category_id": "0192f0a0-0000-7000-8003-000000000003", "amount": "500000.0000", "dated_today": true}]
+
+
+- name: "category update - a refused rename changes nothing, the deactivation in the same body included"
+  issue: "130"
+  given: *seeded
+  request:
+    method: PATCH
+    path: /categories/0192f0a0-0000-7000-8003-000000000002
+    headers:
+      Content-Type: application/json
+    body: '{"category_display_name":"Rent","active":false}'
+  expect:
+    status: 409
+    body_json: {"code": "NAME_TAKEN"}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, category_display_name AS name, bucket, active, (deleted_at IS NOT NULL) AS deleted FROM categories ORDER BY id
+        rows: [{"id": "0192f0a0-0000-7000-8003-000000000001", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Rent", "bucket": "commitment", "active": true, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000002", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Groceries", "bucket": "daily", "active": true, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000003", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Gym", "bucket": "commitment", "active": false, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000004", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Typo", "bucket": "daily", "active": true, "deleted": true}, {"id": "0192f0a0-0000-7000-8003-000000000009", "household_id": "0192f0a0-0000-7000-8000-000000000002", "name": "Theirs", "bucket": "commitment", "active": true, "deleted": false}]
+      - sql: SELECT category_id::text AS category_id, allocation::text AS amount, effective_on = ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date AS dated_today FROM allocations ORDER BY category_id
+        rows: [{"category_id": "0192f0a0-0000-7000-8003-000000000001", "amount": "3000000.0000", "dated_today": true}, {"category_id": "0192f0a0-0000-7000-8003-000000000002", "amount": "2000000.0000", "dated_today": true}, {"category_id": "0192f0a0-0000-7000-8003-000000000003", "amount": "500000.0000", "dated_today": true}]
+
+
+- name: "category update - a rename to its own name in another case is not a clash"
+  issue: "130"
+  given: *seeded
+  request:
+    method: PATCH
+    path: /categories/0192f0a0-0000-7000-8003-000000000001
+    headers:
+      Content-Type: application/json
+    body: '{"category_display_name":"RENT"}'
+  expect:
+    status: 200
+    body_json: {"id": "0192f0a0-0000-7000-8003-000000000001", "category_display_name": "RENT", "bucket": "commitment", "active": true}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, category_display_name AS name, bucket, active, (deleted_at IS NOT NULL) AS deleted FROM categories ORDER BY id
+        rows: [{"id": "0192f0a0-0000-7000-8003-000000000001", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "RENT", "bucket": "commitment", "active": true, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000002", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Groceries", "bucket": "daily", "active": true, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000003", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Gym", "bucket": "commitment", "active": false, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000004", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Typo", "bucket": "daily", "active": true, "deleted": true}, {"id": "0192f0a0-0000-7000-8003-000000000009", "household_id": "0192f0a0-0000-7000-8000-000000000002", "name": "Theirs", "bucket": "commitment", "active": true, "deleted": false}]
+      - sql: SELECT category_id::text AS category_id, allocation::text AS amount, effective_on = ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date AS dated_today FROM allocations ORDER BY category_id
+        rows: [{"category_id": "0192f0a0-0000-7000-8003-000000000001", "amount": "3000000.0000", "dated_today": true}, {"category_id": "0192f0a0-0000-7000-8003-000000000002", "amount": "2000000.0000", "dated_today": true}, {"category_id": "0192f0a0-0000-7000-8003-000000000003", "amount": "500000.0000", "dated_today": true}]
+
+
+- name: "category update - a deleted Category's name is free"
+  issue: "130"
+  given: *seeded
+  request:
+    method: PATCH
+    path: /categories/0192f0a0-0000-7000-8003-000000000001
+    headers:
+      Content-Type: application/json
+    body: '{"category_display_name":"typo"}'
+  expect:
+    status: 200
+    body_json: {"id": "0192f0a0-0000-7000-8003-000000000001", "category_display_name": "typo", "bucket": "commitment", "active": true}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, category_display_name AS name, bucket, active, (deleted_at IS NOT NULL) AS deleted FROM categories ORDER BY id
+        rows: [{"id": "0192f0a0-0000-7000-8003-000000000001", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "typo", "bucket": "commitment", "active": true, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000002", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Groceries", "bucket": "daily", "active": true, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000003", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Gym", "bucket": "commitment", "active": false, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000004", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Typo", "bucket": "daily", "active": true, "deleted": true}, {"id": "0192f0a0-0000-7000-8003-000000000009", "household_id": "0192f0a0-0000-7000-8000-000000000002", "name": "Theirs", "bucket": "commitment", "active": true, "deleted": false}]
+      - sql: SELECT category_id::text AS category_id, allocation::text AS amount, effective_on = ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date AS dated_today FROM allocations ORDER BY category_id
+        rows: [{"category_id": "0192f0a0-0000-7000-8003-000000000001", "amount": "3000000.0000", "dated_today": true}, {"category_id": "0192f0a0-0000-7000-8003-000000000002", "amount": "2000000.0000", "dated_today": true}, {"category_id": "0192f0a0-0000-7000-8003-000000000003", "amount": "500000.0000", "dated_today": true}]
+
+
+- name: "category update - another Household's name is free"
+  issue: "130"
+  given: *seeded
+  request:
+    method: PATCH
+    path: /categories/0192f0a0-0000-7000-8003-000000000001
+    headers:
+      Content-Type: application/json
+    body: '{"category_display_name":"Theirs"}'
+  expect:
+    status: 200
+    body_json: {"id": "0192f0a0-0000-7000-8003-000000000001", "category_display_name": "Theirs", "bucket": "commitment", "active": true}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, category_display_name AS name, bucket, active, (deleted_at IS NOT NULL) AS deleted FROM categories ORDER BY id
+        rows: [{"id": "0192f0a0-0000-7000-8003-000000000001", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Theirs", "bucket": "commitment", "active": true, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000002", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Groceries", "bucket": "daily", "active": true, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000003", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Gym", "bucket": "commitment", "active": false, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000004", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Typo", "bucket": "daily", "active": true, "deleted": true}, {"id": "0192f0a0-0000-7000-8003-000000000009", "household_id": "0192f0a0-0000-7000-8000-000000000002", "name": "Theirs", "bucket": "commitment", "active": true, "deleted": false}]
+      - sql: SELECT category_id::text AS category_id, allocation::text AS amount, effective_on = ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date AS dated_today FROM allocations ORDER BY category_id
+        rows: [{"category_id": "0192f0a0-0000-7000-8003-000000000001", "amount": "3000000.0000", "dated_today": true}, {"category_id": "0192f0a0-0000-7000-8003-000000000002", "amount": "2000000.0000", "dated_today": true}, {"category_id": "0192f0a0-0000-7000-8003-000000000003", "amount": "500000.0000", "dated_today": true}]
+
+
+- name: "category update - a blank name is required"
+  issue: "130"
+  given: *seeded
+  request:
+    method: PATCH
+    path: /categories/0192f0a0-0000-7000-8003-000000000001
+    headers:
+      Content-Type: application/json
+    body: '{"category_display_name":"   "}'
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "category_display_name", "rule": "required"}}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, category_display_name AS name, bucket, active, (deleted_at IS NOT NULL) AS deleted FROM categories ORDER BY id
+        rows: [{"id": "0192f0a0-0000-7000-8003-000000000001", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Rent", "bucket": "commitment", "active": true, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000002", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Groceries", "bucket": "daily", "active": true, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000003", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Gym", "bucket": "commitment", "active": false, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000004", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Typo", "bucket": "daily", "active": true, "deleted": true}, {"id": "0192f0a0-0000-7000-8003-000000000009", "household_id": "0192f0a0-0000-7000-8000-000000000002", "name": "Theirs", "bucket": "commitment", "active": true, "deleted": false}]
+      - sql: SELECT category_id::text AS category_id, allocation::text AS amount, effective_on = ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date AS dated_today FROM allocations ORDER BY category_id
+        rows: [{"category_id": "0192f0a0-0000-7000-8003-000000000001", "amount": "3000000.0000", "dated_today": true}, {"category_id": "0192f0a0-0000-7000-8003-000000000002", "amount": "2000000.0000", "dated_today": true}, {"category_id": "0192f0a0-0000-7000-8003-000000000003", "amount": "500000.0000", "dated_today": true}]
+
+
+- name: "category update - an empty name is required"
+  issue: "130"
+  given: *seeded
+  request:
+    method: PATCH
+    path: /categories/0192f0a0-0000-7000-8003-000000000001
+    headers:
+      Content-Type: application/json
+    body: '{"category_display_name":""}'
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "category_display_name", "rule": "required"}}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, category_display_name AS name, bucket, active, (deleted_at IS NOT NULL) AS deleted FROM categories ORDER BY id
+        rows: [{"id": "0192f0a0-0000-7000-8003-000000000001", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Rent", "bucket": "commitment", "active": true, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000002", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Groceries", "bucket": "daily", "active": true, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000003", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Gym", "bucket": "commitment", "active": false, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000004", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Typo", "bucket": "daily", "active": true, "deleted": true}, {"id": "0192f0a0-0000-7000-8003-000000000009", "household_id": "0192f0a0-0000-7000-8000-000000000002", "name": "Theirs", "bucket": "commitment", "active": true, "deleted": false}]
+      - sql: SELECT category_id::text AS category_id, allocation::text AS amount, effective_on = ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date AS dated_today FROM allocations ORDER BY category_id
+        rows: [{"category_id": "0192f0a0-0000-7000-8003-000000000001", "amount": "3000000.0000", "dated_today": true}, {"category_id": "0192f0a0-0000-7000-8003-000000000002", "amount": "2000000.0000", "dated_today": true}, {"category_id": "0192f0a0-0000-7000-8003-000000000003", "amount": "500000.0000", "dated_today": true}]
+
+
+- name: "category update - a name of only zero-width characters is required"
+  issue: "130"
+  given: *seeded
+  request:
+    method: PATCH
+    path: /categories/0192f0a0-0000-7000-8003-000000000001
+    headers:
+      Content-Type: application/json
+    body: '{"category_display_name":"\u200b\u200d"}'
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "category_display_name", "rule": "required"}}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, category_display_name AS name, bucket, active, (deleted_at IS NOT NULL) AS deleted FROM categories ORDER BY id
+        rows: [{"id": "0192f0a0-0000-7000-8003-000000000001", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Rent", "bucket": "commitment", "active": true, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000002", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Groceries", "bucket": "daily", "active": true, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000003", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Gym", "bucket": "commitment", "active": false, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000004", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Typo", "bucket": "daily", "active": true, "deleted": true}, {"id": "0192f0a0-0000-7000-8003-000000000009", "household_id": "0192f0a0-0000-7000-8000-000000000002", "name": "Theirs", "bucket": "commitment", "active": true, "deleted": false}]
+      - sql: SELECT category_id::text AS category_id, allocation::text AS amount, effective_on = ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date AS dated_today FROM allocations ORDER BY category_id
+        rows: [{"category_id": "0192f0a0-0000-7000-8003-000000000001", "amount": "3000000.0000", "dated_today": true}, {"category_id": "0192f0a0-0000-7000-8003-000000000002", "amount": "2000000.0000", "dated_today": true}, {"category_id": "0192f0a0-0000-7000-8003-000000000003", "amount": "500000.0000", "dated_today": true}]
+
+
+- name: "category update - 61 code points is over the cap"
+  issue: "130"
+  given: *seeded
+  request:
+    method: PATCH
+    path: /categories/0192f0a0-0000-7000-8003-000000000001
+    headers:
+      Content-Type: application/json
+    body: '{"category_display_name":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}'
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "category_display_name", "rule": "max"}}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, category_display_name AS name, bucket, active, (deleted_at IS NOT NULL) AS deleted FROM categories ORDER BY id
+        rows: [{"id": "0192f0a0-0000-7000-8003-000000000001", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Rent", "bucket": "commitment", "active": true, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000002", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Groceries", "bucket": "daily", "active": true, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000003", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Gym", "bucket": "commitment", "active": false, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000004", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Typo", "bucket": "daily", "active": true, "deleted": true}, {"id": "0192f0a0-0000-7000-8003-000000000009", "household_id": "0192f0a0-0000-7000-8000-000000000002", "name": "Theirs", "bucket": "commitment", "active": true, "deleted": false}]
+      - sql: SELECT category_id::text AS category_id, allocation::text AS amount, effective_on = ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date AS dated_today FROM allocations ORDER BY category_id
+        rows: [{"category_id": "0192f0a0-0000-7000-8003-000000000001", "amount": "3000000.0000", "dated_today": true}, {"category_id": "0192f0a0-0000-7000-8003-000000000002", "amount": "2000000.0000", "dated_today": true}, {"category_id": "0192f0a0-0000-7000-8003-000000000003", "amount": "500000.0000", "dated_today": true}]
+
+
+- name: "category update - a name beyond the contract's outer bound is max"
+  issue: "130"
+  given: *seeded
+  request:
+    method: PATCH
+    path: /categories/0192f0a0-0000-7000-8003-000000000001
+    headers:
+      Content-Type: application/json
+    body: '{"category_display_name":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}'
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "category_display_name", "rule": "max"}}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, category_display_name AS name, bucket, active, (deleted_at IS NOT NULL) AS deleted FROM categories ORDER BY id
+        rows: [{"id": "0192f0a0-0000-7000-8003-000000000001", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Rent", "bucket": "commitment", "active": true, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000002", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Groceries", "bucket": "daily", "active": true, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000003", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Gym", "bucket": "commitment", "active": false, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000004", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Typo", "bucket": "daily", "active": true, "deleted": true}, {"id": "0192f0a0-0000-7000-8003-000000000009", "household_id": "0192f0a0-0000-7000-8000-000000000002", "name": "Theirs", "bucket": "commitment", "active": true, "deleted": false}]
+      - sql: SELECT category_id::text AS category_id, allocation::text AS amount, effective_on = ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date AS dated_today FROM allocations ORDER BY category_id
+        rows: [{"category_id": "0192f0a0-0000-7000-8003-000000000001", "amount": "3000000.0000", "dated_today": true}, {"category_id": "0192f0a0-0000-7000-8003-000000000002", "amount": "2000000.0000", "dated_today": true}, {"category_id": "0192f0a0-0000-7000-8003-000000000003", "amount": "500000.0000", "dated_today": true}]
+
+
+- name: "category update - a NUL in the name is pattern"
+  issue: "130"
+  given: *seeded
+  request:
+    method: PATCH
+    path: /categories/0192f0a0-0000-7000-8003-000000000001
+    headers:
+      Content-Type: application/json
+    body: '{"category_display_name":"Re\u0000nt"}'
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "category_display_name", "rule": "pattern"}}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, category_display_name AS name, bucket, active, (deleted_at IS NOT NULL) AS deleted FROM categories ORDER BY id
+        rows: [{"id": "0192f0a0-0000-7000-8003-000000000001", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Rent", "bucket": "commitment", "active": true, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000002", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Groceries", "bucket": "daily", "active": true, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000003", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Gym", "bucket": "commitment", "active": false, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000004", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Typo", "bucket": "daily", "active": true, "deleted": true}, {"id": "0192f0a0-0000-7000-8003-000000000009", "household_id": "0192f0a0-0000-7000-8000-000000000002", "name": "Theirs", "bucket": "commitment", "active": true, "deleted": false}]
+      - sql: SELECT category_id::text AS category_id, allocation::text AS amount, effective_on = ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date AS dated_today FROM allocations ORDER BY category_id
+        rows: [{"category_id": "0192f0a0-0000-7000-8003-000000000001", "amount": "3000000.0000", "dated_today": true}, {"category_id": "0192f0a0-0000-7000-8003-000000000002", "amount": "2000000.0000", "dated_today": true}, {"category_id": "0192f0a0-0000-7000-8003-000000000003", "amount": "500000.0000", "dated_today": true}]
+
+
+- name: "category update - a bad name beside a deactivation refuses both"
+  issue: "130"
+  given: *seeded
+  request:
+    method: PATCH
+    path: /categories/0192f0a0-0000-7000-8003-000000000001
+    headers:
+      Content-Type: application/json
+    body: '{"category_display_name":" ","active":false}'
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "category_display_name", "rule": "required"}}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, category_display_name AS name, bucket, active, (deleted_at IS NOT NULL) AS deleted FROM categories ORDER BY id
+        rows: [{"id": "0192f0a0-0000-7000-8003-000000000001", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Rent", "bucket": "commitment", "active": true, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000002", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Groceries", "bucket": "daily", "active": true, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000003", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Gym", "bucket": "commitment", "active": false, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000004", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Typo", "bucket": "daily", "active": true, "deleted": true}, {"id": "0192f0a0-0000-7000-8003-000000000009", "household_id": "0192f0a0-0000-7000-8000-000000000002", "name": "Theirs", "bucket": "commitment", "active": true, "deleted": false}]
+      - sql: SELECT category_id::text AS category_id, allocation::text AS amount, effective_on = ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date AS dated_today FROM allocations ORDER BY category_id
+        rows: [{"category_id": "0192f0a0-0000-7000-8003-000000000001", "amount": "3000000.0000", "dated_today": true}, {"category_id": "0192f0a0-0000-7000-8003-000000000002", "amount": "2000000.0000", "dated_today": true}, {"category_id": "0192f0a0-0000-7000-8003-000000000003", "amount": "500000.0000", "dated_today": true}]
+
+
+- name: "category update - the bucket cannot be changed"
+  issue: "130"
+  given: *seeded
+  request:
+    method: PATCH
+    path: /categories/0192f0a0-0000-7000-8003-000000000001
+    headers:
+      Content-Type: application/json
+    body: '{"bucket":"daily"}'
+  expect:
+    status: 400
+    body_json: {"code": "INVALID_JSON_BODY"}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, category_display_name AS name, bucket, active, (deleted_at IS NOT NULL) AS deleted FROM categories ORDER BY id
+        rows: [{"id": "0192f0a0-0000-7000-8003-000000000001", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Rent", "bucket": "commitment", "active": true, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000002", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Groceries", "bucket": "daily", "active": true, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000003", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Gym", "bucket": "commitment", "active": false, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000004", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Typo", "bucket": "daily", "active": true, "deleted": true}, {"id": "0192f0a0-0000-7000-8003-000000000009", "household_id": "0192f0a0-0000-7000-8000-000000000002", "name": "Theirs", "bucket": "commitment", "active": true, "deleted": false}]
+      - sql: SELECT category_id::text AS category_id, allocation::text AS amount, effective_on = ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date AS dated_today FROM allocations ORDER BY category_id
+        rows: [{"category_id": "0192f0a0-0000-7000-8003-000000000001", "amount": "3000000.0000", "dated_today": true}, {"category_id": "0192f0a0-0000-7000-8003-000000000002", "amount": "2000000.0000", "dated_today": true}, {"category_id": "0192f0a0-0000-7000-8003-000000000003", "amount": "500000.0000", "dated_today": true}]
+
+
+- name: "category update - the bucket beside a valid rename refuses the whole body"
+  issue: "130"
+  given: *seeded
+  request:
+    method: PATCH
+    path: /categories/0192f0a0-0000-7000-8003-000000000001
+    headers:
+      Content-Type: application/json
+    body: '{"category_display_name":"Housing","bucket":"daily"}'
+  expect:
+    status: 400
+    body_json: {"code": "INVALID_JSON_BODY"}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, category_display_name AS name, bucket, active, (deleted_at IS NOT NULL) AS deleted FROM categories ORDER BY id
+        rows: [{"id": "0192f0a0-0000-7000-8003-000000000001", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Rent", "bucket": "commitment", "active": true, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000002", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Groceries", "bucket": "daily", "active": true, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000003", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Gym", "bucket": "commitment", "active": false, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000004", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Typo", "bucket": "daily", "active": true, "deleted": true}, {"id": "0192f0a0-0000-7000-8003-000000000009", "household_id": "0192f0a0-0000-7000-8000-000000000002", "name": "Theirs", "bucket": "commitment", "active": true, "deleted": false}]
+      - sql: SELECT category_id::text AS category_id, allocation::text AS amount, effective_on = ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date AS dated_today FROM allocations ORDER BY category_id
+        rows: [{"category_id": "0192f0a0-0000-7000-8003-000000000001", "amount": "3000000.0000", "dated_today": true}, {"category_id": "0192f0a0-0000-7000-8003-000000000002", "amount": "2000000.0000", "dated_today": true}, {"category_id": "0192f0a0-0000-7000-8003-000000000003", "amount": "500000.0000", "dated_today": true}]
+
+
+- name: "category update - the allocation is the Budget's, not the Category's"
+  issue: "130"
+  given: *seeded
+  request:
+    method: PATCH
+    path: /categories/0192f0a0-0000-7000-8003-000000000001
+    headers:
+      Content-Type: application/json
+    body: '{"allocation":"1"}'
+  expect:
+    status: 400
+    body_json: {"code": "INVALID_JSON_BODY"}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, category_display_name AS name, bucket, active, (deleted_at IS NOT NULL) AS deleted FROM categories ORDER BY id
+        rows: [{"id": "0192f0a0-0000-7000-8003-000000000001", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Rent", "bucket": "commitment", "active": true, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000002", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Groceries", "bucket": "daily", "active": true, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000003", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Gym", "bucket": "commitment", "active": false, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000004", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Typo", "bucket": "daily", "active": true, "deleted": true}, {"id": "0192f0a0-0000-7000-8003-000000000009", "household_id": "0192f0a0-0000-7000-8000-000000000002", "name": "Theirs", "bucket": "commitment", "active": true, "deleted": false}]
+      - sql: SELECT category_id::text AS category_id, allocation::text AS amount, effective_on = ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date AS dated_today FROM allocations ORDER BY category_id
+        rows: [{"category_id": "0192f0a0-0000-7000-8003-000000000001", "amount": "3000000.0000", "dated_today": true}, {"category_id": "0192f0a0-0000-7000-8003-000000000002", "amount": "2000000.0000", "dated_today": true}, {"category_id": "0192f0a0-0000-7000-8003-000000000003", "amount": "500000.0000", "dated_today": true}]
+
+
+- name: "category update - a null name is not accepted"
+  issue: "130"
+  given: *seeded
+  request:
+    method: PATCH
+    path: /categories/0192f0a0-0000-7000-8003-000000000001
+    headers:
+      Content-Type: application/json
+    body: '{"category_display_name":null}'
+  expect:
+    status: 400
+    body_json: {"code": "INVALID_JSON_BODY"}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, category_display_name AS name, bucket, active, (deleted_at IS NOT NULL) AS deleted FROM categories ORDER BY id
+        rows: [{"id": "0192f0a0-0000-7000-8003-000000000001", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Rent", "bucket": "commitment", "active": true, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000002", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Groceries", "bucket": "daily", "active": true, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000003", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Gym", "bucket": "commitment", "active": false, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000004", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Typo", "bucket": "daily", "active": true, "deleted": true}, {"id": "0192f0a0-0000-7000-8003-000000000009", "household_id": "0192f0a0-0000-7000-8000-000000000002", "name": "Theirs", "bucket": "commitment", "active": true, "deleted": false}]
+      - sql: SELECT category_id::text AS category_id, allocation::text AS amount, effective_on = ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date AS dated_today FROM allocations ORDER BY category_id
+        rows: [{"category_id": "0192f0a0-0000-7000-8003-000000000001", "amount": "3000000.0000", "dated_today": true}, {"category_id": "0192f0a0-0000-7000-8003-000000000002", "amount": "2000000.0000", "dated_today": true}, {"category_id": "0192f0a0-0000-7000-8003-000000000003", "amount": "500000.0000", "dated_today": true}]
+
+
+- name: "category update - a null active is not accepted"
+  issue: "130"
+  given: *seeded
+  request:
+    method: PATCH
+    path: /categories/0192f0a0-0000-7000-8003-000000000001
+    headers:
+      Content-Type: application/json
+    body: '{"active":null}'
+  expect:
+    status: 400
+    body_json: {"code": "INVALID_JSON_BODY"}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, category_display_name AS name, bucket, active, (deleted_at IS NOT NULL) AS deleted FROM categories ORDER BY id
+        rows: [{"id": "0192f0a0-0000-7000-8003-000000000001", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Rent", "bucket": "commitment", "active": true, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000002", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Groceries", "bucket": "daily", "active": true, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000003", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Gym", "bucket": "commitment", "active": false, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000004", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Typo", "bucket": "daily", "active": true, "deleted": true}, {"id": "0192f0a0-0000-7000-8003-000000000009", "household_id": "0192f0a0-0000-7000-8000-000000000002", "name": "Theirs", "bucket": "commitment", "active": true, "deleted": false}]
+      - sql: SELECT category_id::text AS category_id, allocation::text AS amount, effective_on = ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date AS dated_today FROM allocations ORDER BY category_id
+        rows: [{"category_id": "0192f0a0-0000-7000-8003-000000000001", "amount": "3000000.0000", "dated_today": true}, {"category_id": "0192f0a0-0000-7000-8003-000000000002", "amount": "2000000.0000", "dated_today": true}, {"category_id": "0192f0a0-0000-7000-8003-000000000003", "amount": "500000.0000", "dated_today": true}]
+
+
+- name: "category update - active as a string is not accepted"
+  issue: "130"
+  given: *seeded
+  request:
+    method: PATCH
+    path: /categories/0192f0a0-0000-7000-8003-000000000001
+    headers:
+      Content-Type: application/json
+    body: '{"active":"false"}'
+  expect:
+    status: 400
+    body_json: {"code": "INVALID_JSON_BODY"}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, category_display_name AS name, bucket, active, (deleted_at IS NOT NULL) AS deleted FROM categories ORDER BY id
+        rows: [{"id": "0192f0a0-0000-7000-8003-000000000001", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Rent", "bucket": "commitment", "active": true, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000002", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Groceries", "bucket": "daily", "active": true, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000003", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Gym", "bucket": "commitment", "active": false, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000004", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Typo", "bucket": "daily", "active": true, "deleted": true}, {"id": "0192f0a0-0000-7000-8003-000000000009", "household_id": "0192f0a0-0000-7000-8000-000000000002", "name": "Theirs", "bucket": "commitment", "active": true, "deleted": false}]
+      - sql: SELECT category_id::text AS category_id, allocation::text AS amount, effective_on = ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date AS dated_today FROM allocations ORDER BY category_id
+        rows: [{"category_id": "0192f0a0-0000-7000-8003-000000000001", "amount": "3000000.0000", "dated_today": true}, {"category_id": "0192f0a0-0000-7000-8003-000000000002", "amount": "2000000.0000", "dated_today": true}, {"category_id": "0192f0a0-0000-7000-8003-000000000003", "amount": "500000.0000", "dated_today": true}]
+
+
+- name: "category update - a name as a number is not accepted"
+  issue: "130"
+  given: *seeded
+  request:
+    method: PATCH
+    path: /categories/0192f0a0-0000-7000-8003-000000000001
+    headers:
+      Content-Type: application/json
+    body: '{"category_display_name":5}'
+  expect:
+    status: 400
+    body_json: {"code": "INVALID_JSON_BODY"}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, category_display_name AS name, bucket, active, (deleted_at IS NOT NULL) AS deleted FROM categories ORDER BY id
+        rows: [{"id": "0192f0a0-0000-7000-8003-000000000001", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Rent", "bucket": "commitment", "active": true, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000002", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Groceries", "bucket": "daily", "active": true, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000003", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Gym", "bucket": "commitment", "active": false, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000004", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Typo", "bucket": "daily", "active": true, "deleted": true}, {"id": "0192f0a0-0000-7000-8003-000000000009", "household_id": "0192f0a0-0000-7000-8000-000000000002", "name": "Theirs", "bucket": "commitment", "active": true, "deleted": false}]
+      - sql: SELECT category_id::text AS category_id, allocation::text AS amount, effective_on = ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date AS dated_today FROM allocations ORDER BY category_id
+        rows: [{"category_id": "0192f0a0-0000-7000-8003-000000000001", "amount": "3000000.0000", "dated_today": true}, {"category_id": "0192f0a0-0000-7000-8003-000000000002", "amount": "2000000.0000", "dated_today": true}, {"category_id": "0192f0a0-0000-7000-8003-000000000003", "amount": "500000.0000", "dated_today": true}]
+
+
+- name: "category update - the id is not a property"
+  issue: "130"
+  given: *seeded
+  request:
+    method: PATCH
+    path: /categories/0192f0a0-0000-7000-8003-000000000001
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000001"}'
+  expect:
+    status: 400
+    body_json: {"code": "INVALID_JSON_BODY"}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, category_display_name AS name, bucket, active, (deleted_at IS NOT NULL) AS deleted FROM categories ORDER BY id
+        rows: [{"id": "0192f0a0-0000-7000-8003-000000000001", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Rent", "bucket": "commitment", "active": true, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000002", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Groceries", "bucket": "daily", "active": true, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000003", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Gym", "bucket": "commitment", "active": false, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000004", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Typo", "bucket": "daily", "active": true, "deleted": true}, {"id": "0192f0a0-0000-7000-8003-000000000009", "household_id": "0192f0a0-0000-7000-8000-000000000002", "name": "Theirs", "bucket": "commitment", "active": true, "deleted": false}]
+      - sql: SELECT category_id::text AS category_id, allocation::text AS amount, effective_on = ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date AS dated_today FROM allocations ORDER BY category_id
+        rows: [{"category_id": "0192f0a0-0000-7000-8003-000000000001", "amount": "3000000.0000", "dated_today": true}, {"category_id": "0192f0a0-0000-7000-8003-000000000002", "amount": "2000000.0000", "dated_today": true}, {"category_id": "0192f0a0-0000-7000-8003-000000000003", "amount": "500000.0000", "dated_today": true}]
+
+
+- name: "category update - the household_id is not a property"
+  issue: "130"
+  given: *seeded
+  request:
+    method: PATCH
+    path: /categories/0192f0a0-0000-7000-8003-000000000001
+    headers:
+      Content-Type: application/json
+    body: '{"household_id":"0192f0a0-0000-7000-8000-000000000002"}'
+  expect:
+    status: 400
+    body_json: {"code": "INVALID_JSON_BODY"}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, category_display_name AS name, bucket, active, (deleted_at IS NOT NULL) AS deleted FROM categories ORDER BY id
+        rows: [{"id": "0192f0a0-0000-7000-8003-000000000001", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Rent", "bucket": "commitment", "active": true, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000002", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Groceries", "bucket": "daily", "active": true, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000003", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Gym", "bucket": "commitment", "active": false, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000004", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Typo", "bucket": "daily", "active": true, "deleted": true}, {"id": "0192f0a0-0000-7000-8003-000000000009", "household_id": "0192f0a0-0000-7000-8000-000000000002", "name": "Theirs", "bucket": "commitment", "active": true, "deleted": false}]
+      - sql: SELECT category_id::text AS category_id, allocation::text AS amount, effective_on = ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date AS dated_today FROM allocations ORDER BY category_id
+        rows: [{"category_id": "0192f0a0-0000-7000-8003-000000000001", "amount": "3000000.0000", "dated_today": true}, {"category_id": "0192f0a0-0000-7000-8003-000000000002", "amount": "2000000.0000", "dated_today": true}, {"category_id": "0192f0a0-0000-7000-8003-000000000003", "amount": "500000.0000", "dated_today": true}]
+
+
+- name: "category update - deleted_at is not a property"
+  issue: "130"
+  given: *seeded
+  request:
+    method: PATCH
+    path: /categories/0192f0a0-0000-7000-8003-000000000001
+    headers:
+      Content-Type: application/json
+    body: '{"deleted_at":null}'
+  expect:
+    status: 400
+    body_json: {"code": "INVALID_JSON_BODY"}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, category_display_name AS name, bucket, active, (deleted_at IS NOT NULL) AS deleted FROM categories ORDER BY id
+        rows: [{"id": "0192f0a0-0000-7000-8003-000000000001", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Rent", "bucket": "commitment", "active": true, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000002", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Groceries", "bucket": "daily", "active": true, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000003", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Gym", "bucket": "commitment", "active": false, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000004", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Typo", "bucket": "daily", "active": true, "deleted": true}, {"id": "0192f0a0-0000-7000-8003-000000000009", "household_id": "0192f0a0-0000-7000-8000-000000000002", "name": "Theirs", "bucket": "commitment", "active": true, "deleted": false}]
+      - sql: SELECT category_id::text AS category_id, allocation::text AS amount, effective_on = ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date AS dated_today FROM allocations ORDER BY category_id
+        rows: [{"category_id": "0192f0a0-0000-7000-8003-000000000001", "amount": "3000000.0000", "dated_today": true}, {"category_id": "0192f0a0-0000-7000-8003-000000000002", "amount": "2000000.0000", "dated_today": true}, {"category_id": "0192f0a0-0000-7000-8003-000000000003", "amount": "500000.0000", "dated_today": true}]
+
+
+- name: "category update - a bad name beside an unknown property is the unknown property"
+  issue: "130"
+  given: *seeded
+  request:
+    method: PATCH
+    path: /categories/0192f0a0-0000-7000-8003-000000000001
+    headers:
+      Content-Type: application/json
+    body: '{"category_display_name":" ","colour":"red"}'
+  expect:
+    status: 400
+    body_json: {"code": "INVALID_JSON_BODY"}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, category_display_name AS name, bucket, active, (deleted_at IS NOT NULL) AS deleted FROM categories ORDER BY id
+        rows: [{"id": "0192f0a0-0000-7000-8003-000000000001", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Rent", "bucket": "commitment", "active": true, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000002", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Groceries", "bucket": "daily", "active": true, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000003", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Gym", "bucket": "commitment", "active": false, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000004", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Typo", "bucket": "daily", "active": true, "deleted": true}, {"id": "0192f0a0-0000-7000-8003-000000000009", "household_id": "0192f0a0-0000-7000-8000-000000000002", "name": "Theirs", "bucket": "commitment", "active": true, "deleted": false}]
+      - sql: SELECT category_id::text AS category_id, allocation::text AS amount, effective_on = ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date AS dated_today FROM allocations ORDER BY category_id
+        rows: [{"category_id": "0192f0a0-0000-7000-8003-000000000001", "amount": "3000000.0000", "dated_today": true}, {"category_id": "0192f0a0-0000-7000-8003-000000000002", "amount": "2000000.0000", "dated_today": true}, {"category_id": "0192f0a0-0000-7000-8003-000000000003", "amount": "500000.0000", "dated_today": true}]
+
+
+- name: "category update - malformed JSON"
+  issue: "130"
+  given: *seeded
+  request:
+    method: PATCH
+    path: /categories/0192f0a0-0000-7000-8003-000000000001
+    headers:
+      Content-Type: application/json
+    body: '{"active":'
+  expect:
+    status: 400
+    body_json: {"code": "INVALID_JSON_BODY"}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, category_display_name AS name, bucket, active, (deleted_at IS NOT NULL) AS deleted FROM categories ORDER BY id
+        rows: [{"id": "0192f0a0-0000-7000-8003-000000000001", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Rent", "bucket": "commitment", "active": true, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000002", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Groceries", "bucket": "daily", "active": true, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000003", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Gym", "bucket": "commitment", "active": false, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000004", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Typo", "bucket": "daily", "active": true, "deleted": true}, {"id": "0192f0a0-0000-7000-8003-000000000009", "household_id": "0192f0a0-0000-7000-8000-000000000002", "name": "Theirs", "bucket": "commitment", "active": true, "deleted": false}]
+      - sql: SELECT category_id::text AS category_id, allocation::text AS amount, effective_on = ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date AS dated_today FROM allocations ORDER BY category_id
+        rows: [{"category_id": "0192f0a0-0000-7000-8003-000000000001", "amount": "3000000.0000", "dated_today": true}, {"category_id": "0192f0a0-0000-7000-8003-000000000002", "amount": "2000000.0000", "dated_today": true}, {"category_id": "0192f0a0-0000-7000-8003-000000000003", "amount": "500000.0000", "dated_today": true}]
+
+
+- name: "category update - a non-object body"
+  issue: "130"
+  given: *seeded
+  request:
+    method: PATCH
+    path: /categories/0192f0a0-0000-7000-8003-000000000001
+    headers:
+      Content-Type: application/json
+    body: '[]'
+  expect:
+    status: 400
+    body_json: {"code": "INVALID_JSON_BODY"}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, category_display_name AS name, bucket, active, (deleted_at IS NOT NULL) AS deleted FROM categories ORDER BY id
+        rows: [{"id": "0192f0a0-0000-7000-8003-000000000001", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Rent", "bucket": "commitment", "active": true, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000002", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Groceries", "bucket": "daily", "active": true, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000003", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Gym", "bucket": "commitment", "active": false, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000004", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Typo", "bucket": "daily", "active": true, "deleted": true}, {"id": "0192f0a0-0000-7000-8003-000000000009", "household_id": "0192f0a0-0000-7000-8000-000000000002", "name": "Theirs", "bucket": "commitment", "active": true, "deleted": false}]
+      - sql: SELECT category_id::text AS category_id, allocation::text AS amount, effective_on = ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date AS dated_today FROM allocations ORDER BY category_id
+        rows: [{"category_id": "0192f0a0-0000-7000-8003-000000000001", "amount": "3000000.0000", "dated_today": true}, {"category_id": "0192f0a0-0000-7000-8003-000000000002", "amount": "2000000.0000", "dated_today": true}, {"category_id": "0192f0a0-0000-7000-8003-000000000003", "amount": "500000.0000", "dated_today": true}]
+
+
+- name: "category update - a JSON null body"
+  issue: "130"
+  given: *seeded
+  request:
+    method: PATCH
+    path: /categories/0192f0a0-0000-7000-8003-000000000001
+    headers:
+      Content-Type: application/json
+    body: 'null'
+  expect:
+    status: 400
+    body_json: {"code": "INVALID_JSON_BODY"}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, category_display_name AS name, bucket, active, (deleted_at IS NOT NULL) AS deleted FROM categories ORDER BY id
+        rows: [{"id": "0192f0a0-0000-7000-8003-000000000001", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Rent", "bucket": "commitment", "active": true, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000002", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Groceries", "bucket": "daily", "active": true, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000003", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Gym", "bucket": "commitment", "active": false, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000004", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Typo", "bucket": "daily", "active": true, "deleted": true}, {"id": "0192f0a0-0000-7000-8003-000000000009", "household_id": "0192f0a0-0000-7000-8000-000000000002", "name": "Theirs", "bucket": "commitment", "active": true, "deleted": false}]
+      - sql: SELECT category_id::text AS category_id, allocation::text AS amount, effective_on = ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date AS dated_today FROM allocations ORDER BY category_id
+        rows: [{"category_id": "0192f0a0-0000-7000-8003-000000000001", "amount": "3000000.0000", "dated_today": true}, {"category_id": "0192f0a0-0000-7000-8003-000000000002", "amount": "2000000.0000", "dated_today": true}, {"category_id": "0192f0a0-0000-7000-8003-000000000003", "amount": "500000.0000", "dated_today": true}]
+
+
+- name: "category update - no body is refused"
+  issue: "130"
+  given: *seeded
+  request:
+    method: PATCH
+    path: /categories/0192f0a0-0000-7000-8003-000000000001
+    headers:
+      Content-Type: application/json
+  expect:
+    status: 400
+    body_json: {"code": "INVALID_JSON_BODY"}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, category_display_name AS name, bucket, active, (deleted_at IS NOT NULL) AS deleted FROM categories ORDER BY id
+        rows: [{"id": "0192f0a0-0000-7000-8003-000000000001", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Rent", "bucket": "commitment", "active": true, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000002", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Groceries", "bucket": "daily", "active": true, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000003", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Gym", "bucket": "commitment", "active": false, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000004", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Typo", "bucket": "daily", "active": true, "deleted": true}, {"id": "0192f0a0-0000-7000-8003-000000000009", "household_id": "0192f0a0-0000-7000-8000-000000000002", "name": "Theirs", "bucket": "commitment", "active": true, "deleted": false}]
+      - sql: SELECT category_id::text AS category_id, allocation::text AS amount, effective_on = ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date AS dated_today FROM allocations ORDER BY category_id
+        rows: [{"category_id": "0192f0a0-0000-7000-8003-000000000001", "amount": "3000000.0000", "dated_today": true}, {"category_id": "0192f0a0-0000-7000-8003-000000000002", "amount": "2000000.0000", "dated_today": true}, {"category_id": "0192f0a0-0000-7000-8003-000000000003", "amount": "500000.0000", "dated_today": true}]
+
+
+- name: "category update - an unknown id is NOT_FOUND"
+  issue: "130"
+  given: *seeded
+  request:
+    method: PATCH
+    path: /categories/0192f0a0-0000-7000-8003-000000000099
+    headers:
+      Content-Type: application/json
+    body: '{"active":false}'
+  expect:
+    status: 404
+    body_json: {"code": "NOT_FOUND"}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, category_display_name AS name, bucket, active, (deleted_at IS NOT NULL) AS deleted FROM categories ORDER BY id
+        rows: [{"id": "0192f0a0-0000-7000-8003-000000000001", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Rent", "bucket": "commitment", "active": true, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000002", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Groceries", "bucket": "daily", "active": true, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000003", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Gym", "bucket": "commitment", "active": false, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000004", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Typo", "bucket": "daily", "active": true, "deleted": true}, {"id": "0192f0a0-0000-7000-8003-000000000009", "household_id": "0192f0a0-0000-7000-8000-000000000002", "name": "Theirs", "bucket": "commitment", "active": true, "deleted": false}]
+      - sql: SELECT category_id::text AS category_id, allocation::text AS amount, effective_on = ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date AS dated_today FROM allocations ORDER BY category_id
+        rows: [{"category_id": "0192f0a0-0000-7000-8003-000000000001", "amount": "3000000.0000", "dated_today": true}, {"category_id": "0192f0a0-0000-7000-8003-000000000002", "amount": "2000000.0000", "dated_today": true}, {"category_id": "0192f0a0-0000-7000-8003-000000000003", "amount": "500000.0000", "dated_today": true}]
+
+
+- name: "category update - an empty body on an unknown id is NOT_FOUND too"
+  issue: "130"
+  given: *seeded
+  request:
+    method: PATCH
+    path: /categories/0192f0a0-0000-7000-8003-000000000099
+    headers:
+      Content-Type: application/json
+    body: '{}'
+  expect:
+    status: 404
+    body_json: {"code": "NOT_FOUND"}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, category_display_name AS name, bucket, active, (deleted_at IS NOT NULL) AS deleted FROM categories ORDER BY id
+        rows: [{"id": "0192f0a0-0000-7000-8003-000000000001", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Rent", "bucket": "commitment", "active": true, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000002", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Groceries", "bucket": "daily", "active": true, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000003", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Gym", "bucket": "commitment", "active": false, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000004", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Typo", "bucket": "daily", "active": true, "deleted": true}, {"id": "0192f0a0-0000-7000-8003-000000000009", "household_id": "0192f0a0-0000-7000-8000-000000000002", "name": "Theirs", "bucket": "commitment", "active": true, "deleted": false}]
+      - sql: SELECT category_id::text AS category_id, allocation::text AS amount, effective_on = ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date AS dated_today FROM allocations ORDER BY category_id
+        rows: [{"category_id": "0192f0a0-0000-7000-8003-000000000001", "amount": "3000000.0000", "dated_today": true}, {"category_id": "0192f0a0-0000-7000-8003-000000000002", "amount": "2000000.0000", "dated_today": true}, {"category_id": "0192f0a0-0000-7000-8003-000000000003", "amount": "500000.0000", "dated_today": true}]
+
+
+- name: "category update - another Household's id is the same answer as an unknown one, byte for byte"
+  issue: "130"
+  given: *seeded
+  request:
+    method: PATCH
+    path: /categories/0192f0a0-0000-7000-8003-000000000009
+    headers:
+      Content-Type: application/json
+    body: '{"active":false}'
+  expect:
+    status: 404
+    body_json: {"code": "NOT_FOUND"}
+    same_as:
+      method: PATCH
+      path: /categories/0192f0a0-0000-7000-8003-000000000099
+      headers:
+        Content-Type: application/json
+      body: '{"active":false}'
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, category_display_name AS name, bucket, active, (deleted_at IS NOT NULL) AS deleted FROM categories ORDER BY id
+        rows: [{"id": "0192f0a0-0000-7000-8003-000000000001", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Rent", "bucket": "commitment", "active": true, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000002", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Groceries", "bucket": "daily", "active": true, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000003", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Gym", "bucket": "commitment", "active": false, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000004", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Typo", "bucket": "daily", "active": true, "deleted": true}, {"id": "0192f0a0-0000-7000-8003-000000000009", "household_id": "0192f0a0-0000-7000-8000-000000000002", "name": "Theirs", "bucket": "commitment", "active": true, "deleted": false}]
+      - sql: SELECT category_id::text AS category_id, allocation::text AS amount, effective_on = ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date AS dated_today FROM allocations ORDER BY category_id
+        rows: [{"category_id": "0192f0a0-0000-7000-8003-000000000001", "amount": "3000000.0000", "dated_today": true}, {"category_id": "0192f0a0-0000-7000-8003-000000000002", "amount": "2000000.0000", "dated_today": true}, {"category_id": "0192f0a0-0000-7000-8003-000000000003", "amount": "500000.0000", "dated_today": true}]
+
+
+- name: "category update - another Household's id with an empty body is not confirmed either"
+  issue: "130"
+  given: *seeded
+  request:
+    method: PATCH
+    path: /categories/0192f0a0-0000-7000-8003-000000000009
+    headers:
+      Content-Type: application/json
+    body: '{}'
+  expect:
+    status: 404
+    body_json: {"code": "NOT_FOUND"}
+    same_as:
+      method: PATCH
+      path: /categories/0192f0a0-0000-7000-8003-000000000099
+      headers:
+        Content-Type: application/json
+      body: '{}'
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, category_display_name AS name, bucket, active, (deleted_at IS NOT NULL) AS deleted FROM categories ORDER BY id
+        rows: [{"id": "0192f0a0-0000-7000-8003-000000000001", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Rent", "bucket": "commitment", "active": true, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000002", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Groceries", "bucket": "daily", "active": true, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000003", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Gym", "bucket": "commitment", "active": false, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000004", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Typo", "bucket": "daily", "active": true, "deleted": true}, {"id": "0192f0a0-0000-7000-8003-000000000009", "household_id": "0192f0a0-0000-7000-8000-000000000002", "name": "Theirs", "bucket": "commitment", "active": true, "deleted": false}]
+      - sql: SELECT category_id::text AS category_id, allocation::text AS amount, effective_on = ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date AS dated_today FROM allocations ORDER BY category_id
+        rows: [{"category_id": "0192f0a0-0000-7000-8003-000000000001", "amount": "3000000.0000", "dated_today": true}, {"category_id": "0192f0a0-0000-7000-8003-000000000002", "amount": "2000000.0000", "dated_today": true}, {"category_id": "0192f0a0-0000-7000-8003-000000000003", "amount": "500000.0000", "dated_today": true}]
+
+
+- name: "category update - another Household's id with a rename leaves their name and the name index alone"
+  issue: "130"
+  given: *seeded
+  request:
+    method: PATCH
+    path: /categories/0192f0a0-0000-7000-8003-000000000009
+    headers:
+      Content-Type: application/json
+    body: '{"category_display_name":"Rent"}'
+  expect:
+    status: 404
+    body_json: {"code": "NOT_FOUND"}
+    same_as:
+      method: PATCH
+      path: /categories/0192f0a0-0000-7000-8003-000000000099
+      headers:
+        Content-Type: application/json
+      body: '{"category_display_name":"Rent"}'
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, category_display_name AS name, bucket, active, (deleted_at IS NOT NULL) AS deleted FROM categories ORDER BY id
+        rows: [{"id": "0192f0a0-0000-7000-8003-000000000001", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Rent", "bucket": "commitment", "active": true, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000002", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Groceries", "bucket": "daily", "active": true, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000003", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Gym", "bucket": "commitment", "active": false, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000004", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Typo", "bucket": "daily", "active": true, "deleted": true}, {"id": "0192f0a0-0000-7000-8003-000000000009", "household_id": "0192f0a0-0000-7000-8000-000000000002", "name": "Theirs", "bucket": "commitment", "active": true, "deleted": false}]
+      - sql: SELECT category_id::text AS category_id, allocation::text AS amount, effective_on = ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date AS dated_today FROM allocations ORDER BY category_id
+        rows: [{"category_id": "0192f0a0-0000-7000-8003-000000000001", "amount": "3000000.0000", "dated_today": true}, {"category_id": "0192f0a0-0000-7000-8003-000000000002", "amount": "2000000.0000", "dated_today": true}, {"category_id": "0192f0a0-0000-7000-8003-000000000003", "amount": "500000.0000", "dated_today": true}]
+
+
+- name: "category update - the caller's own deleted Category is NOT_FOUND and stays deleted"
+  issue: "130"
+  given: *seeded
+  request:
+    method: PATCH
+    path: /categories/0192f0a0-0000-7000-8003-000000000004
+    headers:
+      Content-Type: application/json
+    body: '{"active":false}'
+  expect:
+    status: 404
+    body_json: {"code": "NOT_FOUND"}
+    same_as:
+      method: PATCH
+      path: /categories/0192f0a0-0000-7000-8003-000000000099
+      headers:
+        Content-Type: application/json
+      body: '{"active":false}'
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, category_display_name AS name, bucket, active, (deleted_at IS NOT NULL) AS deleted FROM categories ORDER BY id
+        rows: [{"id": "0192f0a0-0000-7000-8003-000000000001", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Rent", "bucket": "commitment", "active": true, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000002", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Groceries", "bucket": "daily", "active": true, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000003", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Gym", "bucket": "commitment", "active": false, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000004", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Typo", "bucket": "daily", "active": true, "deleted": true}, {"id": "0192f0a0-0000-7000-8003-000000000009", "household_id": "0192f0a0-0000-7000-8000-000000000002", "name": "Theirs", "bucket": "commitment", "active": true, "deleted": false}]
+      - sql: SELECT category_id::text AS category_id, allocation::text AS amount, effective_on = ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date AS dated_today FROM allocations ORDER BY category_id
+        rows: [{"category_id": "0192f0a0-0000-7000-8003-000000000001", "amount": "3000000.0000", "dated_today": true}, {"category_id": "0192f0a0-0000-7000-8003-000000000002", "amount": "2000000.0000", "dated_today": true}, {"category_id": "0192f0a0-0000-7000-8003-000000000003", "amount": "500000.0000", "dated_today": true}]
+
+
+- name: "category update - validation comes before the lookup: a foreign id with a blank name is the blank name's 400"
+  issue: "130"
+  given: *seeded
+  request:
+    method: PATCH
+    path: /categories/0192f0a0-0000-7000-8003-000000000009
+    headers:
+      Content-Type: application/json
+    body: '{"category_display_name":" "}'
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "category_display_name", "rule": "required"}}
+    same_as:
+      method: PATCH
+      path: /categories/0192f0a0-0000-7000-8003-000000000099
+      headers:
+        Content-Type: application/json
+      body: '{"category_display_name":" "}'
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, category_display_name AS name, bucket, active, (deleted_at IS NOT NULL) AS deleted FROM categories ORDER BY id
+        rows: [{"id": "0192f0a0-0000-7000-8003-000000000001", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Rent", "bucket": "commitment", "active": true, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000002", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Groceries", "bucket": "daily", "active": true, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000003", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Gym", "bucket": "commitment", "active": false, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000004", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Typo", "bucket": "daily", "active": true, "deleted": true}, {"id": "0192f0a0-0000-7000-8003-000000000009", "household_id": "0192f0a0-0000-7000-8000-000000000002", "name": "Theirs", "bucket": "commitment", "active": true, "deleted": false}]
+      - sql: SELECT category_id::text AS category_id, allocation::text AS amount, effective_on = ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date AS dated_today FROM allocations ORDER BY category_id
+        rows: [{"category_id": "0192f0a0-0000-7000-8003-000000000001", "amount": "3000000.0000", "dated_today": true}, {"category_id": "0192f0a0-0000-7000-8003-000000000002", "amount": "2000000.0000", "dated_today": true}, {"category_id": "0192f0a0-0000-7000-8003-000000000003", "amount": "500000.0000", "dated_today": true}]
+
+
+- name: "category update - with no cookie it is unauthorized and changes nothing"
+  issue: "130"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO categories (id, household_id, category_display_name, bucket, active, deleted_at, created_at) VALUES
+          ('0192f0a0-0000-7000-8003-000000000001',   '0192f0a0-0000-7000-8000-000000000001', 'Rent',      'commitment', true,  NULL,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000002',   '0192f0a0-0000-7000-8000-000000000001', 'Groceries', 'daily',      true,  NULL,  '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000003',    '0192f0a0-0000-7000-8000-000000000001', 'Gym',       'commitment', false, NULL,  '2026-01-03T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000004',   '0192f0a0-0000-7000-8000-000000000001', 'Typo',      'daily',      true,  now(), '2026-01-04T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs',    'commitment', true,  NULL,  '2026-01-05T00:00:00Z');
+        INSERT INTO budgets (household_id, year_month) VALUES ('0192f0a0-0000-7000-8000-000000000001', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'));
+        INSERT INTO monthly_budgets (household_id, year_month, effective_on, monthly_budget) VALUES ('0192f0a0-0000-7000-8000-000000000001', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'), ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date, 9000000);
+        INSERT INTO allocations (household_id, year_month, effective_on, category_id, allocation) VALUES
+          ('0192f0a0-0000-7000-8000-000000000001', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'), ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date, '0192f0a0-0000-7000-8003-000000000001', 3000000),
+          ('0192f0a0-0000-7000-8000-000000000001', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'), ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date, '0192f0a0-0000-7000-8003-000000000002', 2000000),
+          ('0192f0a0-0000-7000-8000-000000000001', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'), ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date, '0192f0a0-0000-7000-8003-000000000003', 500000)
+  request:
+    method: PATCH
+    path: /categories/0192f0a0-0000-7000-8003-000000000001
+    headers:
+      Content-Type: application/json
+    body: '{"active":false}'
+  expect:
+    status: 401
+    body_json: {"code": "UNAUTHORIZED"}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, category_display_name AS name, bucket, active, (deleted_at IS NOT NULL) AS deleted FROM categories ORDER BY id
+        rows: [{"id": "0192f0a0-0000-7000-8003-000000000001", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Rent", "bucket": "commitment", "active": true, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000002", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Groceries", "bucket": "daily", "active": true, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000003", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Gym", "bucket": "commitment", "active": false, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000004", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Typo", "bucket": "daily", "active": true, "deleted": true}, {"id": "0192f0a0-0000-7000-8003-000000000009", "household_id": "0192f0a0-0000-7000-8000-000000000002", "name": "Theirs", "bucket": "commitment", "active": true, "deleted": false}]
+      - sql: SELECT category_id::text AS category_id, allocation::text AS amount, effective_on = ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date AS dated_today FROM allocations ORDER BY category_id
+        rows: [{"category_id": "0192f0a0-0000-7000-8003-000000000001", "amount": "3000000.0000", "dated_today": true}, {"category_id": "0192f0a0-0000-7000-8003-000000000002", "amount": "2000000.0000", "dated_today": true}, {"category_id": "0192f0a0-0000-7000-8003-000000000003", "amount": "500000.0000", "dated_today": true}]
+
+
+- name: "category update - with no cookie even a refused body is unauthorized"
+  issue: "130"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO categories (id, household_id, category_display_name, bucket, active, deleted_at, created_at) VALUES
+          ('0192f0a0-0000-7000-8003-000000000001',   '0192f0a0-0000-7000-8000-000000000001', 'Rent',      'commitment', true,  NULL,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000002',   '0192f0a0-0000-7000-8000-000000000001', 'Groceries', 'daily',      true,  NULL,  '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000003',    '0192f0a0-0000-7000-8000-000000000001', 'Gym',       'commitment', false, NULL,  '2026-01-03T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000004',   '0192f0a0-0000-7000-8000-000000000001', 'Typo',      'daily',      true,  now(), '2026-01-04T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs',    'commitment', true,  NULL,  '2026-01-05T00:00:00Z');
+        INSERT INTO budgets (household_id, year_month) VALUES ('0192f0a0-0000-7000-8000-000000000001', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'));
+        INSERT INTO monthly_budgets (household_id, year_month, effective_on, monthly_budget) VALUES ('0192f0a0-0000-7000-8000-000000000001', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'), ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date, 9000000);
+        INSERT INTO allocations (household_id, year_month, effective_on, category_id, allocation) VALUES
+          ('0192f0a0-0000-7000-8000-000000000001', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'), ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date, '0192f0a0-0000-7000-8003-000000000001', 3000000),
+          ('0192f0a0-0000-7000-8000-000000000001', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'), ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date, '0192f0a0-0000-7000-8003-000000000002', 2000000),
+          ('0192f0a0-0000-7000-8000-000000000001', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'), ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date, '0192f0a0-0000-7000-8003-000000000003', 500000)
+  request:
+    method: PATCH
+    path: /categories/0192f0a0-0000-7000-8003-000000000001
+    headers:
+      Content-Type: application/json
+    body: '{"bucket":"daily"}'
+  expect:
+    status: 401
+    body_json: {"code": "UNAUTHORIZED"}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, category_display_name AS name, bucket, active, (deleted_at IS NOT NULL) AS deleted FROM categories ORDER BY id
+        rows: [{"id": "0192f0a0-0000-7000-8003-000000000001", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Rent", "bucket": "commitment", "active": true, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000002", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Groceries", "bucket": "daily", "active": true, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000003", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Gym", "bucket": "commitment", "active": false, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000004", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Typo", "bucket": "daily", "active": true, "deleted": true}, {"id": "0192f0a0-0000-7000-8003-000000000009", "household_id": "0192f0a0-0000-7000-8000-000000000002", "name": "Theirs", "bucket": "commitment", "active": true, "deleted": false}]
+      - sql: SELECT category_id::text AS category_id, allocation::text AS amount, effective_on = ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date AS dated_today FROM allocations ORDER BY category_id
+        rows: [{"category_id": "0192f0a0-0000-7000-8003-000000000001", "amount": "3000000.0000", "dated_today": true}, {"category_id": "0192f0a0-0000-7000-8003-000000000002", "amount": "2000000.0000", "dated_today": true}, {"category_id": "0192f0a0-0000-7000-8003-000000000003", "amount": "500000.0000", "dated_today": true}]
+
+
+- name: "category update - with no cookie even a malformed id is unauthorized"
+  issue: "130"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO categories (id, household_id, category_display_name, bucket, active, deleted_at, created_at) VALUES
+          ('0192f0a0-0000-7000-8003-000000000001',   '0192f0a0-0000-7000-8000-000000000001', 'Rent',      'commitment', true,  NULL,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000002',   '0192f0a0-0000-7000-8000-000000000001', 'Groceries', 'daily',      true,  NULL,  '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000003',    '0192f0a0-0000-7000-8000-000000000001', 'Gym',       'commitment', false, NULL,  '2026-01-03T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000004',   '0192f0a0-0000-7000-8000-000000000001', 'Typo',      'daily',      true,  now(), '2026-01-04T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs',    'commitment', true,  NULL,  '2026-01-05T00:00:00Z');
+        INSERT INTO budgets (household_id, year_month) VALUES ('0192f0a0-0000-7000-8000-000000000001', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'));
+        INSERT INTO monthly_budgets (household_id, year_month, effective_on, monthly_budget) VALUES ('0192f0a0-0000-7000-8000-000000000001', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'), ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date, 9000000);
+        INSERT INTO allocations (household_id, year_month, effective_on, category_id, allocation) VALUES
+          ('0192f0a0-0000-7000-8000-000000000001', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'), ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date, '0192f0a0-0000-7000-8003-000000000001', 3000000),
+          ('0192f0a0-0000-7000-8000-000000000001', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'), ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date, '0192f0a0-0000-7000-8003-000000000002', 2000000),
+          ('0192f0a0-0000-7000-8000-000000000001', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'), ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date, '0192f0a0-0000-7000-8003-000000000003', 500000)
+  request:
+    method: PATCH
+    path: /categories/not-a-uuid
+    headers:
+      Content-Type: application/json
+    body: '{"active":false}'
+  expect:
+    status: 401
+    body_json: {"code": "UNAUTHORIZED"}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, category_display_name AS name, bucket, active, (deleted_at IS NOT NULL) AS deleted FROM categories ORDER BY id
+        rows: [{"id": "0192f0a0-0000-7000-8003-000000000001", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Rent", "bucket": "commitment", "active": true, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000002", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Groceries", "bucket": "daily", "active": true, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000003", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Gym", "bucket": "commitment", "active": false, "deleted": false}, {"id": "0192f0a0-0000-7000-8003-000000000004", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Typo", "bucket": "daily", "active": true, "deleted": true}, {"id": "0192f0a0-0000-7000-8003-000000000009", "household_id": "0192f0a0-0000-7000-8000-000000000002", "name": "Theirs", "bucket": "commitment", "active": true, "deleted": false}]
+      - sql: SELECT category_id::text AS category_id, allocation::text AS amount, effective_on = ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date AS dated_today FROM allocations ORDER BY category_id
+        rows: [{"category_id": "0192f0a0-0000-7000-8003-000000000001", "amount": "3000000.0000", "dated_today": true}, {"category_id": "0192f0a0-0000-7000-8003-000000000002", "amount": "2000000.0000", "dated_today": true}, {"category_id": "0192f0a0-0000-7000-8003-000000000003", "amount": "500000.0000", "dated_today": true}]

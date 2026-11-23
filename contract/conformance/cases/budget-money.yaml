@@ -460,7 +460,7 @@
       - sql: SELECT (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM monthly_budgets)::int AS versions
         rows: [{budgets: 0, versions: 0}]
 
-- name: "budget money - a PATCH with allocations, which no Category exists to take yet is refused"
+- name: "budget money - allocations sent as a map keyed by Category id, not a list, are refused"
   issue: "130"
   given: *signed-in
   request:
@@ -468,7 +468,7 @@
     path: /budget
     headers:
       Content-Type: application/json
-    body: '{"allocations":[]}'
+    body: '{"allocations":{"0192f0a0-0000-7000-8003-000000000001":"3000000"}}'
   expect:
     status: 400
     body_json: {code: INVALID_JSON_BODY}

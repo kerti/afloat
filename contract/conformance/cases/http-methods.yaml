@@ -741,3 +741,72 @@
     rows:
       - sql: SELECT (SELECT count(*) FROM categories)::int AS categories, (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM allocations)::int AS allocations
         rows: [{categories: 0, budgets: 0, allocations: 0}]
+
+# /categories/{id} serves PATCH (#130, PR 3) and, for now, nothing else: its
+# DELETE and restore are the next slice's. Every other method is 405 with no
+# body, and writes nothing. HEAD has no GET to answer it.
+- name: http methods - PUT on a Category is method not allowed and changes nothing
+  issue: "130"
+  given: &category-one
+    - sql: INSERT INTO categories (id, household_id, category_display_name, bucket) VALUES ('0192f0a0-0000-7000-8003-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'Rent', 'commitment')
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: PUT
+    path: /categories/0192f0a0-0000-7000-8003-000000000001
+    headers:
+      Content-Type: application/json
+    body: '{"category_display_name":"Hijacked","active":false}'
+  expect:
+    status: 405
+    body_empty: true
+    rows:
+      - sql: SELECT category_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM categories
+        rows: [{name: Rent, active: true, deleted: false}]
+
+- name: http methods - DELETE on a Category is method not allowed until the slice that builds it, and deletes nothing
+  issue: "130"
+  given: *category-one
+  request:
+    method: DELETE
+    path: /categories/0192f0a0-0000-7000-8003-000000000001
+  expect:
+    status: 405
+    body_empty: true
+    rows:
+      - sql: SELECT category_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM categories
+        rows: [{name: Rent, active: true, deleted: false}]
+
+- name: http methods - GET on a Category is method not allowed
+  issue: "130"
+  given: *category-one
+  request:
+    method: GET
+    path: /categories/0192f0a0-0000-7000-8003-000000000001
+  expect:
+    status: 405
+    body_empty: true
+    rows:
+      - sql: SELECT category_display_name AS name, active FROM categories
+        rows: [{name: Rent, active: true}]
+
+- name: http methods - POST on a Category is method not allowed and changes nothing
+  issue: "130"
+  given: *category-one
+  request:
+    method: POST
+    path: /categories/0192f0a0-0000-7000-8003-000000000001
+    headers:
+      Content-Type: application/json
+    body: '{"category_display_name":"Hijacked"}'
+  expect:
+    status: 405
+    body_empty: true
+    rows:
+      - sql: SELECT category_display_name AS name, active FROM categories
+        rows: [{name: Rent, active: true}]

@@ -87,8 +87,10 @@ re-cuts the window and moves which label Today falls in, and rewrites no row.
 **Allocation**: What a Category is planned at **in one Budget Period**: a value of that Period's Budget,
 not a property of the Category, so a Period's allocation never moves when a later Period's does.
 Optional for a Daily Category and required for a Commitment; zero is an allocation, and a Commitment's
-is never cleared. A Commitment's allocation is part of the Commitments Budget and so moves the Daily
-Pool; a Daily Category's moves only Unallocated.
+is never cleared (a Daily Category's can be: "none" is a value too). Changing one changes the
+**current** Period's Budget only; a following Period carries the latest state forward when it is first
+read. A Commitment's allocation is part of the Commitments Budget and so moves the Daily Pool; a Daily
+Category's moves only Unallocated.
 
 > **Cross-app note:** Balances reserves **Category** for *Income* categories and **Tag** for
 > user-defined grouping labels. Afloat's Category is a *spending* bucket. The two apps own separate

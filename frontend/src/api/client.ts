@@ -14,6 +14,7 @@ export type UpdatePocketRequest = components["schemas"]["UpdatePocketRequest"];
 export type Category = components["schemas"]["Category"];
 export type CategoryList = components["schemas"]["CategoryList"];
 export type CreateCategoryRequest = components["schemas"]["CreateCategoryRequest"];
+export type UpdateCategoryRequest = components["schemas"]["UpdateCategoryRequest"];
 export type Bucket = components["schemas"]["Bucket"];
 export type Budget = components["schemas"]["Budget"];
 export type UpdateBudgetRequest = components["schemas"]["UpdateBudgetRequest"];
@@ -250,6 +251,18 @@ export async function createCategory(body: CreateCategoryRequest): Promise<Categ
   return (
     await request("/categories", {
       method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    })
+  ).json() as Promise<Category>;
+}
+
+// Merge update: only the fields sent change (`bucket` and the allocation are not
+// accepted here; the allocation is the Budget's). 404 NOT_FOUND, 409 NAME_TAKEN.
+export async function updateCategory(id: string, body: UpdateCategoryRequest): Promise<Category> {
+  return (
+    await request(`/categories/${encodeURIComponent(id)}`, {
+      method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     })

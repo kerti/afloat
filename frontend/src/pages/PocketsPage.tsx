@@ -28,6 +28,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { clampName } from "@/lib/codePoints";
 import { toastError, toastPlain, toastSaved } from "@/lib/plainToast";
 import { routes } from "@/lib/routes";
 import { toastUndoable } from "@/lib/undoToast";
@@ -132,11 +133,10 @@ function PocketForm({
         <Input
           id="pocket-display-name"
           value={name}
-          maxLength={60}
           placeholder={t("pockets.namePlaceholder")}
           disabled={pending}
           onChange={(e) => {
-            setName(e.target.value);
+            setName(clampName(e.target.value));
             setEdited(true);
             if (err) write.reset();
           }}

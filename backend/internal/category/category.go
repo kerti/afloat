@@ -1,5 +1,7 @@
-// Package category owns the Household's Categories (PRD S8): listing them and
-// creating one, with the allocation it starts with. Handlers live with their
+// Package category owns the Household's Categories (PRD S8): listing them,
+// creating one with the allocation it starts with, and renaming, deactivating
+// or reactivating one. What a Category is planned at afterwards is the Budget's
+// (budget.UpdateBudget). Handlers live with their
 // domain (docs/adr/go/0001).
 //
 // The dependency runs one way: this package imports auth, for the User in the
@@ -181,6 +183,79 @@ func (h *Handlers) CreateCategory(ctx context.Context, request api.CreateCategor
 		// allocation is an amount.
 		slog.Error("create category", "err", err)
 		return createInternalError(), nil
+	}
+}
+
+// UpdateCategory renames, deactivates or reactivates a Category. Merge
+// semantics, one statement, last write wins per field (BOOTSTRAP.md §4), as
+// UpdatePocket: a field left out is not touched, and two writers of different
+// fields both land. Deactivating keeps the name, the place in the list and the
+// Category's allocation, so no figure moves; it is not a delete. The bucket is
+// not a property of the request, so it cannot be changed here (PRD S8, #130 C7).
+//
+// The Household is the authenticated User's, taken from the context and never
+// from the request, and the UPDATE filters on it in SQL. An id that is unknown,
+// another Household's or deleted is no row and answers one NOT_FOUND, `{}`
+// included: nothing here confirms another Household's id. The contract's rules
+// and the name rule run before the statement, so a foreign id with a bad body
+// answers what an unknown one does. No transaction: the answer is the row the
+// UPDATE returns.
+func (h *Handlers) UpdateCategory(ctx context.Context, request api.UpdateCategoryRequestObject) (api.UpdateCategoryResponseObject, error) {
+	user, ok := auth.UserFromContext(ctx)
+	if !ok {
+		// Unreachable through the router: httpserver's sessionRequired answers
+		// 401 for this operation first. Kept so a router change that lost the
+		// check degrades to the contract's 401, not an UPDATE with a zero
+		// household_id.
+		return api.UpdateCategory401JSONResponse{
+			UnauthorizedJSONResponse: api.UnauthorizedJSONResponse{Code: api.UNAUTHORIZED},
+		}, nil
+	}
+	body := request.Body
+	if body == nil {
+		// Unreachable: the contract's body is required, and the validator
+		// refuses an absent one first.
+		return api.UpdateCategory400JSONResponse{
+			BadRequestJSONResponse: api.BadRequestJSONResponse{Code: api.INVALIDJSONBODY},
+		}, nil
+	}
+
+	params := db.UpdateCategoryParams{
+		ID:          pgtype.UUID{Bytes: request.Id, Valid: true},
+		HouseholdID: user.HouseholdID,
+		Active:      body.Active,
+	}
+	if body.CategoryDisplayName != nil {
+		name, rule := auth.CheckBoundedName(*body.CategoryDisplayName, maxCategoryDisplayNameCodePoints)
+		if rule != "" {
+			return api.UpdateCategory400JSONResponse{
+				BadRequestJSONResponse: api.BadRequestJSONResponse{
+					Code: api.VALIDATION,
+					Args: &map[string]interface{}{"field": "category_display_name", "rule": rule},
+				},
+			}, nil
+		}
+		params.CategoryDisplayName = &name
+	}
+
+	row, err := h.q.UpdateCategory(ctx, params)
+	switch {
+	case err == nil:
+		return api.UpdateCategory200JSONResponse(response(row)), nil
+	case errors.Is(err, pgx.ErrNoRows):
+		return api.UpdateCategory404JSONResponse{
+			NotFoundJSONResponse: api.NotFoundJSONResponse{Code: api.NOTFOUND},
+		}, nil
+	case isNameTaken(err):
+		return api.UpdateCategory409JSONResponse{
+			ConflictJSONResponse: api.ConflictJSONResponse{Code: api.NAMETAKEN},
+		}, nil
+	default:
+		// Never the request's body: a Category's name is user content.
+		slog.Error("update category", "err", err)
+		return api.UpdateCategory500JSONResponse{
+			InternalErrorJSONResponse: api.InternalErrorJSONResponse{Code: api.INTERNAL},
+		}, nil
 	}
 }
 

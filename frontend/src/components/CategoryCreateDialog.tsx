@@ -17,6 +17,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger } from "@/components/ui/select";
+import { clampName } from "@/lib/codePoints";
 import { toastPlain } from "@/lib/plainToast";
 
 type FieldKey = "name" | "bucket" | "allocation";
@@ -114,11 +115,10 @@ export function CategoryCreateDialog({
             <Input
               id="category-display-name"
               value={name}
-              maxLength={60}
               placeholder={t("categories.namePlaceholder")}
               disabled={pending}
               onChange={(e) => {
-                setName(e.target.value);
+                setName(clampName(e.target.value));
                 edit("name");
                 clearServer();
               }}

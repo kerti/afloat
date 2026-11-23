@@ -17,6 +17,7 @@ import {
   localRegister,
   logout,
   updateBudget,
+  updateCategory,
   updatePocket,
   updateHousehold,
   updateMe,
@@ -35,6 +36,7 @@ import {
   type Pocket,
   type PocketList,
   type UpdateBudgetRequest,
+  type UpdateCategoryRequest,
   type UpdateHouseholdRequest,
   type UpdateMeRequest,
   type UpdatePocketRequest,
@@ -231,5 +233,23 @@ export function useCreateCategory() {
         qc.invalidateQueries({ queryKey: categoriesKey }),
         qc.invalidateQueries({ queryKey: budgetKey }),
       ]),
+  });
+}
+
+// A deactivated Category may hold an allocation, so both reads are refetched and
+// the write settles after them. A NOT_FOUND means the list is stale.
+export function useUpdateCategory() {
+  const qc = useQueryClient();
+  const refetch = () =>
+    Promise.all([
+      qc.invalidateQueries({ queryKey: categoriesKey }),
+      qc.invalidateQueries({ queryKey: budgetKey }),
+    ]);
+  return useMutation<Category, ApiError, { id: string; body: UpdateCategoryRequest }>({
+    mutationFn: ({ id, body }) => updateCategory(id, body),
+    onSuccess: refetch,
+    onError: (err) => {
+      if (err.code === "NOT_FOUND") void refetch();
+    },
   });
 }

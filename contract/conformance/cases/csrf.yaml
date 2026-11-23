@@ -728,3 +728,84 @@
     rows:
       - sql: SELECT (SELECT count(*) FROM categories)::int AS categories, (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM allocations)::int AS allocations
         rows: [{categories: 0, budgets: 0, allocations: 0}]
+
+# PATCH /categories/{id} and the allocations of PATCH /budget (#130, PR 3): a
+# cross-site page must not be able to rename or deactivate a Category, or change
+# what the Household has planned. A refused request changes nothing.
+- name: csrf - a cross-site category patch is blocked and changes nothing
+  issue: "130"
+  given:
+    - sql: INSERT INTO categories (id, household_id, category_display_name, bucket) VALUES ('0192f0a0-0000-7000-8003-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'Rent', 'commitment')
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: PATCH
+    path: /categories/0192f0a0-0000-7000-8003-000000000001
+    headers:
+      Content-Type: application/json
+      Sec-Fetch-Site: cross-site
+    body: '{"category_display_name":"Hijacked","active":false}'
+  expect:
+    status: 403
+    body_json: {code: CROSS_SITE_REQUEST_BLOCKED}
+    cookies: {}
+    rows:
+      - sql: SELECT category_display_name AS name, active FROM categories
+        rows: [{name: Rent, active: true}]
+
+- name: csrf - a foreign Origin on a category patch is blocked and changes nothing
+  issue: "130"
+  given:
+    - sql: INSERT INTO categories (id, household_id, category_display_name, bucket) VALUES ('0192f0a0-0000-7000-8003-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'Rent', 'commitment')
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: PATCH
+    path: /categories/0192f0a0-0000-7000-8003-000000000001
+    headers:
+      Content-Type: application/json
+      Origin: https://evil.example
+    body: '{"category_display_name":"Hijacked","active":false}'
+  expect:
+    status: 403
+    body_json: {code: CROSS_SITE_REQUEST_BLOCKED}
+    cookies: {}
+    rows:
+      - sql: SELECT category_display_name AS name, active FROM categories
+        rows: [{name: Rent, active: true}]
+
+- name: csrf - a cross-site budget patch carrying allocations is blocked and writes nothing
+  issue: "130"
+  given:
+    - sql: INSERT INTO categories (id, household_id, category_display_name, bucket) VALUES ('0192f0a0-0000-7000-8003-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Groceries', 'daily')
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: PATCH
+    path: /budget
+    headers:
+      Content-Type: application/json
+      Sec-Fetch-Site: cross-site
+    body: '{"allocations":[{"category_id":"0192f0a0-0000-7000-8003-000000000002","allocation":"1"}]}'
+  expect:
+    status: 403
+    body_json: {code: CROSS_SITE_REQUEST_BLOCKED}
+    cookies: {}
+    rows:
+      - sql: SELECT (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM allocations)::int AS allocations
+        rows: [{budgets: 0, allocations: 0}]

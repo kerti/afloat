@@ -83,8 +83,8 @@ afloat/
 ├── backend/                        # Go backend
 │   └── internal/
 │       ├── period/                 # Period Day and Budget Period arithmetic, pure — §6 (#130)
-│       ├── budget/                 # the Budget of the current Period, its materialisation (#130)
-│       ├── category/               # Categories, and the allocation one starts with (#130)
+│       ├── budget/                 # the Budget of the current Period, its materialisation and its changes (#130)
+│       ├── category/               # Categories: list, create (with the allocation one starts with), rename, deactivate or reactivate (#130)
 │       ├── migrations/             # CANONICAL goose migrations, hand-written, //go:embed — §7
 │       └── auth/common_passwords.txt  # the password denylist — §5.1
 ├── frontend/                       # React app
@@ -262,6 +262,35 @@ with zoneinfo answers from it, so a case-insensitive filesystem (a Mac) also acc
   `false` must be able to set is `sqlc.narg` and a Go `*bool`** (`PATCH /pockets/{id}`'s `active`): a
   plain `bool` zero value would read as "absent" and silently drop every deactivation. A row that the
   `WHERE` does not match is no row, and the answer is `404 NOT_FOUND` (next bullet).
+- **A list of changes inside a `PATCH`** (#130, PR 3: `PATCH /budget`'s `allocations`) is an array of
+  `{key, value}` items, not a map (OpenAPI 3.0.3 has no `patternProperties`). A value that may be cleared
+  is **required and nullable** on the item (`allocation: null` is "none", an absent key is a contract
+  `required` failure and never a clear), and a Category not listed is untouched. **Failure order:** the
+  contract's rules (a nested failure names its path, `allocations.<index>.<property>`), then the handler's,
+  all before anything is written, so a refused request writes nothing and does not even materialise a
+  Period: a repeated key is `VALIDATION {field: category_id, rule: unique}`; then, item by item in the order
+  sent (the handler's rules; the contract's own failure is the least by (field, rule) as a string, so with
+  11 or more items `allocations.10` sorts before `allocations.2`), a key that is unknown, another Household's or deleted is `{category_id, invalid}` (one answer for
+  the three, so a foreign id is never confirmed), and `null` for a Commitment is `{allocation, required}`.
+  The write is **one transaction** (the Period's materialising, the Monthly Budget if sent, and every
+  item; the answer is read after it commits, next bullet), one upsert per item, each checking the Category is the Household's own and live in
+  the same statement and share-locking it; zero rows rolls everything back and answers the same `invalid`
+  (a Category deleted between the check and the write). **Items are written in key order, whatever order
+  they were sent in**: each upsert holds its row until the transaction ends, so two requests naming the same
+  rows in opposite orders would each hold the one the other waits for next and Postgres would abort one.
+- **A response built from more than one statement is read from one snapshot** (#130, PR 3). Under
+  `READ COMMITTED` each statement sees what has committed by the time it starts, so a concurrent edit that
+  lands between two of them leaves the answer half old and half new (a Monthly Budget from before an edit
+  beside allocations from after it: a Budget that never existed). `GET /budget` therefore materialises
+  its Period first, if it must, in a transaction of its own that commits, and then reads in a
+  `REPEATABLE READ`, `READ ONLY` transaction (`budget.Beginner.BeginTx`), which can neither fail to serialise
+  nor hold a lock a writer waits on. **`PATCH /budget` reads its answer the same way** (maintainer's ruling, #130):
+  the write transaction commits, and the answer is then read in its own snapshot, by the same code as
+  `GET`. The alternative, reading back inside the writing transaction, runs at `READ COMMITTED` (a
+  `REPEATABLE READ` write would fail concurrent upserts of one key with `40001`), so a concurrent edit
+  committing between the read's statements would show through and the answer could be a Budget that never
+  existed. The cost, accepted: a failure of that read answers `500` although the change is saved. A `PATCH`
+  of absolute values is idempotent, so repeating it is the recovery.
 - **Tenancy on a path id** (#121, the first `{id}` route): an id that is **unknown, another
   Household's, or soft-deleted** answers one `404 NOT_FOUND`, a code with no `args`, the same bytes in
   every case and for every body, `{}` included (a no-op must not confirm another Household's id).
@@ -707,7 +736,11 @@ collection's `/pockets/` with a trailing slash, for one.
   middleware, so a handler rule (`iso4217`, a blank-to-the-eye name) competes only once every
   contract rule has passed. `{"period_start_day": 0, "household_display_name": ""}` reports
   `period_start_day` (`min`). Registration and every later write behave the same (#113).
-- `rule` uses go-playground/validator's tag names (`required`, `min`, `max`, `email`), plus `pattern`.
+- `rule` uses go-playground/validator's tag names (`required`, `min`, `max`, `email`), plus `pattern`,
+  and, for a handler's own rules, `unique` (a repeated `category_id`) and `invalid` (a path `{id}` that is
+  not a uuid, or a `category_id` that names no live Category of the Household). A contract failure inside
+  an array item names its path in `field` (`allocations.0.allocation`); a handler rule names the bare
+  property (`category_id`, `allocation`).
 - `minLength` and `maxLength` count code points, JSON Schema's characters: an emoji is one, not two
   UTF-16 units or four bytes.
 - `format: email` trims, then validates: a padded address is accepted and trimmed again for the

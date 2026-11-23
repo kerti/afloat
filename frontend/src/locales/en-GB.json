@@ -32,7 +32,8 @@
     "monthly_budget": "Monthly Budget",
     "category_display_name": "Category name",
     "bucket": "kind",
-    "allocation": "allocation"
+    "allocation": "allocation",
+    "category_id": "Category"
   },
   "login": {
     "title": "Sign in",
@@ -206,6 +207,15 @@
     "allocationRequired": "Enter an allocation.",
     "allocationCommitmentHint": "What this Commitment is planned at for this Budget Period. Enter 0 if it has none yet.",
     "allocationDailyHint": "Optional. What this Category is planned at for this Budget Period.",
-    "noAllocation": "No allocation"
+    "noAllocation": "No allocation",
+    "editHeading": "Edit Category",
+    "editFor": "Edit {{name}}, {{amount}}",
+    "editForInactive": "Edit {{name}}, {{amount}}, inactive",
+    "save": "Save",
+    "saving": "Saving…",
+    "deactivate": "Deactivate",
+    "reactivate": "Reactivate",
+    "showInactive": "Show inactive Categories ({{count}})",
+    "allocationDailyEditHint": "Optional. Clear it to give this Category no allocation for this Budget Period."
   }
 }

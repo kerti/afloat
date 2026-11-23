@@ -26,6 +26,13 @@ whole scaffold sheet. If the two ever disagree, `BOOTSTRAP.md` wins and this fil
   parameter is `format: uuid` with no `pattern` and no `maxLength` (#106). A `PATCH` boolean that a
   `false` must set is `sqlc.narg` and a `*bool`. Deactivating (`active`) is not a delete. Delete and
   restore alone see a deleted row: for them only an unknown or foreign id is the `404`.
+- **A list of changes in a `PATCH`** (`PATCH /budget`'s `allocations`): an array of `{key, value}`, the
+  value required and nullable (an absent key is a contract failure, never a clear). Checked in full
+  before anything is written (repeat `unique`, then per item `invalid` for an unknown, foreign or deleted
+  key, `required` for `null` on a Commitment), written in one transaction in key order so two requests
+  cannot deadlock, each upsert checking tenancy and share-locking the row. An answer built from several
+  statements is read from one `REPEATABLE READ`, `READ ONLY` snapshot (`GET /budget`, and `PATCH /budget` after its
+  write commits: a failed read then is a `500` with the change saved).
 - **Collections:** `{"items": [...]}`, empty is `{"items": []}` never `null`, ordered by `created_at, id`.
 - **Tenancy:** `household_id` filtered in SQL on every Household-scoped query, never only in
   middleware.

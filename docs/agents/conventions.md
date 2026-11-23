@@ -10,14 +10,16 @@ whole scaffold sheet. If the two ever disagree, `BOOTSTRAP.md` wins and this fil
   and never rounded (`MoneyInput`'s `pattern`). The Household's plan (income, the Monthly Budget,
   allocations) has no `currency` column: it is in `reporting_currency`.
 - **Ids:** UUIDv7, client-generated, column type `uuid`. A row only the server creates and no request
-  addresses by id (the Budget tables) has a composite natural key and no `id`. Create is idempotent:
+  addresses by id (the Budget tables, allocations included) has a composite natural key and no `id`. Create is idempotent:
   `INSERT ... ON CONFLICT (id) DO NOTHING RETURNING *` + read-back, 200 on replay (the row as stored;
   the rest of the body is not compared), 201 on first write. The contract's `pattern` enforces the
   canonical dashed v7 spelling. An id held by another Household or by the caller's own deleted row is
   `409 ID_TAKEN`; a name-index `23505` is read back by id before it is `NAME_TAKEN` (a concurrent
-  replay can raise it). Only `ErrNoRows` means the id is held; apart from the name clash, any other error is `500`.
+  replay can raise it; so can any other unique index on the id, such as a Category's
+  `UNIQUE (household_id, id)`, which `ON CONFLICT (id)` does not arbitrate). Only `ErrNoRows` means the
+  id is held; apart from those clashes, any other error is `500`.
 - **Names:** `<entity>_display_name` everywhere. One shared rule (`auth.CheckBoundedName`: trimmed,
-  `required` / `max` / `pattern`), a per-entity cap (60 for Household and Pocket). Unique among live
+  `required` / `max` / `pattern`), a per-entity cap (60 for Household, Pocket and Category). Unique among live
   rows via a partial index on `lower(name)`; a clash is `409 NAME_TAKEN`. Pin only ASCII case folds.
 - **Path ids:** an `{id}` that is unknown, another Household's or deleted is one `404 NOT_FOUND` (no
   `args`, same bytes for every body, `{}` included); validation comes before the lookup. A path
@@ -30,7 +32,7 @@ whole scaffold sheet. If the two ever disagree, `BOOTSTRAP.md` wins and this fil
 - **Dates:** `occurred_on` is a `date` (the Period Day); `captured_at` is `timestamptz`; everything
   else that's an instant is `timestamptz`. Period Day (`day_starts_at` + per-User `time_zone`) is
   computed server-side only — if the frontend also derives it, the two disagree at 03:59.
-- **Soft delete everywhere:** nullable `deleted_at`. No hard-delete endpoint. A version log with no delete operation (the Budget tables) carries
+- **Soft delete everywhere:** nullable `deleted_at`. No hard-delete endpoint. A version log with no delete operation (the Budget tables: budgets, monthly budgets, allocations) carries
   no `deleted_at`. Scoped to Household-scoped domain data — instance-local auth state (`sessions`, `credentials`,
   `invitations`) is exempt and hard-deletes, because session revocation *is* the row delete.
   `DELETE /<entity>/{id}` is soft (`204`), `POST /<entity>/{id}/restore` is its Undo (`200` with the

@@ -12,6 +12,8 @@ type ChangePasswordBody = components["schemas"]["ChangePasswordRequest"];
 type Pocket = components["schemas"]["Pocket"];
 type CreatePocketBody = components["schemas"]["CreatePocketRequest"];
 type UpdatePocketBody = components["schemas"]["UpdatePocketRequest"];
+type Category = components["schemas"]["Category"];
+type CreateCategoryBody = components["schemas"]["CreateCategoryRequest"];
 type Budget = components["schemas"]["Budget"];
 type UpdateBudgetBody = components["schemas"]["UpdateBudgetRequest"];
 type ChoiceBody = components["schemas"]["OnboardingChoiceRequest"];
@@ -44,6 +46,10 @@ export type State = {
   deletedPockets?: Pocket[];
   pocketDeletes?: string[];
   pocketRestores?: string[];
+  // The fake server's Categories in creation order, and every POST /categories
+  // body it was sent.
+  categories?: Category[];
+  categoryPosts?: CreateCategoryBody[];
   // The fake server's Budget for the current Period (absent: a first read
   // answers an empty one), and every PATCH /budget body, in order.
   budget?: Budget;
@@ -269,6 +275,66 @@ export function defaultHandlers(state: State = { signedIn: false, me: alice }) {
       state.deletedPockets = state.deletedPockets!.filter((p) => p !== gone);
       list.push(gone);
       return HttpResponse.json(gone);
+    }),
+    http.get("/api/categories", () => {
+      if (!state.signedIn) return HttpResponse.json(envelope("UNAUTHORIZED"), { status: 401 });
+      return HttpResponse.json({ items: state.categories ?? [] });
+    }),
+    http.post("/api/categories", async ({ request }) => {
+      if (!state.signedIn) return HttpResponse.json(envelope("UNAUTHORIZED"), { status: 401 });
+      const body = (await request.json()) as CreateCategoryBody;
+      (state.categoryPosts ??= []).push(body);
+      const list = (state.categories ??= []);
+      const name = body.category_display_name.trim();
+      if (name === "") {
+        return HttpResponse.json(
+          envelope("VALIDATION", { field: "category_display_name", rule: "required" }),
+          { status: 400 },
+        );
+      }
+      const held = list.find((c) => c.id === body.id);
+      if (held) return HttpResponse.json(held, { status: 200 });
+      if (list.some((c) => c.category_display_name.toLowerCase() === name.toLowerCase())) {
+        return HttpResponse.json(envelope("NAME_TAKEN"), { status: 409 });
+      }
+      if (body.bucket === "commitment" && (body.allocation ?? null) === null) {
+        return HttpResponse.json(
+          envelope("VALIDATION", { field: "allocation", rule: "required" }),
+          {
+            status: 400,
+          },
+        );
+      }
+      const category: Category = {
+        id: body.id,
+        category_display_name: name,
+        bucket: body.bucket,
+        active: true,
+      };
+      list.push(category);
+      if (body.allocation != null) {
+        // As the server: the allocation joins the Budget and the figures follow.
+        const held = (state.budget ??= emptyBudget);
+        const [int = "0", frac = ""] = body.allocation.split(".");
+        const amount = `${int}.${frac.padEnd(4, "0")}`;
+        const allocations = [...held.allocations, { category_id: body.id, allocation: amount }];
+        const sum = (bucket: Category["bucket"]) =>
+          allocations
+            .filter((a) => list.find((c) => c.id === a.category_id)?.bucket === bucket)
+            .reduce((n, a) => n + Number(a.allocation), 0);
+        const commitments = sum("commitment");
+        const fixed = (n: number) => n.toFixed(4);
+        state.budget = {
+          ...held,
+          allocations,
+          commitments_budget: fixed(commitments),
+          ...(held.monthly_budget !== undefined && {
+            daily_pool: fixed(Number(held.monthly_budget) - commitments),
+            unallocated: fixed(Number(held.monthly_budget) - commitments - sum("daily")),
+          }),
+        };
+      }
+      return HttpResponse.json(category, { status: 201 });
     }),
     http.get("/api/budget", () => {
       if (!state.signedIn) return HttpResponse.json(envelope("UNAUTHORIZED"), { status: 401 });

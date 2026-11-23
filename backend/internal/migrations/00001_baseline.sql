@@ -2,8 +2,8 @@
 -- domain tables as their slices land in step 9, edited in place until the
 -- freeze (BOOTSTRAP.md §7.1).
 -- Households, Users, credentials, sessions, onboarding handshakes, invitations,
--- login backoff, Pockets, Budgets. The rest of the domain (categories,
--- allocations, expenses) lands with its own slice; a dev database already at
+-- login backoff, Pockets, Categories, Budgets. The rest of the domain
+-- (expenses) lands with its own slice; a dev database already at
 -- version 1 does not gain a table added here, so run `make db-reset` after
 -- pulling one.
 --
@@ -19,10 +19,10 @@
 --     (credentials, sessions, onboarding_handshakes, invitations,
 --     login_attempts) hard-deletes:
 --     revocation IS the row delete. A version log no operation deletes from
---     (budgets, monthly_budgets) has no deleted_at: a column nothing sets is
+--     (budgets, monthly_budgets, allocations) has no deleted_at: a column nothing sets is
 --     a filter every read must remember.
 --   * Rows only the server creates, never addressed by id on the wire (the
---     Budget tables), have composite natural keys and no id column. The first
+--     Budget tables, allocations included), have composite natural keys and no id column. The first
 --     rule above is about rows a client creates.
 
 -- +goose Up
@@ -276,7 +276,45 @@ CREATE UNIQUE INDEX pockets_household_name_idx
     WHERE deleted_at IS NULL;
 
 -- ---------------------------------------------------------------------------
--- budgets, monthly_budgets
+-- categories
+-- ---------------------------------------------------------------------------
+
+-- A household-defined bucket an Expense is classified into (PRD S8,
+-- CONTEXT.md): a name and a bucket, and no allocation: what is planned for a
+-- Category is a value of each Budget Period (allocations below), not a column
+-- here. Belongs to the Household, never to a User (PRD S2).
+CREATE TABLE categories (
+    id                    uuid PRIMARY KEY,
+    household_id          uuid NOT NULL REFERENCES households (id),
+    category_display_name text NOT NULL,
+    -- Fixed at creation (#130 C7): a flip would move the Category's allocation
+    -- between the Commitments Budget and Unallocated in every Period at once.
+    bucket                text NOT NULL,
+    -- Deactivated is not deleted: an inactive Category stays in the list, keeps
+    -- labelling its Expenses, keeps its name and keeps its allocation.
+    active                boolean NOT NULL DEFAULT true,
+    created_at            timestamptz NOT NULL DEFAULT now(),
+    updated_at            timestamptz NOT NULL DEFAULT now(),
+    deleted_at            timestamptz,
+
+    CONSTRAINT categories_category_display_name_not_blank
+        CHECK (btrim(category_display_name) <> ''),
+    CONSTRAINT categories_bucket_known
+        CHECK (bucket IN ('daily', 'commitment')),
+    -- The target of allocations' composite foreign key: an allocation naming
+    -- another Household's Category is impossible by construction.
+    CONSTRAINT categories_household_id_id_key UNIQUE (household_id, id)
+);
+
+-- Soft-delete-aware, like pockets_household_name_idx: a deleted Category
+-- releases its name, an inactive one keeps it, and the name is unique across
+-- both buckets (#130 C7).
+CREATE UNIQUE INDEX categories_household_name_idx
+    ON categories (household_id, lower(category_display_name))
+    WHERE deleted_at IS NULL;
+
+-- ---------------------------------------------------------------------------
+-- budgets, monthly_budgets, allocations
 -- ---------------------------------------------------------------------------
 
 -- One Budget per Household per Budget Period (CONTEXT, PRD S12, S13). The row
@@ -315,11 +353,33 @@ CREATE TABLE monthly_budgets (
         CHECK (monthly_budget >= 0)
 );
 
+-- What a Category is planned at, as a version log within its Period, like
+-- monthly_budgets: the value on a day is the latest row on or before it, per
+-- Category, and a NULL allocation is "none from that day". No currency (PRD N3)
+-- and no deleted_at (nothing deletes one). The composite foreign key onto
+-- categories is what keeps a Household's allocations on its own Categories.
+CREATE TABLE allocations (
+    household_id uuid NOT NULL,
+    year_month   text NOT NULL,
+    effective_on date NOT NULL,
+    category_id  uuid NOT NULL,
+    allocation   numeric(20,4),
+    updated_at   timestamptz NOT NULL DEFAULT now(),
+
+    PRIMARY KEY (household_id, year_month, effective_on, category_id),
+    FOREIGN KEY (household_id, year_month) REFERENCES budgets (household_id, year_month),
+    FOREIGN KEY (household_id, category_id) REFERENCES categories (household_id, id),
+    CONSTRAINT allocations_allocation_non_negative
+        CHECK (allocation IS NULL OR allocation >= 0)
+);
+
 -- +goose Down
 -- Reverse order of creation, so foreign keys drop before their targets.
 
+DROP TABLE IF EXISTS allocations;
 DROP TABLE IF EXISTS monthly_budgets;
 DROP TABLE IF EXISTS budgets;
+DROP TABLE IF EXISTS categories;
 DROP TABLE IF EXISTS pockets;
 DROP TABLE IF EXISTS login_attempts;
 DROP TABLE IF EXISTS invitations;

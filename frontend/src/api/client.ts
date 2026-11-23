@@ -11,6 +11,10 @@ export type Pocket = components["schemas"]["Pocket"];
 export type PocketList = components["schemas"]["PocketList"];
 export type CreatePocketRequest = components["schemas"]["CreatePocketRequest"];
 export type UpdatePocketRequest = components["schemas"]["UpdatePocketRequest"];
+export type Category = components["schemas"]["Category"];
+export type CategoryList = components["schemas"]["CategoryList"];
+export type CreateCategoryRequest = components["schemas"]["CreateCategoryRequest"];
+export type Bucket = components["schemas"]["Bucket"];
 export type Budget = components["schemas"]["Budget"];
 export type UpdateBudgetRequest = components["schemas"]["UpdateBudgetRequest"];
 export type AuthMethods = components["schemas"]["AuthMethods"];
@@ -234,4 +238,20 @@ export async function updateBudget(body: UpdateBudgetRequest): Promise<Budget> {
       body: JSON.stringify(body),
     })
   ).json() as Promise<Budget>;
+}
+
+export async function listCategories(): Promise<CategoryList> {
+  return (await request("/categories")).json() as Promise<CategoryList>;
+}
+
+// Idempotent on the client's id: 201 the first time, 200 with the Category as it
+// stands on a replay (its allocation is then neither compared nor applied).
+export async function createCategory(body: CreateCategoryRequest): Promise<Category> {
+  return (
+    await request("/categories", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    })
+  ).json() as Promise<Category>;
 }

@@ -73,9 +73,22 @@ is a figure the Household sets, never a sum derived from Categories. _Avoid_: Li
 (each implies enforcement Afloat does not perform).
 
 **Category**: A household-defined bucket an Expense is classified into — Groceries, Transport, Rent.
-Each Category carries a `bucket` of `daily` or `commitment` (below) and an optional planned
-`allocation` for the Period. _Avoid_: Budget (as a noun for a category — the scratch drafts' term
-"Budget/category" is retired), Tag.
+Each Category carries a name and a `bucket` of `daily` or `commitment` (below), fixed at creation. What
+is planned for it is its **allocation**, which belongs to a Period's Budget, not to the Category.
+_Avoid_: Budget (as a noun for a category — the scratch drafts' term "Budget/category" is retired), Tag.
+
+**Budget**: The Household's plan for one Budget Period: its Monthly Budget and its Category
+allocations. There is one per Period, versioned by effective date within it (see Mid-period Budget
+changes), and a Period's Budget comes into being on the first read of that Period, carrying forward
+the latest state of the nearest earlier Period that had one. A Period's window (derived from
+`period_start_day`) and the rows stored for it are separate things: changing `period_start_day`
+re-cuts the window and moves which label Today falls in, and rewrites no row.
+
+**Allocation**: What a Category is planned at **in one Budget Period**: a value of that Period's Budget,
+not a property of the Category, so a Period's allocation never moves when a later Period's does.
+Optional for a Daily Category and required for a Commitment; zero is an allocation, and a Commitment's
+is never cleared. A Commitment's allocation is part of the Commitments Budget and so moves the Daily
+Pool; a Daily Category's moves only Unallocated.
 
 > **Cross-app note:** Balances reserves **Category** for *Income* categories and **Tag** for
 > user-defined grouping labels. Afloat's Category is a *spending* bucket. The two apps own separate
@@ -84,8 +97,8 @@ Each Category carries a `bucket` of `daily` or `commitment` (below) and an optio
 **Commitment**: A Category whose spending is large, largely non-discretionary, and lumpy in time —
 rent, insurance premiums, school fees, annual taxes, a planned appliance purchase. Commitment
 spending is **excluded from every daily figure**: it does not reduce the Daily Pool's per-day maths,
-does not move Trajectory Variance, and does not affect State. A Commitment Category **must** carry an
-allocation; that is the point of it. _Avoid_: Fixed cost, Bill.
+does not move Trajectory Variance, and does not affect State. A Commitment Category **must** have an
+allocation in every Period; that is the point of it. _Avoid_: Fixed cost, Bill.
 
 **Daily Category**: Any Category that is not a Commitment. Its allocation is optional.
 
@@ -172,7 +185,11 @@ JSON. Blank means not yet in the UI.
 | Home (the screen) | Beranda | UI retrofit |
 | Period | periode anggaran | Household settings (#117) |
 | Expense | | |
-| Category | | |
+| Category | kategori | Categories (#130 PR 2), provisional (R16) |
+| Daily (bucket) | harian | Categories (#130 PR 2), provisional (R16) |
+| Commitment (bucket) | komitmen | Categories (#130 PR 2), provisional (R16); no settled word |
+| `bucket` (the field, as a user reads it: **Kind**) | jenis | Categories (#130 PR 2), provisional (R16); en-GB word is "Kind" |
+| Allocation | alokasi | Categories (#130 PR 2), provisional (R16) |
 | Budget | anggaran | Budget (#130 PR 1), provisional (R16) |
 | Monthly Budget | anggaran bulanan | Budget (#130 PR 1), provisional (R16) |
 | Commitments Budget | anggaran komitmen | Budget (#130 PR 1), provisional (R16) |

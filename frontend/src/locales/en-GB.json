@@ -12,7 +12,10 @@
     "userDisplayName": "Your name (optional)",
     "pocketDisplayName": "Pocket name",
     "householdDisplayName": "Household name",
-    "monthlyBudget": "Monthly Budget"
+    "monthlyBudget": "Monthly Budget",
+    "categoryDisplayName": "Category name",
+    "categoryBucket": "Kind",
+    "allocation": "Allocation"
   },
   "fieldNames": {
     "reporting_currency": "reporting currency",
@@ -26,7 +29,10 @@
     "locale": "language",
     "current_password": "current password",
     "new_password": "new password",
-    "monthly_budget": "Monthly Budget"
+    "monthly_budget": "Monthly Budget",
+    "category_display_name": "Category name",
+    "bucket": "kind",
+    "allocation": "allocation"
   },
   "login": {
     "title": "Sign in",
@@ -180,6 +186,26 @@
     "empty": "Set your Monthly Budget to see what is left to spend.",
     "commitmentsBudget": "Commitments Budget",
     "dailyPool": "Daily Pool",
-    "unallocated": "Unallocated"
+    "unallocated": "Unallocated",
+    "overAllocated": "Your Category allocations add up to more than your Daily Pool. That's fine; it's just information."
+  },
+  "categories": {
+    "commitmentsHeading": "Commitments",
+    "dailyHeading": "Daily",
+    "commitmentsEmpty": "Your Commitments will appear here.",
+    "dailyEmpty": "Your Daily Categories will appear here.",
+    "addHeading": "Add a Category",
+    "add": "Add",
+    "adding": "Adding…",
+    "cancel": "Cancel",
+    "namePlaceholder": "For example: Rent, Groceries, Transport",
+    "kindCommitment": "Commitment",
+    "kindDaily": "Daily",
+    "nameRequired": "Enter a Category name.",
+    "kindRequired": "Choose a kind.",
+    "allocationRequired": "Enter an allocation.",
+    "allocationCommitmentHint": "What this Commitment is planned at for this Budget Period. Enter 0 if it has none yet.",
+    "allocationDailyHint": "Optional. What this Category is planned at for this Budget Period.",
+    "noAllocation": "No allocation"
   }
 }

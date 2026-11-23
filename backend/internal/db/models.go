@@ -9,10 +9,30 @@ import (
 	decimal "github.com/shopspring/decimal"
 )
 
+type Allocation struct {
+	HouseholdID pgtype.UUID
+	YearMonth   string
+	EffectiveOn pgtype.Date
+	CategoryID  pgtype.UUID
+	Allocation  decimal.NullDecimal
+	UpdatedAt   pgtype.Timestamptz
+}
+
 type Budget struct {
 	HouseholdID pgtype.UUID
 	YearMonth   string
 	CreatedAt   pgtype.Timestamptz
+}
+
+type Category struct {
+	ID                  pgtype.UUID
+	HouseholdID         pgtype.UUID
+	CategoryDisplayName string
+	Bucket              string
+	Active              bool
+	CreatedAt           pgtype.Timestamptz
+	UpdatedAt           pgtype.Timestamptz
+	DeletedAt           pgtype.Timestamptz
 }
 
 type Credential struct {

@@ -932,6 +932,9 @@ func TestAFailureWhileMaterialisingLeavesNoMarkerAndAnswers500(t *testing.T) {
 	}{
 		{"begin", breakingBeginner{failBegin: true}, true},
 		{"the copy", breakingBeginner{failOn: "FROM monthly_budgets m"}, true},
+		{"the choice of source", breakingBeginner{failOn: "FROM budgets b"}, true},
+		{"the allocation copy", breakingBeginner{failOn: "INSERT INTO allocations"}, true},
+		{"the allocation read", breakingBeginner{failOn: "FROM allocations s"}, true},
 		{"the marker", breakingBeginner{failOn: "INSERT INTO budgets"}, true},
 		{"the read", breakingBeginner{failOn: "ORDER BY effective_on"}, true},
 		{"commit", breakingBeginner{failCommit: true}, true},
@@ -944,6 +947,7 @@ func TestAFailureWhileMaterialisingLeavesNoMarkerAndAnswers500(t *testing.T) {
 			// A source Period exists, so the copy has something to copy.
 			f.exec(t, `INSERT INTO budgets (household_id, year_month) VALUES ($1, '2026-10')`, householdID)
 			f.exec(t, `INSERT INTO monthly_budgets (household_id, year_month, effective_on, monthly_budget) VALUES ($1, '2026-10', '2026-10-01', 123456)`, householdID)
+			f.allocate(t, householdID, "2026-10", "2026-10-01", f.category(t, householdID, "Rent", "commitment"), "654321")
 			logs := capturedLog(t)
 
 			if tc.get {
@@ -960,6 +964,9 @@ func TestAFailureWhileMaterialisingLeavesNoMarkerAndAnswers500(t *testing.T) {
 				if v := f.shape(t, householdID); v != "2026-10 2026-10-01 123456.0000" {
 					t.Errorf("monthly_budgets = %q: a failed materialisation must leave no copy behind", v)
 				}
+				if v := f.allocationShape(t, householdID); v != "2026-10 2026-10-01 Rent 654321.0000" {
+					t.Errorf("allocations = %q: a failed materialisation must leave no copy behind", v)
+				}
 			}
 
 			// The same for a change.
@@ -973,7 +980,10 @@ func TestAFailureWhileMaterialisingLeavesNoMarkerAndAnswers500(t *testing.T) {
 			if v := f.shape(t, householdID); v != "2026-10 2026-10-01 123456.0000" {
 				t.Errorf("monthly_budgets = %q after a failed change", v)
 			}
-			for _, secret := range []string{"123456", "9000000", "Home", "a@example.com"} {
+			if v := f.allocationShape(t, householdID); v != "2026-10 2026-10-01 Rent 654321.0000" {
+				t.Errorf("allocations = %q after a failed change", v)
+			}
+			for _, secret := range []string{"123456", "654321", "9000000", "Home", "Rent", "a@example.com"} {
 				if strings.Contains(logs.String(), secret) {
 					t.Errorf("the log leaks %q:\n%s", secret, logs.String())
 				}

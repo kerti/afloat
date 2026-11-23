@@ -1,0 +1,3646 @@
+# GET and POST /categories (#130, PR 2): the second domain entity, copying
+# Pockets' conventions (BOOTSTRAP.md §4): the client-supplied UUIDv7 is the
+# idempotency key (201 first, 200 for a replay of a live Category of the
+# Household, the STORED row, the rest of the body neither compared nor applied,
+# the allocation included), an id held by something else is 409 ID_TAKEN (another
+# Household's or the caller's own deleted one, one answer), and a name already
+# held by a Category that is not deleted is 409 NAME_TAKEN, whatever the bucket
+# (inactive Categories still hold theirs).
+#
+# What a Category is planned at is the Budget's, per Period (PRD S8): a create
+# may carry an `allocation`, required for a Commitment, written in the same
+# transaction to the current Period's Budget, dated Today, and bringing the
+# Period into being if this is the first request to find it missing (S13). The
+# seed is one Household with period_start_day 1 and day_starts_at 04:00, and
+# Alice's time zone is Asia/Jakarta, so Today is the Postgres clock in Jakarta
+# less four hours; a case asserts the allocation's Period and date relative to it
+# (`in_period`, `dated_today`), never as a literal, and the exact-date assertions
+# live in the backend's suite, which injects a clock.
+#
+# The Household is always the session's, never the body's. fixtures/seed.sql holds
+# one; a case that proves another is untouched adds a second in `given:`. `rows:`
+# read the columns, because a response can be right while the row behind it is not.
+#
+# Only ASCII case folding is pinned (Rent/rent): lower() follows the database's
+# locale, so a non-ASCII row would pass on one host and fail on another.
+#
+# Under an outage the session itself cannot be read, which the session middleware
+# answers 500 with the cookie left alone (#27); it never reaches the handler,
+# whose own 500s the backend's suite covers.
+#
+# The Categories a case starts with, inserted in `given:`. Fixed ids
+# 0192f0a0-0000-7000-8003-00000000000N.
+
+- name: "categories - an empty Household lists items, not null"
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: GET
+    path: /categories
+  expect:
+    status: 200
+    body_json: {"items": []}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, category_display_name AS name, bucket, active, (deleted_at IS NOT NULL) AS deleted FROM categories ORDER BY id
+        rows: []
+
+- name: "categories - the list is in creation order, both buckets together, inactive ones included, deleted and foreign ones not"
+  issue: "130"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO categories (id, household_id, category_display_name, bucket, active, deleted_at, created_at) VALUES
+          ('0192f0a0-0000-7000-8003-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'Rent',     'commitment', true,  NULL,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Gym',      'commitment', false, NULL,  '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Gone',     'daily',      true,  now(), '2026-01-03T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs',   'daily',      true,  NULL,  '2026-01-04T00:00:00Z')
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: GET
+    path: /categories
+  expect:
+    status: 200
+    body_json: {"items": [{"id": "0192f0a0-0000-7000-8003-000000000001", "category_display_name": "Rent", "bucket": "commitment", "active": true}, {"id": "0192f0a0-0000-7000-8003-000000000002", "category_display_name": "Gym", "bucket": "commitment", "active": false}]}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, category_display_name AS name, bucket, active, (deleted_at IS NOT NULL) AS deleted FROM categories ORDER BY id
+        rows:
+          - {id: "0192f0a0-0000-7000-8003-000000000001", household_id: "0192f0a0-0000-7000-8000-000000000001", name: "Rent", bucket: "commitment", active: true, deleted: false}
+          - {id: "0192f0a0-0000-7000-8003-000000000002", household_id: "0192f0a0-0000-7000-8000-000000000001", name: "Gym", bucket: "commitment", active: false, deleted: false}
+          - {id: "0192f0a0-0000-7000-8003-000000000003", household_id: "0192f0a0-0000-7000-8000-000000000001", name: "Gone", bucket: "daily", active: true, deleted: true}
+          - {id: "0192f0a0-0000-7000-8003-000000000009", household_id: "0192f0a0-0000-7000-8000-000000000002", name: "Theirs", bucket: "daily", active: true, deleted: false}
+
+- name: "categories - creation order is not alphabetical order, and a rename does not move a Category"
+  issue: "130"
+  given:
+    - sql: |
+        INSERT INTO categories (id, household_id, category_display_name, bucket, created_at) VALUES
+          ('0192f0a0-0000-7000-8003-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'Zeta', 'daily', '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Alpha', 'commitment', '2026-01-02T00:00:00Z');
+        UPDATE categories SET category_display_name = 'Zeta', updated_at = now() WHERE id = '0192f0a0-0000-7000-8003-000000000001'
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: GET
+    path: /categories
+  expect:
+    status: 200
+    body_json: {"items": [{"id": "0192f0a0-0000-7000-8003-000000000001", "category_display_name": "Zeta", "bucket": "daily", "active": true}, {"id": "0192f0a0-0000-7000-8003-000000000002", "category_display_name": "Alpha", "bucket": "commitment", "active": true}]}
+    cookies: {}
+
+- name: "categories - create answers 201 with the Daily Category and writes no Budget"
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000001","category_display_name":"Groceries","bucket":"daily"}'
+  expect:
+    status: 201
+    body_json: {"id": "0192f0a0-0000-7000-8003-000000000001", "category_display_name": "Groceries", "bucket": "daily", "active": true}
+    cookies: {}
+    headers:
+      Content-Type: application/json
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, category_display_name AS name, bucket, active, (deleted_at IS NOT NULL) AS deleted FROM categories ORDER BY id
+        rows:
+          - {id: "0192f0a0-0000-7000-8003-000000000001", household_id: "0192f0a0-0000-7000-8000-000000000001", name: "Groceries", bucket: "daily", active: true, deleted: false}
+      - sql: SELECT (SELECT count(*) FROM categories)::int AS categories, (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM allocations)::int AS allocations
+        rows:
+          - {categories: 1, budgets: 0, allocations: 0}
+
+- name: "categories - create answers 201 with a Daily Category and its allocation, dated Today in the current Period"
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000001","category_display_name":"Groceries","bucket":"daily","allocation":"2000000"}'
+  expect:
+    status: 201
+    body_json: {"id": "0192f0a0-0000-7000-8003-000000000001", "category_display_name": "Groceries", "bucket": "daily", "active": true}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, category_display_name AS name, bucket, active, (deleted_at IS NOT NULL) AS deleted FROM categories ORDER BY id
+        rows:
+          - {id: "0192f0a0-0000-7000-8003-000000000001", household_id: "0192f0a0-0000-7000-8000-000000000001", name: "Groceries", bucket: "daily", active: true, deleted: false}
+      - sql: SELECT category_id::text AS category_id, household_id::text AS household_id, (year_month = to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM')) AS in_period, (effective_on = ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date) AS dated_today, allocation::text AS allocation FROM allocations ORDER BY category_id, effective_on
+        rows:
+          - {category_id: "0192f0a0-0000-7000-8003-000000000001", household_id: "0192f0a0-0000-7000-8000-000000000001", in_period: true, dated_today: true, allocation: "2000000.0000"}
+      - sql: SELECT (SELECT count(*) FROM categories)::int AS categories, (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM allocations)::int AS allocations
+        rows:
+          - {categories: 1, budgets: 1, allocations: 1}
+
+- name: "categories - a Commitment is created with its allocation, in one transaction with the Period's marker"
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000001","category_display_name":"Rent","bucket":"commitment","allocation":"3000000"}'
+  expect:
+    status: 201
+    body_json: {"id": "0192f0a0-0000-7000-8003-000000000001", "category_display_name": "Rent", "bucket": "commitment", "active": true}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, category_display_name AS name, bucket, active, (deleted_at IS NOT NULL) AS deleted FROM categories ORDER BY id
+        rows:
+          - {id: "0192f0a0-0000-7000-8003-000000000001", household_id: "0192f0a0-0000-7000-8000-000000000001", name: "Rent", bucket: "commitment", active: true, deleted: false}
+      - sql: SELECT category_id::text AS category_id, household_id::text AS household_id, (year_month = to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM')) AS in_period, (effective_on = ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date) AS dated_today, allocation::text AS allocation FROM allocations ORDER BY category_id, effective_on
+        rows:
+          - {category_id: "0192f0a0-0000-7000-8003-000000000001", household_id: "0192f0a0-0000-7000-8000-000000000001", in_period: true, dated_today: true, allocation: "3000000.0000"}
+      - sql: SELECT (SELECT count(*) FROM budgets WHERE year_month = to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'))::int AS in_period, (SELECT count(*) FROM budgets)::int AS budgets
+        rows:
+          - {in_period: 1, budgets: 1}
+
+- name: "categories - a Commitment allocated zero is accepted: zero is an allocation"
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000001","category_display_name":"Retired gym","bucket":"commitment","allocation":"0"}'
+  expect:
+    status: 201
+    body_json: {"id": "0192f0a0-0000-7000-8003-000000000001", "category_display_name": "Retired gym", "bucket": "commitment", "active": true}
+    cookies: {}
+    rows:
+      - sql: SELECT category_id::text AS category_id, household_id::text AS household_id, (year_month = to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM')) AS in_period, (effective_on = ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date) AS dated_today, allocation::text AS allocation FROM allocations ORDER BY category_id, effective_on
+        rows:
+          - {category_id: "0192f0a0-0000-7000-8003-000000000001", household_id: "0192f0a0-0000-7000-8000-000000000001", in_period: true, dated_today: true, allocation: "0.0000"}
+
+- name: "categories - a null allocation on a Daily Category is none, and writes no Budget"
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000001","category_display_name":"Groceries","bucket":"daily","allocation":null}'
+  expect:
+    status: 201
+    body_json: {"id": "0192f0a0-0000-7000-8003-000000000001", "category_display_name": "Groceries", "bucket": "daily", "active": true}
+    cookies: {}
+    rows:
+      - sql: SELECT (SELECT count(*) FROM categories)::int AS categories, (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM allocations)::int AS allocations
+        rows:
+          - {categories: 1, budgets: 0, allocations: 0}
+
+- name: "categories - create stores the name trimmed"
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000001","category_display_name":"  Groceries \t","bucket":"daily"}'
+  expect:
+    status: 201
+    body_json: {"id": "0192f0a0-0000-7000-8003-000000000001", "category_display_name": "Groceries", "bucket": "daily", "active": true}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, category_display_name AS name, bucket, active, (deleted_at IS NOT NULL) AS deleted FROM categories ORDER BY id
+        rows:
+          - {id: "0192f0a0-0000-7000-8003-000000000001", household_id: "0192f0a0-0000-7000-8000-000000000001", name: "Groceries", bucket: "daily", active: true, deleted: false}
+
+- name: "categories - a name of exactly 60 code points is accepted"
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000001","category_display_name":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","bucket":"daily"}'
+  expect:
+    status: 201
+    body_json: {"id": "0192f0a0-0000-7000-8003-000000000001", "category_display_name": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "bucket": "daily", "active": true}
+    cookies: {}
+
+- name: "categories - a create with an allocation materialises the Period and carries the earlier one's allocations forward"
+  issue: "130"
+  given:
+    - sql: |
+        INSERT INTO categories (id, household_id, category_display_name, bucket) VALUES ('0192f0a0-0000-7000-8003-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'Rent', 'commitment');
+        INSERT INTO budgets (household_id, year_month) VALUES ('0192f0a0-0000-7000-8000-000000000001', to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month', 'YYYY-MM'));
+        INSERT INTO allocations (household_id, year_month, effective_on, category_id, allocation) VALUES
+          ('0192f0a0-0000-7000-8000-000000000001', to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month', 'YYYY-MM'), (date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month')::date, '0192f0a0-0000-7000-8003-000000000001', 3000000), ('0192f0a0-0000-7000-8000-000000000001', to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month', 'YYYY-MM'), (date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month')::date + 10, '0192f0a0-0000-7000-8003-000000000001', 3200000)
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000002","category_display_name":"School","bucket":"commitment","allocation":"500000"}'
+  expect:
+    status: 201
+    body_json: {"id": "0192f0a0-0000-7000-8003-000000000002", "category_display_name": "School", "bucket": "commitment", "active": true}
+    cookies: {}
+    rows:
+      - sql: SELECT category_id::text AS category_id, (year_month = to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM')) AS in_period, (effective_on = date_trunc('month', ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date)::date) AS first_day, (effective_on = ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date) AS dated_today, allocation::text AS allocation FROM allocations WHERE year_month = to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM') ORDER BY category_id
+        rows:
+          - {category_id: "0192f0a0-0000-7000-8003-000000000001", in_period: true, first_day: true, dated_today: false, allocation: "3200000.0000"}
+          - {category_id: "0192f0a0-0000-7000-8003-000000000002", in_period: true, first_day: false, dated_today: true, allocation: "500000.0000"}
+      - sql: SELECT count(*)::int AS n FROM allocations WHERE year_month = to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month', 'YYYY-MM')
+        rows:
+          - {n: 2}
+      - sql: SELECT count(*)::int AS n FROM budgets
+        rows:
+          - {n: 2}
+
+- name: "categories - a replay of the same body answers 200 and changes nothing"
+  issue: "130"
+  given:
+    - sql: |
+        INSERT INTO categories (id, household_id, category_display_name, bucket, created_at) VALUES ('0192f0a0-0000-7000-8003-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'Rent', 'commitment', '2026-01-01T00:00:00Z');
+        INSERT INTO budgets (household_id, year_month, created_at) VALUES ('0192f0a0-0000-7000-8000-000000000001', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'), '2000-01-01T00:00:00Z');
+        INSERT INTO allocations (household_id, year_month, effective_on, category_id, allocation, updated_at) VALUES ('0192f0a0-0000-7000-8000-000000000001', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'), ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date, '0192f0a0-0000-7000-8003-000000000001', 3000000, '2000-01-01T00:00:00Z')
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000001","category_display_name":"Rent","bucket":"commitment","allocation":"3000000"}'
+  expect:
+    status: 200
+    body_json: {"id": "0192f0a0-0000-7000-8003-000000000001", "category_display_name": "Rent", "bucket": "commitment", "active": true}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, category_display_name AS name, bucket, active, (deleted_at IS NOT NULL) AS deleted FROM categories ORDER BY id
+        rows:
+          - {id: "0192f0a0-0000-7000-8003-000000000001", household_id: "0192f0a0-0000-7000-8000-000000000001", name: "Rent", bucket: "commitment", active: true, deleted: false}
+      - sql: SELECT category_id::text AS category_id, allocation::text AS allocation, to_char(updated_at, 'YYYY') AS written FROM allocations ORDER BY category_id
+        rows:
+          - {category_id: "0192f0a0-0000-7000-8003-000000000001", allocation: "3000000.0000", written: "2000"}
+      - sql: SELECT (SELECT count(*) FROM categories)::int AS categories, (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM allocations)::int AS allocations
+        rows:
+          - {categories: 1, budgets: 1, allocations: 1}
+
+- name: "categories - a replay with a different name, bucket and allocation answers the stored Category and applies none of it"
+  issue: "130"
+  given:
+    - sql: |
+        INSERT INTO categories (id, household_id, category_display_name, bucket, created_at) VALUES ('0192f0a0-0000-7000-8003-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'Rent', 'commitment', '2026-01-01T00:00:00Z');
+        INSERT INTO budgets (household_id, year_month, created_at) VALUES ('0192f0a0-0000-7000-8000-000000000001', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'), '2000-01-01T00:00:00Z');
+        INSERT INTO allocations (household_id, year_month, effective_on, category_id, allocation, updated_at) VALUES ('0192f0a0-0000-7000-8000-000000000001', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'), ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date, '0192f0a0-0000-7000-8003-000000000001', 3000000, '2000-01-01T00:00:00Z')
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000001","category_display_name":"Other","bucket":"daily","allocation":"9999999"}'
+  expect:
+    status: 200
+    body_json: {"id": "0192f0a0-0000-7000-8003-000000000001", "category_display_name": "Rent", "bucket": "commitment", "active": true}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, category_display_name AS name, bucket, active, (deleted_at IS NOT NULL) AS deleted FROM categories ORDER BY id
+        rows:
+          - {id: "0192f0a0-0000-7000-8003-000000000001", household_id: "0192f0a0-0000-7000-8000-000000000001", name: "Rent", bucket: "commitment", active: true, deleted: false}
+      - sql: SELECT category_id::text AS category_id, allocation::text AS allocation, to_char(updated_at, 'YYYY') AS written FROM allocations ORDER BY category_id
+        rows:
+          - {category_id: "0192f0a0-0000-7000-8003-000000000001", allocation: "3000000.0000", written: "2000"}
+
+- name: "categories - a replay carrying an allocation for a Category that had none applies none"
+  issue: "130"
+  given:
+    - sql: |
+        INSERT INTO categories (id, household_id, category_display_name, bucket) VALUES ('0192f0a0-0000-7000-8003-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'Groceries', 'daily')
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000001","category_display_name":"Groceries","bucket":"daily","allocation":"500"}'
+  expect:
+    status: 200
+    body_json: {"id": "0192f0a0-0000-7000-8003-000000000001", "category_display_name": "Groceries", "bucket": "daily", "active": true}
+    cookies: {}
+    rows:
+      - sql: SELECT (SELECT count(*) FROM categories)::int AS categories, (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM allocations)::int AS allocations
+        rows:
+          - {categories: 1, budgets: 0, allocations: 0}
+
+- name: "categories - a replay of an inactive Category answers 200 with active false"
+  issue: "130"
+  given:
+    - sql: |
+        INSERT INTO categories (id, household_id, category_display_name, bucket, active) VALUES ('0192f0a0-0000-7000-8003-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'Gym', 'commitment', false)
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000001","category_display_name":"Gym","bucket":"commitment","allocation":"1"}'
+  expect:
+    status: 200
+    body_json: {"id": "0192f0a0-0000-7000-8003-000000000001", "category_display_name": "Gym", "bucket": "commitment", "active": false}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, category_display_name AS name, bucket, active, (deleted_at IS NOT NULL) AS deleted FROM categories ORDER BY id
+        rows:
+          - {id: "0192f0a0-0000-7000-8003-000000000001", household_id: "0192f0a0-0000-7000-8000-000000000001", name: "Gym", bucket: "commitment", active: false, deleted: false}
+      - sql: SELECT (SELECT count(*) FROM categories)::int AS categories, (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM allocations)::int AS allocations
+        rows:
+          - {categories: 1, budgets: 0, allocations: 0}
+
+- name: "categories - a replay whose name is another Category's is still 200, never NAME_TAKEN"
+  issue: "130"
+  given:
+    - sql: |
+        INSERT INTO categories (id, household_id, category_display_name, bucket, created_at) VALUES ('0192f0a0-0000-7000-8003-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'Rent', 'commitment', '2026-01-01T00:00:00Z'), ('0192f0a0-0000-7000-8003-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Food', 'daily', '2026-01-02T00:00:00Z')
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000002","category_display_name":"rent","bucket":"daily"}'
+  expect:
+    status: 200
+    body_json: {"id": "0192f0a0-0000-7000-8003-000000000002", "category_display_name": "Food", "bucket": "daily", "active": true}
+    cookies: {}
+
+- name: "categories - the same id in upper case is the same Category"
+  issue: "130"
+  given:
+    - sql: |
+        INSERT INTO categories (id, household_id, category_display_name, bucket, created_at) VALUES ('0192f0a0-0000-7000-8003-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'Rent', 'commitment', '2026-01-01T00:00:00Z');
+        INSERT INTO budgets (household_id, year_month, created_at) VALUES ('0192f0a0-0000-7000-8000-000000000001', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'), '2000-01-01T00:00:00Z');
+        INSERT INTO allocations (household_id, year_month, effective_on, category_id, allocation, updated_at) VALUES ('0192f0a0-0000-7000-8000-000000000001', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'), ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date, '0192f0a0-0000-7000-8003-000000000001', 3000000, '2000-01-01T00:00:00Z')
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192F0A0-0000-7000-8003-000000000001","category_display_name":"Rent","bucket":"commitment","allocation":"3000000"}'
+  expect:
+    status: 200
+    body_json: {"id": "0192f0a0-0000-7000-8003-000000000001", "category_display_name": "Rent", "bucket": "commitment", "active": true}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, category_display_name AS name, bucket, active, (deleted_at IS NOT NULL) AS deleted FROM categories ORDER BY id
+        rows:
+          - {id: "0192f0a0-0000-7000-8003-000000000001", household_id: "0192f0a0-0000-7000-8000-000000000001", name: "Rent", bucket: "commitment", active: true, deleted: false}
+      - sql: SELECT category_id::text AS category_id, allocation::text AS allocation, to_char(updated_at, 'YYYY') AS written FROM allocations ORDER BY category_id
+        rows:
+          - {category_id: "0192f0a0-0000-7000-8003-000000000001", allocation: "3000000.0000", written: "2000"}
+
+- name: "categories - another Household's id is ID_TAKEN and their Category is untouched"
+  issue: "130"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO categories (id, household_id, category_display_name, bucket, active, deleted_at, created_at) VALUES
+          ('0192f0a0-0000-7000-8003-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'Rent',     'commitment', true,  NULL,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Gym',      'commitment', false, NULL,  '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Gone',     'daily',      true,  now(), '2026-01-03T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs',   'daily',      true,  NULL,  '2026-01-04T00:00:00Z')
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000009","category_display_name":"Mine","bucket":"daily"}'
+  expect:
+    status: 409
+    body_json: {"code": "ID_TAKEN"}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, category_display_name AS name, bucket, active, (deleted_at IS NOT NULL) AS deleted FROM categories ORDER BY id
+        rows:
+          - {id: "0192f0a0-0000-7000-8003-000000000001", household_id: "0192f0a0-0000-7000-8000-000000000001", name: "Rent", bucket: "commitment", active: true, deleted: false}
+          - {id: "0192f0a0-0000-7000-8003-000000000002", household_id: "0192f0a0-0000-7000-8000-000000000001", name: "Gym", bucket: "commitment", active: false, deleted: false}
+          - {id: "0192f0a0-0000-7000-8003-000000000003", household_id: "0192f0a0-0000-7000-8000-000000000001", name: "Gone", bucket: "daily", active: true, deleted: true}
+          - {id: "0192f0a0-0000-7000-8003-000000000009", household_id: "0192f0a0-0000-7000-8000-000000000002", name: "Theirs", bucket: "daily", active: true, deleted: false}
+
+- name: "categories - another Household's id is ID_TAKEN with an allocation too, and writes no allocation"
+  issue: "130"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO categories (id, household_id, category_display_name, bucket, active, deleted_at, created_at) VALUES
+          ('0192f0a0-0000-7000-8003-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'Rent',     'commitment', true,  NULL,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Gym',      'commitment', false, NULL,  '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Gone',     'daily',      true,  now(), '2026-01-03T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs',   'daily',      true,  NULL,  '2026-01-04T00:00:00Z')
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000009","category_display_name":"Mine","bucket":"commitment","allocation":"1"}'
+  expect:
+    status: 409
+    body_json: {"code": "ID_TAKEN"}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, category_display_name AS name, bucket, active, (deleted_at IS NOT NULL) AS deleted FROM categories ORDER BY id
+        rows:
+          - {id: "0192f0a0-0000-7000-8003-000000000001", household_id: "0192f0a0-0000-7000-8000-000000000001", name: "Rent", bucket: "commitment", active: true, deleted: false}
+          - {id: "0192f0a0-0000-7000-8003-000000000002", household_id: "0192f0a0-0000-7000-8000-000000000001", name: "Gym", bucket: "commitment", active: false, deleted: false}
+          - {id: "0192f0a0-0000-7000-8003-000000000003", household_id: "0192f0a0-0000-7000-8000-000000000001", name: "Gone", bucket: "daily", active: true, deleted: true}
+          - {id: "0192f0a0-0000-7000-8003-000000000009", household_id: "0192f0a0-0000-7000-8000-000000000002", name: "Theirs", bucket: "daily", active: true, deleted: false}
+      - sql: SELECT (SELECT count(*) FROM categories)::int AS categories, (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM allocations)::int AS allocations
+        rows:
+          - {categories: 4, budgets: 0, allocations: 0}
+
+- name: "categories - the caller's own deleted id is ID_TAKEN and stays deleted"
+  issue: "130"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO categories (id, household_id, category_display_name, bucket, active, deleted_at, created_at) VALUES
+          ('0192f0a0-0000-7000-8003-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'Rent',     'commitment', true,  NULL,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Gym',      'commitment', false, NULL,  '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Gone',     'daily',      true,  now(), '2026-01-03T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs',   'daily',      true,  NULL,  '2026-01-04T00:00:00Z')
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000003","category_display_name":"Gone","bucket":"daily"}'
+  expect:
+    status: 409
+    body_json: {"code": "ID_TAKEN"}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, category_display_name AS name, bucket, active, (deleted_at IS NOT NULL) AS deleted FROM categories ORDER BY id
+        rows:
+          - {id: "0192f0a0-0000-7000-8003-000000000001", household_id: "0192f0a0-0000-7000-8000-000000000001", name: "Rent", bucket: "commitment", active: true, deleted: false}
+          - {id: "0192f0a0-0000-7000-8003-000000000002", household_id: "0192f0a0-0000-7000-8000-000000000001", name: "Gym", bucket: "commitment", active: false, deleted: false}
+          - {id: "0192f0a0-0000-7000-8003-000000000003", household_id: "0192f0a0-0000-7000-8000-000000000001", name: "Gone", bucket: "daily", active: true, deleted: true}
+          - {id: "0192f0a0-0000-7000-8003-000000000009", household_id: "0192f0a0-0000-7000-8000-000000000002", name: "Theirs", bucket: "daily", active: true, deleted: false}
+
+- name: "categories - a foreign id and an own deleted id are one answer"
+  issue: "130"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO categories (id, household_id, category_display_name, bucket, active, deleted_at, created_at) VALUES
+          ('0192f0a0-0000-7000-8003-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'Rent',     'commitment', true,  NULL,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Gym',      'commitment', false, NULL,  '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Gone',     'daily',      true,  now(), '2026-01-03T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs',   'daily',      true,  NULL,  '2026-01-04T00:00:00Z')
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000009","category_display_name":"Mine","bucket":"daily"}'
+  expect:
+    status: 409
+    body_json: {"code": "ID_TAKEN"}
+    same_as:
+      method: POST
+      path: /categories
+      headers:
+        Content-Type: application/json
+      body: '{"id":"0192f0a0-0000-7000-8003-000000000003","category_display_name":"Mine","bucket":"daily"}'
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, category_display_name AS name, bucket, active, (deleted_at IS NOT NULL) AS deleted FROM categories ORDER BY id
+        rows:
+          - {id: "0192f0a0-0000-7000-8003-000000000001", household_id: "0192f0a0-0000-7000-8000-000000000001", name: "Rent", bucket: "commitment", active: true, deleted: false}
+          - {id: "0192f0a0-0000-7000-8003-000000000002", household_id: "0192f0a0-0000-7000-8000-000000000001", name: "Gym", bucket: "commitment", active: false, deleted: false}
+          - {id: "0192f0a0-0000-7000-8003-000000000003", household_id: "0192f0a0-0000-7000-8000-000000000001", name: "Gone", bucket: "daily", active: true, deleted: true}
+          - {id: "0192f0a0-0000-7000-8003-000000000009", household_id: "0192f0a0-0000-7000-8000-000000000002", name: "Theirs", bucket: "daily", active: true, deleted: false}
+
+- name: "categories - a name held by a live Category is NAME_TAKEN, in the same bucket"
+  issue: "130"
+  given:
+    - sql: |
+        INSERT INTO categories (id, household_id, category_display_name, bucket, active, created_at) VALUES ('0192f0a0-0000-7000-8003-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'Insurance', 'commitment', true, '2026-01-01T00:00:00Z')
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000002","category_display_name":"Insurance","bucket":"commitment","allocation":"1"}'
+  expect:
+    status: 409
+    body_json: {"code": "NAME_TAKEN"}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, category_display_name AS name, bucket, active, (deleted_at IS NOT NULL) AS deleted FROM categories ORDER BY id
+        rows:
+          - {id: "0192f0a0-0000-7000-8003-000000000001", household_id: "0192f0a0-0000-7000-8000-000000000001", name: "Insurance", bucket: "commitment", active: true, deleted: false}
+      - sql: SELECT (SELECT count(*) FROM categories)::int AS categories, (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM allocations)::int AS allocations
+        rows:
+          - {categories: 1, budgets: 0, allocations: 0}
+
+- name: "categories - a name is unique across both buckets"
+  issue: "130"
+  given:
+    - sql: |
+        INSERT INTO categories (id, household_id, category_display_name, bucket, active, created_at) VALUES ('0192f0a0-0000-7000-8003-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'Insurance', 'commitment', true, '2026-01-01T00:00:00Z')
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000002","category_display_name":"Insurance","bucket":"daily"}'
+  expect:
+    status: 409
+    body_json: {"code": "NAME_TAKEN"}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, category_display_name AS name, bucket, active, (deleted_at IS NOT NULL) AS deleted FROM categories ORDER BY id
+        rows:
+          - {id: "0192f0a0-0000-7000-8003-000000000001", household_id: "0192f0a0-0000-7000-8000-000000000001", name: "Insurance", bucket: "commitment", active: true, deleted: false}
+
+- name: "categories - a name is compared case-insensitively"
+  issue: "130"
+  given:
+    - sql: |
+        INSERT INTO categories (id, household_id, category_display_name, bucket, active, created_at) VALUES ('0192f0a0-0000-7000-8003-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'Insurance', 'commitment', true, '2026-01-01T00:00:00Z')
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000002","category_display_name":"INSURANCE","bucket":"daily","allocation":"1"}'
+  expect:
+    status: 409
+    body_json: {"code": "NAME_TAKEN"}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, category_display_name AS name, bucket, active, (deleted_at IS NOT NULL) AS deleted FROM categories ORDER BY id
+        rows:
+          - {id: "0192f0a0-0000-7000-8003-000000000001", household_id: "0192f0a0-0000-7000-8000-000000000001", name: "Insurance", bucket: "commitment", active: true, deleted: false}
+      - sql: SELECT (SELECT count(*) FROM categories)::int AS categories, (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM allocations)::int AS allocations
+        rows:
+          - {categories: 1, budgets: 0, allocations: 0}
+
+- name: "categories - a name is compared trimmed"
+  issue: "130"
+  given:
+    - sql: |
+        INSERT INTO categories (id, household_id, category_display_name, bucket, active, created_at) VALUES ('0192f0a0-0000-7000-8003-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'Insurance', 'commitment', true, '2026-01-01T00:00:00Z')
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000002","category_display_name":"  insurance  ","bucket":"daily"}'
+  expect:
+    status: 409
+    body_json: {"code": "NAME_TAKEN"}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, category_display_name AS name, bucket, active, (deleted_at IS NOT NULL) AS deleted FROM categories ORDER BY id
+        rows:
+          - {id: "0192f0a0-0000-7000-8003-000000000001", household_id: "0192f0a0-0000-7000-8000-000000000001", name: "Insurance", bucket: "commitment", active: true, deleted: false}
+
+- name: "categories - an inactive Category still holds its name"
+  issue: "130"
+  given:
+    - sql: |
+        INSERT INTO categories (id, household_id, category_display_name, bucket, active, created_at) VALUES ('0192f0a0-0000-7000-8003-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'Insurance', 'commitment', false, '2026-01-01T00:00:00Z')
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000002","category_display_name":"insurance","bucket":"daily"}'
+  expect:
+    status: 409
+    body_json: {"code": "NAME_TAKEN"}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, category_display_name AS name, bucket, active, (deleted_at IS NOT NULL) AS deleted FROM categories ORDER BY id
+        rows:
+          - {id: "0192f0a0-0000-7000-8003-000000000001", household_id: "0192f0a0-0000-7000-8000-000000000001", name: "Insurance", bucket: "commitment", active: false, deleted: false}
+
+- name: "categories - a deleted Category releases its name"
+  issue: "130"
+  given:
+    - sql: |
+        INSERT INTO categories (id, household_id, category_display_name, bucket, deleted_at, created_at) VALUES ('0192f0a0-0000-7000-8003-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'Insurance', 'commitment', now(), '2026-01-01T00:00:00Z')
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000002","category_display_name":"insurance","bucket":"daily"}'
+  expect:
+    status: 201
+    body_json: {"id": "0192f0a0-0000-7000-8003-000000000002", "category_display_name": "insurance", "bucket": "daily", "active": true}
+    cookies: {}
+
+- name: "categories - another Household's Category does not hold the name"
+  issue: "130"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO categories (id, household_id, category_display_name, bucket, created_at) VALUES ('0192f0a0-0000-7000-8003-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Insurance', 'commitment', '2026-01-01T00:00:00Z')
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000002","category_display_name":"Insurance","bucket":"commitment","allocation":"1"}'
+  expect:
+    status: 201
+    body_json: {"id": "0192f0a0-0000-7000-8003-000000000002", "category_display_name": "Insurance", "bucket": "commitment", "active": true}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, category_display_name AS name, bucket, active, (deleted_at IS NOT NULL) AS deleted FROM categories ORDER BY id
+        rows:
+          - {id: "0192f0a0-0000-7000-8003-000000000002", household_id: "0192f0a0-0000-7000-8000-000000000001", name: "Insurance", bucket: "commitment", active: true, deleted: false}
+          - {id: "0192f0a0-0000-7000-8003-000000000009", household_id: "0192f0a0-0000-7000-8000-000000000002", name: "Insurance", bucket: "commitment", active: true, deleted: false}
+
+- name: "categories - a refused name writes no Category, no allocation and no Budget"
+  issue: "130"
+  given:
+    - sql: |
+        INSERT INTO categories (id, household_id, category_display_name, bucket, active, created_at) VALUES ('0192f0a0-0000-7000-8003-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'Insurance', 'commitment', true, '2026-01-01T00:00:00Z')
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000002","category_display_name":"insurance","bucket":"commitment","allocation":"500"}'
+  expect:
+    status: 409
+    body_json: {"code": "NAME_TAKEN"}
+    cookies: {}
+    rows:
+      - sql: SELECT (SELECT count(*) FROM categories)::int AS categories, (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM allocations)::int AS allocations
+        rows:
+          - {categories: 1, budgets: 0, allocations: 0}
+
+- name: "categories - a create with an allocation lands in the session's Household and leaves another's rows as they were"
+  issue: "130"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO categories (id, household_id, category_display_name, bucket, created_at, updated_at) VALUES ('0192f0a0-0000-7000-8003-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Rent', 'commitment', '2000-01-01T00:00:00Z', '2000-01-01T00:00:00Z');
+        INSERT INTO budgets (household_id, year_month, created_at) VALUES ('0192f0a0-0000-7000-8000-000000000002', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'), '2000-01-01T00:00:00Z');
+        INSERT INTO allocations (household_id, year_month, effective_on, category_id, allocation, updated_at) VALUES ('0192f0a0-0000-7000-8000-000000000002', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'), ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date, '0192f0a0-0000-7000-8003-000000000009', 7000000, '2000-01-01T00:00:00Z')
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000001","category_display_name":"Rent","bucket":"commitment","allocation":"3000000"}'
+  expect:
+    status: 201
+    body_json: {"id": "0192f0a0-0000-7000-8003-000000000001", "category_display_name": "Rent", "bucket": "commitment", "active": true}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, category_display_name AS name, to_char(created_at, 'YYYY') AS created, to_char(updated_at, 'YYYY') AS updated FROM categories WHERE household_id = '0192f0a0-0000-7000-8000-000000000002'
+        rows:
+          - {id: "0192f0a0-0000-7000-8003-000000000009", name: "Rent", created: "2000", updated: "2000"}
+      - sql: SELECT category_id::text AS category_id, household_id::text AS household_id, allocation::text AS allocation, to_char(updated_at, 'YYYY') AS written FROM allocations WHERE household_id = '0192f0a0-0000-7000-8000-000000000002'
+        rows:
+          - {category_id: "0192f0a0-0000-7000-8003-000000000009", household_id: "0192f0a0-0000-7000-8000-000000000002", allocation: "7000000.0000", written: "2000"}
+      - sql: SELECT household_id::text AS household_id, count(*)::int AS n FROM allocations GROUP BY household_id ORDER BY household_id
+        rows:
+          - {household_id: "0192f0a0-0000-7000-8000-000000000001", n: 1}
+          - {household_id: "0192f0a0-0000-7000-8000-000000000002", n: 1}
+      - sql: SELECT household_id::text AS household_id, count(*)::int AS n FROM budgets GROUP BY household_id ORDER BY household_id
+        rows:
+          - {household_id: "0192f0a0-0000-7000-8000-000000000001", n: 1}
+          - {household_id: "0192f0a0-0000-7000-8000-000000000002", n: 1}
+
+- name: "categories - the same name in two Households is two Categories"
+  issue: "130"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO categories (id, household_id, category_display_name, bucket, created_at, updated_at) VALUES ('0192f0a0-0000-7000-8003-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Rent', 'commitment', '2000-01-01T00:00:00Z', '2000-01-01T00:00:00Z');
+        INSERT INTO budgets (household_id, year_month, created_at) VALUES ('0192f0a0-0000-7000-8000-000000000002', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'), '2000-01-01T00:00:00Z');
+        INSERT INTO allocations (household_id, year_month, effective_on, category_id, allocation, updated_at) VALUES ('0192f0a0-0000-7000-8000-000000000002', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'), ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date, '0192f0a0-0000-7000-8003-000000000009', 7000000, '2000-01-01T00:00:00Z')
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000001","category_display_name":"rent","bucket":"daily"}'
+  expect:
+    status: 201
+    body_json: {"id": "0192f0a0-0000-7000-8003-000000000001", "category_display_name": "rent", "bucket": "daily", "active": true}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, category_display_name AS name, to_char(created_at, 'YYYY') AS created, to_char(updated_at, 'YYYY') AS updated FROM categories WHERE household_id = '0192f0a0-0000-7000-8000-000000000002'
+        rows:
+          - {id: "0192f0a0-0000-7000-8003-000000000009", name: "Rent", created: "2000", updated: "2000"}
+
+- name: "categories - another Household's Categories and allocations are not in the list or the Budget"
+  issue: "130"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO categories (id, household_id, category_display_name, bucket, created_at, updated_at) VALUES ('0192f0a0-0000-7000-8003-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Rent', 'commitment', '2000-01-01T00:00:00Z', '2000-01-01T00:00:00Z');
+        INSERT INTO budgets (household_id, year_month, created_at) VALUES ('0192f0a0-0000-7000-8000-000000000002', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'), '2000-01-01T00:00:00Z');
+        INSERT INTO allocations (household_id, year_month, effective_on, category_id, allocation, updated_at) VALUES ('0192f0a0-0000-7000-8000-000000000002', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'), ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date, '0192f0a0-0000-7000-8003-000000000009', 7000000, '2000-01-01T00:00:00Z')
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: GET
+    path: /categories
+  expect:
+    status: 200
+    body_json: {"items": []}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, category_display_name AS name, to_char(created_at, 'YYYY') AS created, to_char(updated_at, 'YYYY') AS updated FROM categories WHERE household_id = '0192f0a0-0000-7000-8000-000000000002'
+        rows:
+          - {id: "0192f0a0-0000-7000-8003-000000000009", name: "Rent", created: "2000", updated: "2000"}
+      - sql: SELECT category_id::text AS category_id, household_id::text AS household_id, allocation::text AS allocation, to_char(updated_at, 'YYYY') AS written FROM allocations WHERE household_id = '0192f0a0-0000-7000-8000-000000000002'
+        rows:
+          - {category_id: "0192f0a0-0000-7000-8003-000000000009", household_id: "0192f0a0-0000-7000-8000-000000000002", allocation: "7000000.0000", written: "2000"}
+
+- name: "categories - a Commitment with no allocation is refused: allocation is required"
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000001","category_display_name":"Rent","bucket":"commitment"}'
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "allocation", "rule": "required"}}
+    cookies: {}
+    rows:
+      - sql: SELECT (SELECT count(*) FROM categories)::int AS categories, (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM allocations)::int AS allocations
+        rows:
+          - {categories: 0, budgets: 0, allocations: 0}
+
+- name: "categories - a Commitment with a null allocation is refused: allocation is required"
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000001","category_display_name":"Rent","bucket":"commitment","allocation":null}'
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "allocation", "rule": "required"}}
+    cookies: {}
+    rows:
+      - sql: SELECT (SELECT count(*) FROM categories)::int AS categories, (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM allocations)::int AS allocations
+        rows:
+          - {categories: 0, budgets: 0, allocations: 0}
+
+- name: "categories - a refused Commitment leaves the id free"
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000001","category_display_name":"Rent","bucket":"commitment"}'
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "allocation", "rule": "required"}}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, category_display_name AS name, bucket, active, (deleted_at IS NOT NULL) AS deleted FROM categories ORDER BY id
+        rows: []
+
+- name: "categories - the name rule is checked before the Commitment's allocation"
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000001","category_display_name":"   ","bucket":"commitment"}'
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "category_display_name", "rule": "required"}}
+    cookies: {}
+
+- name: "categories - a bad body is refused before the id is considered: a foreign id with a blank name is the blank name's 400"
+  issue: "130"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO categories (id, household_id, category_display_name, bucket, active, deleted_at, created_at) VALUES
+          ('0192f0a0-0000-7000-8003-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'Rent',     'commitment', true,  NULL,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Gym',      'commitment', false, NULL,  '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Gone',     'daily',      true,  now(), '2026-01-03T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs',   'daily',      true,  NULL,  '2026-01-04T00:00:00Z')
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000009","category_display_name":"   ","bucket":"daily"}'
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "category_display_name", "rule": "required"}}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, category_display_name AS name, bucket, active, (deleted_at IS NOT NULL) AS deleted FROM categories ORDER BY id
+        rows:
+          - {id: "0192f0a0-0000-7000-8003-000000000001", household_id: "0192f0a0-0000-7000-8000-000000000001", name: "Rent", bucket: "commitment", active: true, deleted: false}
+          - {id: "0192f0a0-0000-7000-8003-000000000002", household_id: "0192f0a0-0000-7000-8000-000000000001", name: "Gym", bucket: "commitment", active: false, deleted: false}
+          - {id: "0192f0a0-0000-7000-8003-000000000003", household_id: "0192f0a0-0000-7000-8000-000000000001", name: "Gone", bucket: "daily", active: true, deleted: true}
+          - {id: "0192f0a0-0000-7000-8003-000000000009", household_id: "0192f0a0-0000-7000-8000-000000000002", name: "Theirs", bucket: "daily", active: true, deleted: false}
+
+- name: "categories - a Commitment with no allocation and an own deleted id is the allocation's 400, not 409"
+  issue: "130"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO categories (id, household_id, category_display_name, bucket, active, deleted_at, created_at) VALUES
+          ('0192f0a0-0000-7000-8003-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'Rent',     'commitment', true,  NULL,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Gym',      'commitment', false, NULL,  '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Gone',     'daily',      true,  now(), '2026-01-03T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs',   'daily',      true,  NULL,  '2026-01-04T00:00:00Z')
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000003","category_display_name":"Gone","bucket":"commitment"}'
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "allocation", "rule": "required"}}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, category_display_name AS name, bucket, active, (deleted_at IS NOT NULL) AS deleted FROM categories ORDER BY id
+        rows:
+          - {id: "0192f0a0-0000-7000-8003-000000000001", household_id: "0192f0a0-0000-7000-8000-000000000001", name: "Rent", bucket: "commitment", active: true, deleted: false}
+          - {id: "0192f0a0-0000-7000-8003-000000000002", household_id: "0192f0a0-0000-7000-8000-000000000001", name: "Gym", bucket: "commitment", active: false, deleted: false}
+          - {id: "0192f0a0-0000-7000-8003-000000000003", household_id: "0192f0a0-0000-7000-8000-000000000001", name: "Gone", bucket: "daily", active: true, deleted: true}
+          - {id: "0192f0a0-0000-7000-8003-000000000009", household_id: "0192f0a0-0000-7000-8000-000000000002", name: "Theirs", bucket: "daily", active: true, deleted: false}
+
+- name: "categories - a blank name with a live own id is the blank name's 400, not 200"
+  issue: "130"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO categories (id, household_id, category_display_name, bucket, active, deleted_at, created_at) VALUES
+          ('0192f0a0-0000-7000-8003-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'Rent',     'commitment', true,  NULL,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Gym',      'commitment', false, NULL,  '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Gone',     'daily',      true,  now(), '2026-01-03T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs',   'daily',      true,  NULL,  '2026-01-04T00:00:00Z')
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000001","category_display_name":"","bucket":"commitment","allocation":"1"}'
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "category_display_name", "rule": "required"}}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, category_display_name AS name, bucket, active, (deleted_at IS NOT NULL) AS deleted FROM categories ORDER BY id
+        rows:
+          - {id: "0192f0a0-0000-7000-8003-000000000001", household_id: "0192f0a0-0000-7000-8000-000000000001", name: "Rent", bucket: "commitment", active: true, deleted: false}
+          - {id: "0192f0a0-0000-7000-8003-000000000002", household_id: "0192f0a0-0000-7000-8000-000000000001", name: "Gym", bucket: "commitment", active: false, deleted: false}
+          - {id: "0192f0a0-0000-7000-8003-000000000003", household_id: "0192f0a0-0000-7000-8000-000000000001", name: "Gone", bucket: "daily", active: true, deleted: true}
+          - {id: "0192f0a0-0000-7000-8003-000000000009", household_id: "0192f0a0-0000-7000-8000-000000000002", name: "Theirs", bucket: "daily", active: true, deleted: false}
+
+- name: "categories - a v4 id is refused by the contract's pattern"
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"4b5e1b0e-3a0f-4c5b-8d6f-0a1b2c3d4e5f","category_display_name":"Rent","bucket":"daily"}'
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "id", "rule": "pattern"}}
+    cookies: {}
+    rows:
+      - sql: SELECT (SELECT count(*) FROM categories)::int AS categories, (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM allocations)::int AS allocations
+        rows:
+          - {categories: 0, budgets: 0, allocations: 0}
+
+- name: "categories - the nil UUID is refused"
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"00000000-0000-0000-0000-000000000000","category_display_name":"Rent","bucket":"daily"}'
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "id", "rule": "pattern"}}
+    cookies: {}
+    rows:
+      - sql: SELECT (SELECT count(*) FROM categories)::int AS categories, (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM allocations)::int AS allocations
+        rows:
+          - {categories: 0, budgets: 0, allocations: 0}
+
+- name: "categories - 32 hex digits are refused"
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a000007000800300000000000a","category_display_name":"Rent","bucket":"daily"}'
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "id", "rule": "pattern"}}
+    cookies: {}
+    rows:
+      - sql: SELECT (SELECT count(*) FROM categories)::int AS categories, (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM allocations)::int AS allocations
+        rows:
+          - {categories: 0, budgets: 0, allocations: 0}
+
+- name: "categories - a v7 id with the wrong variant is refused"
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-c003-000000000001","category_display_name":"Rent","bucket":"daily"}'
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "id", "rule": "pattern"}}
+    cookies: {}
+    rows:
+      - sql: SELECT (SELECT count(*) FROM categories)::int AS categories, (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM allocations)::int AS allocations
+        rows:
+          - {categories: 0, budgets: 0, allocations: 0}
+
+- name: "categories - a blank name is required"
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000001","category_display_name":"   ","bucket":"daily"}'
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "category_display_name", "rule": "required"}}
+    cookies: {}
+    rows:
+      - sql: SELECT (SELECT count(*) FROM categories)::int AS categories, (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM allocations)::int AS allocations
+        rows:
+          - {categories: 0, budgets: 0, allocations: 0}
+
+- name: "categories - an empty name is required"
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000001","category_display_name":"","bucket":"daily"}'
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "category_display_name", "rule": "required"}}
+    cookies: {}
+    rows:
+      - sql: SELECT (SELECT count(*) FROM categories)::int AS categories, (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM allocations)::int AS allocations
+        rows:
+          - {categories: 0, budgets: 0, allocations: 0}
+
+- name: "categories - a name of only zero-width characters is required"
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000001","category_display_name":"\u200b\u200b","bucket":"daily"}'
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "category_display_name", "rule": "required"}}
+    cookies: {}
+    rows:
+      - sql: SELECT (SELECT count(*) FROM categories)::int AS categories, (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM allocations)::int AS allocations
+        rows:
+          - {categories: 0, budgets: 0, allocations: 0}
+
+- name: "categories - 61 code points is over the cap"
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000001","category_display_name":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","bucket":"daily"}'
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "category_display_name", "rule": "max"}}
+    cookies: {}
+    rows:
+      - sql: SELECT (SELECT count(*) FROM categories)::int AS categories, (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM allocations)::int AS allocations
+        rows:
+          - {categories: 0, budgets: 0, allocations: 0}
+
+- name: "categories - a name beyond the contract's outer bound is max"
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000001","category_display_name":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","bucket":"daily"}'
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "category_display_name", "rule": "max"}}
+    cookies: {}
+    rows:
+      - sql: SELECT (SELECT count(*) FROM categories)::int AS categories, (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM allocations)::int AS allocations
+        rows:
+          - {categories: 0, budgets: 0, allocations: 0}
+
+- name: "categories - a missing id is required"
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"category_display_name":"Rent","bucket":"daily"}'
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "id", "rule": "required"}}
+    cookies: {}
+    rows:
+      - sql: SELECT (SELECT count(*) FROM categories)::int AS categories, (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM allocations)::int AS allocations
+        rows:
+          - {categories: 0, budgets: 0, allocations: 0}
+
+- name: "categories - a missing name is required"
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000001","bucket":"daily"}'
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "category_display_name", "rule": "required"}}
+    cookies: {}
+    rows:
+      - sql: SELECT (SELECT count(*) FROM categories)::int AS categories, (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM allocations)::int AS allocations
+        rows:
+          - {categories: 0, budgets: 0, allocations: 0}
+
+- name: "categories - a missing bucket is required"
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000001","category_display_name":"Rent"}'
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "bucket", "rule": "required"}}
+    cookies: {}
+    rows:
+      - sql: SELECT (SELECT count(*) FROM categories)::int AS categories, (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM allocations)::int AS allocations
+        rows:
+          - {categories: 0, budgets: 0, allocations: 0}
+
+- name: "categories - a bad id beats a blank name, contract rules first"
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"nope","category_display_name":"   ","bucket":"daily"}'
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "id", "rule": "pattern"}}
+    cookies: {}
+    rows:
+      - sql: SELECT (SELECT count(*) FROM categories)::int AS categories, (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM allocations)::int AS allocations
+        rows:
+          - {categories: 0, budgets: 0, allocations: 0}
+
+- name: "categories - a bucket outside the enum is INVALID_JSON_BODY"
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000001","category_display_name":"Rent","bucket":"weekly"}'
+  expect:
+    status: 400
+    body_json: {"code": "INVALID_JSON_BODY"}
+    cookies: {}
+    rows:
+      - sql: SELECT (SELECT count(*) FROM categories)::int AS categories, (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM allocations)::int AS allocations
+        rows:
+          - {categories: 0, budgets: 0, allocations: 0}
+
+- name: "categories - a bucket in the wrong case is INVALID_JSON_BODY"
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000001","category_display_name":"Rent","bucket":"Daily"}'
+  expect:
+    status: 400
+    body_json: {"code": "INVALID_JSON_BODY"}
+    cookies: {}
+    rows:
+      - sql: SELECT (SELECT count(*) FROM categories)::int AS categories, (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM allocations)::int AS allocations
+        rows:
+          - {categories: 0, budgets: 0, allocations: 0}
+
+- name: "categories - a null bucket is INVALID_JSON_BODY"
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000001","category_display_name":"Rent","bucket":null}'
+  expect:
+    status: 400
+    body_json: {"code": "INVALID_JSON_BODY"}
+    cookies: {}
+    rows:
+      - sql: SELECT (SELECT count(*) FROM categories)::int AS categories, (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM allocations)::int AS allocations
+        rows:
+          - {categories: 0, budgets: 0, allocations: 0}
+
+- name: "categories - a numeric bucket is INVALID_JSON_BODY"
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000001","category_display_name":"Rent","bucket":1}'
+  expect:
+    status: 400
+    body_json: {"code": "INVALID_JSON_BODY"}
+    cookies: {}
+    rows:
+      - sql: SELECT (SELECT count(*) FROM categories)::int AS categories, (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM allocations)::int AS allocations
+        rows:
+          - {categories: 0, budgets: 0, allocations: 0}
+
+- name: "categories - active is an unknown property (a new Category is always active), INVALID_JSON_BODY"
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000001","category_display_name":"Rent","bucket":"daily","active":false}'
+  expect:
+    status: 400
+    body_json: {"code": "INVALID_JSON_BODY"}
+    cookies: {}
+    rows:
+      - sql: SELECT (SELECT count(*) FROM categories)::int AS categories, (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM allocations)::int AS allocations
+        rows:
+          - {categories: 0, budgets: 0, allocations: 0}
+
+- name: "categories - household_id is an unknown property (the Household is the session's), INVALID_JSON_BODY"
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000001","category_display_name":"Rent","bucket":"daily","household_id":"0192f0a0-0000-7000-8000-000000000002"}'
+  expect:
+    status: 400
+    body_json: {"code": "INVALID_JSON_BODY"}
+    cookies: {}
+    rows:
+      - sql: SELECT (SELECT count(*) FROM categories)::int AS categories, (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM allocations)::int AS allocations
+        rows:
+          - {categories: 0, budgets: 0, allocations: 0}
+
+- name: "categories - deleted_at is an unknown property, INVALID_JSON_BODY"
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000001","category_display_name":"Rent","bucket":"daily","deleted_at":null}'
+  expect:
+    status: 400
+    body_json: {"code": "INVALID_JSON_BODY"}
+    cookies: {}
+    rows:
+      - sql: SELECT (SELECT count(*) FROM categories)::int AS categories, (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM allocations)::int AS allocations
+        rows:
+          - {categories: 0, budgets: 0, allocations: 0}
+
+- name: "categories - a Pocket's name is an unknown property, INVALID_JSON_BODY"
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000001","pocket_display_name":"Rent","bucket":"daily"}'
+  expect:
+    status: 400
+    body_json: {"code": "INVALID_JSON_BODY"}
+    cookies: {}
+    rows:
+      - sql: SELECT (SELECT count(*) FROM categories)::int AS categories, (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM allocations)::int AS allocations
+        rows:
+          - {categories: 0, budgets: 0, allocations: 0}
+
+- name: "categories - a null name is INVALID_JSON_BODY"
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000001","category_display_name":null,"bucket":"daily"}'
+  expect:
+    status: 400
+    body_json: {"code": "INVALID_JSON_BODY"}
+    cookies: {}
+    rows:
+      - sql: SELECT (SELECT count(*) FROM categories)::int AS categories, (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM allocations)::int AS allocations
+        rows:
+          - {categories: 0, budgets: 0, allocations: 0}
+
+- name: "categories - a numeric name is INVALID_JSON_BODY"
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000001","category_display_name":5,"bucket":"daily"}'
+  expect:
+    status: 400
+    body_json: {"code": "INVALID_JSON_BODY"}
+    cookies: {}
+    rows:
+      - sql: SELECT (SELECT count(*) FROM categories)::int AS categories, (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM allocations)::int AS allocations
+        rows:
+          - {categories: 0, budgets: 0, allocations: 0}
+
+- name: "categories - a numeric id is INVALID_JSON_BODY"
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":5,"category_display_name":"Rent","bucket":"daily"}'
+  expect:
+    status: 400
+    body_json: {"code": "INVALID_JSON_BODY"}
+    cookies: {}
+    rows:
+      - sql: SELECT (SELECT count(*) FROM categories)::int AS categories, (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM allocations)::int AS allocations
+        rows:
+          - {categories: 0, budgets: 0, allocations: 0}
+
+- name: "categories - malformed JSON is INVALID_JSON_BODY"
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":'
+  expect:
+    status: 400
+    body_json: {"code": "INVALID_JSON_BODY"}
+    cookies: {}
+    rows:
+      - sql: SELECT (SELECT count(*) FROM categories)::int AS categories, (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM allocations)::int AS allocations
+        rows:
+          - {categories: 0, budgets: 0, allocations: 0}
+
+- name: "categories - an array body is INVALID_JSON_BODY"
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '[]'
+  expect:
+    status: 400
+    body_json: {"code": "INVALID_JSON_BODY"}
+    cookies: {}
+    rows:
+      - sql: SELECT (SELECT count(*) FROM categories)::int AS categories, (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM allocations)::int AS allocations
+        rows:
+          - {categories: 0, budgets: 0, allocations: 0}
+
+- name: "categories - a JSON null body is INVALID_JSON_BODY"
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: 'null'
+  expect:
+    status: 400
+    body_json: {"code": "INVALID_JSON_BODY"}
+    cookies: {}
+    rows:
+      - sql: SELECT (SELECT count(*) FROM categories)::int AS categories, (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM allocations)::int AS allocations
+        rows:
+          - {categories: 0, budgets: 0, allocations: 0}
+
+- name: "categories - a bad allocation and an unknown property: the unknown property wins"
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000001","category_display_name":"Rent","bucket":"daily","allocation":"-1","x":1}'
+  expect:
+    status: 400
+    body_json: {"code": "INVALID_JSON_BODY"}
+    cookies: {}
+    rows:
+      - sql: SELECT (SELECT count(*) FROM categories)::int AS categories, (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM allocations)::int AS allocations
+        rows:
+          - {categories: 0, budgets: 0, allocations: 0}
+
+- name: "categories - a body with no Content-Type is INVALID_JSON_BODY"
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000001","category_display_name":"Rent","bucket":"daily"}'
+  expect:
+    status: 400
+    body_json: {"code": "INVALID_JSON_BODY"}
+    cookies: {}
+    rows:
+      - sql: SELECT (SELECT count(*) FROM categories)::int AS categories, (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM allocations)::int AS allocations
+        rows:
+          - {categories: 0, budgets: 0, allocations: 0}
+
+- name: "categories - an empty body is INVALID_JSON_BODY"
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: ''
+  expect:
+    status: 400
+    body_json: {"code": "INVALID_JSON_BODY"}
+    cookies: {}
+    rows:
+      - sql: SELECT (SELECT count(*) FROM categories)::int AS categories, (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM allocations)::int AS allocations
+        rows:
+          - {categories: 0, budgets: 0, allocations: 0}
+
+- name: "categories money - a commitment allocation of exponent notation, as a string is refused"
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000001","category_display_name":"Rent","bucket":"commitment","allocation":"9e6"}'
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "allocation", "rule": "pattern"}}
+    cookies: {}
+    rows:
+      - sql: SELECT (SELECT count(*) FROM categories)::int AS categories, (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM allocations)::int AS allocations
+        rows:
+          - {categories: 0, budgets: 0, allocations: 0}
+
+- name: "categories money - a commitment allocation of an upper-case exponent is refused"
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000001","category_display_name":"Rent","bucket":"commitment","allocation":"9E6"}'
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "allocation", "rule": "pattern"}}
+    cookies: {}
+    rows:
+      - sql: SELECT (SELECT count(*) FROM categories)::int AS categories, (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM allocations)::int AS allocations
+        rows:
+          - {categories: 0, budgets: 0, allocations: 0}
+
+- name: "categories money - a commitment allocation of a negative is refused"
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000001","category_display_name":"Rent","bucket":"commitment","allocation":"-1"}'
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "allocation", "rule": "pattern"}}
+    cookies: {}
+    rows:
+      - sql: SELECT (SELECT count(*) FROM categories)::int AS categories, (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM allocations)::int AS allocations
+        rows:
+          - {categories: 0, budgets: 0, allocations: 0}
+
+- name: "categories money - a commitment allocation of a negative zero is refused"
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000001","category_display_name":"Rent","bucket":"commitment","allocation":"-0"}'
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "allocation", "rule": "pattern"}}
+    cookies: {}
+    rows:
+      - sql: SELECT (SELECT count(*) FROM categories)::int AS categories, (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM allocations)::int AS allocations
+        rows:
+          - {categories: 0, budgets: 0, allocations: 0}
+
+- name: "categories money - a commitment allocation of a plus sign is refused"
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000001","category_display_name":"Rent","bucket":"commitment","allocation":"+5"}'
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "allocation", "rule": "pattern"}}
+    cookies: {}
+    rows:
+      - sql: SELECT (SELECT count(*) FROM categories)::int AS categories, (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM allocations)::int AS allocations
+        rows:
+          - {categories: 0, budgets: 0, allocations: 0}
+
+- name: "categories money - a commitment allocation of five decimals: refused, never rounded is refused"
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000001","category_display_name":"Rent","bucket":"commitment","allocation":"1.00001"}'
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "allocation", "rule": "pattern"}}
+    cookies: {}
+    rows:
+      - sql: SELECT (SELECT count(*) FROM categories)::int AS categories, (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM allocations)::int AS allocations
+        rows:
+          - {categories: 0, budgets: 0, allocations: 0}
+
+- name: "categories money - a commitment allocation of five decimals that would round up is refused"
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000001","category_display_name":"Rent","bucket":"commitment","allocation":"0.99999"}'
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "allocation", "rule": "pattern"}}
+    cookies: {}
+    rows:
+      - sql: SELECT (SELECT count(*) FROM categories)::int AS categories, (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM allocations)::int AS allocations
+        rows:
+          - {categories: 0, budgets: 0, allocations: 0}
+
+- name: "categories money - a commitment allocation of a leading space is refused"
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000001","category_display_name":"Rent","bucket":"commitment","allocation":" 5"}'
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "allocation", "rule": "pattern"}}
+    cookies: {}
+    rows:
+      - sql: SELECT (SELECT count(*) FROM categories)::int AS categories, (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM allocations)::int AS allocations
+        rows:
+          - {categories: 0, budgets: 0, allocations: 0}
+
+- name: "categories money - a commitment allocation of a trailing space is refused"
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000001","category_display_name":"Rent","bucket":"commitment","allocation":"5 "}'
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "allocation", "rule": "pattern"}}
+    cookies: {}
+    rows:
+      - sql: SELECT (SELECT count(*) FROM categories)::int AS categories, (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM allocations)::int AS allocations
+        rows:
+          - {categories: 0, budgets: 0, allocations: 0}
+
+- name: "categories money - a commitment allocation of a trailing newline is refused"
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000001","category_display_name":"Rent","bucket":"commitment","allocation":"5\n"}'
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "allocation", "rule": "pattern"}}
+    cookies: {}
+    rows:
+      - sql: SELECT (SELECT count(*) FROM categories)::int AS categories, (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM allocations)::int AS allocations
+        rows:
+          - {categories: 0, budgets: 0, allocations: 0}
+
+- name: "categories money - a commitment allocation of a thousands separator is refused"
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000001","category_display_name":"Rent","bucket":"commitment","allocation":"1,000"}'
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "allocation", "rule": "pattern"}}
+    cookies: {}
+    rows:
+      - sql: SELECT (SELECT count(*) FROM categories)::int AS categories, (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM allocations)::int AS allocations
+        rows:
+          - {categories: 0, budgets: 0, allocations: 0}
+
+- name: "categories money - a commitment allocation of a decimal comma is refused"
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000001","category_display_name":"Rent","bucket":"commitment","allocation":"1,5"}'
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "allocation", "rule": "pattern"}}
+    cookies: {}
+    rows:
+      - sql: SELECT (SELECT count(*) FROM categories)::int AS categories, (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM allocations)::int AS allocations
+        rows:
+          - {categories: 0, budgets: 0, allocations: 0}
+
+- name: "categories money - a commitment allocation of an underscore is refused"
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000001","category_display_name":"Rent","bucket":"commitment","allocation":"1_000"}'
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "allocation", "rule": "pattern"}}
+    cookies: {}
+    rows:
+      - sql: SELECT (SELECT count(*) FROM categories)::int AS categories, (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM allocations)::int AS allocations
+        rows:
+          - {categories: 0, budgets: 0, allocations: 0}
+
+- name: "categories money - a commitment allocation of 17 integer digits is refused"
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000001","category_display_name":"Rent","bucket":"commitment","allocation":"10000000000000000"}'
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "allocation", "rule": "pattern"}}
+    cookies: {}
+    rows:
+      - sql: SELECT (SELECT count(*) FROM categories)::int AS categories, (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM allocations)::int AS allocations
+        rows:
+          - {categories: 0, budgets: 0, allocations: 0}
+
+- name: "categories money - a commitment allocation of the empty string is refused"
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000001","category_display_name":"Rent","bucket":"commitment","allocation":""}'
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "allocation", "rule": "pattern"}}
+    cookies: {}
+    rows:
+      - sql: SELECT (SELECT count(*) FROM categories)::int AS categories, (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM allocations)::int AS allocations
+        rows:
+          - {categories: 0, budgets: 0, allocations: 0}
+
+- name: "categories money - a commitment allocation of a bare point is refused"
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000001","category_display_name":"Rent","bucket":"commitment","allocation":"."}'
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "allocation", "rule": "pattern"}}
+    cookies: {}
+    rows:
+      - sql: SELECT (SELECT count(*) FROM categories)::int AS categories, (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM allocations)::int AS allocations
+        rows:
+          - {categories: 0, budgets: 0, allocations: 0}
+
+- name: "categories money - a commitment allocation of a leading point is refused"
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000001","category_display_name":"Rent","bucket":"commitment","allocation":".5"}'
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "allocation", "rule": "pattern"}}
+    cookies: {}
+    rows:
+      - sql: SELECT (SELECT count(*) FROM categories)::int AS categories, (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM allocations)::int AS allocations
+        rows:
+          - {categories: 0, budgets: 0, allocations: 0}
+
+- name: "categories money - a commitment allocation of a trailing point is refused"
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000001","category_display_name":"Rent","bucket":"commitment","allocation":"5."}'
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "allocation", "rule": "pattern"}}
+    cookies: {}
+    rows:
+      - sql: SELECT (SELECT count(*) FROM categories)::int AS categories, (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM allocations)::int AS allocations
+        rows:
+          - {categories: 0, budgets: 0, allocations: 0}
+
+- name: "categories money - a commitment allocation of hexadecimal is refused"
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000001","category_display_name":"Rent","bucket":"commitment","allocation":"0x10"}'
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "allocation", "rule": "pattern"}}
+    cookies: {}
+    rows:
+      - sql: SELECT (SELECT count(*) FROM categories)::int AS categories, (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM allocations)::int AS allocations
+        rows:
+          - {categories: 0, budgets: 0, allocations: 0}
+
+- name: "categories money - a commitment allocation of words is refused"
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000001","category_display_name":"Rent","bucket":"commitment","allocation":"nine million"}'
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "allocation", "rule": "pattern"}}
+    cookies: {}
+    rows:
+      - sql: SELECT (SELECT count(*) FROM categories)::int AS categories, (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM allocations)::int AS allocations
+        rows:
+          - {categories: 0, budgets: 0, allocations: 0}
+
+- name: "categories money - a commitment allocation of NaN is refused"
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000001","category_display_name":"Rent","bucket":"commitment","allocation":"NaN"}'
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "allocation", "rule": "pattern"}}
+    cookies: {}
+    rows:
+      - sql: SELECT (SELECT count(*) FROM categories)::int AS categories, (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM allocations)::int AS allocations
+        rows:
+          - {categories: 0, budgets: 0, allocations: 0}
+
+- name: "categories money - a commitment allocation of Infinity is refused"
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000001","category_display_name":"Rent","bucket":"commitment","allocation":"Infinity"}'
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "allocation", "rule": "pattern"}}
+    cookies: {}
+    rows:
+      - sql: SELECT (SELECT count(*) FROM categories)::int AS categories, (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM allocations)::int AS allocations
+        rows:
+          - {categories: 0, budgets: 0, allocations: 0}
+
+- name: "categories money - a commitment allocation of full-width digits is refused"
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000001","category_display_name":"Rent","bucket":"commitment","allocation":"１２３"}'
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "allocation", "rule": "pattern"}}
+    cookies: {}
+    rows:
+      - sql: SELECT (SELECT count(*) FROM categories)::int AS categories, (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM allocations)::int AS allocations
+        rows:
+          - {categories: 0, budgets: 0, allocations: 0}
+
+- name: "categories money - a commitment allocation of a currency symbol is refused"
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000001","category_display_name":"Rent","bucket":"commitment","allocation":"Rp5"}'
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "allocation", "rule": "pattern"}}
+    cookies: {}
+    rows:
+      - sql: SELECT (SELECT count(*) FROM categories)::int AS categories, (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM allocations)::int AS allocations
+        rows:
+          - {categories: 0, budgets: 0, allocations: 0}
+
+- name: "categories money - a daily allocation of exponent notation, as a string is refused"
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000001","category_display_name":"Rent","bucket":"daily","allocation":"9e6"}'
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "allocation", "rule": "pattern"}}
+    cookies: {}
+    rows:
+      - sql: SELECT (SELECT count(*) FROM categories)::int AS categories, (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM allocations)::int AS allocations
+        rows:
+          - {categories: 0, budgets: 0, allocations: 0}
+
+- name: "categories money - a daily allocation of an upper-case exponent is refused"
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000001","category_display_name":"Rent","bucket":"daily","allocation":"9E6"}'
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "allocation", "rule": "pattern"}}
+    cookies: {}
+    rows:
+      - sql: SELECT (SELECT count(*) FROM categories)::int AS categories, (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM allocations)::int AS allocations
+        rows:
+          - {categories: 0, budgets: 0, allocations: 0}
+
+- name: "categories money - a daily allocation of a negative is refused"
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000001","category_display_name":"Rent","bucket":"daily","allocation":"-1"}'
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "allocation", "rule": "pattern"}}
+    cookies: {}
+    rows:
+      - sql: SELECT (SELECT count(*) FROM categories)::int AS categories, (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM allocations)::int AS allocations
+        rows:
+          - {categories: 0, budgets: 0, allocations: 0}
+
+- name: "categories money - a daily allocation of a negative zero is refused"
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000001","category_display_name":"Rent","bucket":"daily","allocation":"-0"}'
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "allocation", "rule": "pattern"}}
+    cookies: {}
+    rows:
+      - sql: SELECT (SELECT count(*) FROM categories)::int AS categories, (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM allocations)::int AS allocations
+        rows:
+          - {categories: 0, budgets: 0, allocations: 0}
+
+- name: "categories money - a daily allocation of a plus sign is refused"
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000001","category_display_name":"Rent","bucket":"daily","allocation":"+5"}'
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "allocation", "rule": "pattern"}}
+    cookies: {}
+    rows:
+      - sql: SELECT (SELECT count(*) FROM categories)::int AS categories, (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM allocations)::int AS allocations
+        rows:
+          - {categories: 0, budgets: 0, allocations: 0}
+
+- name: "categories money - a daily allocation of five decimals: refused, never rounded is refused"
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000001","category_display_name":"Rent","bucket":"daily","allocation":"1.00001"}'
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "allocation", "rule": "pattern"}}
+    cookies: {}
+    rows:
+      - sql: SELECT (SELECT count(*) FROM categories)::int AS categories, (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM allocations)::int AS allocations
+        rows:
+          - {categories: 0, budgets: 0, allocations: 0}
+
+- name: "categories money - a daily allocation of five decimals that would round up is refused"
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000001","category_display_name":"Rent","bucket":"daily","allocation":"0.99999"}'
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "allocation", "rule": "pattern"}}
+    cookies: {}
+    rows:
+      - sql: SELECT (SELECT count(*) FROM categories)::int AS categories, (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM allocations)::int AS allocations
+        rows:
+          - {categories: 0, budgets: 0, allocations: 0}
+
+- name: "categories money - a daily allocation of a leading space is refused"
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000001","category_display_name":"Rent","bucket":"daily","allocation":" 5"}'
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "allocation", "rule": "pattern"}}
+    cookies: {}
+    rows:
+      - sql: SELECT (SELECT count(*) FROM categories)::int AS categories, (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM allocations)::int AS allocations
+        rows:
+          - {categories: 0, budgets: 0, allocations: 0}
+
+- name: "categories money - a daily allocation of a trailing space is refused"
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000001","category_display_name":"Rent","bucket":"daily","allocation":"5 "}'
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "allocation", "rule": "pattern"}}
+    cookies: {}
+    rows:
+      - sql: SELECT (SELECT count(*) FROM categories)::int AS categories, (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM allocations)::int AS allocations
+        rows:
+          - {categories: 0, budgets: 0, allocations: 0}
+
+- name: "categories money - a daily allocation of a trailing newline is refused"
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000001","category_display_name":"Rent","bucket":"daily","allocation":"5\n"}'
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "allocation", "rule": "pattern"}}
+    cookies: {}
+    rows:
+      - sql: SELECT (SELECT count(*) FROM categories)::int AS categories, (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM allocations)::int AS allocations
+        rows:
+          - {categories: 0, budgets: 0, allocations: 0}
+
+- name: "categories money - a daily allocation of a thousands separator is refused"
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000001","category_display_name":"Rent","bucket":"daily","allocation":"1,000"}'
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "allocation", "rule": "pattern"}}
+    cookies: {}
+    rows:
+      - sql: SELECT (SELECT count(*) FROM categories)::int AS categories, (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM allocations)::int AS allocations
+        rows:
+          - {categories: 0, budgets: 0, allocations: 0}
+
+- name: "categories money - a daily allocation of a decimal comma is refused"
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000001","category_display_name":"Rent","bucket":"daily","allocation":"1,5"}'
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "allocation", "rule": "pattern"}}
+    cookies: {}
+    rows:
+      - sql: SELECT (SELECT count(*) FROM categories)::int AS categories, (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM allocations)::int AS allocations
+        rows:
+          - {categories: 0, budgets: 0, allocations: 0}
+
+- name: "categories money - a daily allocation of an underscore is refused"
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000001","category_display_name":"Rent","bucket":"daily","allocation":"1_000"}'
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "allocation", "rule": "pattern"}}
+    cookies: {}
+    rows:
+      - sql: SELECT (SELECT count(*) FROM categories)::int AS categories, (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM allocations)::int AS allocations
+        rows:
+          - {categories: 0, budgets: 0, allocations: 0}
+
+- name: "categories money - a daily allocation of 17 integer digits is refused"
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000001","category_display_name":"Rent","bucket":"daily","allocation":"10000000000000000"}'
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "allocation", "rule": "pattern"}}
+    cookies: {}
+    rows:
+      - sql: SELECT (SELECT count(*) FROM categories)::int AS categories, (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM allocations)::int AS allocations
+        rows:
+          - {categories: 0, budgets: 0, allocations: 0}
+
+- name: "categories money - a daily allocation of the empty string is refused"
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000001","category_display_name":"Rent","bucket":"daily","allocation":""}'
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "allocation", "rule": "pattern"}}
+    cookies: {}
+    rows:
+      - sql: SELECT (SELECT count(*) FROM categories)::int AS categories, (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM allocations)::int AS allocations
+        rows:
+          - {categories: 0, budgets: 0, allocations: 0}
+
+- name: "categories money - a daily allocation of a bare point is refused"
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000001","category_display_name":"Rent","bucket":"daily","allocation":"."}'
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "allocation", "rule": "pattern"}}
+    cookies: {}
+    rows:
+      - sql: SELECT (SELECT count(*) FROM categories)::int AS categories, (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM allocations)::int AS allocations
+        rows:
+          - {categories: 0, budgets: 0, allocations: 0}
+
+- name: "categories money - a daily allocation of a leading point is refused"
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000001","category_display_name":"Rent","bucket":"daily","allocation":".5"}'
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "allocation", "rule": "pattern"}}
+    cookies: {}
+    rows:
+      - sql: SELECT (SELECT count(*) FROM categories)::int AS categories, (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM allocations)::int AS allocations
+        rows:
+          - {categories: 0, budgets: 0, allocations: 0}
+
+- name: "categories money - a daily allocation of a trailing point is refused"
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000001","category_display_name":"Rent","bucket":"daily","allocation":"5."}'
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "allocation", "rule": "pattern"}}
+    cookies: {}
+    rows:
+      - sql: SELECT (SELECT count(*) FROM categories)::int AS categories, (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM allocations)::int AS allocations
+        rows:
+          - {categories: 0, budgets: 0, allocations: 0}
+
+- name: "categories money - a daily allocation of hexadecimal is refused"
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000001","category_display_name":"Rent","bucket":"daily","allocation":"0x10"}'
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "allocation", "rule": "pattern"}}
+    cookies: {}
+    rows:
+      - sql: SELECT (SELECT count(*) FROM categories)::int AS categories, (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM allocations)::int AS allocations
+        rows:
+          - {categories: 0, budgets: 0, allocations: 0}
+
+- name: "categories money - a daily allocation of words is refused"
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000001","category_display_name":"Rent","bucket":"daily","allocation":"nine million"}'
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "allocation", "rule": "pattern"}}
+    cookies: {}
+    rows:
+      - sql: SELECT (SELECT count(*) FROM categories)::int AS categories, (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM allocations)::int AS allocations
+        rows:
+          - {categories: 0, budgets: 0, allocations: 0}
+
+- name: "categories money - a daily allocation of NaN is refused"
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000001","category_display_name":"Rent","bucket":"daily","allocation":"NaN"}'
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "allocation", "rule": "pattern"}}
+    cookies: {}
+    rows:
+      - sql: SELECT (SELECT count(*) FROM categories)::int AS categories, (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM allocations)::int AS allocations
+        rows:
+          - {categories: 0, budgets: 0, allocations: 0}
+
+- name: "categories money - a daily allocation of Infinity is refused"
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000001","category_display_name":"Rent","bucket":"daily","allocation":"Infinity"}'
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "allocation", "rule": "pattern"}}
+    cookies: {}
+    rows:
+      - sql: SELECT (SELECT count(*) FROM categories)::int AS categories, (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM allocations)::int AS allocations
+        rows:
+          - {categories: 0, budgets: 0, allocations: 0}
+
+- name: "categories money - a daily allocation of full-width digits is refused"
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000001","category_display_name":"Rent","bucket":"daily","allocation":"１２３"}'
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "allocation", "rule": "pattern"}}
+    cookies: {}
+    rows:
+      - sql: SELECT (SELECT count(*) FROM categories)::int AS categories, (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM allocations)::int AS allocations
+        rows:
+          - {categories: 0, budgets: 0, allocations: 0}
+
+- name: "categories money - a daily allocation of a currency symbol is refused"
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000001","category_display_name":"Rent","bucket":"daily","allocation":"Rp5"}'
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "allocation", "rule": "pattern"}}
+    cookies: {}
+    rows:
+      - sql: SELECT (SELECT count(*) FROM categories)::int AS categories, (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM allocations)::int AS allocations
+        rows:
+          - {categories: 0, budgets: 0, allocations: 0}
+
+- name: "categories money - an allocation that is a JSON number is INVALID_JSON_BODY"
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000001","category_display_name":"Rent","bucket":"commitment","allocation":9000000}'
+  expect:
+    status: 400
+    body_json: {"code": "INVALID_JSON_BODY"}
+    cookies: {}
+    rows:
+      - sql: SELECT (SELECT count(*) FROM categories)::int AS categories, (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM allocations)::int AS allocations
+        rows:
+          - {categories: 0, budgets: 0, allocations: 0}
+
+- name: "categories money - an allocation that is a JSON number with a fraction is INVALID_JSON_BODY"
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000001","category_display_name":"Rent","bucket":"commitment","allocation":9000000.5}'
+  expect:
+    status: 400
+    body_json: {"code": "INVALID_JSON_BODY"}
+    cookies: {}
+    rows:
+      - sql: SELECT (SELECT count(*) FROM categories)::int AS categories, (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM allocations)::int AS allocations
+        rows:
+          - {categories: 0, budgets: 0, allocations: 0}
+
+- name: "categories money - an allocation that is a JSON number in exponent notation is INVALID_JSON_BODY"
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000001","category_display_name":"Rent","bucket":"commitment","allocation":9e6}'
+  expect:
+    status: 400
+    body_json: {"code": "INVALID_JSON_BODY"}
+    cookies: {}
+    rows:
+      - sql: SELECT (SELECT count(*) FROM categories)::int AS categories, (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM allocations)::int AS allocations
+        rows:
+          - {categories: 0, budgets: 0, allocations: 0}
+
+- name: "categories money - an allocation that is a boolean is INVALID_JSON_BODY"
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000001","category_display_name":"Rent","bucket":"commitment","allocation":true}'
+  expect:
+    status: 400
+    body_json: {"code": "INVALID_JSON_BODY"}
+    cookies: {}
+    rows:
+      - sql: SELECT (SELECT count(*) FROM categories)::int AS categories, (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM allocations)::int AS allocations
+        rows:
+          - {categories: 0, budgets: 0, allocations: 0}
+
+- name: "categories money - an allocation that is an object is INVALID_JSON_BODY"
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000001","category_display_name":"Rent","bucket":"commitment","allocation":{"amount":"5"}}'
+  expect:
+    status: 400
+    body_json: {"code": "INVALID_JSON_BODY"}
+    cookies: {}
+    rows:
+      - sql: SELECT (SELECT count(*) FROM categories)::int AS categories, (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM allocations)::int AS allocations
+        rows:
+          - {categories: 0, budgets: 0, allocations: 0}
+
+- name: "categories money - an allocation that is an array is INVALID_JSON_BODY"
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000001","category_display_name":"Rent","bucket":"commitment","allocation":["5"]}'
+  expect:
+    status: 400
+    body_json: {"code": "INVALID_JSON_BODY"}
+    cookies: {}
+    rows:
+      - sql: SELECT (SELECT count(*) FROM categories)::int AS categories, (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM allocations)::int AS allocations
+        rows:
+          - {categories: 0, budgets: 0, allocations: 0}
+
+- name: "categories money - an allocation of 0 is accepted and stored as 0.0000"
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000001","category_display_name":"Rent","bucket":"commitment","allocation":"0"}'
+  expect:
+    status: 201
+    body_json: {"id": "0192f0a0-0000-7000-8003-000000000001", "category_display_name": "Rent", "bucket": "commitment", "active": true}
+    cookies: {}
+    rows:
+      - sql: SELECT allocation::text AS allocation FROM allocations
+        rows:
+          - {allocation: "0.0000"}
+
+- name: "categories money - an allocation of 0.0001 is accepted and stored as 0.0001"
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000001","category_display_name":"Rent","bucket":"commitment","allocation":"0.0001"}'
+  expect:
+    status: 201
+    body_json: {"id": "0192f0a0-0000-7000-8003-000000000001", "category_display_name": "Rent", "bucket": "commitment", "active": true}
+    cookies: {}
+    rows:
+      - sql: SELECT allocation::text AS allocation FROM allocations
+        rows:
+          - {allocation: "0.0001"}
+
+- name: "categories money - an allocation of 3000000 is accepted and stored as 3000000.0000"
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000001","category_display_name":"Rent","bucket":"commitment","allocation":"3000000"}'
+  expect:
+    status: 201
+    body_json: {"id": "0192f0a0-0000-7000-8003-000000000001", "category_display_name": "Rent", "bucket": "commitment", "active": true}
+    cookies: {}
+    rows:
+      - sql: SELECT allocation::text AS allocation FROM allocations
+        rows:
+          - {allocation: "3000000.0000"}
+
+- name: "categories money - an allocation of 3000000.5 is accepted and stored as 3000000.5000"
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000001","category_display_name":"Rent","bucket":"commitment","allocation":"3000000.5"}'
+  expect:
+    status: 201
+    body_json: {"id": "0192f0a0-0000-7000-8003-000000000001", "category_display_name": "Rent", "bucket": "commitment", "active": true}
+    cookies: {}
+    rows:
+      - sql: SELECT allocation::text AS allocation FROM allocations
+        rows:
+          - {allocation: "3000000.5000"}
+
+- name: "categories money - an allocation of 3000000.5000 is accepted and stored as 3000000.5000"
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000001","category_display_name":"Rent","bucket":"commitment","allocation":"3000000.5000"}'
+  expect:
+    status: 201
+    body_json: {"id": "0192f0a0-0000-7000-8003-000000000001", "category_display_name": "Rent", "bucket": "commitment", "active": true}
+    cookies: {}
+    rows:
+      - sql: SELECT allocation::text AS allocation FROM allocations
+        rows:
+          - {allocation: "3000000.5000"}
+
+- name: "categories money - an allocation of 0000000000000001 is accepted and stored as 1.0000"
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000001","category_display_name":"Rent","bucket":"commitment","allocation":"0000000000000001"}'
+  expect:
+    status: 201
+    body_json: {"id": "0192f0a0-0000-7000-8003-000000000001", "category_display_name": "Rent", "bucket": "commitment", "active": true}
+    cookies: {}
+    rows:
+      - sql: SELECT allocation::text AS allocation FROM allocations
+        rows:
+          - {allocation: "1.0000"}
+
+- name: "categories money - an allocation of 9999999999999999.9999 is accepted and stored as 9999999999999999.9999"
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000001","category_display_name":"Rent","bucket":"commitment","allocation":"9999999999999999.9999"}'
+  expect:
+    status: 201
+    body_json: {"id": "0192f0a0-0000-7000-8003-000000000001", "category_display_name": "Rent", "bucket": "commitment", "active": true}
+    cookies: {}
+    rows:
+      - sql: SELECT allocation::text AS allocation FROM allocations
+        rows:
+          - {allocation: "9999999999999999.9999"}
+
+- name: "categories - listing with no cookie is unauthorized"
+  issue: "130"
+  request:
+    method: GET
+    path: /categories
+  expect:
+    status: 401
+    body_json: {"code": "UNAUTHORIZED"}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, category_display_name AS name, bucket, active, (deleted_at IS NOT NULL) AS deleted FROM categories ORDER BY id
+        rows: []
+
+- name: "categories - creating with no cookie is unauthorized and writes nothing"
+  issue: "130"
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000001","category_display_name":"Rent","bucket":"commitment","allocation":"1"}'
+  expect:
+    status: 401
+    body_json: {"code": "UNAUTHORIZED"}
+    cookies: {}
+    rows:
+      - sql: SELECT (SELECT count(*) FROM categories)::int AS categories, (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM allocations)::int AS allocations
+        rows:
+          - {categories: 0, budgets: 0, allocations: 0}
+
+- name: "categories - with no cookie, even a malformed body is unauthorized"
+  issue: "114"
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":'
+  expect:
+    status: 401
+    body_json: {"code": "UNAUTHORIZED"}
+    cookies: {}
+    rows:
+      - sql: SELECT (SELECT count(*) FROM categories)::int AS categories, (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM allocations)::int AS allocations
+        rows:
+          - {categories: 0, budgets: 0, allocations: 0}
+
+- name: "categories - with no cookie, a bad id is unauthorized, not a validation answer"
+  issue: "114"
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"not-a-uuid"}'
+  expect:
+    status: 401
+    body_json: {"code": "UNAUTHORIZED"}
+    cookies: {}
+
+- name: "categories - listing with an expired session is unauthorized, clears the cookie and writes nothing"
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+    - sql: |
+        UPDATE sessions SET expires_at = now() - interval '1 minute'
+  request:
+    method: GET
+    path: /categories
+  expect:
+    status: 401
+    body_json: {"code": "UNAUTHORIZED"}
+    cookies:
+      afloat_session:
+        value: ""
+        path: /
+        max_age: 0
+        http_only: true
+        secure: false
+        same_site: Lax
+        expires: past
+    rows:
+      - sql: SELECT (SELECT count(*) FROM categories)::int AS categories, (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM allocations)::int AS allocations
+        rows:
+          - {categories: 0, budgets: 0, allocations: 0}
+
+- name: "categories - creating with an expired session is unauthorized, clears the cookie and writes nothing"
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+    - sql: |
+        UPDATE sessions SET expires_at = now() - interval '1 minute'
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000001","category_display_name":"Rent","bucket":"commitment","allocation":"1"}'
+  expect:
+    status: 401
+    body_json: {"code": "UNAUTHORIZED"}
+    cookies:
+      afloat_session:
+        value: ""
+        path: /
+        max_age: 0
+        http_only: true
+        secure: false
+        same_site: Lax
+        expires: past
+    rows:
+      - sql: SELECT (SELECT count(*) FROM categories)::int AS categories, (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM allocations)::int AS allocations
+        rows:
+          - {categories: 0, budgets: 0, allocations: 0}
+
+
+- name: "categories - listing under an outage is 500 and keeps the cookie"
+  issue: "27"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+    - outage: true
+  request:
+    method: GET
+    path: /categories
+  expect:
+    status: 500
+    body_json: {code: INTERNAL}
+    cookies: {}
+
+
+- name: "categories - creating under an outage is 500 and keeps the cookie"
+  issue: "27"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+    - outage: true
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000001","category_display_name":"Rent","bucket":"commitment","allocation":"1"}'
+  expect:
+    status: 500
+    body_json: {code: INTERNAL}
+    cookies: {}
+
+- name: "categories - HEAD answers like GET"
+  issue: "66"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: HEAD
+    path: /categories
+  expect:
+    status: 200
+    body_empty: true
+    cookies: {}
+    headers:
+      Content-Type: application/json
+

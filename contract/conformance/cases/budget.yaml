@@ -584,3 +584,449 @@
     rows:
       - sql: SELECT count(*)::int AS n FROM budgets
         rows: [{n: 0}]
+
+# Allocations on the Budget (#130, PR 2): what each Category is planned at in the
+# current Period, the figures they move (Commitments Budget, Daily Pool,
+# Unallocated: computed on read, four decimals, negative where they are), and
+# what a new Period carries forward. The Categories are inserted in `given:` in
+# creation order; a case builds its dates from the Postgres clock as above.
+
+- name: "budget - the figures: allocations of live Categories, inactive ones counted, deleted ones and Categories with none not"
+  issue: "130"
+  given:
+    - sql: |
+        INSERT INTO categories (id, household_id, category_display_name, bucket, active, deleted_at, created_at) VALUES
+          ('0192f0a0-0000-7000-8003-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'Rent', 'commitment', true, NULL, '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Groceries', 'daily', true, NULL, '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Transport', 'daily', true, NULL, '2026-01-03T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000004', '0192f0a0-0000-7000-8000-000000000001', 'Gym', 'commitment', false, NULL, '2026-01-04T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000005', '0192f0a0-0000-7000-8000-000000000001', 'Typo', 'commitment', true, now(), '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000006', '0192f0a0-0000-7000-8000-000000000001', 'Unplanned', 'daily', true, NULL, '2026-01-06T00:00:00Z');
+        INSERT INTO budgets (household_id, year_month) VALUES ('0192f0a0-0000-7000-8000-000000000001', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'));
+        INSERT INTO monthly_budgets (household_id, year_month, effective_on, monthly_budget) VALUES ('0192f0a0-0000-7000-8000-000000000001', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'), ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date, 9000000);
+        INSERT INTO allocations (household_id, year_month, effective_on, category_id, allocation) VALUES
+          ('0192f0a0-0000-7000-8000-000000000001', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'), ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date, '0192f0a0-0000-7000-8003-000000000001', 3000000),
+          ('0192f0a0-0000-7000-8000-000000000001', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'), ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date, '0192f0a0-0000-7000-8003-000000000002', 2000000),
+          ('0192f0a0-0000-7000-8000-000000000001', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'), ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date, '0192f0a0-0000-7000-8003-000000000003', 1000000),
+          ('0192f0a0-0000-7000-8000-000000000001', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'), ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date, '0192f0a0-0000-7000-8003-000000000004', 500000),
+          ('0192f0a0-0000-7000-8000-000000000001', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'), ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date, '0192f0a0-0000-7000-8003-000000000005', 1000000)
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: GET
+    path: /budget
+  expect:
+    status: 200
+    body_json:
+      period:
+        year_month: "<re:[0-9]{4}-[0-9]{2}>"
+        starts_on: "<re:[0-9]{4}-[0-9]{2}-01>"
+        ends_on: "<re:[0-9]{4}-[0-9]{2}-(28|29|30|31)>"
+      monthly_budget: "9000000.0000"
+      daily_pool: "5500000.0000"
+      unallocated: "2500000.0000"
+      commitments_budget: "3500000.0000"
+      allocations:
+        - {category_id: 0192f0a0-0000-7000-8003-000000000001, allocation: "3000000.0000"}
+        - {category_id: 0192f0a0-0000-7000-8003-000000000002, allocation: "2000000.0000"}
+        - {category_id: 0192f0a0-0000-7000-8003-000000000003, allocation: "1000000.0000"}
+        - {category_id: 0192f0a0-0000-7000-8003-000000000004, allocation: "500000.0000"}
+    cookies: {}
+
+- name: "budget - a Daily allocation moves only Unallocated, and a Commitment's moves the Daily Pool"
+  issue: "130"
+  given:
+    - sql: |
+        INSERT INTO categories (id, household_id, category_display_name, bucket, active, deleted_at, created_at) VALUES
+          ('0192f0a0-0000-7000-8003-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'Rent', 'commitment', true, NULL, '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Groceries', 'daily', true, NULL, '2026-01-02T00:00:00Z');
+        INSERT INTO budgets (household_id, year_month) VALUES ('0192f0a0-0000-7000-8000-000000000001', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'));
+        INSERT INTO monthly_budgets (household_id, year_month, effective_on, monthly_budget) VALUES ('0192f0a0-0000-7000-8000-000000000001', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'), ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date, 9000000);
+        INSERT INTO allocations (household_id, year_month, effective_on, category_id, allocation) VALUES
+          ('0192f0a0-0000-7000-8000-000000000001', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'), ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date, '0192f0a0-0000-7000-8003-000000000001', 3000000),
+          ('0192f0a0-0000-7000-8000-000000000001', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'), ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date, '0192f0a0-0000-7000-8003-000000000002', 2000000)
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: GET
+    path: /budget
+  expect:
+    status: 200
+    body_json:
+      period:
+        year_month: "<re:[0-9]{4}-[0-9]{2}>"
+        starts_on: "<re:[0-9]{4}-[0-9]{2}-01>"
+        ends_on: "<re:[0-9]{4}-[0-9]{2}-(28|29|30|31)>"
+      monthly_budget: "9000000.0000"
+      daily_pool: "6000000.0000"
+      unallocated: "4000000.0000"
+      commitments_budget: "3000000.0000"
+      allocations:
+        - {category_id: 0192f0a0-0000-7000-8003-000000000001, allocation: "3000000.0000"}
+        - {category_id: 0192f0a0-0000-7000-8003-000000000002, allocation: "2000000.0000"}
+    cookies: {}
+
+- name: "budget - a Daily Pool and an Unallocated below zero are sent as negatives, not refused"
+  issue: "130"
+  given:
+    - sql: |
+        INSERT INTO categories (id, household_id, category_display_name, bucket, active, deleted_at, created_at) VALUES
+          ('0192f0a0-0000-7000-8003-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'Rent', 'commitment', true, NULL, '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Groceries', 'daily', true, NULL, '2026-01-02T00:00:00Z');
+        INSERT INTO budgets (household_id, year_month) VALUES ('0192f0a0-0000-7000-8000-000000000001', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'));
+        INSERT INTO monthly_budgets (household_id, year_month, effective_on, monthly_budget) VALUES ('0192f0a0-0000-7000-8000-000000000001', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'), ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date, 2000000);
+        INSERT INTO allocations (household_id, year_month, effective_on, category_id, allocation) VALUES
+          ('0192f0a0-0000-7000-8000-000000000001', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'), ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date, '0192f0a0-0000-7000-8003-000000000001', 3000000),
+          ('0192f0a0-0000-7000-8000-000000000001', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'), ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date, '0192f0a0-0000-7000-8003-000000000002', 500000)
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: GET
+    path: /budget
+  expect:
+    status: 200
+    body_json:
+      period:
+        year_month: "<re:[0-9]{4}-[0-9]{2}>"
+        starts_on: "<re:[0-9]{4}-[0-9]{2}-01>"
+        ends_on: "<re:[0-9]{4}-[0-9]{2}-(28|29|30|31)>"
+      monthly_budget: "2000000.0000"
+      daily_pool: "-1000000.0000"
+      unallocated: "-1500000.0000"
+      commitments_budget: "3000000.0000"
+      allocations:
+        - {category_id: 0192f0a0-0000-7000-8003-000000000001, allocation: "3000000.0000"}
+        - {category_id: 0192f0a0-0000-7000-8003-000000000002, allocation: "500000.0000"}
+    cookies: {}
+
+- name: "budget - an allocation typed before any Monthly Budget is listed and counted, with no Daily Pool or Unallocated"
+  issue: "130"
+  given:
+    - sql: |
+        INSERT INTO categories (id, household_id, category_display_name, bucket, active, deleted_at, created_at) VALUES
+          ('0192f0a0-0000-7000-8003-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'Rent', 'commitment', true, NULL, '2026-01-01T00:00:00Z');
+        INSERT INTO budgets (household_id, year_month) VALUES ('0192f0a0-0000-7000-8000-000000000001', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'));
+        INSERT INTO allocations (household_id, year_month, effective_on, category_id, allocation) VALUES
+          ('0192f0a0-0000-7000-8000-000000000001', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'), ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date, '0192f0a0-0000-7000-8003-000000000001', 3000000)
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: GET
+    path: /budget
+  expect:
+    status: 200
+    body_json:
+      period:
+        year_month: "<re:[0-9]{4}-[0-9]{2}>"
+        starts_on: "<re:[0-9]{4}-[0-9]{2}-01>"
+        ends_on: "<re:[0-9]{4}-[0-9]{2}-(28|29|30|31)>"
+      commitments_budget: "3000000.0000"
+      allocations:
+        - {category_id: 0192f0a0-0000-7000-8003-000000000001, allocation: "3000000.0000"}
+    cookies: {}
+
+- name: "budget - an allocation typed on an earlier day of the Period is read as part of the same setup as a Monthly Budget set later"
+  issue: "130"
+  given:
+    - sql: |
+        INSERT INTO categories (id, household_id, category_display_name, bucket, active, deleted_at, created_at) VALUES
+          ('0192f0a0-0000-7000-8003-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'Rent', 'commitment', true, NULL, '2026-01-01T00:00:00Z');
+        INSERT INTO budgets (household_id, year_month) VALUES ('0192f0a0-0000-7000-8000-000000000001', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'));
+        INSERT INTO monthly_budgets (household_id, year_month, effective_on, monthly_budget) VALUES ('0192f0a0-0000-7000-8000-000000000001', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'), ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date, 9000000);
+        INSERT INTO allocations (household_id, year_month, effective_on, category_id, allocation) VALUES
+          ('0192f0a0-0000-7000-8000-000000000001', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'), ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date - 5, '0192f0a0-0000-7000-8003-000000000001', 3000000)
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: GET
+    path: /budget
+  expect:
+    status: 200
+    body_json:
+      period:
+        year_month: "<re:[0-9]{4}-[0-9]{2}>"
+        starts_on: "<re:[0-9]{4}-[0-9]{2}-01>"
+        ends_on: "<re:[0-9]{4}-[0-9]{2}-(28|29|30|31)>"
+      monthly_budget: "9000000.0000"
+      daily_pool: "6000000.0000"
+      unallocated: "6000000.0000"
+      commitments_budget: "3000000.0000"
+      allocations:
+        - {category_id: 0192f0a0-0000-7000-8003-000000000001, allocation: "3000000.0000"}
+    cookies: {}
+
+- name: "budget - a new Period carries the latest allocation state forward, dated its first day: not a cleared, deleted or zero-less one, inactive ones included"
+  issue: "130"
+  given:
+    - sql: |
+        INSERT INTO categories (id, household_id, category_display_name, bucket, active, deleted_at, created_at) VALUES
+          ('0192f0a0-0000-7000-8003-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'Rent', 'commitment', true, NULL, '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Food', 'daily', true, NULL, '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Gym', 'commitment', false, NULL, '2026-01-03T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000004', '0192f0a0-0000-7000-8000-000000000001', 'Typo', 'daily', true, now(), '2026-01-04T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000005', '0192f0a0-0000-7000-8000-000000000001', 'Cleared', 'daily', true, NULL, '2026-01-05T00:00:00Z');
+        INSERT INTO budgets (household_id, year_month) VALUES ('0192f0a0-0000-7000-8000-000000000001', to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month', 'YYYY-MM'));
+        INSERT INTO monthly_budgets (household_id, year_month, effective_on, monthly_budget) VALUES ('0192f0a0-0000-7000-8000-000000000001', to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month', 'YYYY-MM'), (date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month')::date, 9000000);
+        INSERT INTO allocations (household_id, year_month, effective_on, category_id, allocation) VALUES
+          ('0192f0a0-0000-7000-8000-000000000001', to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month', 'YYYY-MM'), (date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month')::date, '0192f0a0-0000-7000-8003-000000000001', 3000000),
+          ('0192f0a0-0000-7000-8000-000000000001', to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month', 'YYYY-MM'), (date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month')::date + 10, '0192f0a0-0000-7000-8003-000000000001', 3200000),
+          ('0192f0a0-0000-7000-8000-000000000001', to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month', 'YYYY-MM'), (date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month')::date + 3, '0192f0a0-0000-7000-8003-000000000002', 1000000),
+          ('0192f0a0-0000-7000-8000-000000000001', to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month', 'YYYY-MM'), (date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month')::date + 3, '0192f0a0-0000-7000-8003-000000000003', 500000),
+          ('0192f0a0-0000-7000-8000-000000000001', to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month', 'YYYY-MM'), (date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month')::date + 3, '0192f0a0-0000-7000-8003-000000000004', 700000),
+          ('0192f0a0-0000-7000-8000-000000000001', to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month', 'YYYY-MM'), (date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month')::date + 3, '0192f0a0-0000-7000-8003-000000000005', 800000),
+          ('0192f0a0-0000-7000-8000-000000000001', to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month', 'YYYY-MM'), (date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month')::date + 4, '0192f0a0-0000-7000-8003-000000000005', NULL)
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: GET
+    path: /budget
+  expect:
+    status: 200
+    body_json:
+      period:
+        year_month: "<re:[0-9]{4}-[0-9]{2}>"
+        starts_on: "<re:[0-9]{4}-[0-9]{2}-01>"
+        ends_on: "<re:[0-9]{4}-[0-9]{2}-(28|29|30|31)>"
+      monthly_budget: "9000000.0000"
+      daily_pool: "5300000.0000"
+      unallocated: "4300000.0000"
+      commitments_budget: "3700000.0000"
+      allocations:
+        - {category_id: 0192f0a0-0000-7000-8003-000000000001, allocation: "3200000.0000"}
+        - {category_id: 0192f0a0-0000-7000-8003-000000000002, allocation: "1000000.0000"}
+        - {category_id: 0192f0a0-0000-7000-8003-000000000003, allocation: "500000.0000"}
+    cookies: {}
+    rows:
+      - sql: SELECT category_id::text AS category_id, (effective_on = date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date) AS first_day, allocation::text AS allocation FROM allocations WHERE year_month = to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM') ORDER BY category_id
+        rows:
+          - {category_id: "0192f0a0-0000-7000-8003-000000000001", first_day: true, allocation: "3200000.0000"}
+          - {category_id: "0192f0a0-0000-7000-8003-000000000002", first_day: true, allocation: "1000000.0000"}
+          - {category_id: "0192f0a0-0000-7000-8003-000000000003", first_day: true, allocation: "500000.0000"}
+      - sql: SELECT count(*)::int AS n FROM allocations WHERE year_month = to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month', 'YYYY-MM')
+        rows:
+          - {n: 7}
+      - sql: SELECT count(*)::int AS n FROM budgets
+        rows:
+          - {n: 2}
+
+- name: "budget - a Period that holds only allocations is a copy source, and what it copies is only its allocations"
+  issue: "130"
+  given:
+    - sql: |
+        INSERT INTO categories (id, household_id, category_display_name, bucket, active, deleted_at, created_at) VALUES
+          ('0192f0a0-0000-7000-8003-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'Rent', 'commitment', true, NULL, '2026-01-01T00:00:00Z');
+        INSERT INTO budgets (household_id, year_month) VALUES ('0192f0a0-0000-7000-8000-000000000001', to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month', 'YYYY-MM'));
+        INSERT INTO allocations (household_id, year_month, effective_on, category_id, allocation) VALUES
+          ('0192f0a0-0000-7000-8000-000000000001', to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month', 'YYYY-MM'), (date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month')::date, '0192f0a0-0000-7000-8003-000000000001', 3000000)
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: GET
+    path: /budget
+  expect:
+    status: 200
+    body_json:
+      period:
+        year_month: "<re:[0-9]{4}-[0-9]{2}>"
+        starts_on: "<re:[0-9]{4}-[0-9]{2}-01>"
+        ends_on: "<re:[0-9]{4}-[0-9]{2}-(28|29|30|31)>"
+      commitments_budget: "3000000.0000"
+      allocations:
+        - {category_id: 0192f0a0-0000-7000-8003-000000000001, allocation: "3000000.0000"}
+    cookies: {}
+    rows:
+      - sql: SELECT (SELECT count(*) FROM allocations WHERE year_month = to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'))::int AS current, (SELECT count(*) FROM monthly_budgets)::int AS versions
+        rows:
+          - {current: 1, versions: 0}
+
+- name: "budget - a read of a Period that exists copies nothing and writes nothing"
+  issue: "130"
+  given:
+    - sql: |
+        INSERT INTO categories (id, household_id, category_display_name, bucket, active, deleted_at, created_at) VALUES
+          ('0192f0a0-0000-7000-8003-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'Rent', 'commitment', true, NULL, '2026-01-01T00:00:00Z');
+        INSERT INTO budgets (household_id, year_month) VALUES ('0192f0a0-0000-7000-8000-000000000001', to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month', 'YYYY-MM'));
+        INSERT INTO monthly_budgets (household_id, year_month, effective_on, monthly_budget) VALUES ('0192f0a0-0000-7000-8000-000000000001', to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month', 'YYYY-MM'), (date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month')::date, 9000000);
+        INSERT INTO budgets (household_id, year_month, created_at) VALUES ('0192f0a0-0000-7000-8000-000000000001', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'), '2000-01-01T00:00:00Z');
+        INSERT INTO allocations (household_id, year_month, effective_on, category_id, allocation, updated_at) VALUES ('0192f0a0-0000-7000-8000-000000000001', to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month', 'YYYY-MM'), (date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month')::date, '0192f0a0-0000-7000-8003-000000000001', 1, '2000-01-01T00:00:00Z'),('0192f0a0-0000-7000-8000-000000000001', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'), ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date, '0192f0a0-0000-7000-8003-000000000001', 3000000, '2000-01-01T00:00:00Z');
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: GET
+    path: /budget
+  expect:
+    status: 200
+    body_json:
+      period:
+        year_month: "<re:[0-9]{4}-[0-9]{2}>"
+        starts_on: "<re:[0-9]{4}-[0-9]{2}-01>"
+        ends_on: "<re:[0-9]{4}-[0-9]{2}-(28|29|30|31)>"
+      commitments_budget: "3000000.0000"
+      allocations:
+        - {category_id: 0192f0a0-0000-7000-8003-000000000001, allocation: "3000000.0000"}
+    cookies: {}
+    rows:
+      - sql: SELECT count(*)::int AS n, to_char(min(updated_at), 'YYYY') AS written FROM allocations WHERE year_month = to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM')
+        rows:
+          - {n: 1, written: "2000"}
+
+- name: "budget - another Household's allocations are neither listed nor counted, and a read leaves them as they were"
+  issue: "130"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO categories (id, household_id, category_display_name, bucket, created_at, updated_at) VALUES ('0192f0a0-0000-7000-8003-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', 'commitment', '2000-01-01T00:00:00Z', '2000-01-01T00:00:00Z');
+        INSERT INTO budgets (household_id, year_month, created_at) VALUES ('0192f0a0-0000-7000-8000-000000000002', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'), '2000-01-01T00:00:00Z'), ('0192f0a0-0000-7000-8000-000000000002', to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month', 'YYYY-MM'), '2000-01-01T00:00:00Z');
+        INSERT INTO allocations (household_id, year_month, effective_on, category_id, allocation, updated_at) VALUES
+          ('0192f0a0-0000-7000-8000-000000000002', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'), ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date, '0192f0a0-0000-7000-8003-000000000009', 99999999, '2000-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8000-000000000002', to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month', 'YYYY-MM'), (date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month')::date, '0192f0a0-0000-7000-8003-000000000009', 88888888, '2000-01-01T00:00:00Z')
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: GET
+    path: /budget
+  expect:
+    status: 200
+    body_json:
+      period:
+        year_month: "<re:[0-9]{4}-[0-9]{2}>"
+        starts_on: "<re:[0-9]{4}-[0-9]{2}-01>"
+        ends_on: "<re:[0-9]{4}-[0-9]{2}-(28|29|30|31)>"
+      commitments_budget: "0.0000"
+      allocations: []
+    cookies: {}
+    rows:
+      - sql: SELECT household_id::text AS household_id, allocation::text AS allocation, to_char(updated_at, 'YYYY') AS written FROM allocations WHERE household_id = '0192f0a0-0000-7000-8000-000000000002' ORDER BY effective_on
+        rows:
+          - {household_id: "0192f0a0-0000-7000-8000-000000000002", allocation: "88888888.0000", written: "2000"}
+          - {household_id: "0192f0a0-0000-7000-8000-000000000002", allocation: "99999999.0000", written: "2000"}
+      - sql: SELECT count(*)::int AS n FROM allocations
+        rows:
+          - {n: 2}
+
+- name: "budget - a change by one Household leaves another's allocations as they were"
+  issue: "130"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO categories (id, household_id, category_display_name, bucket, created_at, updated_at) VALUES ('0192f0a0-0000-7000-8003-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', 'commitment', '2000-01-01T00:00:00Z', '2000-01-01T00:00:00Z');
+        INSERT INTO budgets (household_id, year_month, created_at) VALUES ('0192f0a0-0000-7000-8000-000000000002', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'), '2000-01-01T00:00:00Z'), ('0192f0a0-0000-7000-8000-000000000002', to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month', 'YYYY-MM'), '2000-01-01T00:00:00Z');
+        INSERT INTO allocations (household_id, year_month, effective_on, category_id, allocation, updated_at) VALUES
+          ('0192f0a0-0000-7000-8000-000000000002', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'), ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date, '0192f0a0-0000-7000-8003-000000000009', 99999999, '2000-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8000-000000000002', to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month', 'YYYY-MM'), (date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month')::date, '0192f0a0-0000-7000-8003-000000000009', 88888888, '2000-01-01T00:00:00Z')
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: PATCH
+    path: /budget
+    headers:
+      Content-Type: application/json
+    body: '{"monthly_budget":"9000000"}'
+  expect:
+    status: 200
+    body_json:
+      period:
+        year_month: "<re:[0-9]{4}-[0-9]{2}>"
+        starts_on: "<re:[0-9]{4}-[0-9]{2}-01>"
+        ends_on: "<re:[0-9]{4}-[0-9]{2}-(28|29|30|31)>"
+      monthly_budget: "9000000.0000"
+      daily_pool: "9000000.0000"
+      unallocated: "9000000.0000"
+      commitments_budget: "0.0000"
+      allocations: []
+    cookies: {}
+    rows:
+      - sql: SELECT household_id::text AS household_id, allocation::text AS allocation, to_char(updated_at, 'YYYY') AS written FROM allocations WHERE household_id = '0192f0a0-0000-7000-8000-000000000002' ORDER BY effective_on
+        rows:
+          - {household_id: "0192f0a0-0000-7000-8000-000000000002", allocation: "88888888.0000", written: "2000"}
+          - {household_id: "0192f0a0-0000-7000-8000-000000000002", allocation: "99999999.0000", written: "2000"}
+
+- name: "budget - a new Period never copies another Household's allocations, even from a nearer Period"
+  issue: "130"
+  given:
+    - sql: |
+        INSERT INTO categories (id, household_id, category_display_name, bucket, active, deleted_at, created_at) VALUES
+          ('0192f0a0-0000-7000-8003-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'Rent', 'commitment', true, NULL, '2026-01-01T00:00:00Z');
+        INSERT INTO budgets (household_id, year_month) VALUES ('0192f0a0-0000-7000-8000-000000000001', to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '3 months', 'YYYY-MM'));
+        INSERT INTO allocations (household_id, year_month, effective_on, category_id, allocation) VALUES ('0192f0a0-0000-7000-8000-000000000001', to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '3 months', 'YYYY-MM'), (date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '3 months')::date, '0192f0a0-0000-7000-8003-000000000001', 4200000);
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO categories (id, household_id, category_display_name, bucket) VALUES ('0192f0a0-0000-7000-8003-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', 'commitment');
+        INSERT INTO budgets (household_id, year_month) VALUES ('0192f0a0-0000-7000-8000-000000000002', to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month', 'YYYY-MM'));
+        INSERT INTO allocations (household_id, year_month, effective_on, category_id, allocation) VALUES ('0192f0a0-0000-7000-8000-000000000002', to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month', 'YYYY-MM'), (date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month')::date, '0192f0a0-0000-7000-8003-000000000009', 99999999);
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: GET
+    path: /budget
+  expect:
+    status: 200
+    body_json:
+      period:
+        year_month: "<re:[0-9]{4}-[0-9]{2}>"
+        starts_on: "<re:[0-9]{4}-[0-9]{2}-01>"
+        ends_on: "<re:[0-9]{4}-[0-9]{2}-(28|29|30|31)>"
+      commitments_budget: "4200000.0000"
+      allocations:
+        - {category_id: 0192f0a0-0000-7000-8003-000000000001, allocation: "4200000.0000"}
+    cookies: {}
+    rows:
+      - sql: SELECT category_id::text AS category_id, household_id::text AS household_id FROM allocations WHERE year_month = to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM')
+        rows:
+          - {category_id: "0192f0a0-0000-7000-8003-000000000001", household_id: "0192f0a0-0000-7000-8000-000000000001"}
+

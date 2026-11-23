@@ -433,6 +433,63 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/categories": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The caller's Household's Categories.
+         * @description Every Category of the caller's Household that is not deleted, active or
+         *     inactive (an inactive one carries `active: false`), in creation order
+         *     (`created_at`, then `id`), the two buckets together: the client groups
+         *     them. A Category carries no allocation: what is planned for it in the
+         *     current Budget Period is `GET /budget`'s `allocations`, joined by id.
+         *     Never paginated. An empty Household answers `{"items": []}`. The
+         *     Household is the caller's own, from the session; nothing in the request
+         *     names one.
+         */
+        get: operations["listCategories"];
+        put?: never;
+        /**
+         * Create a Category.
+         * @description The client supplies the id (a UUIDv7) and it is the idempotency key
+         *     (BOOTSTRAP.md §4), exactly as for a Pocket: the first write answers
+         *     `201` with the Category, and a repeat of the same id answers `200` with
+         *     the Category **as it stands now**. The rest of a repeated body is
+         *     neither compared nor applied, **`allocation` included**: a replay
+         *     changes no Budget. An id held by something other than a live Category
+         *     of the caller's own Household (another Household's, or the caller's own
+         *     deleted one) is `409 ID_TAKEN`. A name already held, case-insensitively
+         *     and **whatever the bucket**, by another Category of the Household that
+         *     is not deleted (active or inactive) is `409 NAME_TAKEN`.
+         *
+         *     A body that is invalid is refused whatever the id holds. A new Category
+         *     is always active. `bucket` is chosen here and never changes.
+         *
+         *     `category_display_name` follows the Household's name rules
+         *     (BOOTSTRAP.md §5.1.1): trimmed, not blank, at most 60 code points.
+         *
+         *     `allocation` is what the Category is planned at in the current Budget
+         *     Period (PRD S8). It is **required for a Commitment**: absent or `null`
+         *     is `VALIDATION {field: allocation, rule: required}`, and `"0"` is an
+         *     allocation. It is optional for a Daily Category, where absent or
+         *     `null` means none. It is written in the same transaction as the
+         *     Category, to the Budget of the Period the caller's Today is in, dated
+         *     that Today; like `GET /budget`, a create that carries one brings that
+         *     Period into being if it is the first request to find it missing. The
+         *     failure order is: the contract's rules, the name, the Commitment's
+         *     allocation, then the database.
+         */
+        post: operations["createCategory"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/budget": {
         parameters: {
             query?: never;
@@ -446,9 +503,11 @@ export interface paths {
          *     out on the server from the User's `time_zone` and the Household's
          *     `day_starts_at` (BOOTSTRAP.md §4): there is no id and no way to name
          *     another Period. A Period that has not been read yet comes into being
-         *     by this first read (PRD S13, Q-09) and carries the Monthly Budget
-         *     forward from the nearest earlier Period that has one, so **this
-         *     operation may write once per Period**, and `HEAD` does too. A request
+         *     by this first read (PRD S13, Q-09) and carries the Monthly Budget and
+         *     the allocations forward, as they stood last, from the nearest earlier
+         *     Period that holds either (else the nearest later one), dated its first
+         *     day, so **this operation may write once per Period**, and `HEAD` does
+         *     too. A request
          *     that finds the Period already there writes nothing, and what is
          *     returned never differs from what a read that did not write would have
          *     returned.
@@ -457,9 +516,13 @@ export interface paths {
          *     `effective_on` on or before Today, except that a Period's days before
          *     its first Monthly Budget was set are read as of that first one (the
          *     Budget a Household sets on day 14 is its Budget for the whole
-         *     Period). `monthly_budget`, `daily_pool` and `unallocated` are omitted
-         *     until a Monthly Budget exists. Every figure is computed here and the
-         *     client derives none (PRD N5a).
+         *     Period). Allocations are read as of that same day, so one typed before
+         *     the Monthly Budget is part of the same setup. `monthly_budget`,
+         *     `daily_pool` and `unallocated` are omitted until a Monthly Budget
+         *     exists; the Commitments Budget is always there, `0.0000` while no
+         *     Commitment has an allocation. A Commitment's allocation moves the Daily
+         *     Pool, a Daily Category's only Unallocated. Every figure is computed
+         *     here, never stored, and the client derives none (PRD N5a).
          */
         get: operations["getBudget"];
         put?: never;
@@ -734,6 +797,58 @@ export interface components {
             active?: boolean;
         };
         /**
+         * @description Which side of the Monthly Budget a Category is on (CONTEXT.md): a
+         *     `commitment` is money committed before the Period starts, a `daily`
+         *     Category is spent from the Daily Pool. Chosen at creation and never
+         *     changed, because a change would move the Category's allocation between
+         *     the Commitments Budget and Unallocated in every Period at once.
+         * @enum {string}
+         */
+        Bucket: "daily" | "commitment";
+        /**
+         * @description A household-defined bucket an Expense is classified into (PRD S8,
+         *     CONTEXT.md): a name and a bucket, no allocation (that is the Budget's,
+         *     per Period). A Category on the wire is never deleted, but it may be
+         *     inactive: kept for what it labels and for its allocation, and not
+         *     offered for new capture.
+         */
+        Category: {
+            /**
+             * Format: uuid
+             * @description UUIDv7, supplied by the client at creation.
+             */
+            id: string;
+            category_display_name: string;
+            bucket: components["schemas"]["Bucket"];
+            /**
+             * @description `false` for a Category that has been deactivated. A new Category is
+             *     always active.
+             */
+            active: boolean;
+        };
+        /**
+         * @description The Household's Categories in creation order. An object rather than a
+         *     bare array so it can grow without breaking a client.
+         */
+        CategoryList: {
+            items: components["schemas"]["Category"][];
+        };
+        /**
+         * @description A new Category. `allocation` is what it is planned at in the current
+         *     Budget Period: required for a Commitment (`null` is as absent), optional
+         *     for a Daily Category, where absent and `null` both mean none.
+         */
+        CreateCategoryRequest: {
+            /**
+             * Format: uuid
+             * @description UUIDv7, generated by the client. The idempotency key.
+             */
+            id: string;
+            category_display_name: string;
+            bucket: components["schemas"]["Bucket"];
+            allocation?: components["schemas"]["MoneyInputOrNull"];
+        };
+        /**
          * @description A decimal serialised as a string at exactly four decimal places (PRD
          *     N2, BOOTSTRAP.md §4): `"9000000.0000"`, never a JSON number, never
          *     trimmed, never exponent notation. In the Household's
@@ -751,6 +866,18 @@ export interface components {
          * @example 9000000
          */
         MoneyInput: string;
+        /**
+         * @description A `MoneyInput`, or `null` where a write may say "none": what a Category
+         *     is planned at when it is created (a Commitment's `null` is the
+         *     required-allocation rule, a Daily Category's is none). The pattern is
+         *     `MoneyInput`'s, written out because OpenAPI 3.0 ignores the siblings of a
+         *     `$ref`, and a `nullable` over an `allOf` reports a breach of the pattern
+         *     as a body that is not the declared shape instead of as the pattern (a
+         *     test pins that the two stay equal). Everything `MoneyInput` says about
+         *     the spelling applies.
+         * @example 3000000
+         */
+        MoneyInputOrNull: string | null;
         /**
          * @description A Budget Period (CONTEXT.md): `year_month` is the `YYYY-MM` of the
          *     calendar month in which it starts, and its window is derived from the
@@ -773,8 +900,7 @@ export interface components {
         };
         /**
          * @description A Category's planned amount in the Budget's Period (PRD S8), in force
-         *     as of Today. Categories land with a later slice, so no allocation
-         *     exists yet and `Budget.allocations` is empty.
+         *     as of Today.
          */
         Allocation: {
             /** Format: uuid */
@@ -787,15 +913,18 @@ export interface components {
          *     the server. The Commitments Budget is the sum of the allocations of
          *     Commitment Categories, the Daily Pool is the Monthly Budget less it,
          *     and Unallocated is the Daily Pool less the allocations of Daily
-         *     Categories. A Daily Pool or Unallocated below zero is sent as such: it
-         *     is information, never an error (PRD S9).
+         *     Categories, inactive Categories counted and deleted ones not. A Daily
+         *     Pool or Unallocated below zero is sent as such: it is information,
+         *     never an error (PRD S9).
          */
         Budget: {
             period: components["schemas"]["BudgetPeriod"];
             monthly_budget?: components["schemas"]["Money"];
             /**
-             * @description The allocations in force as of Today whose Category is live. A
-             *     Category with none is absent. Empty until Categories exist.
+             * @description The allocations in force as of Today whose Category is live (active
+             *     or inactive), in the Categories' creation order. A Category with
+             *     none is absent: the client reads that as "no allocation". Empty
+             *     while no Category has one.
              */
             allocations: components["schemas"]["Allocation"][];
             commitments_budget: components["schemas"]["Money"];
@@ -883,8 +1012,10 @@ export interface components {
          *     `VALIDATION` carries `{field, rule}` in `args` and reports only the
          *     first failing field, as in Balances. `field` is the wire name of the
          *     property, so a Household's name (`household_display_name`), a User's
-         *     (`user_display_name`) and a Pocket's (`pocket_display_name`) are never
-         *     confused; a Pocket's `id` is `id`; a Budget's Monthly Budget is
+         *     (`user_display_name`), a Pocket's (`pocket_display_name`) and a
+         *     Category's (`category_display_name`) are never confused; a Pocket's
+         *     or a Category's `id` is `id`; a Category's bucket is `bucket` and what
+         *     it is planned at is `allocation`; a Budget's Monthly Budget is
          *     `monthly_budget`. `WEAK_PASSWORD` carries
          *     `{reason}`, `min` or `breached`, at registration and at a password
          *     change. `INVALID_CURRENT_PASSWORD` is the password change's and the
@@ -1449,6 +1580,65 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    listCategories: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The Categories, in creation order. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CategoryList"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    createCategory: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateCategoryRequest"];
+            };
+        };
+        responses: {
+            /** @description The id already names a live Category of this Household, returned as stored. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Category"];
+                };
+            };
+            /** @description The Category was created. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Category"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
             409: components["responses"]["Conflict"];
             500: components["responses"]["InternalError"];
         };

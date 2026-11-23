@@ -27,7 +27,19 @@ const (
 	u1      = "019212e0-0000-7000-8000-000000000002"
 	u2      = "019212e0-0000-7000-8000-000000000003"
 	p1      = "019212e0-0000-7000-8000-000000000011"
+	c1      = "019212e0-0000-7000-8000-000000000021"
+	c2      = "019212e0-0000-7000-8000-000000000022"
 )
+
+// categoryInsert is the INSERT of a live, active Category of the given bucket.
+func categoryInsert(id, household, name, bucket string) string {
+	return `INSERT INTO categories (id, household_id, category_display_name, bucket) VALUES ('` + id + `', '` + household + `', '` + name + `', '` + bucket + `')`
+}
+
+// allocationInsert is the INSERT of one allocation row, for Period 2026-11.
+func allocationInsert(household, effectiveOn, category, amount string) string {
+	return `INSERT INTO allocations (household_id, year_month, effective_on, category_id, allocation) VALUES ('` + household + `', '2026-11', '` + effectiveOn + `', '` + category + `', ` + amount + `)`
+}
 
 // pocketInsert is the INSERT of a live, active Pocket.
 func pocketInsert(id, household, name string) string {
@@ -153,6 +165,40 @@ func TestSchemaRefuses(t *testing.T) {
 		{"a Monthly Budget past DECIMAL(20,4)", budgetInsert("2026-11") + `;
 			INSERT INTO monthly_budgets (household_id, year_month, effective_on, monthly_budget) VALUES ('` + hh + `', '2026-11', '2026-11-01', 100000000000000000)`,
 			"22003", ""},
+		{"blank category_display_name", `INSERT INTO categories (id, household_id, category_display_name, bucket) VALUES (gen_random_uuid(), '` + hh + `', '   ', 'daily')`,
+			checkViolation, "categories_category_display_name_not_blank"},
+		{"an unknown bucket", categoryInsert(c1, hh, "Rent", "weekly"),
+			checkViolation, "categories_bucket_known"},
+		{"a bucket in the wrong case", categoryInsert(c1, hh, "Rent", "Daily"),
+			checkViolation, "categories_bucket_known"},
+		{"second Category under the same name, other case", categoryInsert(c1, hh, "Rent", "commitment") + `;` + categoryInsert(c2, hh, "rent", "commitment"),
+			uniqueViolation, "categories_household_name_idx"},
+		// The name is unique across both buckets: one real thing, one row.
+		{"the same name in the other bucket", categoryInsert(c1, hh, "Insurance", "commitment") + `;` + categoryInsert(c2, hh, "insurance", "daily"),
+			uniqueViolation, "categories_household_name_idx"},
+		// Inactive is not deleted: the Category is still on screen and still holds
+		// its allocation, so it keeps its name.
+		{"name held by an inactive Category", `INSERT INTO categories (id, household_id, category_display_name, bucket, active) VALUES ('` + c1 + `', '` + hh + `', 'Rent', 'commitment', false);` + categoryInsert(c2, hh, "rent", "commitment"),
+			uniqueViolation, "categories_household_name_idx"},
+		{"a second Category under one id", categoryInsert(c1, hh, "Rent", "commitment") + `;` + categoryInsert(c1, hh, "Food", "daily"),
+			uniqueViolation, "categories_pkey"},
+		{"Category for a Household that doesn't exist", `INSERT INTO categories (id, household_id, category_display_name, bucket) VALUES (gen_random_uuid(), gen_random_uuid(), 'x', 'daily')`,
+			fkViolation, "categories_household_id_fkey"},
+		{"a negative allocation", categoryInsert(c1, hh, "Rent", "commitment") + `;` + budgetInsert("2026-11") + `;` + allocationInsert(hh, "2026-11-01", c1, "-0.0001"),
+			checkViolation, "allocations_allocation_non_negative"},
+		{"an allocation for a Period with no Budget row", categoryInsert(c1, hh, "Rent", "commitment") + `;` + allocationInsert(hh, "2026-11-01", c1, "1"),
+			fkViolation, "allocations_household_id_year_month_fkey"},
+		{"an allocation for a Category that doesn't exist", budgetInsert("2026-11") + `;` + allocationInsert(hh, "2026-11-01", c1, "1"),
+			fkViolation, "allocations_household_id_category_id_fkey"},
+		// The composite foreign key: the Household's own Budget row and another
+		// Household's Category, which a plain category_id key would accept.
+		{"an allocation for another Household's Category", budgetInsert("2026-11") + `;
+			INSERT INTO households (id, household_display_name) VALUES ('` + hhOther + `', 'Other');` + categoryInsert(c1, hhOther, "Theirs", "commitment") + `;` + allocationInsert(hh, "2026-11-01", c1, "1"),
+			fkViolation, "allocations_household_id_category_id_fkey"},
+		{"two allocations for one Category on one day", categoryInsert(c1, hh, "Rent", "commitment") + `;` + budgetInsert("2026-11") + `;` + allocationInsert(hh, "2026-11-01", c1, "1") + `;` + allocationInsert(hh, "2026-11-01", c1, "2"),
+			uniqueViolation, "allocations_pkey"},
+		{"an allocation past DECIMAL(20,4)", categoryInsert(c1, hh, "Rent", "commitment") + `;` + budgetInsert("2026-11") + `;` + allocationInsert(hh, "2026-11-01", c1, "100000000000000000"),
+			"22003", ""},
 		// Users are soft-deleted, so a live one always holds its Household.
 		{"household delete under live users", `DELETE FROM households WHERE id = '` + hh + `'`,
 			fkViolation, "users_household_id_fkey"},
@@ -206,6 +252,17 @@ func TestSchemaAccepts(t *testing.T) {
 		{"the same Period for two Households", `INSERT INTO households (id, household_display_name) VALUES ('` + hhOther + `', 'Other');
 			INSERT INTO budgets (household_id, year_month) VALUES ('` + hh + `', '2026-11'), ('` + hhOther + `', '2026-11')`},
 		{"a December Period and the January after it", `INSERT INTO budgets (household_id, year_month) VALUES ('` + hh + `', '2026-12'), ('` + hh + `', '2027-01')`},
+		{"the same Category name in another Household", `INSERT INTO households (id, household_display_name) VALUES ('` + hhOther + `', 'Other');` +
+			categoryInsert(c1, hh, "Rent", "commitment") + `;` + categoryInsert(c2, hhOther, "Rent", "commitment")},
+		{"a Category name whose earlier holder is soft-deleted", `INSERT INTO categories (id, household_id, category_display_name, bucket, deleted_at) VALUES ('` + c1 + `', '` + hh + `', 'Rent', 'commitment', now());` + categoryInsert(c2, hh, "rent", "daily")},
+		{"two soft-deleted Categories under one name", `INSERT INTO categories (id, household_id, category_display_name, bucket, deleted_at) VALUES ('` + c1 + `', '` + hh + `', 'Rent', 'daily', now()), ('` + c2 + `', '` + hh + `', 'Rent', 'daily', now())`},
+		{"an allocation of zero: how a retired Commitment is freed", categoryInsert(c1, hh, "Rent", "commitment") + `;` + budgetInsert("2026-11") + `;` + allocationInsert(hh, "2026-11-01", c1, "0")},
+		{"a NULL allocation: none from that day", categoryInsert(c1, hh, "Rent", "commitment") + `;` + budgetInsert("2026-11") + `;` + allocationInsert(hh, "2026-11-01", c1, "NULL")},
+		{"the largest allocation the type holds", categoryInsert(c1, hh, "Rent", "commitment") + `;` + budgetInsert("2026-11") + `;` + allocationInsert(hh, "2026-11-01", c1, "9999999999999999.9999")},
+		{"an allocation for a Category with no Monthly Budget in the Period", categoryInsert(c1, hh, "Rent", "commitment") + `;` + budgetInsert("2026-11") + `;` + allocationInsert(hh, "2026-11-01", c1, "1")},
+		{"two Categories' allocations on one day, and one Category's on two days", categoryInsert(c1, hh, "Rent", "commitment") + `;` + categoryInsert(c2, hh, "Food", "daily") + `;` + budgetInsert("2026-11") + `;` +
+			allocationInsert(hh, "2026-11-01", c1, "1") + `;` + allocationInsert(hh, "2026-11-01", c2, "2") + `;` + allocationInsert(hh, "2026-11-14", c1, "3")},
+		{"an allocation for a deleted Category: nothing in the schema forbids the log keeping it", `INSERT INTO categories (id, household_id, category_display_name, bucket, deleted_at) VALUES ('` + c1 + `', '` + hh + `', 'Rent', 'commitment', now());` + budgetInsert("2026-11") + `;` + allocationInsert(hh, "2026-11-01", c1, "1")},
 		{"login_attempts row", `INSERT INTO login_attempts (key, failure_count, backoff_until) VALUES ('ip:203.0.113.7', 3, now() + interval '4 seconds')`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -230,6 +287,24 @@ func TestSchemaDefaults(t *testing.T) {
 	mustExec(t, tdb, pocketInsert(p1, hh, "OVO"))
 	if got := scalar(t, tdb, `SELECT active || ' / ' || (deleted_at IS NULL)  FROM pockets WHERE id = '`+p1+`'`); got != "true / true" {
 		t.Errorf("pocket defaults (active / deleted_at null) = %q", got)
+	}
+	mustExec(t, tdb, categoryInsert(c1, hh, "Rent", "commitment"))
+	if got := scalar(t, tdb, `SELECT active || ' / ' || (deleted_at IS NULL) || ' / ' || (created_at IS NOT NULL) FROM categories WHERE id = '`+c1+`'`); got != "true / true / true" {
+		t.Errorf("category defaults (active / deleted_at null / created_at set) = %q", got)
+	}
+}
+
+// A deleted Category releases its name, and restoring it into a name another
+// live Category now holds is refused by the same index.
+func TestSoftDeletedCategoriesReleaseTheirName(t *testing.T) {
+	tdb := seeded(t)
+	mustExec(t, tdb, categoryInsert(c1, hh, "Rent", "commitment"))
+	mustExec(t, tdb, `UPDATE categories SET deleted_at = now() WHERE id = '`+c1+`'`)
+	mustExec(t, tdb, categoryInsert(c2, hh, "rent", "daily"))
+	_, err := tdb.Pool.Exec(context.Background(), `UPDATE categories SET deleted_at = NULL WHERE id = '`+c1+`'`)
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) || pgErr.Code != uniqueViolation || pgErr.ConstraintName != "categories_household_name_idx" {
+		t.Fatalf("restore into a taken name: got %v, want %s on categories_household_name_idx", err, uniqueViolation)
 	}
 }
 
@@ -283,6 +358,7 @@ func TestBudgetTablesHaveExactlyTheRuledColumns(t *testing.T) {
 	for table, want := range map[string]string{
 		"budgets":         "created_at,household_id,year_month",
 		"monthly_budgets": "effective_on,household_id,monthly_budget,updated_at,year_month",
+		"allocations":     "allocation,category_id,effective_on,household_id,updated_at,year_month",
 	} {
 		got := scalar(t, tdb, `SELECT string_agg(column_name, ',' ORDER BY column_name)
 			FROM information_schema.columns WHERE table_schema = 'public' AND table_name = '`+table+`'`)
@@ -302,5 +378,10 @@ func TestBudgetDefaults(t *testing.T) {
 	// Stored at the scale, whatever scale it was written at.
 	if got := scalar(t, tdb, `SELECT monthly_budget::text FROM monthly_budgets`); got != "9000000.0000" {
 		t.Errorf("monthly_budget = %s, want 9000000.0000", got)
+	}
+	mustExec(t, tdb, categoryInsert(c1, hh, "Rent", "commitment"))
+	mustExec(t, tdb, allocationInsert(hh, "2026-11-01", c1, "3000000"))
+	if got := scalar(t, tdb, `SELECT allocation::text FROM allocations`); got != "3000000.0000" {
+		t.Errorf("allocation = %s, want 3000000.0000", got)
 	}
 }

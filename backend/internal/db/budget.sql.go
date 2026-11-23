@@ -12,6 +12,55 @@ import (
 	decimal "github.com/shopspring/decimal"
 )
 
+const allocationsAsOf = `-- name: AllocationsAsOf :many
+SELECT c.id AS category_id, c.bucket, a.allocation
+FROM (SELECT DISTINCT ON (s.category_id) s.category_id, s.allocation
+      FROM allocations s
+      WHERE s.household_id = $1 AND s.year_month = $2
+        AND s.effective_on <= $3
+      ORDER BY s.category_id, s.effective_on DESC) a
+JOIN categories c ON c.id = a.category_id AND c.household_id = $1 AND c.deleted_at IS NULL
+WHERE a.allocation IS NOT NULL
+ORDER BY c.created_at, c.id
+`
+
+type AllocationsAsOfParams struct {
+	HouseholdID pgtype.UUID
+	YearMonth   string
+	AsOf        pgtype.Date
+}
+
+type AllocationsAsOfRow struct {
+	CategoryID pgtype.UUID
+	Bucket     string
+	Allocation decimal.NullDecimal
+}
+
+// The allocations in force on a day, for the Categories that are live, active or
+// inactive, non-null only (a Category with none is absent). The day is the one
+// budget.InForceDay works out, passed in: the as-of rule is written once, in Go.
+// bucket rides along because the figures sum by it. The order follows the
+// Category list's, so the wire is stable.
+func (q *Queries) AllocationsAsOf(ctx context.Context, arg AllocationsAsOfParams) ([]AllocationsAsOfRow, error) {
+	rows, err := q.db.Query(ctx, allocationsAsOf, arg.HouseholdID, arg.YearMonth, arg.AsOf)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []AllocationsAsOfRow{}
+	for rows.Next() {
+		var i AllocationsAsOfRow
+		if err := rows.Scan(&i.CategoryID, &i.Bucket, &i.Allocation); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const budgetExists = `-- name: BudgetExists :one
 
 SELECT EXISTS (
@@ -38,16 +87,49 @@ func (q *Queries) BudgetExists(ctx context.Context, arg BudgetExistsParams) (boo
 	return exists, err
 }
 
+const copyAllocationsForward = `-- name: CopyAllocationsForward :execrows
+INSERT INTO allocations (household_id, year_month, effective_on, category_id, allocation)
+SELECT c.household_id, $1, $2, c.id, a.allocation
+FROM (SELECT DISTINCT ON (s.category_id) s.category_id, s.allocation
+      FROM allocations s
+      WHERE s.household_id = $3 AND s.year_month = $4
+      ORDER BY s.category_id, s.effective_on DESC) a
+JOIN categories c ON c.id = a.category_id AND c.household_id = $3 AND c.deleted_at IS NULL
+WHERE a.allocation IS NOT NULL
+FOR SHARE OF c
+`
+
+type CopyAllocationsForwardParams struct {
+	YearMonth   string
+	EffectiveOn pgtype.Date
+	HouseholdID pgtype.UUID
+	Source      string
+}
+
+// Carries every allocation's latest state from the source into the Period being
+// materialised, dated the Period's first day: only the non-null ones (a Category
+// whose latest row is "none" has nothing to carry), and only Categories that
+// are not deleted, inactive ones included, so deactivating changes no figure
+// (#130 C8). FOR SHARE on the Category rows it reads, so a delete (which takes
+// FOR UPDATE on the row) and this copy cannot both succeed against one Category.
+func (q *Queries) CopyAllocationsForward(ctx context.Context, arg CopyAllocationsForwardParams) (int64, error) {
+	result, err := q.db.Exec(ctx, copyAllocationsForward,
+		arg.YearMonth,
+		arg.EffectiveOn,
+		arg.HouseholdID,
+		arg.Source,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const copyMonthlyBudgetForward = `-- name: CopyMonthlyBudgetForward :execrows
 INSERT INTO monthly_budgets (household_id, year_month, effective_on, monthly_budget)
 SELECT m.household_id, $1, $2, m.monthly_budget
 FROM monthly_budgets m
-WHERE m.household_id = $3
-  AND m.year_month = coalesce(
-        (SELECT max(e.year_month) FROM monthly_budgets e
-          WHERE e.household_id = $3 AND e.year_month < $1),
-        (SELECT min(l.year_month) FROM monthly_budgets l
-          WHERE l.household_id = $3 AND l.year_month > $1))
+WHERE m.household_id = $3 AND m.year_month = $4
 ORDER BY m.effective_on DESC
 LIMIT 1
 `
@@ -56,23 +138,57 @@ type CopyMonthlyBudgetForwardParams struct {
 	YearMonth   string
 	EffectiveOn pgtype.Date
 	HouseholdID pgtype.UUID
+	Source      string
 }
 
-// Carries the Monthly Budget into a Period being materialised (PRD S12): the
-// latest version of the nearest EARLIER Period that has one, else of the nearest
-// LATER one (reachable only after a period_start_day change re-labelled Today,
-// #130 C3), else nothing, which is the Household's first Period. The copy is
-// dated the Period's first day. The target is never its own source: the
-// comparisons are strict, and the marker was just created in this transaction.
-//
-// The source choice is this one statement. A standing default (Q-17) would be
-// consulted here, first, and no stored row would change.
+// Carries the Monthly Budget's latest version from the source into the Period
+// being materialised, dated the Period's first day (PRD S12). Nothing when the
+// source holds none.
 func (q *Queries) CopyMonthlyBudgetForward(ctx context.Context, arg CopyMonthlyBudgetForwardParams) (int64, error) {
-	result, err := q.db.Exec(ctx, copyMonthlyBudgetForward, arg.YearMonth, arg.EffectiveOn, arg.HouseholdID)
+	result, err := q.db.Exec(ctx, copyMonthlyBudgetForward,
+		arg.YearMonth,
+		arg.EffectiveOn,
+		arg.HouseholdID,
+		arg.Source,
+	)
 	if err != nil {
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const copySource = `-- name: CopySource :one
+SELECT coalesce(max(b.year_month) FILTER (WHERE b.year_month < $1),
+                min(b.year_month) FILTER (WHERE b.year_month > $1))::text AS year_month
+FROM budgets b
+WHERE b.household_id = $2 AND b.year_month <> $1
+  AND (EXISTS (SELECT 1 FROM monthly_budgets m WHERE m.household_id = b.household_id AND m.year_month = b.year_month)
+    OR EXISTS (SELECT 1 FROM allocations x WHERE x.household_id = b.household_id AND x.year_month = b.year_month))
+HAVING count(*) > 0
+`
+
+type CopySourceParams struct {
+	YearMonth   string
+	HouseholdID pgtype.UUID
+}
+
+// Where a Period being materialised copies from (PRD S12): the nearest EARLIER
+// Period that holds a Monthly Budget or an allocation, else the nearest LATER
+// one (reachable only after a period_start_day change re-labelled Today, #130
+// C3), else no row (the HAVING: an aggregate would otherwise answer one NULL),
+// which is the Household's first Period. A marker alone is
+// not a source, and a Period whose allocations were all cleared still is (its
+// latest state is "none"). The target is never its own source: the comparisons
+// are strict, and the marker was just created in this transaction.
+//
+// This is the ONE statement that chooses a source, for the Monthly Budget and
+// the allocations alike. A standing default (Q-17) would be consulted here,
+// first, and no stored row would change.
+func (q *Queries) CopySource(ctx context.Context, arg CopySourceParams) (string, error) {
+	row := q.db.QueryRow(ctx, copySource, arg.YearMonth, arg.HouseholdID)
+	var year_month string
+	err := row.Scan(&year_month)
+	return year_month, err
 }
 
 const insertBudget = `-- name: InsertBudget :one
@@ -142,6 +258,43 @@ func (q *Queries) ListMonthlyBudgetVersions(ctx context.Context, arg ListMonthly
 		return nil, err
 	}
 	return items, nil
+}
+
+const upsertAllocation = `-- name: UpsertAllocation :execrows
+INSERT INTO allocations (household_id, year_month, effective_on, category_id, allocation)
+SELECT c.household_id, $1, $2, c.id, $3
+FROM categories c
+WHERE c.id = $4 AND c.household_id = $5 AND c.deleted_at IS NULL
+FOR SHARE OF c
+ON CONFLICT (household_id, year_month, effective_on, category_id)
+DO UPDATE SET allocation = EXCLUDED.allocation, updated_at = now()
+`
+
+type UpsertAllocationParams struct {
+	YearMonth   string
+	EffectiveOn pgtype.Date
+	Allocation  decimal.NullDecimal
+	CategoryID  pgtype.UUID
+	HouseholdID pgtype.UUID
+}
+
+// One statement per field, keyed by the version's date and Category, so two
+// writers of different Categories both land and a second change on the same
+// Period Day overwrites the first. effective_on is the writer's Today. The
+// Category must be the Household's own and live, checked and share-locked in the
+// same statement: zero rows means it is not.
+func (q *Queries) UpsertAllocation(ctx context.Context, arg UpsertAllocationParams) (int64, error) {
+	result, err := q.db.Exec(ctx, upsertAllocation,
+		arg.YearMonth,
+		arg.EffectiveOn,
+		arg.Allocation,
+		arg.CategoryID,
+		arg.HouseholdID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const upsertMonthlyBudget = `-- name: UpsertMonthlyBudget :exec

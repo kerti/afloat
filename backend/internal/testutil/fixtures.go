@@ -58,3 +58,19 @@ func (tdb *TestDB) CreatePocket(t *testing.T, householdID pgtype.UUID, pocketDis
 	}
 	return id
 }
+
+// CreateCategory inserts an active, live Category of the given bucket
+// ("daily" or "commitment") into a Household and returns its id. A test that
+// needs an inactive or deleted one updates the row; one that needs an allocation
+// inserts it, or goes through the API.
+func (tdb *TestDB) CreateCategory(t *testing.T, householdID pgtype.UUID, categoryDisplayName, bucket string) pgtype.UUID {
+	t.Helper()
+	id := NewUUID(t)
+	_, err := tdb.Pool.Exec(context.Background(),
+		`INSERT INTO categories (id, household_id, category_display_name, bucket) VALUES ($1, $2, $3, $4)`,
+		id, householdID, categoryDisplayName, bucket)
+	if err != nil {
+		t.Fatalf("testutil: create category: %v", err)
+	}
+	return id
+}

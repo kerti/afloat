@@ -105,8 +105,11 @@ describe("creating a Pocket", () => {
     const dialog = await openCreate(user);
     expect(view.param("new")).toBe("pocket");
     const field = within(dialog).getByLabelText(enGB.fields.pocketDisplayName);
-    expect(field).toHaveAttribute("maxlength", "60");
     expect(field).toHaveFocus();
+    // The limit counts code points, as the server does: 70 emoji are cut at 60.
+    await user.paste("😀".repeat(70));
+    expect(Array.from((field as HTMLInputElement).value)).toHaveLength(60);
+    await user.clear(field);
     await user.type(field, "Cash");
     await user.click(submit());
 

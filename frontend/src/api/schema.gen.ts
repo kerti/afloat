@@ -490,6 +490,56 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/categories/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Rename, deactivate or reactivate a Category.
+         * @description Merge-style, as `PATCH /pockets/{id}`: a property left out is unchanged,
+         *     none is required, and `{}` is a no-op that answers the Category as it
+         *     stands. Two writers of different properties both land. The answer is the
+         *     whole Category.
+         *
+         *     `category_display_name` follows the same name rules as at creation
+         *     (BOOTSTRAP.md §5.1.1): trimmed, not blank, at most 60 code points. A name
+         *     already held, case-insensitively and **whatever the bucket**, by another
+         *     Category of the Household that is not deleted (active or inactive) is
+         *     `409 NAME_TAKEN`, with nothing changed; a rename to its own name in
+         *     another case is not a clash. A rename applies to every Budget Period
+         *     alike: it changes a label, never a figure.
+         *
+         *     `bucket` cannot be changed (a flip would move the Category's allocation
+         *     between the Commitments Budget and Unallocated in every Period at once):
+         *     it is not a property of the request, so sending one is
+         *     `INVALID_JSON_BODY`.
+         *
+         *     `active: false` deactivates: the Category keeps its name, its place in
+         *     the list, what it labels and **its allocation**, so no figure moves, and
+         *     it is no longer offered for new capture. `active: true` reactivates.
+         *     Deactivating is not deleting. An inactive Category can be renamed like
+         *     any other, and is still listed by `GET /categories` (the client
+         *     filters).
+         *
+         *     An id that is unknown, that belongs to another Household, or that is
+         *     deleted is `404 NOT_FOUND`, the same answer in every case, and it is
+         *     given even for `{}`: no request confirms another Household's id. The
+         *     Household is the caller's own, from the session, never from the request.
+         *     The id's shape and the body are checked before the lookup, so a foreign
+         *     id with a bad body answers what an unknown one does.
+         */
+        patch: operations["updateCategory"];
+        trace?: never;
+    };
     "/budget": {
         parameters: {
             query?: never;
@@ -522,7 +572,9 @@ export interface paths {
          *     exists; the Commitments Budget is always there, `0.0000` while no
          *     Commitment has an allocation. A Commitment's allocation moves the Daily
          *     Pool, a Daily Category's only Unallocated. Every figure is computed
-         *     here, never stored, and the client derives none (PRD N5a).
+         *     here, never stored, and the client derives none (PRD N5a). The answer
+         *     is read from one snapshot, so a concurrent change is in it whole or
+         *     not at all.
          */
         get: operations["getBudget"];
         put?: never;
@@ -548,6 +600,32 @@ export interface paths {
          *     `monthly_budget` is a `MoneyInput`; more than four decimals is refused,
          *     never rounded. A Monthly Budget cannot be cleared: `null` is
          *     `INVALID_JSON_BODY`.
+         *
+         *     `allocations` changes what Categories are planned at, **in the current
+         *     Budget Period only**: earlier Periods keep what they held, and nothing
+         *     here applies "from now on" to the Periods that follow (a Period carries
+         *     the latest state forward when it is first read). Each item is a
+         *     `category_id` and an `allocation`, a `MoneyInput` or `null`; a Category
+         *     not listed is untouched. `"0"` is an allocation (it is how a retired
+         *     Commitment is freed). `null` means none, and is allowed only for a
+         *     **Daily** Category: for a **Commitment** it is
+         *     `VALIDATION {field: allocation, rule: required}`, because a Commitment
+         *     always has an allocation (PRD S8). Both keys of an item are required:
+         *     an item without `allocation` is a contract failure, never a clear.
+         *
+         *     Checked before anything is written, after the contract's own rules: a
+         *     `category_id` listed twice is `VALIDATION {field: category_id, rule:
+         *     unique}`; then, item by item in the order sent, a `null` for a
+         *     Commitment (`allocation`, `required`) or a `category_id` that is
+         *     unknown, another Household's or deleted (`category_id`, `invalid`, the
+         *     same answer in all three). A Category that stops being live between the
+         *     check and the write is answered the same way, with nothing written.
+         *     Everything the request carries is one transaction: the Monthly Budget,
+         *     every allocation and the materialising of the Period land together or
+         *     not at all. The answer is the Budget read afterwards from one snapshot,
+         *     as `GET /budget` reads it, so it is never half of a concurrent change.
+         *     If that read fails the answer is `500` although the change is saved;
+         *     repeating the request is safe.
          */
         patch: operations["updateBudget"];
         trace?: never;
@@ -797,6 +875,18 @@ export interface components {
             active?: boolean;
         };
         /**
+         * @description What a Category may change, merge-style: a property left out is
+         *     unchanged, and none is required. `id`, `household_id`, `bucket` and any
+         *     other property are not accepted, and `null` is not accepted for either
+         *     listed one. What a Category is planned at is not here: it is the
+         *     Budget's (`PATCH /budget`).
+         */
+        UpdateCategoryRequest: {
+            category_display_name?: string;
+            /** @description `false` deactivates the Category, `true` reactivates it. */
+            active?: boolean;
+        };
+        /**
          * @description Which side of the Monthly Budget a Category is on (CONTEXT.md): a
          *     `commitment` is money committed before the Period starts, a `daily`
          *     Category is spent from the Daily Pool. Chosen at creation and never
@@ -868,7 +958,7 @@ export interface components {
         MoneyInput: string;
         /**
          * @description A `MoneyInput`, or `null` where a write may say "none": what a Category
-         *     is planned at when it is created (a Commitment's `null` is the
+         *     is planned at when it is created or changed (a Commitment's `null` is the
          *     required-allocation rule, a Daily Category's is none). The pattern is
          *     `MoneyInput`'s, written out because OpenAPI 3.0 ignores the siblings of a
          *     `$ref`, and a `nullable` over an `allOf` reports a breach of the pattern
@@ -932,12 +1022,28 @@ export interface components {
             unallocated?: components["schemas"]["Money"];
         };
         /**
+         * @description One Category's allocation in the current Budget Period, set to an
+         *     amount or to none. Both properties are required: `allocation` is
+         *     nullable, and a key that is absent is a contract failure and not a
+         *     clear, so `null` is always something the caller wrote.
+         */
+        AllocationChange: {
+            /** Format: uuid */
+            category_id: string;
+            allocation: components["schemas"]["MoneyInputOrNull"];
+        };
+        /**
          * @description What a Budget change may set, merge-style: a property left out is
-         *     unchanged and none is required. `null` is not accepted for any of
-         *     them. Allocations are added with the Categories slice.
+         *     unchanged and none is required. `null` is not accepted for either
+         *     property (an allocation's own `null` is inside `allocations`).
          */
         UpdateBudgetRequest: {
             monthly_budget?: components["schemas"]["MoneyInput"];
+            /**
+             * @description Allocation changes for the current Budget Period; a Category not
+             *     listed is untouched, and `[]` is a no-op.
+             */
+            allocations?: components["schemas"]["AllocationChange"][];
         };
         ChangePasswordRequest: {
             /** Format: password */
@@ -1151,6 +1257,12 @@ export interface components {
          *     `400 VALIDATION {field: id, rule: invalid}`, from the binder.
          */
         PocketId: string;
+        /**
+         * @description A Category's id. Deliberately no `pattern` and no `maxLength`, for the
+         *     reason `PocketId` gives (#106). A value that is not a UUID is
+         *     `400 VALIDATION {field: id, rule: invalid}`, from the binder.
+         */
+        CategoryId: string;
     };
     requestBodies: never;
     headers: never;
@@ -1639,6 +1751,42 @@ export interface operations {
             };
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
+            409: components["responses"]["Conflict"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    updateCategory: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description A Category's id. Deliberately no `pattern` and no `maxLength`, for the
+                 *     reason `PocketId` gives (#106). A value that is not a UUID is
+                 *     `400 VALIDATION {field: id, rule: invalid}`, from the binder.
+                 */
+                id: components["parameters"]["CategoryId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateCategoryRequest"];
+            };
+        };
+        responses: {
+            /** @description The Category as it now stands. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Category"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
             500: components["responses"]["InternalError"];
         };

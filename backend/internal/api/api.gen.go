@@ -177,6 +177,26 @@ type Allocation struct {
 	CategoryId openapi_types.UUID `json:"category_id"`
 }
 
+// AllocationChange One Category's allocation in the current Budget Period, set to an
+// amount or to none. Both properties are required: `allocation` is
+// nullable, and a key that is absent is a contract failure and not a
+// clear, so `null` is always something the caller wrote.
+type AllocationChange struct {
+	// Allocation A `MoneyInput`, or `null` where a write may say "none": what a Category
+	// is planned at when it is created or changed (a Commitment's `null` is the
+	// required-allocation rule, a Daily Category's is none). The pattern is
+	// `MoneyInput`'s, written out because OpenAPI 3.0 ignores the siblings of a
+	// `$ref`, and a `nullable` over an `allOf` reports a breach of the pattern
+	// as a body that is not the declared shape instead of as the pattern (a
+	// test pins that the two stay equal). Everything `MoneyInput` says about
+	// the spelling applies.
+	//
+	//
+	// Example: 3000000
+	Allocation *MoneyInputOrNull  `json:"allocation"`
+	CategoryId openapi_types.UUID `json:"category_id"`
+}
+
 // AllowanceMode How the daily allowance is read. Default `adaptive`.
 type AllowanceMode string
 
@@ -329,7 +349,7 @@ type ChangePasswordRequest struct {
 // for a Daily Category, where absent and `null` both mean none.
 type CreateCategoryRequest struct {
 	// Allocation A `MoneyInput`, or `null` where a write may say "none": what a Category
-	// is planned at when it is created (a Commitment's `null` is the
+	// is planned at when it is created or changed (a Commitment's `null` is the
 	// required-allocation rule, a Daily Category's is none). The pattern is
 	// `MoneyInput`'s, written out because OpenAPI 3.0 ignores the siblings of a
 	// `$ref`, and a `nullable` over an `allOf` reports a breach of the pattern
@@ -557,7 +577,7 @@ type Money = string
 type MoneyInput = string
 
 // MoneyInputOrNull A `MoneyInput`, or `null` where a write may say "none": what a Category
-// is planned at when it is created (a Commitment's `null` is the
+// is planned at when it is created or changed (a Commitment's `null` is the
 // required-allocation rule, a Daily Category's is none). The pattern is
 // `MoneyInput`'s, written out because OpenAPI 3.0 ignores the siblings of a
 // `$ref`, and a `nullable` over an `allOf` reports a breach of the pattern
@@ -614,9 +634,13 @@ type PocketList struct {
 }
 
 // UpdateBudgetRequest What a Budget change may set, merge-style: a property left out is
-// unchanged and none is required. `null` is not accepted for any of
-// them. Allocations are added with the Categories slice.
+// unchanged and none is required. `null` is not accepted for either
+// property (an allocation's own `null` is inside `allocations`).
 type UpdateBudgetRequest struct {
+	// Allocations Allocation changes for the current Budget Period; a Category not
+	// listed is untouched, and `[]` is a no-op.
+	Allocations *[]AllocationChange `json:"allocations,omitempty"`
+
 	// MonthlyBudget A non-negative decimal sent as a string: at most 16 integer digits and
 	// at most 4 decimals, no sign, no exponent, no separator and no
 	// whitespace. More than four decimals is refused and never rounded. The
@@ -626,6 +650,17 @@ type UpdateBudgetRequest struct {
 	//
 	// Example: 9000000
 	MonthlyBudget *MoneyInput `json:"monthly_budget,omitempty"`
+}
+
+// UpdateCategoryRequest What a Category may change, merge-style: a property left out is
+// unchanged, and none is required. `id`, `household_id`, `bucket` and any
+// other property are not accepted, and `null` is not accepted for either
+// listed one. What a Category is planned at is not here: it is the
+// Budget's (`PATCH /budget`).
+type UpdateCategoryRequest struct {
+	// Active `false` deactivates the Category, `true` reactivates it.
+	Active              *bool   `json:"active,omitempty"`
+	CategoryDisplayName *string `json:"category_display_name,omitempty"`
 }
 
 // UpdateHouseholdRequest The settings a Household may change today, merge-style: a property left
@@ -667,6 +702,9 @@ type UpdatePocketRequest struct {
 	Active            *bool   `json:"active,omitempty"`
 	PocketDisplayName *string `json:"pocket_display_name,omitempty"`
 }
+
+// CategoryId defines model for CategoryId.
+type CategoryId = openapi_types.UUID
 
 // PocketId defines model for PocketId.
 type PocketId = openapi_types.UUID
@@ -745,6 +783,9 @@ type UpdateBudgetJSONRequestBody = UpdateBudgetRequest
 // CreateCategoryJSONRequestBody defines body for CreateCategory for application/json ContentType.
 type CreateCategoryJSONRequestBody = CreateCategoryRequest
 
+// UpdateCategoryJSONRequestBody defines body for UpdateCategory for application/json ContentType.
+type UpdateCategoryJSONRequestBody = UpdateCategoryRequest
+
 // UpdateHouseholdJSONRequestBody defines body for UpdateHousehold for application/json ContentType.
 type UpdateHouseholdJSONRequestBody = UpdateHouseholdRequest
 
@@ -792,6 +833,9 @@ type ServerInterface interface {
 	// CreateCategory Create a Category.
 	// (POST /categories)
 	CreateCategory(w http.ResponseWriter, r *http.Request)
+	// UpdateCategory Rename, deactivate or reactivate a Category.
+	// (PATCH /categories/{id})
+	UpdateCategory(w http.ResponseWriter, r *http.Request, id CategoryId)
 	// GetHealth Liveness and readiness of this instance.
 	// (GET /health)
 	GetHealth(w http.ResponseWriter, r *http.Request)
@@ -888,6 +932,12 @@ func (_ Unimplemented) ListCategories(w http.ResponseWriter, r *http.Request) {
 // CreateCategory Create a Category.
 // (POST /categories)
 func (_ Unimplemented) CreateCategory(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// UpdateCategory Rename, deactivate or reactivate a Category.
+// (PATCH /categories/{id})
+func (_ Unimplemented) UpdateCategory(w http.ResponseWriter, r *http.Request, id CategoryId) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
@@ -1097,6 +1147,32 @@ func (siw *ServerInterfaceWrapper) CreateCategory(w http.ResponseWriter, r *http
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.CreateCategory(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// UpdateCategory operation middleware
+func (siw *ServerInterfaceWrapper) UpdateCategory(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id CategoryId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", chi.URLParam(r, "id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: r.URL.RawPath == ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.UpdateCategory(w, r, id)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -1459,6 +1535,9 @@ func HandlerWithOptions(si ServerInterface, options ChiServerOptions) http.Handl
 	})
 	r.Group(func(r chi.Router) {
 		r.Post(options.BaseURL+"/categories", wrapper.CreateCategory)
+	})
+	r.Group(func(r chi.Router) {
+		r.Patch(options.BaseURL+"/categories/{id}", wrapper.UpdateCategory)
 	})
 	r.Group(func(r chi.Router) {
 		r.Get(options.BaseURL+"/budget", wrapper.GetBudget)
@@ -2179,6 +2258,99 @@ func (response CreateCategory409JSONResponse) VisitCreateCategoryResponse(w http
 type CreateCategory500JSONResponse struct{ InternalErrorJSONResponse }
 
 func (response CreateCategory500JSONResponse) VisitCreateCategoryResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateCategoryRequestObject struct {
+	Id   CategoryId `json:"id"`
+	Body *UpdateCategoryJSONRequestBody
+}
+
+type UpdateCategoryResponseObject interface {
+	VisitUpdateCategoryResponse(w http.ResponseWriter) error
+}
+
+type UpdateCategory200JSONResponse Category
+
+func (response UpdateCategory200JSONResponse) VisitUpdateCategoryResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateCategory400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response UpdateCategory400JSONResponse) VisitUpdateCategoryResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateCategory401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response UpdateCategory401JSONResponse) VisitUpdateCategoryResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateCategory404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response UpdateCategory404JSONResponse) VisitUpdateCategoryResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateCategory409JSONResponse struct{ ConflictJSONResponse }
+
+func (response UpdateCategory409JSONResponse) VisitUpdateCategoryResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateCategory500JSONResponse struct{ InternalErrorJSONResponse }
+
+func (response UpdateCategory500JSONResponse) VisitUpdateCategoryResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response); err != nil {
@@ -2985,6 +3157,9 @@ type StrictServerInterface interface {
 	// CreateCategory Create a Category.
 	// (POST /categories)
 	CreateCategory(ctx context.Context, request CreateCategoryRequestObject) (CreateCategoryResponseObject, error)
+	// UpdateCategory Rename, deactivate or reactivate a Category.
+	// (PATCH /categories/{id})
+	UpdateCategory(ctx context.Context, request UpdateCategoryRequestObject) (UpdateCategoryResponseObject, error)
 	// GetHealth Liveness and readiness of this instance.
 	// (GET /health)
 	GetHealth(ctx context.Context, request GetHealthRequestObject) (GetHealthResponseObject, error)
@@ -3334,6 +3509,39 @@ func (sh *strictHandler) CreateCategory(w http.ResponseWriter, r *http.Request) 
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(CreateCategoryResponseObject); ok {
 		if err := validResponse.VisitCreateCategoryResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// UpdateCategory operation middleware
+func (sh *strictHandler) UpdateCategory(w http.ResponseWriter, r *http.Request, id CategoryId) {
+	var request UpdateCategoryRequestObject
+
+	request.Id = id
+
+	var body UpdateCategoryJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.UpdateCategory(ctx, request.(UpdateCategoryRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "UpdateCategory")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(UpdateCategoryResponseObject); ok {
+		if err := validResponse.VisitUpdateCategoryResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

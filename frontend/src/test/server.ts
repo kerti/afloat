@@ -14,6 +14,7 @@ type CreatePocketBody = components["schemas"]["CreatePocketRequest"];
 type UpdatePocketBody = components["schemas"]["UpdatePocketRequest"];
 type Category = components["schemas"]["Category"];
 type CreateCategoryBody = components["schemas"]["CreateCategoryRequest"];
+type UpdateCategoryBody = components["schemas"]["UpdateCategoryRequest"];
 type Budget = components["schemas"]["Budget"];
 type UpdateBudgetBody = components["schemas"]["UpdateBudgetRequest"];
 type ChoiceBody = components["schemas"]["OnboardingChoiceRequest"];
@@ -50,6 +51,10 @@ export type State = {
   // body it was sent.
   categories?: Category[];
   categoryPosts?: CreateCategoryBody[];
+  // Every PATCH /categories/{id}, in order, with the id it named.
+  categoryPatches?: { id: string; body: UpdateCategoryBody }[];
+  // A code the next PATCH /budget answers with instead of applying (then cleared).
+  budgetPatchFails?: ErrorBody["code"];
   // The fake server's Budget for the current Period (absent: a first read
   // answers an empty one), and every PATCH /budget body, in order.
   budget?: Budget;
@@ -336,6 +341,32 @@ export function defaultHandlers(state: State = { signedIn: false, me: alice }) {
       }
       return HttpResponse.json(category, { status: 201 });
     }),
+    http.patch("/api/categories/:id", async ({ request, params }) => {
+      if (!state.signedIn) return HttpResponse.json(envelope("UNAUTHORIZED"), { status: 401 });
+      const body = (await request.json()) as UpdateCategoryBody;
+      (state.categoryPatches ??= []).push({ id: params.id as string, body });
+      const list = (state.categories ??= []);
+      const held = list.find((c) => c.id === params.id);
+      if (!held) return HttpResponse.json(envelope("NOT_FOUND"), { status: 404 });
+      const name = body.category_display_name?.trim();
+      if (name === "") {
+        return HttpResponse.json(
+          envelope("VALIDATION", { field: "category_display_name", rule: "required" }),
+          { status: 400 },
+        );
+      }
+      if (
+        name !== undefined &&
+        list.some(
+          (c) => c.id !== held.id && c.category_display_name.toLowerCase() === name.toLowerCase(),
+        )
+      ) {
+        return HttpResponse.json(envelope("NAME_TAKEN"), { status: 409 });
+      }
+      if (name !== undefined) held.category_display_name = name;
+      if (body.active !== undefined) held.active = body.active;
+      return HttpResponse.json(held);
+    }),
     http.get("/api/budget", () => {
       if (!state.signedIn) return HttpResponse.json(envelope("UNAUTHORIZED"), { status: 401 });
       return HttpResponse.json((state.budget ??= emptyBudget));
@@ -344,12 +375,48 @@ export function defaultHandlers(state: State = { signedIn: false, me: alice }) {
       if (!state.signedIn) return HttpResponse.json(envelope("UNAUTHORIZED"), { status: 401 });
       const body = (await request.json()) as UpdateBudgetBody;
       (state.budgetPatches ??= []).push(body);
+      if (state.budgetPatchFails) {
+        const code = state.budgetPatchFails;
+        state.budgetPatchFails = undefined;
+        return HttpResponse.json(envelope(code), { status: code === "INTERNAL" ? 500 : 400 });
+      }
+      // As the handler: a repeated category_id is `unique`; then, item by item in
+      // the order sent, a Category that is not a live one of this Household is
+      // `invalid`, and null for a Commitment is `allocation required`.
+      const items = body.allocations ?? [];
+      const bad = (field: string, rule: string) =>
+        HttpResponse.json(envelope("VALIDATION", { field, rule }), { status: 400 });
+      if (new Set(items.map((i) => i.category_id)).size !== items.length) {
+        return bad("category_id", "unique");
+      }
+      for (const item of items) {
+        const known = state.categories?.find((c) => c.id === item.category_id);
+        if (!known) return bad("category_id", "invalid");
+        if (item.allocation === null && known.bucket === "commitment") {
+          return bad("allocation", "required");
+        }
+      }
       const held = (state.budget ??= emptyBudget);
       if (body.monthly_budget !== undefined) {
         // As the server: the amount comes back at exactly four decimals.
         const [int = "0", frac = ""] = body.monthly_budget.split(".");
         const amount = `${int}.${frac.padEnd(4, "0")}`;
         state.budget = { ...held, monthly_budget: amount, daily_pool: amount, unallocated: amount };
+      }
+      if (body.allocations) {
+        const cur = state.budget!;
+        let allocations = cur.allocations;
+        for (const a of body.allocations) {
+          allocations = allocations.filter((x) => x.category_id !== a.category_id);
+          if (a.allocation !== null) {
+            const [int = "0", frac = ""] = a.allocation.split(".");
+            allocations.push({
+              category_id: a.category_id,
+              allocation: `${int}.${frac.padEnd(4, "0")}`,
+            });
+          }
+        }
+        state.budget = { ...cur, allocations };
       }
       return HttpResponse.json(state.budget);
     }),

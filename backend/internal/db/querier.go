@@ -191,6 +191,18 @@ type Querier interface {
 	// Not UpsertCredential, which would let both through.
 	SwapCredentialPasswordHash(ctx context.Context, arg SwapCredentialPasswordHashParams) (int64, error)
 	TouchSession(ctx context.Context, arg TouchSessionParams) error
+	// Rename and/or (de)activate, merge-style, in one statement so a rename and a
+	// deactivation sent by two writers both land. Both arguments are sqlc.narg so
+	// that a false for active is a value and not "absent"; neither column is
+	// nullable, so coalesce cannot be mistaken for "clear". bucket is not here:
+	// it is fixed at creation (#130 C7). A row that is another Household's, unknown
+	// or deleted is no row: the caller answers all three NOT_FOUND. A 23505 on
+	// categories_household_name_idx is a rename into a held name. Deactivating
+	// touches no allocation, so no figure moves.
+	//
+	// updated_at is set here because the baseline has no trigger, and from the
+	// database's own clock (BOOTSTRAP.md §5.1).
+	UpdateCategory(ctx context.Context, arg UpdateCategoryParams) (Category, error)
 	// Household settings (PRD S3). Tenant-scoped in SQL: the id is the
 	// authenticated User's household_id, never anything the request supplied
 	// (BOOTSTRAP.md §4).

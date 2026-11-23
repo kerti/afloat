@@ -95,14 +95,18 @@ tag each, so it has components only. A missing element is proposed first (see Ho
 **Lists**
 
 - `ListCard`, `ListRow` (`components/List.tsx`): the bordered divided list, and its 44px tappable
-  row that opens an edit dialog (muted title when inactive, a trailing badge slot).
+  row that opens an edit dialog (muted title when inactive, a trailing badge slot). A row may end in
+  an amount, `trailing`, as `FigureRow` shows one: `tabular-nums`, medium. `trailingMuted` sets the
+  words that stand where an amount would ("No allocation") in the muted colour at regular weight. A
+  Category with no allocation reads "No allocation" there and is never shown as zero; with a badge,
+  the badge sits beside the title and the amount ends the row. Category rows on `/budget` are
+  `ListRow`s. (Confirmed by the maintainer, 23 Nov 2026, for #130 PR 3.)
 - `Badge` (`components/Badge.tsx`): the "Inactive" pill. Neutral only.
 - `FigureRow` (`components/FigureRow.tsx`): a read-only `li` for a `ListCard`, label left, amount
   right in `tabular-nums` medium. A negative figure is neutral, never coloured. A figure that cannot
   be computed yet is hidden, not shown as zero. An optional `badge` (the "Inactive" `Badge`) sits
-  beside the label, and `muted` sets the words that stand where an amount would ("No allocation") in
-  the muted colour at regular weight. A Category with no allocation reads "No allocation" there and
-  is never shown as zero. (Confirmed by the maintainer, 23 Nov 2026, for #130.)
+  beside the label, and `muted` sets the words that stand where an amount would in the muted colour at
+  regular weight. (Confirmed by the maintainer, 23 Nov 2026, for #130.)
 
 **States** (`components/states.tsx`): `Loading`, `ErrorState`. `UpdatePrompt`
 (`components/UpdatePrompt.tsx`): the update banner.
@@ -192,7 +196,8 @@ role table follows Uruni `docs/Design-System.md` § Typography.)
   dialog. No nested dialogs, no mode-switching dialogs, no unbounded list inside a dialog. (Uruni.)
 - **Tapping a row opens its edit dialog.** The row is one full-width button, at least 44px, with a
   hover tint and a focus ring; its badges (Inactive) sit inside it; its accessible name names the
-  record ("Edit OVO"). No per-row pencil, trash or ⋮ menu. A row that navigates to another screen ends
+  record ("Edit OVO"), and its figure when the row shows one ("Edit Rent, Rp3,000,000", "Edit Transport,
+  No allocation"), then ", inactive" when it is. (Confirmed by the maintainer, 23 Nov 2026, for #130 PR 3.) No per-row pencil, trash or ⋮ menu. A row that navigates to another screen ends
   in a chevron; a row that opens a dialog does not. (Uruni `TransactionList`, list cards.)
 - **The create action** is one full-width button below the list ("Add a Pocket"), the same button the
   empty state offers. No header "+" and no floating button. (Uruni Locations.)
@@ -205,8 +210,18 @@ role table follows Uruni `docs/Design-System.md` § Typography.)
   the dialog at once and raise the Undo toast; Delete has no confirm (R3, P6). (Uruni #768; ruled 22 Nov.)
 - **Footer:** holds only the dialog's decision. Create: [Cancel | Add]. Edit: [Save] alone, with no
   Cancel; the X, Esc, back and an outside tap close it. So the edit dialog reads: field, hairline,
-  [Deactivate or Reactivate | Delete], footer [Save]. A screen with more than three buttons needs a
+  [Deactivate or Reactivate | Delete], footer [Save]. The Category edit dialog reads: name, Kind,
+  allocation, DetailActions with Deactivate or Reactivate alone (full row), footer [Save]. (Confirmed by the maintainer, 23 Nov 2026, for #130 PR 3.) A screen with more than three buttons needs a
   reason. (Uruni `Locations.tsx`, `DetailActions.tsx`; ruled 22 Nov.)
+- **A field that is fixed** once the record exists (a Category's Kind) is shown in the edit dialog as
+  the create dialog's own control, disabled, never as plain text or dropped. (Confirmed by the maintainer, 23 Nov 2026, for #130 PR 3.)
+- **An inactive Category row** gets a muted title, as an inactive Pocket does. The "Show inactive
+  Categories (N)" count covers only the rows still hidden: an inactive Category holding a non-zero
+  allocation is always listed (R9) and is not counted, and the checkbox is absent when N is 0. (Confirmed by the maintainer, 23 Nov 2026, for #130 PR 3.)
+- **A record that is gone during an edit** (another member deleted it; the save answers NOT_FOUND, or
+  for an allocation `VALIDATION {category_id, invalid}`) gets an error toast, a refetch of what it
+  touches, and the dialog closes: with the record gone there is no form left to hold the message.
+  (Confirmed by the maintainer, 23 Nov 2026, for #130 PR 3.)
 - **Outside tap:** only a dialog that **records money** (an Expense, a payment: a fact that happened)
   ignores a tap outside it (`posts` on `DialogContent`); it closes by its X, Esc or its buttons. A
   dialog that sets a plan, such as a Category's allocation, is not a record of money and closes on an
@@ -250,6 +265,9 @@ role table follows Uruni `docs/Design-System.md` § Typography.)
   Light, Dark, the default first. (Confirmed by the maintainer, 23 Nov 2026, for #124.)
 - **A Category's bucket field** is labelled "Kind" in en-GB ("Jenis" in id-ID), never "Type", and
   its options read Daily, then Commitment. (Confirmed by the maintainer, 23 Nov 2026, for #130.)
+- **A name's length counts code points**, as the server does, not UTF-16 units: a name field has no
+  `maxLength` attribute, its input is clamped with `lib/codePoints.ts` (`clampName`, 60), so an emoji
+  name is not cut at 30. (Confirmed by the maintainer, 23 Nov 2026, for #130 PR 3.)
 - **Money input** groups digits live, in the app locale, as the user types, and keeps the caret after
   the same digit when separators come and go (Uruni `AmountInput`, #749). A typed `.` or `,` is the
   decimal point; paste goes through a strict locale parser; the value on the wire is a canonical

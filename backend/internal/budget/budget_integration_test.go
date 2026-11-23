@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -61,8 +62,9 @@ type fixture struct {
 // finds its Period already there must open none.
 type countingBeginner struct {
 	budget.Beginner
-	mu sync.Mutex
-	n  int
+	mu    sync.Mutex
+	n     int
+	reads []pgx.TxOptions
 }
 
 func (b *countingBeginner) Begin(ctx context.Context) (pgx.Tx, error) {
@@ -72,10 +74,27 @@ func (b *countingBeginner) Begin(ctx context.Context) (pgx.Tx, error) {
 	return b.Beginner.Begin(ctx)
 }
 
+// BeginTx is the snapshot read of GET /budget: counted apart from a write's
+// Begin, with the options it asked for.
+func (b *countingBeginner) BeginTx(ctx context.Context, opts pgx.TxOptions) (pgx.Tx, error) {
+	b.mu.Lock()
+	b.reads = append(b.reads, opts)
+	b.mu.Unlock()
+	return b.Beginner.BeginTx(ctx, opts)
+}
+
+// count is the write transactions opened.
 func (b *countingBeginner) count() int {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.n
+}
+
+// snapshots is the read transactions opened, with their options.
+func (b *countingBeginner) snapshots() []pgx.TxOptions {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return slices.Clone(b.reads)
 }
 
 // 10:00 on 14 Nov 2026 in Jakarta, the User's zone unless a test moves them.
@@ -264,18 +283,27 @@ func TestAHouseholdsFirstReadMaterialisesItsPeriodAndHasNoMonthlyBudget(t *testi
 	}
 }
 
-func TestARequestThatFindsThePeriodThereOpensNoTransactionAndWritesNothing(t *testing.T) {
+// A request that finds its Period there writes nothing, so it opens no write
+// transaction; its one transaction is the snapshot it reads from, which is
+// REPEATABLE READ and READ ONLY (see TestAConcurrentEditCannotTearAGetBudget).
+func TestARequestThatFindsThePeriodThereOpensNoWriteTransactionAndWritesNothing(t *testing.T) {
 	f := newFixture(t)
 	householdID, _, ctx := f.member(t, "Home", "a@example.com")
 	f.get(ctx, t)
 	beforeMarkers := f.markers(t, householdID)
 	opened := f.begins.count()
+	snapshots := len(f.begins.snapshots())
 
 	f.get(ctx, t)
 	f.get(ctx, t)
 
 	if n := f.begins.count(); n != opened {
-		t.Errorf("transactions opened by two reads of an existing Period = %d, want 0", n-opened)
+		t.Errorf("write transactions opened by two reads of an existing Period = %d, want 0", n-opened)
+	}
+	got := f.begins.snapshots()[snapshots:]
+	want := pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly}
+	if len(got) != 2 || got[0] != want || got[1] != want {
+		t.Errorf("snapshots opened by two reads = %+v, want two %+v", got, want)
 	}
 	if after := f.markers(t, householdID); after != beforeMarkers {
 		t.Errorf("marker changed by a read:\n%s\n%s", beforeMarkers, after)
@@ -912,6 +940,18 @@ func (b breakingBeginner) Begin(ctx context.Context) (pgx.Tx, error) {
 	return failingTx{Tx: tx, failOn: b.failOn, failCommit: b.failCommit}, nil
 }
 
+// BeginTx breaks the snapshot read of GET /budget the same way.
+func (b breakingBeginner) BeginTx(ctx context.Context, opts pgx.TxOptions) (pgx.Tx, error) {
+	if b.failBegin {
+		return nil, errBoom
+	}
+	tx, err := b.Beginner.BeginTx(ctx, opts)
+	if err != nil {
+		return nil, err
+	}
+	return failingTx{Tx: tx, failOn: b.failOn, failCommit: b.failCommit}, nil
+}
+
 // capturedLog collects what the handlers log, so a test can show that a 500
 // leaks no amount.
 func capturedLog(t *testing.T) *bytes.Buffer {
@@ -924,21 +964,34 @@ func capturedLog(t *testing.T) *bytes.Buffer {
 }
 
 func TestAFailureWhileMaterialisingLeavesNoMarkerAndAnswers500(t *testing.T) {
+	// What a failed GET leaves behind. A failure while the Period is being
+	// materialised leaves nothing (the marker and its copy are one transaction);
+	// the answer is read after that transaction has committed, so a failure of
+	// the read leaves the Period whole: marker and copy, never one without the
+	// other.
+	const (
+		nothing = "nothing"
+		whole   = "whole"
+	)
+	// "whole" rows fail only the read of the answer, which both GET and PATCH
+	// make after their writes have committed.
 	for _, tc := range []struct {
 		name string
 		brk  breakingBeginner
 		// whether a GET reaches the failing step too, or only a change does
 		get bool
+		// what a failed GET leaves
+		left string
 	}{
-		{"begin", breakingBeginner{failBegin: true}, true},
-		{"the copy", breakingBeginner{failOn: "FROM monthly_budgets m"}, true},
-		{"the choice of source", breakingBeginner{failOn: "FROM budgets b"}, true},
-		{"the allocation copy", breakingBeginner{failOn: "INSERT INTO allocations"}, true},
-		{"the allocation read", breakingBeginner{failOn: "FROM allocations s"}, true},
-		{"the marker", breakingBeginner{failOn: "INSERT INTO budgets"}, true},
-		{"the read", breakingBeginner{failOn: "ORDER BY effective_on"}, true},
-		{"commit", breakingBeginner{failCommit: true}, true},
-		{"the version", breakingBeginner{failOn: "DO UPDATE SET monthly_budget"}, false},
+		{"begin", breakingBeginner{failBegin: true}, true, nothing},
+		{"the copy", breakingBeginner{failOn: "FROM monthly_budgets m"}, true, nothing},
+		{"the choice of source", breakingBeginner{failOn: "FROM budgets b"}, true, nothing},
+		{"the allocation copy", breakingBeginner{failOn: "INSERT INTO allocations"}, true, nothing},
+		{"the marker", breakingBeginner{failOn: "INSERT INTO budgets"}, true, nothing},
+		{"commit", breakingBeginner{failCommit: true}, true, nothing},
+		{"the version read", breakingBeginner{failOn: "ORDER BY effective_on"}, true, whole},
+		{"the allocation read", breakingBeginner{failOn: "c.bucket, a.allocation"}, true, whole},
+		{"the version", breakingBeginner{failOn: "DO UPDATE SET monthly_budget"}, false, nothing},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			brk := tc.brk
@@ -950,6 +1003,27 @@ func TestAFailureWhileMaterialisingLeavesNoMarkerAndAnswers500(t *testing.T) {
 			f.allocate(t, householdID, "2026-10", "2026-10-01", f.category(t, householdID, "Rent", "commitment"), "654321")
 			logs := capturedLog(t)
 
+			wantMarkers := "2026-10"
+			wantMonthly := "2026-10 2026-10-01 123456.0000"
+			wantAllocations := "2026-10 2026-10-01 Rent 654321.0000"
+			if tc.get && tc.left == whole {
+				wantMarkers = "2026-10,2026-11"
+				wantMonthly += "; 2026-11 2026-11-01 123456.0000"
+				wantAllocations += "; 2026-11 2026-11-01 Rent 654321.0000"
+			}
+			assertLeft := func(when string) {
+				t.Helper()
+				if labels := f.markerLabels(t, householdID); labels != wantMarkers {
+					t.Errorf("budgets = %q %s, want %q", labels, when, wantMarkers)
+				}
+				if v := f.shape(t, householdID); v != wantMonthly {
+					t.Errorf("monthly_budgets = %q %s, want %q", v, when, wantMonthly)
+				}
+				if v := f.allocationShape(t, householdID); v != wantAllocations {
+					t.Errorf("allocations = %q %s, want %q", v, when, wantAllocations)
+				}
+			}
+
 			if tc.get {
 				resp, err := f.handlers.GetBudget(ctx, api.GetBudgetRequestObject{})
 				if err != nil {
@@ -958,35 +1032,57 @@ func TestAFailureWhileMaterialisingLeavesNoMarkerAndAnswers500(t *testing.T) {
 				if got, ok := resp.(api.GetBudget500JSONResponse); !ok || got.Code != api.INTERNAL {
 					t.Errorf("GetBudget = %#v, want 500 INTERNAL", resp)
 				}
-				if labels := f.markerLabels(t, householdID); labels != "2026-10" {
-					t.Errorf("budgets = %q: a failed materialisation must leave no marker behind", labels)
-				}
-				if v := f.shape(t, householdID); v != "2026-10 2026-10-01 123456.0000" {
-					t.Errorf("monthly_budgets = %q: a failed materialisation must leave no copy behind", v)
-				}
-				if v := f.allocationShape(t, householdID); v != "2026-10 2026-10-01 Rent 654321.0000" {
-					t.Errorf("allocations = %q: a failed materialisation must leave no copy behind", v)
-				}
+				assertLeft("after a failed read")
 			}
 
-			// The same for a change.
+			// The same for a change. What it writes is one transaction and never
+			// leaves a half; its answer is read after that commits, so a failure
+			// of the read is a 500 with the change saved (the maintainer's
+			// ruling), and a failure of the write is a 500 with nothing changed.
 			uresp := f.patchResp(ctx, t, "9000000")
 			if got, ok := uresp.(api.UpdateBudget500JSONResponse); !ok || got.Code != api.INTERNAL {
 				t.Errorf("UpdateBudget = %#v, want 500 INTERNAL", uresp)
 			}
-			if labels := f.markerLabels(t, householdID); labels != "2026-10" {
-				t.Errorf("budgets = %q after a failed change", labels)
+			if tc.left == whole && tc.get {
+				wantMonthly += "; 2026-11 2026-11-14 9000000.0000"
 			}
-			if v := f.shape(t, householdID); v != "2026-10 2026-10-01 123456.0000" {
-				t.Errorf("monthly_budgets = %q after a failed change", v)
-			}
-			if v := f.allocationShape(t, householdID); v != "2026-10 2026-10-01 Rent 654321.0000" {
-				t.Errorf("allocations = %q after a failed change", v)
-			}
+			assertLeft("after a failed change")
 			for _, secret := range []string{"123456", "654321", "9000000", "Home", "Rent", "a@example.com"} {
 				if strings.Contains(logs.String(), secret) {
 					t.Errorf("the log leaks %q:\n%s", secret, logs.String())
 				}
+			}
+		})
+	}
+}
+
+// Reading an existing Period needs no write, so everything that can fail is the
+// snapshot: the transaction, either of its two statements, or ending it.
+func TestAFailureOfTheSnapshotReadIs500(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		brk  breakingBeginner
+	}{
+		{"begin", breakingBeginner{failBegin: true}},
+		{"the version read", breakingBeginner{failOn: "ORDER BY effective_on"}},
+		{"the allocation read", breakingBeginner{failOn: "c.bucket, a.allocation"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			brk := tc.brk
+			f := newFixtureWith(t, nil, func(b budget.Beginner) budget.Beginner { brk.Beginner = b; return brk })
+			householdID, _, ctx := f.member(t, "Home", "a@example.com")
+			f.exec(t, `INSERT INTO budgets (household_id, year_month) VALUES ($1, '2026-11')`, householdID)
+			logs := capturedLog(t)
+
+			resp, err := f.handlers.GetBudget(ctx, api.GetBudgetRequestObject{})
+			if err != nil {
+				t.Fatalf("GetBudget error: %v", err)
+			}
+			if got, ok := resp.(api.GetBudget500JSONResponse); !ok || got.Code != api.INTERNAL {
+				t.Errorf("GetBudget = %#v, want 500 INTERNAL", resp)
+			}
+			if strings.Contains(logs.String(), "Home") || strings.Contains(logs.String(), "a@example.com") {
+				t.Errorf("the log leaks user content:\n%s", logs.String())
 			}
 		})
 	}
@@ -1013,7 +1109,7 @@ func TestAFailedChangeOnAFreshPeriodRollsBackItsMarker(t *testing.T) {
 // and it logs no amount.
 type brokenQuerier struct {
 	db.Querier
-	household, exists, list bool
+	household, exists bool
 }
 
 func (q brokenQuerier) GetHouseholdByID(ctx context.Context, id pgtype.UUID) (db.Household, error) {
@@ -1030,13 +1126,6 @@ func (q brokenQuerier) BudgetExists(ctx context.Context, arg db.BudgetExistsPara
 	return q.Querier.BudgetExists(ctx, arg)
 }
 
-func (q brokenQuerier) ListMonthlyBudgetVersions(ctx context.Context, arg db.ListMonthlyBudgetVersionsParams) ([]db.ListMonthlyBudgetVersionsRow, error) {
-	if q.list {
-		return nil, errBoom
-	}
-	return q.Querier.ListMonthlyBudgetVersions(ctx, arg)
-}
-
 func TestADatabaseFailureIs500(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
@@ -1045,14 +1134,13 @@ func TestADatabaseFailureIs500(t *testing.T) {
 	}{
 		{"the Household lookup", brokenQuerier{household: true}, true},
 		{"the existence check", brokenQuerier{exists: true}, false},
-		{"the version list of an existing Period", brokenQuerier{list: true}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			brk := tc.brk
 			f := newFixtureWith(t, func(q db.Querier) db.Querier { brk.Querier = q; return brk }, nil)
 			householdID, _, ctx := f.member(t, "Home", "a@example.com")
-			// The Period exists already, so a GET reads on the plain Querier
-			// and the failing statement is the only thing that can fail it.
+			// The Period exists already, so a GET writes nothing and the
+			// failing statement is the only thing that can fail it.
 			f.exec(t, `INSERT INTO budgets (household_id, year_month) VALUES ($1, '2026-11')`, householdID)
 			logs := capturedLog(t)
 

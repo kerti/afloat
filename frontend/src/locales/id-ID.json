@@ -32,7 +32,8 @@
     "monthly_budget": "anggaran bulanan",
     "category_display_name": "nama kategori",
     "bucket": "jenis",
-    "allocation": "alokasi"
+    "allocation": "alokasi",
+    "category_id": "kategori"
   },
   "login": {
     "title": "Masuk",
@@ -204,6 +205,15 @@
     "allocationRequired": "Masukkan alokasi.",
     "allocationCommitmentHint": "Rencana untuk komitmen ini pada periode anggaran ini. Isi 0 jika belum ada.",
     "allocationDailyHint": "Opsional. Rencana untuk kategori ini pada periode anggaran ini.",
-    "noAllocation": "Belum ada alokasi"
+    "noAllocation": "Belum ada alokasi",
+    "editHeading": "Ubah kategori",
+    "editFor": "Ubah {{name}}, {{amount}}",
+    "editForInactive": "Ubah {{name}}, {{amount}}, nonaktif",
+    "save": "Simpan",
+    "saving": "Menyimpan…",
+    "deactivate": "Nonaktifkan",
+    "reactivate": "Aktifkan kembali",
+    "showInactive": "Tampilkan kategori nonaktif ({{count}})",
+    "allocationDailyEditHint": "Opsional. Kosongkan jika kategori ini tidak punya alokasi pada periode anggaran ini."
   }
 }

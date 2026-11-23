@@ -120,3 +120,51 @@ func (q *Queries) ListCategories(ctx context.Context, householdID pgtype.UUID) (
 	}
 	return items, nil
 }
+
+const updateCategory = `-- name: UpdateCategory :one
+UPDATE categories SET
+    category_display_name = coalesce($1, category_display_name),
+    active                = coalesce($2, active),
+    updated_at            = now()
+WHERE id = $3 AND household_id = $4 AND deleted_at IS NULL
+RETURNING id, household_id, category_display_name, bucket, active, created_at, updated_at, deleted_at
+`
+
+type UpdateCategoryParams struct {
+	CategoryDisplayName *string
+	Active              *bool
+	ID                  pgtype.UUID
+	HouseholdID         pgtype.UUID
+}
+
+// Rename and/or (de)activate, merge-style, in one statement so a rename and a
+// deactivation sent by two writers both land. Both arguments are sqlc.narg so
+// that a false for active is a value and not "absent"; neither column is
+// nullable, so coalesce cannot be mistaken for "clear". bucket is not here:
+// it is fixed at creation (#130 C7). A row that is another Household's, unknown
+// or deleted is no row: the caller answers all three NOT_FOUND. A 23505 on
+// categories_household_name_idx is a rename into a held name. Deactivating
+// touches no allocation, so no figure moves.
+//
+// updated_at is set here because the baseline has no trigger, and from the
+// database's own clock (BOOTSTRAP.md §5.1).
+func (q *Queries) UpdateCategory(ctx context.Context, arg UpdateCategoryParams) (Category, error) {
+	row := q.db.QueryRow(ctx, updateCategory,
+		arg.CategoryDisplayName,
+		arg.Active,
+		arg.ID,
+		arg.HouseholdID,
+	)
+	var i Category
+	err := row.Scan(
+		&i.ID,
+		&i.HouseholdID,
+		&i.CategoryDisplayName,
+		&i.Bucket,
+		&i.Active,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.DeletedAt,
+	)
+	return i, err
+}

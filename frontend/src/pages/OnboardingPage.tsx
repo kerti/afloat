@@ -12,6 +12,7 @@ import { ErrorState, Loading } from "@/components/states";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { clampName } from "@/lib/codePoints";
 
 // The gate between a registered credential and an account. Today it offers one
 // choice, founding a Household; invitations add theirs here later. The
@@ -75,9 +76,8 @@ export function OnboardingPage() {
             <Input
               id="household-name"
               required
-              maxLength={60}
               value={householdName}
-              onChange={(e) => setEdited(e.target.value)}
+              onChange={(e) => setEdited(clampName(e.target.value))}
               aria-invalid={commit.error?.code === "VALIDATION" || undefined}
             />
           </Field>

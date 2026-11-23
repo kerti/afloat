@@ -130,6 +130,10 @@ func (s *Server) CreateCategory(ctx context.Context, r api.CreateCategoryRequest
 	return s.category.CreateCategory(ctx, r)
 }
 
+func (s *Server) UpdateCategory(ctx context.Context, r api.UpdateCategoryRequestObject) (api.UpdateCategoryResponseObject, error) {
+	return s.category.UpdateCategory(ctx, r)
+}
+
 func (s *Server) GetBudget(ctx context.Context, r api.GetBudgetRequestObject) (api.GetBudgetResponseObject, error) {
 	return s.budget.GetBudget(ctx, r)
 }

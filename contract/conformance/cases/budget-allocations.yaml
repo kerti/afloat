@@ -1,0 +1,1078 @@
+# PATCH /budget's `allocations` (#130, PR 3 of 4): what Categories are planned at,
+# in the CURRENT Budget Period only (R1, R2: earlier Periods keep what they held,
+# nothing is applied "from now on"). An allocation is a version dated Today, the
+# writer's Period Day (CONTEXT.md §Mid-period Budget changes): the same day
+# overwrites, and the answer is the whole Budget with its figures recomputed on
+# the server. `null` means none and is allowed for a Daily Category only: a
+# Commitment always has an allocation (PRD S8, R10), and "0" is an allocation.
+# What can be refused is refused before anything is written, so a refused request
+# does not even materialise a Period. The seed is one Household with
+# period_start_day 1 and day_starts_at 04:00, and Alice's time zone is
+# Asia/Jakarta, so state is built and asserted relative to the database's clock,
+# as budget.yaml; the exact-date assertions live in the backend's suite, which
+# injects a clock. Money spelling: budget-money.yaml covers the Monthly Budget;
+# the amount of an allocation is the same MoneyInput, and its table is here.
+#
+# The Categories a case starts with (the ids of categories-update.yaml):
+#   0192f0a0-0000-7000-8003-000000000001  Rent       commitment  active
+#   0192f0a0-0000-7000-8003-000000000002  Groceries  daily       active
+#   0192f0a0-0000-7000-8003-000000000003  Gym        commitment  inactive
+#   0192f0a0-0000-7000-8003-000000000004  Typo       daily       deleted
+#   0192f0a0-0000-7000-8003-000000000009  Theirs     commitment  Household 2
+
+
+- name: "budget allocations - a change is a version dated Today in the current Period, and the answer is the whole Budget"
+  issue: "130"
+  given: &planned
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO categories (id, household_id, category_display_name, bucket, active, deleted_at, created_at) VALUES
+          ('0192f0a0-0000-7000-8003-000000000001',   '0192f0a0-0000-7000-8000-000000000001', 'Rent',      'commitment', true,  NULL,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000002',   '0192f0a0-0000-7000-8000-000000000001', 'Groceries', 'daily',      true,  NULL,  '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000003',    '0192f0a0-0000-7000-8000-000000000001', 'Gym',       'commitment', false, NULL,  '2026-01-03T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000004',   '0192f0a0-0000-7000-8000-000000000001', 'Typo',      'daily',      true,  now(), '2026-01-04T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs',    'commitment', true,  NULL,  '2026-01-05T00:00:00Z')
+        ;
+        INSERT INTO budgets (household_id, year_month) VALUES ('0192f0a0-0000-7000-8000-000000000001', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'));
+        INSERT INTO monthly_budgets (household_id, year_month, effective_on, monthly_budget) VALUES ('0192f0a0-0000-7000-8000-000000000001', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'), ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date, 9000000);
+        INSERT INTO allocations (household_id, year_month, effective_on, category_id, allocation) VALUES
+          ('0192f0a0-0000-7000-8000-000000000001', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'), ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date, '0192f0a0-0000-7000-8003-000000000001', 3000000),
+          ('0192f0a0-0000-7000-8000-000000000001', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'), ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date, '0192f0a0-0000-7000-8003-000000000002', 2000000)
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: PATCH
+    path: /budget
+    headers:
+      Content-Type: application/json
+    body: '{"allocations":[{"category_id":"0192f0a0-0000-7000-8003-000000000001","allocation":"3500000"},{"category_id":"0192f0a0-0000-7000-8003-000000000002","allocation":"1500000.5"}]}'
+  expect:
+    status: 200
+    body_json: {"period": {"year_month": "<re:[0-9]{4}-[0-9]{2}>", "starts_on": "<re:[0-9]{4}-[0-9]{2}-01>", "ends_on": "<re:[0-9]{4}-[0-9]{2}-(28|29|30|31)>"}, "allocations": [{"category_id": "0192f0a0-0000-7000-8003-000000000001", "allocation": "3500000.0000"}, {"category_id": "0192f0a0-0000-7000-8003-000000000002", "allocation": "1500000.5000"}], "commitments_budget": "3500000.0000", "monthly_budget": "9000000.0000", "daily_pool": "5500000.0000", "unallocated": "3999999.5000"}
+    cookies: {}
+    rows:
+      - sql: SELECT category_id::text AS category_id, year_month = to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM') AS in_period, effective_on = ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date AS dated_today, allocation::text AS amount FROM allocations ORDER BY category_id
+        rows: [{"category_id": "0192f0a0-0000-7000-8003-000000000001", "in_period": true, "dated_today": true, "amount": "3500000.0000"}, {"category_id": "0192f0a0-0000-7000-8003-000000000002", "in_period": true, "dated_today": true, "amount": "1500000.5000"}]
+      - sql: SELECT (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM monthly_budgets)::int AS versions, (SELECT count(*) FROM allocations)::int AS allocations
+        rows: [{"budgets": 1, "versions": 1, "allocations": 2}]
+
+
+- name: "budget allocations - a Commitment's allocation moves the Daily Pool and a Daily one only Unallocated"
+  issue: "130"
+  given: *planned
+  request:
+    method: PATCH
+    path: /budget
+    headers:
+      Content-Type: application/json
+    body: '{"allocations":[{"category_id":"0192f0a0-0000-7000-8003-000000000002","allocation":"4000000"}]}'
+  expect:
+    status: 200
+    body_json: {"period": {"year_month": "<re:[0-9]{4}-[0-9]{2}>", "starts_on": "<re:[0-9]{4}-[0-9]{2}-01>", "ends_on": "<re:[0-9]{4}-[0-9]{2}-(28|29|30|31)>"}, "allocations": [{"category_id": "0192f0a0-0000-7000-8003-000000000001", "allocation": "3000000.0000"}, {"category_id": "0192f0a0-0000-7000-8003-000000000002", "allocation": "4000000.0000"}], "commitments_budget": "3000000.0000", "monthly_budget": "9000000.0000", "daily_pool": "6000000.0000", "unallocated": "2000000.0000"}
+    cookies: {}
+    rows:
+      - sql: SELECT category_id::text AS category_id, year_month = to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM') AS in_period, effective_on = ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date AS dated_today, allocation::text AS amount FROM allocations ORDER BY category_id
+        rows: [{"category_id": "0192f0a0-0000-7000-8003-000000000001", "in_period": true, "dated_today": true, "amount": "3000000.0000"}, {"category_id": "0192f0a0-0000-7000-8003-000000000002", "in_period": true, "dated_today": true, "amount": "4000000.0000"}]
+
+
+- name: "budget allocations - a Category not listed is untouched"
+  issue: "130"
+  given: *planned
+  request:
+    method: PATCH
+    path: /budget
+    headers:
+      Content-Type: application/json
+    body: '{"allocations":[{"category_id":"0192f0a0-0000-7000-8003-000000000002","allocation":"1"}]}'
+  expect:
+    status: 200
+    body_json: {"period": {"year_month": "<re:[0-9]{4}-[0-9]{2}>", "starts_on": "<re:[0-9]{4}-[0-9]{2}-01>", "ends_on": "<re:[0-9]{4}-[0-9]{2}-(28|29|30|31)>"}, "allocations": [{"category_id": "0192f0a0-0000-7000-8003-000000000001", "allocation": "3000000.0000"}, {"category_id": "0192f0a0-0000-7000-8003-000000000002", "allocation": "1.0000"}], "commitments_budget": "3000000.0000", "monthly_budget": "9000000.0000", "daily_pool": "6000000.0000", "unallocated": "5999999.0000"}
+    cookies: {}
+    rows:
+      - sql: SELECT category_id::text AS category_id, year_month = to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM') AS in_period, effective_on = ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date AS dated_today, allocation::text AS amount FROM allocations ORDER BY category_id
+        rows: [{"category_id": "0192f0a0-0000-7000-8003-000000000001", "in_period": true, "dated_today": true, "amount": "3000000.0000"}, {"category_id": "0192f0a0-0000-7000-8003-000000000002", "in_period": true, "dated_today": true, "amount": "1.0000"}]
+
+
+- name: "budget allocations - a Monthly Budget and allocations in one body land together"
+  issue: "130"
+  given: *planned
+  request:
+    method: PATCH
+    path: /budget
+    headers:
+      Content-Type: application/json
+    body: '{"monthly_budget":"10000000","allocations":[{"category_id":"0192f0a0-0000-7000-8003-000000000001","allocation":"4000000"},{"category_id":"0192f0a0-0000-7000-8003-000000000003","allocation":"250000"}]}'
+  expect:
+    status: 200
+    body_json: {"period": {"year_month": "<re:[0-9]{4}-[0-9]{2}>", "starts_on": "<re:[0-9]{4}-[0-9]{2}-01>", "ends_on": "<re:[0-9]{4}-[0-9]{2}-(28|29|30|31)>"}, "allocations": [{"category_id": "0192f0a0-0000-7000-8003-000000000001", "allocation": "4000000.0000"}, {"category_id": "0192f0a0-0000-7000-8003-000000000002", "allocation": "2000000.0000"}, {"category_id": "0192f0a0-0000-7000-8003-000000000003", "allocation": "250000.0000"}], "commitments_budget": "4250000.0000", "monthly_budget": "10000000.0000", "daily_pool": "5750000.0000", "unallocated": "3750000.0000"}
+    cookies: {}
+    rows:
+      - sql: SELECT category_id::text AS category_id, year_month = to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM') AS in_period, effective_on = ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date AS dated_today, allocation::text AS amount FROM allocations ORDER BY category_id
+        rows: [{"category_id": "0192f0a0-0000-7000-8003-000000000001", "in_period": true, "dated_today": true, "amount": "4000000.0000"}, {"category_id": "0192f0a0-0000-7000-8003-000000000002", "in_period": true, "dated_today": true, "amount": "2000000.0000"}, {"category_id": "0192f0a0-0000-7000-8003-000000000003", "in_period": true, "dated_today": true, "amount": "250000.0000"}]
+      - sql: SELECT monthly_budget::text AS amount FROM monthly_budgets
+        rows: [{"amount": "10000000.0000"}]
+
+
+- name: "budget allocations - an inactive Category's allocation can be changed, and still counts"
+  issue: "130"
+  given: *planned
+  request:
+    method: PATCH
+    path: /budget
+    headers:
+      Content-Type: application/json
+    body: '{"allocations":[{"category_id":"0192f0a0-0000-7000-8003-000000000003","allocation":"100"}]}'
+  expect:
+    status: 200
+    body_json: {"period": {"year_month": "<re:[0-9]{4}-[0-9]{2}>", "starts_on": "<re:[0-9]{4}-[0-9]{2}-01>", "ends_on": "<re:[0-9]{4}-[0-9]{2}-(28|29|30|31)>"}, "allocations": [{"category_id": "0192f0a0-0000-7000-8003-000000000001", "allocation": "3000000.0000"}, {"category_id": "0192f0a0-0000-7000-8003-000000000002", "allocation": "2000000.0000"}, {"category_id": "0192f0a0-0000-7000-8003-000000000003", "allocation": "100.0000"}], "commitments_budget": "3000100.0000", "monthly_budget": "9000000.0000", "daily_pool": "5999900.0000", "unallocated": "3999900.0000"}
+    cookies: {}
+    rows:
+      - sql: SELECT (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM monthly_budgets)::int AS versions, (SELECT count(*) FROM allocations)::int AS allocations
+        rows: [{"budgets": 1, "versions": 1, "allocations": 3}]
+
+
+- name: "budget allocations - zero is an allocation: a retired Commitment is freed and stays listed"
+  issue: "130"
+  given: *planned
+  request:
+    method: PATCH
+    path: /budget
+    headers:
+      Content-Type: application/json
+    body: '{"allocations":[{"category_id":"0192f0a0-0000-7000-8003-000000000001","allocation":"0"}]}'
+  expect:
+    status: 200
+    body_json: {"period": {"year_month": "<re:[0-9]{4}-[0-9]{2}>", "starts_on": "<re:[0-9]{4}-[0-9]{2}-01>", "ends_on": "<re:[0-9]{4}-[0-9]{2}-(28|29|30|31)>"}, "allocations": [{"category_id": "0192f0a0-0000-7000-8003-000000000001", "allocation": "0.0000"}, {"category_id": "0192f0a0-0000-7000-8003-000000000002", "allocation": "2000000.0000"}], "commitments_budget": "0.0000", "monthly_budget": "9000000.0000", "daily_pool": "9000000.0000", "unallocated": "7000000.0000"}
+    cookies: {}
+    rows:
+      - sql: SELECT category_id::text AS category_id, year_month = to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM') AS in_period, effective_on = ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date AS dated_today, allocation::text AS amount FROM allocations ORDER BY category_id
+        rows: [{"category_id": "0192f0a0-0000-7000-8003-000000000001", "in_period": true, "dated_today": true, "amount": "0.0000"}, {"category_id": "0192f0a0-0000-7000-8003-000000000002", "in_period": true, "dated_today": true, "amount": "2000000.0000"}]
+
+
+- name: "budget allocations - null clears a Daily Category: absent from the list, a NULL version in the log"
+  issue: "130"
+  given: *planned
+  request:
+    method: PATCH
+    path: /budget
+    headers:
+      Content-Type: application/json
+    body: '{"allocations":[{"category_id":"0192f0a0-0000-7000-8003-000000000002","allocation":null}]}'
+  expect:
+    status: 200
+    body_json: {"period": {"year_month": "<re:[0-9]{4}-[0-9]{2}>", "starts_on": "<re:[0-9]{4}-[0-9]{2}-01>", "ends_on": "<re:[0-9]{4}-[0-9]{2}-(28|29|30|31)>"}, "allocations": [{"category_id": "0192f0a0-0000-7000-8003-000000000001", "allocation": "3000000.0000"}], "commitments_budget": "3000000.0000", "monthly_budget": "9000000.0000", "daily_pool": "6000000.0000", "unallocated": "6000000.0000"}
+    cookies: {}
+    rows:
+      - sql: SELECT category_id::text AS category_id, year_month = to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM') AS in_period, effective_on = ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date AS dated_today, allocation::text AS amount FROM allocations ORDER BY category_id
+        rows: [{"category_id": "0192f0a0-0000-7000-8003-000000000001", "in_period": true, "dated_today": true, "amount": "3000000.0000"}, {"category_id": "0192f0a0-0000-7000-8003-000000000002", "in_period": true, "dated_today": true, "amount": null}]
+
+
+- name: "budget allocations - an empty list is a no-op that answers the Budget"
+  issue: "130"
+  given: *planned
+  request:
+    method: PATCH
+    path: /budget
+    headers:
+      Content-Type: application/json
+    body: '{"allocations":[]}'
+  expect:
+    status: 200
+    body_json: {"period": {"year_month": "<re:[0-9]{4}-[0-9]{2}>", "starts_on": "<re:[0-9]{4}-[0-9]{2}-01>", "ends_on": "<re:[0-9]{4}-[0-9]{2}-(28|29|30|31)>"}, "allocations": [{"category_id": "0192f0a0-0000-7000-8003-000000000001", "allocation": "3000000.0000"}, {"category_id": "0192f0a0-0000-7000-8003-000000000002", "allocation": "2000000.0000"}], "commitments_budget": "3000000.0000", "monthly_budget": "9000000.0000", "daily_pool": "6000000.0000", "unallocated": "4000000.0000"}
+    cookies: {}
+    rows:
+      - sql: SELECT category_id::text AS category_id, year_month = to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM') AS in_period, effective_on = ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date AS dated_today, allocation::text AS amount FROM allocations ORDER BY category_id
+        rows: [{"category_id": "0192f0a0-0000-7000-8003-000000000001", "in_period": true, "dated_today": true, "amount": "3000000.0000"}, {"category_id": "0192f0a0-0000-7000-8003-000000000002", "in_period": true, "dated_today": true, "amount": "2000000.0000"}]
+
+
+- name: "budget allocations - a Monthly Budget alone leaves the allocations alone"
+  issue: "130"
+  given: *planned
+  request:
+    method: PATCH
+    path: /budget
+    headers:
+      Content-Type: application/json
+    body: '{"monthly_budget":"12000000"}'
+  expect:
+    status: 200
+    body_json: {"period": {"year_month": "<re:[0-9]{4}-[0-9]{2}>", "starts_on": "<re:[0-9]{4}-[0-9]{2}-01>", "ends_on": "<re:[0-9]{4}-[0-9]{2}-(28|29|30|31)>"}, "allocations": [{"category_id": "0192f0a0-0000-7000-8003-000000000001", "allocation": "3000000.0000"}, {"category_id": "0192f0a0-0000-7000-8003-000000000002", "allocation": "2000000.0000"}], "commitments_budget": "3000000.0000", "monthly_budget": "12000000.0000", "daily_pool": "9000000.0000", "unallocated": "7000000.0000"}
+    cookies: {}
+    rows:
+      - sql: SELECT category_id::text AS category_id, year_month = to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM') AS in_period, effective_on = ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date AS dated_today, allocation::text AS amount FROM allocations ORDER BY category_id
+        rows: [{"category_id": "0192f0a0-0000-7000-8003-000000000001", "in_period": true, "dated_today": true, "amount": "3000000.0000"}, {"category_id": "0192f0a0-0000-7000-8003-000000000002", "in_period": true, "dated_today": true, "amount": "2000000.0000"}]
+
+
+- name: "budget allocations - an earlier Period keeps what it held: the change lands in this one, which carried the earlier forward first"
+  issue: "130"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO categories (id, household_id, category_display_name, bucket, active, deleted_at, created_at) VALUES
+          ('0192f0a0-0000-7000-8003-000000000001',   '0192f0a0-0000-7000-8000-000000000001', 'Rent',      'commitment', true,  NULL,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000002',   '0192f0a0-0000-7000-8000-000000000001', 'Groceries', 'daily',      true,  NULL,  '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000003',    '0192f0a0-0000-7000-8000-000000000001', 'Gym',       'commitment', false, NULL,  '2026-01-03T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000004',   '0192f0a0-0000-7000-8000-000000000001', 'Typo',      'daily',      true,  now(), '2026-01-04T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs',    'commitment', true,  NULL,  '2026-01-05T00:00:00Z')
+        ;
+        INSERT INTO budgets (household_id, year_month) VALUES ('0192f0a0-0000-7000-8000-000000000001', to_char(((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month', 'YYYY-MM'));
+        INSERT INTO allocations (household_id, year_month, effective_on, category_id, allocation) VALUES
+          ('0192f0a0-0000-7000-8000-000000000001', to_char(((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month', 'YYYY-MM'), ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours' - interval '1 month')::date, '0192f0a0-0000-7000-8003-000000000001', 2500000)
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: PATCH
+    path: /budget
+    headers:
+      Content-Type: application/json
+    body: '{"allocations":[{"category_id":"0192f0a0-0000-7000-8003-000000000001","allocation":"2800000"}]}'
+  expect:
+    status: 200
+    body_json: {"period": {"year_month": "<re:[0-9]{4}-[0-9]{2}>", "starts_on": "<re:[0-9]{4}-[0-9]{2}-01>", "ends_on": "<re:[0-9]{4}-[0-9]{2}-(28|29|30|31)>"}, "allocations": [{"category_id": "0192f0a0-0000-7000-8003-000000000001", "allocation": "2800000.0000"}], "commitments_budget": "2800000.0000"}
+    cookies: {}
+    rows:
+      - sql: SELECT allocation::text AS amount, effective_on < ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date - interval '1 month' + interval '1 day' AS is_earlier FROM allocations WHERE year_month <> to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM')
+        rows: [{"amount": "2500000.0000", "is_earlier": true}]
+      - sql: SELECT allocation::text AS amount FROM allocations WHERE year_month = to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM') AND effective_on = ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date
+        rows: [{"amount": "2800000.0000"}]
+      - sql: SELECT count(*)::int AS budgets FROM budgets
+        rows: [{"budgets": 2}]
+
+
+- name: "budget allocations - null for a Commitment is refused: allocation is required"
+  issue: "130"
+  given: *planned
+  request:
+    method: PATCH
+    path: /budget
+    headers:
+      Content-Type: application/json
+    body: '{"allocations":[{"category_id":"0192f0a0-0000-7000-8003-000000000001","allocation":null}]}'
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "allocation", "rule": "required"}}
+    cookies: {}
+    rows:
+      - sql: SELECT category_id::text AS category_id, year_month = to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM') AS in_period, effective_on = ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date AS dated_today, allocation::text AS amount FROM allocations ORDER BY category_id
+        rows: [{"category_id": "0192f0a0-0000-7000-8003-000000000001", "in_period": true, "dated_today": true, "amount": "3000000.0000"}, {"category_id": "0192f0a0-0000-7000-8003-000000000002", "in_period": true, "dated_today": true, "amount": "2000000.0000"}]
+      - sql: SELECT (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM monthly_budgets)::int AS versions, (SELECT count(*) FROM allocations)::int AS allocations
+        rows: [{"budgets": 1, "versions": 1, "allocations": 2}]
+
+
+- name: "budget allocations - null for an inactive Commitment is refused too"
+  issue: "130"
+  given: *planned
+  request:
+    method: PATCH
+    path: /budget
+    headers:
+      Content-Type: application/json
+    body: '{"allocations":[{"category_id":"0192f0a0-0000-7000-8003-000000000003","allocation":null}]}'
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "allocation", "rule": "required"}}
+    cookies: {}
+    rows:
+      - sql: SELECT category_id::text AS category_id, year_month = to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM') AS in_period, effective_on = ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date AS dated_today, allocation::text AS amount FROM allocations ORDER BY category_id
+        rows: [{"category_id": "0192f0a0-0000-7000-8003-000000000001", "in_period": true, "dated_today": true, "amount": "3000000.0000"}, {"category_id": "0192f0a0-0000-7000-8003-000000000002", "in_period": true, "dated_today": true, "amount": "2000000.0000"}]
+      - sql: SELECT (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM monthly_budgets)::int AS versions, (SELECT count(*) FROM allocations)::int AS allocations
+        rows: [{"budgets": 1, "versions": 1, "allocations": 2}]
+
+
+- name: "budget allocations - a refused null refuses the rest of the request with it"
+  issue: "130"
+  given: *planned
+  request:
+    method: PATCH
+    path: /budget
+    headers:
+      Content-Type: application/json
+    body: '{"monthly_budget":"1","allocations":[{"category_id":"0192f0a0-0000-7000-8003-000000000002","allocation":"5"},{"category_id":"0192f0a0-0000-7000-8003-000000000001","allocation":null}]}'
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "allocation", "rule": "required"}}
+    cookies: {}
+    rows:
+      - sql: SELECT category_id::text AS category_id, year_month = to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM') AS in_period, effective_on = ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date AS dated_today, allocation::text AS amount FROM allocations ORDER BY category_id
+        rows: [{"category_id": "0192f0a0-0000-7000-8003-000000000001", "in_period": true, "dated_today": true, "amount": "3000000.0000"}, {"category_id": "0192f0a0-0000-7000-8003-000000000002", "in_period": true, "dated_today": true, "amount": "2000000.0000"}]
+      - sql: SELECT (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM monthly_budgets)::int AS versions, (SELECT count(*) FROM allocations)::int AS allocations
+        rows: [{"budgets": 1, "versions": 1, "allocations": 2}]
+
+
+- name: "budget allocations - a category_id listed twice is refused"
+  issue: "130"
+  given: *planned
+  request:
+    method: PATCH
+    path: /budget
+    headers:
+      Content-Type: application/json
+    body: '{"allocations":[{"category_id":"0192f0a0-0000-7000-8003-000000000002","allocation":"1"},{"category_id":"0192f0a0-0000-7000-8003-000000000002","allocation":"2"}]}'
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "category_id", "rule": "unique"}}
+    cookies: {}
+    rows:
+      - sql: SELECT category_id::text AS category_id, year_month = to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM') AS in_period, effective_on = ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date AS dated_today, allocation::text AS amount FROM allocations ORDER BY category_id
+        rows: [{"category_id": "0192f0a0-0000-7000-8003-000000000001", "in_period": true, "dated_today": true, "amount": "3000000.0000"}, {"category_id": "0192f0a0-0000-7000-8003-000000000002", "in_period": true, "dated_today": true, "amount": "2000000.0000"}]
+      - sql: SELECT (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM monthly_budgets)::int AS versions, (SELECT count(*) FROM allocations)::int AS allocations
+        rows: [{"budgets": 1, "versions": 1, "allocations": 2}]
+
+
+- name: "budget allocations - an unknown category_id is refused"
+  issue: "130"
+  given: *planned
+  request:
+    method: PATCH
+    path: /budget
+    headers:
+      Content-Type: application/json
+    body: '{"allocations":[{"category_id":"0192f0a0-0000-7000-8003-000000000099","allocation":"1"}]}'
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "category_id", "rule": "invalid"}}
+    cookies: {}
+    rows:
+      - sql: SELECT category_id::text AS category_id, year_month = to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM') AS in_period, effective_on = ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date AS dated_today, allocation::text AS amount FROM allocations ORDER BY category_id
+        rows: [{"category_id": "0192f0a0-0000-7000-8003-000000000001", "in_period": true, "dated_today": true, "amount": "3000000.0000"}, {"category_id": "0192f0a0-0000-7000-8003-000000000002", "in_period": true, "dated_today": true, "amount": "2000000.0000"}]
+      - sql: SELECT (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM monthly_budgets)::int AS versions, (SELECT count(*) FROM allocations)::int AS allocations
+        rows: [{"budgets": 1, "versions": 1, "allocations": 2}]
+
+
+- name: "budget allocations - another Household's category_id is refused, the same answer"
+  issue: "130"
+  given: *planned
+  request:
+    method: PATCH
+    path: /budget
+    headers:
+      Content-Type: application/json
+    body: '{"allocations":[{"category_id":"0192f0a0-0000-7000-8003-000000000009","allocation":"1"}]}'
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "category_id", "rule": "invalid"}}
+    cookies: {}
+    rows:
+      - sql: SELECT category_id::text AS category_id, year_month = to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM') AS in_period, effective_on = ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date AS dated_today, allocation::text AS amount FROM allocations ORDER BY category_id
+        rows: [{"category_id": "0192f0a0-0000-7000-8003-000000000001", "in_period": true, "dated_today": true, "amount": "3000000.0000"}, {"category_id": "0192f0a0-0000-7000-8003-000000000002", "in_period": true, "dated_today": true, "amount": "2000000.0000"}]
+      - sql: SELECT (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM monthly_budgets)::int AS versions, (SELECT count(*) FROM allocations)::int AS allocations
+        rows: [{"budgets": 1, "versions": 1, "allocations": 2}]
+
+
+- name: "budget allocations - another Household's Commitment with null is still the same answer"
+  issue: "130"
+  given: *planned
+  request:
+    method: PATCH
+    path: /budget
+    headers:
+      Content-Type: application/json
+    body: '{"allocations":[{"category_id":"0192f0a0-0000-7000-8003-000000000009","allocation":null}]}'
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "category_id", "rule": "invalid"}}
+    cookies: {}
+    rows:
+      - sql: SELECT category_id::text AS category_id, year_month = to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM') AS in_period, effective_on = ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date AS dated_today, allocation::text AS amount FROM allocations ORDER BY category_id
+        rows: [{"category_id": "0192f0a0-0000-7000-8003-000000000001", "in_period": true, "dated_today": true, "amount": "3000000.0000"}, {"category_id": "0192f0a0-0000-7000-8003-000000000002", "in_period": true, "dated_today": true, "amount": "2000000.0000"}]
+      - sql: SELECT (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM monthly_budgets)::int AS versions, (SELECT count(*) FROM allocations)::int AS allocations
+        rows: [{"budgets": 1, "versions": 1, "allocations": 2}]
+
+
+- name: "budget allocations - a deleted Category's id is refused, the same answer"
+  issue: "130"
+  given: *planned
+  request:
+    method: PATCH
+    path: /budget
+    headers:
+      Content-Type: application/json
+    body: '{"allocations":[{"category_id":"0192f0a0-0000-7000-8003-000000000004","allocation":"1"}]}'
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "category_id", "rule": "invalid"}}
+    cookies: {}
+    rows:
+      - sql: SELECT category_id::text AS category_id, year_month = to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM') AS in_period, effective_on = ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date AS dated_today, allocation::text AS amount FROM allocations ORDER BY category_id
+        rows: [{"category_id": "0192f0a0-0000-7000-8003-000000000001", "in_period": true, "dated_today": true, "amount": "3000000.0000"}, {"category_id": "0192f0a0-0000-7000-8003-000000000002", "in_period": true, "dated_today": true, "amount": "2000000.0000"}]
+      - sql: SELECT (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM monthly_budgets)::int AS versions, (SELECT count(*) FROM allocations)::int AS allocations
+        rows: [{"budgets": 1, "versions": 1, "allocations": 2}]
+
+
+- name: "budget allocations - a repeat outranks an unknown id"
+  issue: "130"
+  given: *planned
+  request:
+    method: PATCH
+    path: /budget
+    headers:
+      Content-Type: application/json
+    body: '{"allocations":[{"category_id":"0192f0a0-0000-7000-8003-000000000099","allocation":"1"},{"category_id":"0192f0a0-0000-7000-8003-000000000002","allocation":"1"},{"category_id":"0192f0a0-0000-7000-8003-000000000002","allocation":"2"}]}'
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "category_id", "rule": "unique"}}
+    cookies: {}
+    rows:
+      - sql: SELECT category_id::text AS category_id, year_month = to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM') AS in_period, effective_on = ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date AS dated_today, allocation::text AS amount FROM allocations ORDER BY category_id
+        rows: [{"category_id": "0192f0a0-0000-7000-8003-000000000001", "in_period": true, "dated_today": true, "amount": "3000000.0000"}, {"category_id": "0192f0a0-0000-7000-8003-000000000002", "in_period": true, "dated_today": true, "amount": "2000000.0000"}]
+      - sql: SELECT (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM monthly_budgets)::int AS versions, (SELECT count(*) FROM allocations)::int AS allocations
+        rows: [{"budgets": 1, "versions": 1, "allocations": 2}]
+
+
+- name: "budget allocations - a refused request does not even materialise the Period"
+  issue: "130"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO categories (id, household_id, category_display_name, bucket, active, deleted_at, created_at) VALUES
+          ('0192f0a0-0000-7000-8003-000000000001',   '0192f0a0-0000-7000-8000-000000000001', 'Rent',      'commitment', true,  NULL,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000002',   '0192f0a0-0000-7000-8000-000000000001', 'Groceries', 'daily',      true,  NULL,  '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000003',    '0192f0a0-0000-7000-8000-000000000001', 'Gym',       'commitment', false, NULL,  '2026-01-03T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000004',   '0192f0a0-0000-7000-8000-000000000001', 'Typo',      'daily',      true,  now(), '2026-01-04T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs',    'commitment', true,  NULL,  '2026-01-05T00:00:00Z')
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: PATCH
+    path: /budget
+    headers:
+      Content-Type: application/json
+    body: '{"monthly_budget":"9000000","allocations":[{"category_id":"0192f0a0-0000-7000-8003-000000000099","allocation":"1"}]}'
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "category_id", "rule": "invalid"}}
+    cookies: {}
+    rows:
+      - sql: SELECT (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM monthly_budgets)::int AS versions, (SELECT count(*) FROM allocations)::int AS allocations
+        rows: [{"budgets": 0, "versions": 0, "allocations": 0}]
+
+
+- name: "budget allocations - another Household's Budget is untouched by a change, and a foreign id is not told apart from an unknown one"
+  issue: "130"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO categories (id, household_id, category_display_name, bucket, active, deleted_at, created_at) VALUES
+          ('0192f0a0-0000-7000-8003-000000000001',   '0192f0a0-0000-7000-8000-000000000001', 'Rent',      'commitment', true,  NULL,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000002',   '0192f0a0-0000-7000-8000-000000000001', 'Groceries', 'daily',      true,  NULL,  '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000003',    '0192f0a0-0000-7000-8000-000000000001', 'Gym',       'commitment', false, NULL,  '2026-01-03T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000004',   '0192f0a0-0000-7000-8000-000000000001', 'Typo',      'daily',      true,  now(), '2026-01-04T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs',    'commitment', true,  NULL,  '2026-01-05T00:00:00Z')
+        ;
+        INSERT INTO budgets (household_id, year_month) VALUES ('0192f0a0-0000-7000-8000-000000000002', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'));
+        INSERT INTO monthly_budgets (household_id, year_month, effective_on, monthly_budget, updated_at) VALUES ('0192f0a0-0000-7000-8000-000000000002', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'), ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date, 20000000, '2000-01-01T00:00:00Z');
+        INSERT INTO allocations (household_id, year_month, effective_on, category_id, allocation, updated_at) VALUES ('0192f0a0-0000-7000-8000-000000000002', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'), ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date, '0192f0a0-0000-7000-8003-000000000009', 7000000, '2000-01-01T00:00:00Z')
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: PATCH
+    path: /budget
+    headers:
+      Content-Type: application/json
+    body: '{"allocations":[{"category_id":"0192f0a0-0000-7000-8003-000000000009","allocation":"1"}]}'
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "category_id", "rule": "invalid"}}
+    same_as:
+      method: PATCH
+      path: /budget
+      headers:
+        Content-Type: application/json
+      body: '{"allocations":[{"category_id":"0192f0a0-0000-7000-8003-000000000099","allocation":"1"}]}'
+    cookies: {}
+    rows:
+      - sql: SELECT household_id::text AS household_id, allocation::text AS amount, to_char(updated_at, 'YYYY') AS year FROM allocations
+        rows: [{"household_id": "0192f0a0-0000-7000-8000-000000000002", "amount": "7000000.0000", "year": "2000"}]
+      - sql: SELECT household_id::text AS household_id, monthly_budget::text AS amount, to_char(updated_at, 'YYYY') AS year FROM monthly_budgets
+        rows: [{"household_id": "0192f0a0-0000-7000-8000-000000000002", "amount": "20000000.0000", "year": "2000"}]
+
+
+- name: "budget allocations - a change by one Household leaves another's allocations as they were"
+  issue: "130"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO categories (id, household_id, category_display_name, bucket, active, deleted_at, created_at) VALUES
+          ('0192f0a0-0000-7000-8003-000000000001',   '0192f0a0-0000-7000-8000-000000000001', 'Rent',      'commitment', true,  NULL,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000002',   '0192f0a0-0000-7000-8000-000000000001', 'Groceries', 'daily',      true,  NULL,  '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000003',    '0192f0a0-0000-7000-8000-000000000001', 'Gym',       'commitment', false, NULL,  '2026-01-03T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000004',   '0192f0a0-0000-7000-8000-000000000001', 'Typo',      'daily',      true,  now(), '2026-01-04T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs',    'commitment', true,  NULL,  '2026-01-05T00:00:00Z')
+        ;
+        INSERT INTO budgets (household_id, year_month) VALUES ('0192f0a0-0000-7000-8000-000000000002', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'));
+        INSERT INTO allocations (household_id, year_month, effective_on, category_id, allocation, updated_at) VALUES ('0192f0a0-0000-7000-8000-000000000002', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'), ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date, '0192f0a0-0000-7000-8003-000000000009', 7000000, '2000-01-01T00:00:00Z')
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: PATCH
+    path: /budget
+    headers:
+      Content-Type: application/json
+    body: '{"monthly_budget":"9000000","allocations":[{"category_id":"0192f0a0-0000-7000-8003-000000000001","allocation":"3000000"}]}'
+  expect:
+    status: 200
+    body_json: {"period": {"year_month": "<re:[0-9]{4}-[0-9]{2}>", "starts_on": "<re:[0-9]{4}-[0-9]{2}-01>", "ends_on": "<re:[0-9]{4}-[0-9]{2}-(28|29|30|31)>"}, "allocations": [{"category_id": "0192f0a0-0000-7000-8003-000000000001", "allocation": "3000000.0000"}], "commitments_budget": "3000000.0000", "monthly_budget": "9000000.0000", "daily_pool": "6000000.0000", "unallocated": "6000000.0000"}
+    cookies: {}
+    rows:
+      - sql: SELECT household_id::text AS household_id, allocation::text AS amount, (updated_at > '2001-01-01') AS touched FROM allocations ORDER BY household_id
+        rows: [{"household_id": "0192f0a0-0000-7000-8000-000000000001", "amount": "3000000.0000", "touched": true}, {"household_id": "0192f0a0-0000-7000-8000-000000000002", "amount": "7000000.0000", "touched": false}]
+
+
+- name: "budget allocations - an amount in exponent notation is refused"
+  issue: "130"
+  given: *planned
+  request:
+    method: PATCH
+    path: /budget
+    headers:
+      Content-Type: application/json
+    body: '{"allocations":[{"category_id":"0192f0a0-0000-7000-8003-000000000001","allocation":"3e6"}]}'
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "allocations.0.allocation", "rule": "pattern"}}
+    cookies: {}
+    rows:
+      - sql: SELECT category_id::text AS category_id, year_month = to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM') AS in_period, effective_on = ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date AS dated_today, allocation::text AS amount FROM allocations ORDER BY category_id
+        rows: [{"category_id": "0192f0a0-0000-7000-8003-000000000001", "in_period": true, "dated_today": true, "amount": "3000000.0000"}, {"category_id": "0192f0a0-0000-7000-8003-000000000002", "in_period": true, "dated_today": true, "amount": "2000000.0000"}]
+      - sql: SELECT (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM monthly_budgets)::int AS versions, (SELECT count(*) FROM allocations)::int AS allocations
+        rows: [{"budgets": 1, "versions": 1, "allocations": 2}]
+
+
+- name: "budget allocations - a negative amount is refused"
+  issue: "130"
+  given: *planned
+  request:
+    method: PATCH
+    path: /budget
+    headers:
+      Content-Type: application/json
+    body: '{"allocations":[{"category_id":"0192f0a0-0000-7000-8003-000000000001","allocation":"-1"}]}'
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "allocations.0.allocation", "rule": "pattern"}}
+    cookies: {}
+    rows:
+      - sql: SELECT category_id::text AS category_id, year_month = to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM') AS in_period, effective_on = ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date AS dated_today, allocation::text AS amount FROM allocations ORDER BY category_id
+        rows: [{"category_id": "0192f0a0-0000-7000-8003-000000000001", "in_period": true, "dated_today": true, "amount": "3000000.0000"}, {"category_id": "0192f0a0-0000-7000-8003-000000000002", "in_period": true, "dated_today": true, "amount": "2000000.0000"}]
+      - sql: SELECT (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM monthly_budgets)::int AS versions, (SELECT count(*) FROM allocations)::int AS allocations
+        rows: [{"budgets": 1, "versions": 1, "allocations": 2}]
+
+
+- name: "budget allocations - five decimals are refused and never rounded"
+  issue: "130"
+  given: *planned
+  request:
+    method: PATCH
+    path: /budget
+    headers:
+      Content-Type: application/json
+    body: '{"allocations":[{"category_id":"0192f0a0-0000-7000-8003-000000000001","allocation":"1.00001"}]}'
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "allocations.0.allocation", "rule": "pattern"}}
+    cookies: {}
+    rows:
+      - sql: SELECT category_id::text AS category_id, year_month = to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM') AS in_period, effective_on = ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date AS dated_today, allocation::text AS amount FROM allocations ORDER BY category_id
+        rows: [{"category_id": "0192f0a0-0000-7000-8003-000000000001", "in_period": true, "dated_today": true, "amount": "3000000.0000"}, {"category_id": "0192f0a0-0000-7000-8003-000000000002", "in_period": true, "dated_today": true, "amount": "2000000.0000"}]
+      - sql: SELECT (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM monthly_budgets)::int AS versions, (SELECT count(*) FROM allocations)::int AS allocations
+        rows: [{"budgets": 1, "versions": 1, "allocations": 2}]
+
+
+- name: "budget allocations - a thousands separator is refused"
+  issue: "130"
+  given: *planned
+  request:
+    method: PATCH
+    path: /budget
+    headers:
+      Content-Type: application/json
+    body: '{"allocations":[{"category_id":"0192f0a0-0000-7000-8003-000000000001","allocation":"1,000"}]}'
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "allocations.0.allocation", "rule": "pattern"}}
+    cookies: {}
+    rows:
+      - sql: SELECT category_id::text AS category_id, year_month = to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM') AS in_period, effective_on = ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date AS dated_today, allocation::text AS amount FROM allocations ORDER BY category_id
+        rows: [{"category_id": "0192f0a0-0000-7000-8003-000000000001", "in_period": true, "dated_today": true, "amount": "3000000.0000"}, {"category_id": "0192f0a0-0000-7000-8003-000000000002", "in_period": true, "dated_today": true, "amount": "2000000.0000"}]
+      - sql: SELECT (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM monthly_budgets)::int AS versions, (SELECT count(*) FROM allocations)::int AS allocations
+        rows: [{"budgets": 1, "versions": 1, "allocations": 2}]
+
+
+- name: "budget allocations - a leading space is refused"
+  issue: "130"
+  given: *planned
+  request:
+    method: PATCH
+    path: /budget
+    headers:
+      Content-Type: application/json
+    body: '{"allocations":[{"category_id":"0192f0a0-0000-7000-8003-000000000001","allocation":" 5"}]}'
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "allocations.0.allocation", "rule": "pattern"}}
+    cookies: {}
+    rows:
+      - sql: SELECT category_id::text AS category_id, year_month = to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM') AS in_period, effective_on = ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date AS dated_today, allocation::text AS amount FROM allocations ORDER BY category_id
+        rows: [{"category_id": "0192f0a0-0000-7000-8003-000000000001", "in_period": true, "dated_today": true, "amount": "3000000.0000"}, {"category_id": "0192f0a0-0000-7000-8003-000000000002", "in_period": true, "dated_today": true, "amount": "2000000.0000"}]
+      - sql: SELECT (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM monthly_budgets)::int AS versions, (SELECT count(*) FROM allocations)::int AS allocations
+        rows: [{"budgets": 1, "versions": 1, "allocations": 2}]
+
+
+- name: "budget allocations - 17 integer digits are refused"
+  issue: "130"
+  given: *planned
+  request:
+    method: PATCH
+    path: /budget
+    headers:
+      Content-Type: application/json
+    body: '{"allocations":[{"category_id":"0192f0a0-0000-7000-8003-000000000001","allocation":"10000000000000000"}]}'
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "allocations.0.allocation", "rule": "pattern"}}
+    cookies: {}
+    rows:
+      - sql: SELECT category_id::text AS category_id, year_month = to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM') AS in_period, effective_on = ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date AS dated_today, allocation::text AS amount FROM allocations ORDER BY category_id
+        rows: [{"category_id": "0192f0a0-0000-7000-8003-000000000001", "in_period": true, "dated_today": true, "amount": "3000000.0000"}, {"category_id": "0192f0a0-0000-7000-8003-000000000002", "in_period": true, "dated_today": true, "amount": "2000000.0000"}]
+      - sql: SELECT (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM monthly_budgets)::int AS versions, (SELECT count(*) FROM allocations)::int AS allocations
+        rows: [{"budgets": 1, "versions": 1, "allocations": 2}]
+
+
+- name: "budget allocations - the empty string is refused"
+  issue: "130"
+  given: *planned
+  request:
+    method: PATCH
+    path: /budget
+    headers:
+      Content-Type: application/json
+    body: '{"allocations":[{"category_id":"0192f0a0-0000-7000-8003-000000000001","allocation":""}]}'
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "allocations.0.allocation", "rule": "pattern"}}
+    cookies: {}
+    rows:
+      - sql: SELECT category_id::text AS category_id, year_month = to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM') AS in_period, effective_on = ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date AS dated_today, allocation::text AS amount FROM allocations ORDER BY category_id
+        rows: [{"category_id": "0192f0a0-0000-7000-8003-000000000001", "in_period": true, "dated_today": true, "amount": "3000000.0000"}, {"category_id": "0192f0a0-0000-7000-8003-000000000002", "in_period": true, "dated_today": true, "amount": "2000000.0000"}]
+      - sql: SELECT (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM monthly_budgets)::int AS versions, (SELECT count(*) FROM allocations)::int AS allocations
+        rows: [{"budgets": 1, "versions": 1, "allocations": 2}]
+
+
+- name: "budget allocations - a JSON number is not a MoneyInput"
+  issue: "130"
+  given: *planned
+  request:
+    method: PATCH
+    path: /budget
+    headers:
+      Content-Type: application/json
+    body: '{"allocations":[{"category_id":"0192f0a0-0000-7000-8003-000000000001","allocation":3000000}]}'
+  expect:
+    status: 400
+    body_json: {"code": "INVALID_JSON_BODY"}
+    cookies: {}
+    rows:
+      - sql: SELECT category_id::text AS category_id, year_month = to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM') AS in_period, effective_on = ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date AS dated_today, allocation::text AS amount FROM allocations ORDER BY category_id
+        rows: [{"category_id": "0192f0a0-0000-7000-8003-000000000001", "in_period": true, "dated_today": true, "amount": "3000000.0000"}, {"category_id": "0192f0a0-0000-7000-8003-000000000002", "in_period": true, "dated_today": true, "amount": "2000000.0000"}]
+      - sql: SELECT (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM monthly_budgets)::int AS versions, (SELECT count(*) FROM allocations)::int AS allocations
+        rows: [{"budgets": 1, "versions": 1, "allocations": 2}]
+
+
+- name: "budget allocations - a boolean is not a MoneyInput"
+  issue: "130"
+  given: *planned
+  request:
+    method: PATCH
+    path: /budget
+    headers:
+      Content-Type: application/json
+    body: '{"allocations":[{"category_id":"0192f0a0-0000-7000-8003-000000000001","allocation":true}]}'
+  expect:
+    status: 400
+    body_json: {"code": "INVALID_JSON_BODY"}
+    cookies: {}
+    rows:
+      - sql: SELECT category_id::text AS category_id, year_month = to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM') AS in_period, effective_on = ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date AS dated_today, allocation::text AS amount FROM allocations ORDER BY category_id
+        rows: [{"category_id": "0192f0a0-0000-7000-8003-000000000001", "in_period": true, "dated_today": true, "amount": "3000000.0000"}, {"category_id": "0192f0a0-0000-7000-8003-000000000002", "in_period": true, "dated_today": true, "amount": "2000000.0000"}]
+      - sql: SELECT (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM monthly_budgets)::int AS versions, (SELECT count(*) FROM allocations)::int AS allocations
+        rows: [{"budgets": 1, "versions": 1, "allocations": 2}]
+
+
+- name: "budget allocations - an item with no allocation key is required, never a clear"
+  issue: "130"
+  given: *planned
+  request:
+    method: PATCH
+    path: /budget
+    headers:
+      Content-Type: application/json
+    body: '{"allocations":[{"category_id":"0192f0a0-0000-7000-8003-000000000001"}]}'
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "allocations.0.allocation", "rule": "required"}}
+    cookies: {}
+    rows:
+      - sql: SELECT category_id::text AS category_id, year_month = to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM') AS in_period, effective_on = ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date AS dated_today, allocation::text AS amount FROM allocations ORDER BY category_id
+        rows: [{"category_id": "0192f0a0-0000-7000-8003-000000000001", "in_period": true, "dated_today": true, "amount": "3000000.0000"}, {"category_id": "0192f0a0-0000-7000-8003-000000000002", "in_period": true, "dated_today": true, "amount": "2000000.0000"}]
+      - sql: SELECT (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM monthly_budgets)::int AS versions, (SELECT count(*) FROM allocations)::int AS allocations
+        rows: [{"budgets": 1, "versions": 1, "allocations": 2}]
+
+
+- name: "budget allocations - an item with no category_id is required"
+  issue: "130"
+  given: *planned
+  request:
+    method: PATCH
+    path: /budget
+    headers:
+      Content-Type: application/json
+    body: '{"allocations":[{"allocation":"1"}]}'
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "allocations.0.category_id", "rule": "required"}}
+    cookies: {}
+    rows:
+      - sql: SELECT category_id::text AS category_id, year_month = to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM') AS in_period, effective_on = ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date AS dated_today, allocation::text AS amount FROM allocations ORDER BY category_id
+        rows: [{"category_id": "0192f0a0-0000-7000-8003-000000000001", "in_period": true, "dated_today": true, "amount": "3000000.0000"}, {"category_id": "0192f0a0-0000-7000-8003-000000000002", "in_period": true, "dated_today": true, "amount": "2000000.0000"}]
+      - sql: SELECT (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM monthly_budgets)::int AS versions, (SELECT count(*) FROM allocations)::int AS allocations
+        rows: [{"budgets": 1, "versions": 1, "allocations": 2}]
+
+
+- name: "budget allocations - the second item's bad amount is named by its index"
+  issue: "130"
+  given: *planned
+  request:
+    method: PATCH
+    path: /budget
+    headers:
+      Content-Type: application/json
+    body: '{"allocations":[{"category_id":"0192f0a0-0000-7000-8003-000000000001","allocation":"1"},{"category_id":"0192f0a0-0000-7000-8003-000000000002","allocation":"x"}]}'
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "allocations.1.allocation", "rule": "pattern"}}
+    cookies: {}
+    rows:
+      - sql: SELECT category_id::text AS category_id, year_month = to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM') AS in_period, effective_on = ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date AS dated_today, allocation::text AS amount FROM allocations ORDER BY category_id
+        rows: [{"category_id": "0192f0a0-0000-7000-8003-000000000001", "in_period": true, "dated_today": true, "amount": "3000000.0000"}, {"category_id": "0192f0a0-0000-7000-8003-000000000002", "in_period": true, "dated_today": true, "amount": "2000000.0000"}]
+      - sql: SELECT (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM monthly_budgets)::int AS versions, (SELECT count(*) FROM allocations)::int AS allocations
+        rows: [{"budgets": 1, "versions": 1, "allocations": 2}]
+
+
+- name: "budget allocations - a category_id that is not a uuid is refused by pattern"
+  issue: "130"
+  given: *planned
+  request:
+    method: PATCH
+    path: /budget
+    headers:
+      Content-Type: application/json
+    body: '{"allocations":[{"category_id":"not-a-uuid","allocation":"1"}]}'
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "allocations.0.category_id", "rule": "pattern"}}
+    cookies: {}
+    rows:
+      - sql: SELECT category_id::text AS category_id, year_month = to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM') AS in_period, effective_on = ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date AS dated_today, allocation::text AS amount FROM allocations ORDER BY category_id
+        rows: [{"category_id": "0192f0a0-0000-7000-8003-000000000001", "in_period": true, "dated_today": true, "amount": "3000000.0000"}, {"category_id": "0192f0a0-0000-7000-8003-000000000002", "in_period": true, "dated_today": true, "amount": "2000000.0000"}]
+      - sql: SELECT (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM monthly_budgets)::int AS versions, (SELECT count(*) FROM allocations)::int AS allocations
+        rows: [{"budgets": 1, "versions": 1, "allocations": 2}]
+
+
+- name: "budget allocations - a category_id that is a v4 is refused by pattern"
+  issue: "130"
+  given: *planned
+  request:
+    method: PATCH
+    path: /budget
+    headers:
+      Content-Type: application/json
+    body: '{"allocations":[{"category_id":"0192f0a0-0000-4000-8003-000000000001","allocation":"1"}]}'
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "allocations.0.category_id", "rule": "pattern"}}
+    cookies: {}
+    rows:
+      - sql: SELECT category_id::text AS category_id, year_month = to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM') AS in_period, effective_on = ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date AS dated_today, allocation::text AS amount FROM allocations ORDER BY category_id
+        rows: [{"category_id": "0192f0a0-0000-7000-8003-000000000001", "in_period": true, "dated_today": true, "amount": "3000000.0000"}, {"category_id": "0192f0a0-0000-7000-8003-000000000002", "in_period": true, "dated_today": true, "amount": "2000000.0000"}]
+      - sql: SELECT (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM monthly_budgets)::int AS versions, (SELECT count(*) FROM allocations)::int AS allocations
+        rows: [{"budgets": 1, "versions": 1, "allocations": 2}]
+
+
+- name: "budget allocations - a null category_id is not accepted"
+  issue: "130"
+  given: *planned
+  request:
+    method: PATCH
+    path: /budget
+    headers:
+      Content-Type: application/json
+    body: '{"allocations":[{"category_id":null,"allocation":"1"}]}'
+  expect:
+    status: 400
+    body_json: {"code": "INVALID_JSON_BODY"}
+    cookies: {}
+    rows:
+      - sql: SELECT category_id::text AS category_id, year_month = to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM') AS in_period, effective_on = ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date AS dated_today, allocation::text AS amount FROM allocations ORDER BY category_id
+        rows: [{"category_id": "0192f0a0-0000-7000-8003-000000000001", "in_period": true, "dated_today": true, "amount": "3000000.0000"}, {"category_id": "0192f0a0-0000-7000-8003-000000000002", "in_period": true, "dated_today": true, "amount": "2000000.0000"}]
+      - sql: SELECT (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM monthly_budgets)::int AS versions, (SELECT count(*) FROM allocations)::int AS allocations
+        rows: [{"budgets": 1, "versions": 1, "allocations": 2}]
+
+
+- name: "budget allocations - an unknown property of an item is not accepted"
+  issue: "130"
+  given: *planned
+  request:
+    method: PATCH
+    path: /budget
+    headers:
+      Content-Type: application/json
+    body: '{"allocations":[{"category_id":"0192f0a0-0000-7000-8003-000000000001","allocation":"1","note":"x"}]}'
+  expect:
+    status: 400
+    body_json: {"code": "INVALID_JSON_BODY"}
+    cookies: {}
+    rows:
+      - sql: SELECT category_id::text AS category_id, year_month = to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM') AS in_period, effective_on = ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date AS dated_today, allocation::text AS amount FROM allocations ORDER BY category_id
+        rows: [{"category_id": "0192f0a0-0000-7000-8003-000000000001", "in_period": true, "dated_today": true, "amount": "3000000.0000"}, {"category_id": "0192f0a0-0000-7000-8003-000000000002", "in_period": true, "dated_today": true, "amount": "2000000.0000"}]
+      - sql: SELECT (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM monthly_budgets)::int AS versions, (SELECT count(*) FROM allocations)::int AS allocations
+        rows: [{"budgets": 1, "versions": 1, "allocations": 2}]
+
+
+- name: "budget allocations - a null list is not accepted"
+  issue: "130"
+  given: *planned
+  request:
+    method: PATCH
+    path: /budget
+    headers:
+      Content-Type: application/json
+    body: '{"allocations":null}'
+  expect:
+    status: 400
+    body_json: {"code": "INVALID_JSON_BODY"}
+    cookies: {}
+    rows:
+      - sql: SELECT category_id::text AS category_id, year_month = to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM') AS in_period, effective_on = ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date AS dated_today, allocation::text AS amount FROM allocations ORDER BY category_id
+        rows: [{"category_id": "0192f0a0-0000-7000-8003-000000000001", "in_period": true, "dated_today": true, "amount": "3000000.0000"}, {"category_id": "0192f0a0-0000-7000-8003-000000000002", "in_period": true, "dated_today": true, "amount": "2000000.0000"}]
+      - sql: SELECT (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM monthly_budgets)::int AS versions, (SELECT count(*) FROM allocations)::int AS allocations
+        rows: [{"budgets": 1, "versions": 1, "allocations": 2}]
+
+
+- name: "budget allocations - an object for the list is not accepted"
+  issue: "130"
+  given: *planned
+  request:
+    method: PATCH
+    path: /budget
+    headers:
+      Content-Type: application/json
+    body: '{"allocations":{}}'
+  expect:
+    status: 400
+    body_json: {"code": "INVALID_JSON_BODY"}
+    cookies: {}
+    rows:
+      - sql: SELECT category_id::text AS category_id, year_month = to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM') AS in_period, effective_on = ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date AS dated_today, allocation::text AS amount FROM allocations ORDER BY category_id
+        rows: [{"category_id": "0192f0a0-0000-7000-8003-000000000001", "in_period": true, "dated_today": true, "amount": "3000000.0000"}, {"category_id": "0192f0a0-0000-7000-8003-000000000002", "in_period": true, "dated_today": true, "amount": "2000000.0000"}]
+      - sql: SELECT (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM monthly_budgets)::int AS versions, (SELECT count(*) FROM allocations)::int AS allocations
+        rows: [{"budgets": 1, "versions": 1, "allocations": 2}]
+
+
+- name: "budget allocations - a null item is not accepted"
+  issue: "130"
+  given: *planned
+  request:
+    method: PATCH
+    path: /budget
+    headers:
+      Content-Type: application/json
+    body: '{"allocations":[null]}'
+  expect:
+    status: 400
+    body_json: {"code": "INVALID_JSON_BODY"}
+    cookies: {}
+    rows:
+      - sql: SELECT category_id::text AS category_id, year_month = to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM') AS in_period, effective_on = ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date AS dated_today, allocation::text AS amount FROM allocations ORDER BY category_id
+        rows: [{"category_id": "0192f0a0-0000-7000-8003-000000000001", "in_period": true, "dated_today": true, "amount": "3000000.0000"}, {"category_id": "0192f0a0-0000-7000-8003-000000000002", "in_period": true, "dated_today": true, "amount": "2000000.0000"}]
+      - sql: SELECT (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM monthly_budgets)::int AS versions, (SELECT count(*) FROM allocations)::int AS allocations
+        rows: [{"budgets": 1, "versions": 1, "allocations": 2}]
+
+
+- name: "budget allocations - a bad amount beside an unknown property is the unknown property"
+  issue: "130"
+  given: *planned
+  request:
+    method: PATCH
+    path: /budget
+    headers:
+      Content-Type: application/json
+    body: '{"allocations":[{"category_id":"0192f0a0-0000-7000-8003-000000000001","allocation":"-1"}],"x":1}'
+  expect:
+    status: 400
+    body_json: {"code": "INVALID_JSON_BODY"}
+    cookies: {}
+    rows:
+      - sql: SELECT category_id::text AS category_id, year_month = to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM') AS in_period, effective_on = ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date AS dated_today, allocation::text AS amount FROM allocations ORDER BY category_id
+        rows: [{"category_id": "0192f0a0-0000-7000-8003-000000000001", "in_period": true, "dated_today": true, "amount": "3000000.0000"}, {"category_id": "0192f0a0-0000-7000-8003-000000000002", "in_period": true, "dated_today": true, "amount": "2000000.0000"}]
+      - sql: SELECT (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM monthly_budgets)::int AS versions, (SELECT count(*) FROM allocations)::int AS allocations
+        rows: [{"budgets": 1, "versions": 1, "allocations": 2}]
+
+
+- name: "budget allocations - the least field is reported when two fail"
+  issue: "130"
+  given: *planned
+  request:
+    method: PATCH
+    path: /budget
+    headers:
+      Content-Type: application/json
+    body: '{"monthly_budget":"x","allocations":[{"category_id":"0192f0a0-0000-7000-8003-000000000001","allocation":"1.00001"}]}'
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "allocations.0.allocation", "rule": "pattern"}}
+    cookies: {}
+    rows:
+      - sql: SELECT category_id::text AS category_id, year_month = to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM') AS in_period, effective_on = ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date AS dated_today, allocation::text AS amount FROM allocations ORDER BY category_id
+        rows: [{"category_id": "0192f0a0-0000-7000-8003-000000000001", "in_period": true, "dated_today": true, "amount": "3000000.0000"}, {"category_id": "0192f0a0-0000-7000-8003-000000000002", "in_period": true, "dated_today": true, "amount": "2000000.0000"}]
+      - sql: SELECT (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM monthly_budgets)::int AS versions, (SELECT count(*) FROM allocations)::int AS allocations
+        rows: [{"budgets": 1, "versions": 1, "allocations": 2}]
+
+
+- name: "budget allocations - four decimals are kept exactly"
+  issue: "130"
+  given: *planned
+  request:
+    method: PATCH
+    path: /budget
+    headers:
+      Content-Type: application/json
+    body: '{"allocations":[{"category_id":"0192f0a0-0000-7000-8003-000000000002","allocation":"0.0001"}]}'
+  expect:
+    status: 200
+    cookies: {}
+    rows:
+      - sql: SELECT allocation::text AS amount FROM allocations WHERE category_id = '0192f0a0-0000-7000-8003-000000000002'
+        rows: [{"amount": "0.0001"}]
+
+
+- name: "budget allocations - the largest amount the type holds"
+  issue: "130"
+  given: *planned
+  request:
+    method: PATCH
+    path: /budget
+    headers:
+      Content-Type: application/json
+    body: '{"allocations":[{"category_id":"0192f0a0-0000-7000-8003-000000000002","allocation":"9999999999999999.9999"}]}'
+  expect:
+    status: 200
+    cookies: {}
+    rows:
+      - sql: SELECT allocation::text AS amount FROM allocations WHERE category_id = '0192f0a0-0000-7000-8003-000000000002'
+        rows: [{"amount": "9999999999999999.9999"}]
+
+
+- name: "budget allocations - leading zeros are the same number"
+  issue: "130"
+  given: *planned
+  request:
+    method: PATCH
+    path: /budget
+    headers:
+      Content-Type: application/json
+    body: '{"allocations":[{"category_id":"0192f0a0-0000-7000-8003-000000000002","allocation":"0000000000000005"}]}'
+  expect:
+    status: 200
+    cookies: {}
+    rows:
+      - sql: SELECT allocation::text AS amount FROM allocations WHERE category_id = '0192f0a0-0000-7000-8003-000000000002'
+        rows: [{"amount": "5.0000"}]
+
+
+- name: "budget allocations - with no cookie a change is unauthorized and writes nothing"
+  issue: "130"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO categories (id, household_id, category_display_name, bucket, active, deleted_at, created_at) VALUES
+          ('0192f0a0-0000-7000-8003-000000000001',   '0192f0a0-0000-7000-8000-000000000001', 'Rent',      'commitment', true,  NULL,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000002',   '0192f0a0-0000-7000-8000-000000000001', 'Groceries', 'daily',      true,  NULL,  '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000003',    '0192f0a0-0000-7000-8000-000000000001', 'Gym',       'commitment', false, NULL,  '2026-01-03T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000004',   '0192f0a0-0000-7000-8000-000000000001', 'Typo',      'daily',      true,  now(), '2026-01-04T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs',    'commitment', true,  NULL,  '2026-01-05T00:00:00Z')
+        ;
+        INSERT INTO budgets (household_id, year_month) VALUES ('0192f0a0-0000-7000-8000-000000000001', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'));
+        INSERT INTO monthly_budgets (household_id, year_month, effective_on, monthly_budget) VALUES ('0192f0a0-0000-7000-8000-000000000001', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'), ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date, 9000000);
+        INSERT INTO allocations (household_id, year_month, effective_on, category_id, allocation) VALUES
+          ('0192f0a0-0000-7000-8000-000000000001', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'), ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date, '0192f0a0-0000-7000-8003-000000000001', 3000000),
+          ('0192f0a0-0000-7000-8000-000000000001', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'), ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date, '0192f0a0-0000-7000-8003-000000000002', 2000000)
+  request:
+    method: PATCH
+    path: /budget
+    headers:
+      Content-Type: application/json
+    body: '{"allocations":[{"category_id":"0192f0a0-0000-7000-8003-000000000002","allocation":"1"}]}'
+  expect:
+    status: 401
+    body_json: {"code": "UNAUTHORIZED"}
+    cookies: {}
+    rows:
+      - sql: SELECT category_id::text AS category_id, year_month = to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM') AS in_period, effective_on = ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date AS dated_today, allocation::text AS amount FROM allocations ORDER BY category_id
+        rows: [{"category_id": "0192f0a0-0000-7000-8003-000000000001", "in_period": true, "dated_today": true, "amount": "3000000.0000"}, {"category_id": "0192f0a0-0000-7000-8003-000000000002", "in_period": true, "dated_today": true, "amount": "2000000.0000"}]
+
+
+- name: "budget allocations - with no cookie even a refused allocation body is unauthorized"
+  issue: "130"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO categories (id, household_id, category_display_name, bucket, active, deleted_at, created_at) VALUES
+          ('0192f0a0-0000-7000-8003-000000000001',   '0192f0a0-0000-7000-8000-000000000001', 'Rent',      'commitment', true,  NULL,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000002',   '0192f0a0-0000-7000-8000-000000000001', 'Groceries', 'daily',      true,  NULL,  '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000003',    '0192f0a0-0000-7000-8000-000000000001', 'Gym',       'commitment', false, NULL,  '2026-01-03T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000004',   '0192f0a0-0000-7000-8000-000000000001', 'Typo',      'daily',      true,  now(), '2026-01-04T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs',    'commitment', true,  NULL,  '2026-01-05T00:00:00Z')
+        ;
+        INSERT INTO budgets (household_id, year_month) VALUES ('0192f0a0-0000-7000-8000-000000000001', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'));
+        INSERT INTO monthly_budgets (household_id, year_month, effective_on, monthly_budget) VALUES ('0192f0a0-0000-7000-8000-000000000001', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'), ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date, 9000000);
+        INSERT INTO allocations (household_id, year_month, effective_on, category_id, allocation) VALUES
+          ('0192f0a0-0000-7000-8000-000000000001', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'), ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date, '0192f0a0-0000-7000-8003-000000000001', 3000000),
+          ('0192f0a0-0000-7000-8000-000000000001', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'), ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date, '0192f0a0-0000-7000-8003-000000000002', 2000000)
+  request:
+    method: PATCH
+    path: /budget
+    headers:
+      Content-Type: application/json
+    body: '{"allocations":[{"category_id":"not-a-uuid"}]}'
+  expect:
+    status: 401
+    body_json: {"code": "UNAUTHORIZED"}
+    cookies: {}
+    rows:
+      - sql: SELECT category_id::text AS category_id, year_month = to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM') AS in_period, effective_on = ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date AS dated_today, allocation::text AS amount FROM allocations ORDER BY category_id
+        rows: [{"category_id": "0192f0a0-0000-7000-8003-000000000001", "in_period": true, "dated_today": true, "amount": "3000000.0000"}, {"category_id": "0192f0a0-0000-7000-8003-000000000002", "in_period": true, "dated_today": true, "amount": "2000000.0000"}]

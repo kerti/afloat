@@ -1,0 +1,335 @@
+# The path-parameter table of #106 item 1, run against PATCH /categories/{id}, as
+# pocket-paths.yaml does against the Pocket's: how every shape of a path parameter
+# is answered, through the real router and the generated binder. A parameter is
+# percent-decoded exactly once (#65); for a uuid the binder refuses everything that
+# is not one, with 400 VALIDATION {field: id, rule: invalid}, after the session
+# check. A trailing slash and an empty parameter match no route: the bare 404 an
+# unregistered path gives (same_as). HEAD is 405: there is no GET on this path.
+# The spellings uuid.Parse accepts name the same Category and are accepted
+# (refusing them would take a `pattern` on the path parameter, which the validator
+# would check on the ENCODED form and so refuse the encoded spelling of a valid
+# id). Every row asserts the Category row: a mis-decoded id is a hazard to a write.
+#
+# The Category every case starts with: 0192f0a0-0000-7000-8003-000000000001, Rent,
+# a Commitment of Household 1, active, allocated 3.000.000.
+
+
+- name: "category paths - %2541 binds %41, which is not a uuid, a malformed id"
+  issue: "106"
+  given: &seeded-one
+    - sql: |
+        INSERT INTO categories (id, household_id, category_display_name, bucket) VALUES ('0192f0a0-0000-7000-8003-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'Rent', 'commitment');
+        INSERT INTO budgets (household_id, year_month) VALUES ('0192f0a0-0000-7000-8000-000000000001', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'));
+        INSERT INTO allocations (household_id, year_month, effective_on, category_id, allocation) VALUES ('0192f0a0-0000-7000-8000-000000000001', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'), ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date, '0192f0a0-0000-7000-8003-000000000001', 3000000)
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: PATCH
+    path: /categories/%2541
+    headers:
+      Content-Type: application/json
+    body: '{"active":false}'
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "id", "rule": "invalid"}}
+    cookies: {}
+    rows:
+      - sql: SELECT category_display_name AS name, active FROM categories
+        rows: [{"name": "Rent", "active": true}]
+
+
+- name: "category paths - %25 binds a bare percent sign, a malformed id"
+  issue: "106"
+  given: *seeded-one
+  request:
+    method: PATCH
+    path: /categories/%25
+    headers:
+      Content-Type: application/json
+    body: '{"active":false}'
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "id", "rule": "invalid"}}
+    cookies: {}
+    rows:
+      - sql: SELECT category_display_name AS name, active FROM categories
+        rows: [{"name": "Rent", "active": true}]
+
+
+- name: "category paths - %2F inside the id is a malformed id"
+  issue: "106"
+  given: *seeded-one
+  request:
+    method: PATCH
+    path: /categories/0192f0a0-0000-7000-8003-000000000001%2F
+    headers:
+      Content-Type: application/json
+    body: '{"active":false}'
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "id", "rule": "invalid"}}
+    cookies: {}
+    rows:
+      - sql: SELECT category_display_name AS name, active FROM categories
+        rows: [{"name": "Rent", "active": true}]
+
+
+- name: "category paths - %2f in lower case is a malformed id"
+  issue: "106"
+  given: *seeded-one
+  request:
+    method: PATCH
+    path: /categories/a%2fb
+    headers:
+      Content-Type: application/json
+    body: '{"active":false}'
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "id", "rule": "invalid"}}
+    cookies: {}
+    rows:
+      - sql: SELECT category_display_name AS name, active FROM categories
+        rows: [{"name": "Rent", "active": true}]
+
+
+- name: "category paths - a semicolon is a malformed id"
+  issue: "106"
+  given: *seeded-one
+  request:
+    method: PATCH
+    path: /categories/a;b
+    headers:
+      Content-Type: application/json
+    body: '{"active":false}'
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "id", "rule": "invalid"}}
+    cookies: {}
+    rows:
+      - sql: SELECT category_display_name AS name, active FROM categories
+        rows: [{"name": "Rent", "active": true}]
+
+
+- name: "category paths - %3B is a malformed id"
+  issue: "106"
+  given: *seeded-one
+  request:
+    method: PATCH
+    path: /categories/a%3Bb
+    headers:
+      Content-Type: application/json
+    body: '{"active":false}'
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "id", "rule": "invalid"}}
+    cookies: {}
+    rows:
+      - sql: SELECT category_display_name AS name, active FROM categories
+        rows: [{"name": "Rent", "active": true}]
+
+
+- name: "category paths - %2e%2e is a malformed id"
+  issue: "106"
+  given: *seeded-one
+  request:
+    method: PATCH
+    path: /categories/%2e%2e
+    headers:
+      Content-Type: application/json
+    body: '{"active":false}'
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "id", "rule": "invalid"}}
+    cookies: {}
+    rows:
+      - sql: SELECT category_display_name AS name, active FROM categories
+        rows: [{"name": "Rent", "active": true}]
+
+
+- name: "category paths - %5C is a malformed id"
+  issue: "106"
+  given: *seeded-one
+  request:
+    method: PATCH
+    path: /categories/a%5Cb
+    headers:
+      Content-Type: application/json
+    body: '{"active":false}'
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "id", "rule": "invalid"}}
+    cookies: {}
+    rows:
+      - sql: SELECT category_display_name AS name, active FROM categories
+        rows: [{"name": "Rent", "active": true}]
+
+
+- name: "category paths - %00 is a malformed id"
+  issue: "106"
+  given: *seeded-one
+  request:
+    method: PATCH
+    path: /categories/a%00b
+    headers:
+      Content-Type: application/json
+    body: '{"active":false}'
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "id", "rule": "invalid"}}
+    cookies: {}
+    rows:
+      - sql: SELECT category_display_name AS name, active FROM categories
+        rows: [{"name": "Rent", "active": true}]
+
+
+- name: "category paths - not-a-uuid is a malformed id"
+  issue: "106"
+  given: *seeded-one
+  request:
+    method: PATCH
+    path: /categories/not-a-uuid
+    headers:
+      Content-Type: application/json
+    body: '{"active":false}'
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "id", "rule": "invalid"}}
+    cookies: {}
+    rows:
+      - sql: SELECT category_display_name AS name, active FROM categories
+        rows: [{"name": "Rent", "active": true}]
+
+
+- name: "category paths - a trailing slash matches no route"
+  issue: "106"
+  given: *seeded-one
+  request:
+    method: PATCH
+    path: /categories/0192f0a0-0000-7000-8003-000000000001/
+    headers:
+      Content-Type: application/json
+    body: '{"active":false}'
+  expect:
+    status: 404
+    same_as:
+      method: GET
+      path: /no-such-route
+    cookies: {}
+    rows:
+      - sql: SELECT category_display_name AS name, active FROM categories
+        rows: [{"name": "Rent", "active": true}]
+
+
+- name: "category paths - an empty parameter matches no route"
+  issue: "106"
+  given: *seeded-one
+  request:
+    method: PATCH
+    path: /categories/
+    headers:
+      Content-Type: application/json
+    body: '{"active":false}'
+  expect:
+    status: 404
+    same_as:
+      method: GET
+      path: /no-such-route
+    cookies: {}
+    rows:
+      - sql: SELECT category_display_name AS name, active FROM categories
+        rows: [{"name": "Rent", "active": true}]
+
+
+- name: "category paths - HEAD has no GET to answer it"
+  issue: "106"
+  given: *seeded-one
+  request:
+    method: HEAD
+    path: /categories/0192f0a0-0000-7000-8003-000000000001
+    headers:
+      Content-Type: application/json
+    body: '{"active":false}'
+  expect:
+    status: 405
+    body_empty: true
+    cookies: {}
+    rows:
+      - sql: SELECT category_display_name AS name, active FROM categories
+        rows: [{"name": "Rent", "active": true}]
+
+
+- name: "category paths - upper case names the same Category"
+  issue: "106"
+  given: *seeded-one
+  request:
+    method: PATCH
+    path: /categories/0192F0A0-0000-7000-8003-000000000001
+    headers:
+      Content-Type: application/json
+    body: '{"active":false}'
+  expect:
+    status: 200
+    body_json: {"id": "0192f0a0-0000-7000-8003-000000000001", "category_display_name": "Rent", "bucket": "commitment", "active": false}
+    cookies: {}
+    rows:
+      - sql: SELECT category_display_name AS name, active FROM categories
+        rows: [{"name": "Rent", "active": false}]
+
+
+- name: "category paths - a percent-encoded first digit names the same Category"
+  issue: "106"
+  given: *seeded-one
+  request:
+    method: PATCH
+    path: /categories/%30192f0a0-0000-7000-8003-000000000001
+    headers:
+      Content-Type: application/json
+    body: '{"active":false}'
+  expect:
+    status: 200
+    body_json: {"id": "0192f0a0-0000-7000-8003-000000000001", "category_display_name": "Rent", "bucket": "commitment", "active": false}
+    cookies: {}
+    rows:
+      - sql: SELECT category_display_name AS name, active FROM categories
+        rows: [{"name": "Rent", "active": false}]
+
+
+- name: "category paths - urn:uuid: names the same Category"
+  issue: "106"
+  given: *seeded-one
+  request:
+    method: PATCH
+    path: /categories/urn:uuid:0192f0a0-0000-7000-8003-000000000001
+    headers:
+      Content-Type: application/json
+    body: '{"active":false}'
+  expect:
+    status: 200
+    body_json: {"id": "0192f0a0-0000-7000-8003-000000000001", "category_display_name": "Rent", "bucket": "commitment", "active": false}
+    cookies: {}
+    rows:
+      - sql: SELECT category_display_name AS name, active FROM categories
+        rows: [{"name": "Rent", "active": false}]
+
+
+- name: "category paths - 32 hex digits name the same Category"
+  issue: "106"
+  given: *seeded-one
+  request:
+    method: PATCH
+    path: /categories/0192f0a0000070008003000000000001
+    headers:
+      Content-Type: application/json
+    body: '{"active":false}'
+  expect:
+    status: 200
+    body_json: {"id": "0192f0a0-0000-7000-8003-000000000001", "category_display_name": "Rent", "bucket": "commitment", "active": false}
+    cookies: {}
+    rows:
+      - sql: SELECT category_display_name AS name, active FROM categories
+        rows: [{"name": "Rent", "active": false}]

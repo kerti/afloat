@@ -177,7 +177,6 @@ func TestPatchBudgetRefusesEverySpellingTheContractDoesNotAllow(t *testing.T) {
 		// BOOTSTRAP §5.2: a body that is not the declared shape is INVALID_JSON_BODY
 		// "whatever else is wrong with it", so a bad amount does not outrank it.
 		{"a bad amount and an unknown property", `{"monthly_budget":"-1","x":1}`, invalid},
-		{"allocations are not accepted yet", `{"allocations":[]}`, invalid},
 		{"a property of the Budget the client may not set", `{"daily_pool":"5.0000"}`, invalid},
 		{"a non-object root", `[]`, invalid},
 		{"an empty body is not JSON", ``, invalid},

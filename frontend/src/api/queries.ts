@@ -7,15 +7,18 @@ import {
   createPocket,
   deletePocket,
   getAuthMethods,
+  getBudget,
   getMe,
   getOnboardingOptions,
   listPockets,
   localLogin,
   localRegister,
   logout,
+  updateBudget,
   updatePocket,
   updateHousehold,
   updateMe,
+  type Budget,
   type ChangeEmailRequest,
   type ChangePasswordRequest,
   type CreatePocketRequest,
@@ -26,6 +29,7 @@ import {
   type OnboardingOptions,
   type Pocket,
   type PocketList,
+  type UpdateBudgetRequest,
   type UpdateHouseholdRequest,
   type UpdateMeRequest,
   type UpdatePocketRequest,
@@ -185,5 +189,22 @@ export function useDeletePocket() {
     onError: (err) => {
       if (err.code === "NOT_FOUND") void qc.invalidateQueries({ queryKey: pocketsKey });
     },
+  });
+}
+
+export const budgetKey = ["budget"] as const;
+
+export function useBudget() {
+  return useQuery<Budget, ApiError>({ queryKey: budgetKey, queryFn: getBudget });
+}
+
+// The answer is the whole Budget, but the query is the one read path:
+// invalidate, never patch the cache. The promise is returned so the write
+// settles after the figures have been refetched.
+export function useUpdateBudget() {
+  const qc = useQueryClient();
+  return useMutation<Budget, ApiError, UpdateBudgetRequest>({
+    mutationFn: updateBudget,
+    onSuccess: () => qc.invalidateQueries({ queryKey: budgetKey }),
   });
 }

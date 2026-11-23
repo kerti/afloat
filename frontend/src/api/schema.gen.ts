@@ -433,6 +433,62 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/budget": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The Household's Budget for the current Budget Period.
+         * @description The Budget Period is the one that contains the caller's Today, worked
+         *     out on the server from the User's `time_zone` and the Household's
+         *     `day_starts_at` (BOOTSTRAP.md §4): there is no id and no way to name
+         *     another Period. A Period that has not been read yet comes into being
+         *     by this first read (PRD S13, Q-09) and carries the Monthly Budget
+         *     forward from the nearest earlier Period that has one, so **this
+         *     operation may write once per Period**, and `HEAD` does too. A request
+         *     that finds the Period already there writes nothing, and what is
+         *     returned never differs from what a read that did not write would have
+         *     returned.
+         *
+         *     The Monthly Budget in force is the version with the latest
+         *     `effective_on` on or before Today, except that a Period's days before
+         *     its first Monthly Budget was set are read as of that first one (the
+         *     Budget a Household sets on day 14 is its Budget for the whole
+         *     Period). `monthly_budget`, `daily_pool` and `unallocated` are omitted
+         *     until a Monthly Budget exists. Every figure is computed here and the
+         *     client derives none (PRD N5a).
+         */
+        get: operations["getBudget"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Change the Household's Budget for the current Budget Period.
+         * @description Merge semantics, the update convention (BOOTSTRAP.md §4): a property
+         *     left out is unchanged, an unknown property is `INVALID_JSON_BODY`, and
+         *     `{}` is a valid no-op. The answer is the whole Budget. Last write wins,
+         *     per field.
+         *
+         *     A change is recorded as a version effective on the writer's Today
+         *     (CONTEXT.md §Mid-period Budget changes): a second change on the same
+         *     Period Day overwrites the first, and one on a later day is a new
+         *     version, so the Period before it is not redrawn. The first Monthly
+         *     Budget of a Period is read as in force from the Period's first day.
+         *     Like `GET /budget`, this materialises the current Period if it is the
+         *     first request to find it missing, even for `{}`.
+         *
+         *     `monthly_budget` is a `MoneyInput`; more than four decimals is refused,
+         *     never rounded. A Monthly Budget cannot be cleared: `null` is
+         *     `INVALID_JSON_BODY`.
+         */
+        patch: operations["updateBudget"];
+        trace?: never;
+    };
     "/onboarding/options": {
         parameters: {
             query?: never;
@@ -677,6 +733,83 @@ export interface components {
             /** @description `false` deactivates the Pocket, `true` reactivates it. */
             active?: boolean;
         };
+        /**
+         * @description A decimal serialised as a string at exactly four decimal places (PRD
+         *     N2, BOOTSTRAP.md §4): `"9000000.0000"`, never a JSON number, never
+         *     trimmed, never exponent notation. In the Household's
+         *     `reporting_currency`; a Budget's money carries no `currency` of its own
+         *     (PRD N3). May be negative where it is a difference (`unallocated`).
+         * @example 9000000.0000
+         */
+        Money: string;
+        /**
+         * @description A non-negative decimal sent as a string: at most 16 integer digits and
+         *     at most 4 decimals, no sign, no exponent, no separator and no
+         *     whitespace. More than four decimals is refused and never rounded. The
+         *     rule is the pattern, so a breach is `VALIDATION {rule: pattern}`; the
+         *     answer carries the amount as a `Money`.
+         * @example 9000000
+         */
+        MoneyInput: string;
+        /**
+         * @description A Budget Period (CONTEXT.md): `year_month` is the `YYYY-MM` of the
+         *     calendar month in which it starts, and its window is derived from the
+         *     Household's current `period_start_day`, both ends inclusive. The
+         *     client derives neither.
+         */
+        BudgetPeriod: {
+            /** @example 2026-11 */
+            year_month: string;
+            /**
+             * Format: date
+             * @example 2026-11-01
+             */
+            starts_on: string;
+            /**
+             * Format: date
+             * @example 2026-11-30
+             */
+            ends_on: string;
+        };
+        /**
+         * @description A Category's planned amount in the Budget's Period (PRD S8), in force
+         *     as of Today. Categories land with a later slice, so no allocation
+         *     exists yet and `Budget.allocations` is empty.
+         */
+        Allocation: {
+            /** Format: uuid */
+            category_id: string;
+            allocation: components["schemas"]["Money"];
+        };
+        /**
+         * @description The Household's plan for one Budget Period (CONTEXT.md): its Monthly
+         *     Budget and Category allocations, and the figures computed from them on
+         *     the server. The Commitments Budget is the sum of the allocations of
+         *     Commitment Categories, the Daily Pool is the Monthly Budget less it,
+         *     and Unallocated is the Daily Pool less the allocations of Daily
+         *     Categories. A Daily Pool or Unallocated below zero is sent as such: it
+         *     is information, never an error (PRD S9).
+         */
+        Budget: {
+            period: components["schemas"]["BudgetPeriod"];
+            monthly_budget?: components["schemas"]["Money"];
+            /**
+             * @description The allocations in force as of Today whose Category is live. A
+             *     Category with none is absent. Empty until Categories exist.
+             */
+            allocations: components["schemas"]["Allocation"][];
+            commitments_budget: components["schemas"]["Money"];
+            daily_pool?: components["schemas"]["Money"];
+            unallocated?: components["schemas"]["Money"];
+        };
+        /**
+         * @description What a Budget change may set, merge-style: a property left out is
+         *     unchanged and none is required. `null` is not accepted for any of
+         *     them. Allocations are added with the Categories slice.
+         */
+        UpdateBudgetRequest: {
+            monthly_budget?: components["schemas"]["MoneyInput"];
+        };
         ChangePasswordRequest: {
             /** Format: password */
             current_password: string;
@@ -751,7 +884,8 @@ export interface components {
          *     first failing field, as in Balances. `field` is the wire name of the
          *     property, so a Household's name (`household_display_name`), a User's
          *     (`user_display_name`) and a Pocket's (`pocket_display_name`) are never
-         *     confused; a Pocket's `id` is `id`. `WEAK_PASSWORD` carries
+         *     confused; a Pocket's `id` is `id`; a Budget's Monthly Budget is
+         *     `monthly_budget`. `WEAK_PASSWORD` carries
          *     `{reason}`, `min` or `breached`, at registration and at a password
          *     change. `INVALID_CURRENT_PASSWORD` is the password change's and the
          *     email change's own: the current password sent with the request is not
@@ -1316,6 +1450,55 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getBudget: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The Budget, as it stands now. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Budget"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    updateBudget: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateBudgetRequest"];
+            };
+        };
+        responses: {
+            /** @description The Budget as it now stands. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Budget"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
             500: components["responses"]["InternalError"];
         };
     };

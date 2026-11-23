@@ -23,6 +23,7 @@ import (
 	_ "time/tzdata"
 
 	"github.com/kerti/afloat/backend/internal/auth"
+	"github.com/kerti/afloat/backend/internal/budget"
 	"github.com/kerti/afloat/backend/internal/config"
 	"github.com/kerti/afloat/backend/internal/db"
 	"github.com/kerti/afloat/backend/internal/household"
@@ -111,6 +112,7 @@ func run() error {
 		}),
 		Household: household.New(household.Deps{Querier: queries}),
 		Pocket:    pocket.New(pocket.Deps{Querier: queries}),
+		Budget:    budget.New(budget.Deps{Querier: queries, Beginner: pool, Now: time.Now}),
 		System: system.New(system.Deps{
 			Querier:          queries,
 			Version:          cfg.Version,

@@ -626,3 +626,55 @@
     rows:
       - sql: SELECT user_display_name FROM users WHERE id = '0192f0a0-0000-7000-8000-0000000000a1'
         rows: [{user_display_name: Alice}]
+
+# PATCH /budget (#130): a cross-site page must not be able to set the Household's
+# Monthly Budget, and a refused request does not even materialise the Period.
+- name: csrf - cross-site budget patch is blocked and nothing is written
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: PATCH
+    path: /budget
+    headers:
+      Content-Type: application/json
+      Sec-Fetch-Site: cross-site
+    body: '{"monthly_budget":"1"}'
+  expect:
+    status: 403
+    body_json: {code: CROSS_SITE_REQUEST_BLOCKED}
+    cookies: {}
+    rows:
+      - sql: SELECT (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM monthly_budgets)::int AS versions
+        rows: [{budgets: 0, versions: 0}]
+
+- name: csrf - a foreign Origin on a budget patch is blocked
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: PATCH
+    path: /budget
+    headers:
+      Content-Type: application/json
+      Origin: http://evil.example
+    body: '{"monthly_budget":"1"}'
+  expect:
+    status: 403
+    body_json: {code: CROSS_SITE_REQUEST_BLOCKED}
+    cookies: {}
+    rows:
+      - sql: SELECT (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM monthly_budgets)::int AS versions
+        rows: [{budgets: 0, versions: 0}]

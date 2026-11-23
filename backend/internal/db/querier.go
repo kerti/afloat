@@ -11,11 +11,28 @@ import (
 )
 
 type Querier interface {
+	// Budgets (PRD S9, S12, S13). Tenant-scoped in SQL: every statement filters on
+	// the authenticated User's household_id, never anything the request supplied
+	// (BOOTSTRAP.md §4). year_month is the Budget Period's label, derived by the
+	// period package from the User's Today; nothing here works out a date.
+	// Whether the Period has been materialised. A request that finds it writes
+	// nothing, so only the first request after a boundary pays for the copy.
+	BudgetExists(ctx context.Context, arg BudgetExistsParams) (bool, error)
 	// The commit's claim. Run inside the founding transaction: a second concurrent
 	// commit on the same handshake blocks on this row's lock until the first
 	// commits, then finds it gone and gets no row, so only one of them can found.
 	ClaimOnboardingHandshake(ctx context.Context, id string) (OnboardingHandshake, error)
 	ClearLoginAttempts(ctx context.Context, keys []string) error
+	// Carries the Monthly Budget into a Period being materialised (PRD S12): the
+	// latest version of the nearest EARLIER Period that has one, else of the nearest
+	// LATER one (reachable only after a period_start_day change re-labelled Today,
+	// #130 C3), else nothing, which is the Household's first Period. The copy is
+	// dated the Period's first day. The target is never its own source: the
+	// comparisons are strict, and the marker was just created in this transaction.
+	//
+	// The source choice is this one statement. A standing default (Q-17) would be
+	// consulted here, first, and no stored row would change.
+	CopyMonthlyBudgetForward(ctx context.Context, arg CopyMonthlyBudgetForwardParams) (int64, error)
 	// Plain INSERT, not UpsertCredential: a founding never overwrites one.
 	CreateCredential(ctx context.Context, arg CreateCredentialParams) error
 	// Founding. Ids are minted by the server, UUIDv7 (BOOTSTRAP.md §4): founding is
@@ -79,6 +96,21 @@ type Querier interface {
 	// what the index considers a duplicate. Soft-deleted Users are invisible here.
 	GetUserByEmail(ctx context.Context, email string) (User, error)
 	GetUserByID(ctx context.Context, id pgtype.UUID) (User, error)
+	// The materialisation marker. ON CONFLICT DO NOTHING, not a SELECT then an
+	// INSERT: a row back means THIS request is the materialiser and copies; no row
+	// means another request is or was, and this one reads what it committed. Two
+	// concurrent first reads queue on the primary key's index entry, the second
+	// resumes only once the first has committed or rolled back, and a rollback
+	// makes the second the materialiser. The marker and its copy are one
+	// transaction (see CopyMonthlyBudgetForward): a marker committed alone would be
+	// a Period that looks materialised and is empty.
+	InsertBudget(ctx context.Context, arg InsertBudgetParams) (string, error)
+	// Every version of the Period's Monthly Budget, oldest first. A Period holds at
+	// most one per day it was edited, so the list is short, and the as-of rule
+	// (budget.MonthlyBudgetAsOf) is one Go function over it rather than a second copy in SQL.
+	// One statement, so the version in force and the first version, which the rule
+	// needs, come from the same snapshot.
+	ListMonthlyBudgetVersions(ctx context.Context, arg ListMonthlyBudgetVersionsParams) ([]ListMonthlyBudgetVersionsRow, error)
 	// Pockets (PRD S10). Tenant-scoped in SQL: every statement filters on the
 	// authenticated User's household_id, never anything the request supplied
 	// (BOOTSTRAP.md §4).
@@ -162,6 +194,10 @@ type Querier interface {
 	// and there is no lookup beforehand for it to race (BOOTSTRAP.md §5.1.1).
 	UpdateUserEmail(ctx context.Context, arg UpdateUserEmailParams) (User, error)
 	UpsertCredential(ctx context.Context, arg UpsertCredentialParams) error
+	// One statement per field, keyed by the version's date, so two writers of
+	// different fields both land (BOOTSTRAP.md §4) and a second change on the same
+	// Period Day overwrites the first. effective_on is the writer's Today.
+	UpsertMonthlyBudget(ctx context.Context, arg UpsertMonthlyBudgetParams) error
 }
 
 var _ Querier = (*Queries)(nil)

@@ -1,0 +1,586 @@
+# GET and PATCH /budget (#130, PR 1): the first money on the wire and the first
+# Period Day arithmetic. The Budget is always the current Budget Period's, for
+# the caller's own Household, and a read may write once per Period (S13, Q-09).
+#
+# The seed is one Household with period_start_day 1 and day_starts_at 04:00, and
+# Alice's time zone is Asia/Jakarta, so Today is the Postgres clock in Jakarta
+# less four hours:
+#
+#   Today  = ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date
+#   Period = to_char(that, 'YYYY-MM')
+#
+# A case builds its state from that clock and asserts the rows relative to it,
+# never a literal date, and the answer's own dates are matched by `<re:...>`; the
+# rest of the body is still compared exactly. A case that straddles a Period
+# boundary or 04:00 Jakarta could flake, so the exact-date assertions live in the
+# backend's own suite, which injects a clock.
+#
+# `rows:` read the columns, because a response can be right while the row behind
+# it is not. The money spelling table is budget-money.yaml.
+
+- name: budget - a first read materialises the Period and has no Monthly Budget
+  issue: "130"
+  given: &signed-in
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: GET
+    path: /budget
+  expect:
+    status: 200
+    headers:
+      Content-Type: application/json
+    body_json:
+      period: &period
+        year_month: "<re:[0-9]{4}-[0-9]{2}>"
+        starts_on: "<re:[0-9]{4}-[0-9]{2}-01>"
+        ends_on: "<re:[0-9]{4}-[0-9]{2}-(28|29|30|31)>"
+      allocations: []
+      commitments_budget: "0.0000"
+    cookies: {}
+    rows:
+      - sql: |
+          SELECT (SELECT count(*) FROM budgets WHERE household_id = '0192f0a0-0000-7000-8000-000000000001'
+                    AND year_month = to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'))::int AS in_period,
+                 (SELECT count(*) FROM budgets)::int AS budgets,
+                 (SELECT count(*) FROM monthly_budgets)::int AS versions
+        rows: [{in_period: 1, budgets: 1, versions: 0}]
+
+- name: budget - a read of a Period that exists writes nothing
+  issue: "130"
+  given:
+    - sql: |
+        INSERT INTO budgets (household_id, year_month, created_at) VALUES
+          ('0192f0a0-0000-7000-8000-000000000001', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'), '2000-01-01T00:00:00Z');
+        INSERT INTO monthly_budgets (household_id, year_month, effective_on, monthly_budget, updated_at) VALUES
+          ('0192f0a0-0000-7000-8000-000000000001', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'),
+           ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date, 6000000, '2000-01-01T00:00:00Z')
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: GET
+    path: /budget
+  expect:
+    status: 200
+    body_json:
+      period: *period
+      monthly_budget: "6000000.0000"
+      daily_pool: "6000000.0000"
+      unallocated: "6000000.0000"
+      allocations: []
+      commitments_budget: "0.0000"
+    cookies: {}
+    rows:
+      - sql: |
+          SELECT to_char(b.created_at, 'YYYY') AS marker_year, to_char(m.updated_at, 'YYYY') AS version_year,
+                 (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM monthly_budgets)::int AS versions
+          FROM budgets b, monthly_budgets m
+        rows: [{marker_year: "2000", version_year: "2000", budgets: 1, versions: 1}]
+
+# HEAD answers like GET (BOOTSTRAP.md §5.2), so it is a first read too.
+- name: budget - HEAD answers like GET with no body, and materialises too
+  issue: "130"
+  given: *signed-in
+  request:
+    method: HEAD
+    path: /budget
+  expect:
+    status: 200
+    body_empty: true
+    rows:
+      - sql: SELECT count(*)::int AS n FROM budgets
+        rows: [{n: 1}]
+
+- name: budget - the first Monthly Budget is dated Today and answered as four-decimal strings
+  issue: "130"
+  given: *signed-in
+  request:
+    method: PATCH
+    path: /budget
+    headers:
+      Content-Type: application/json
+    body: '{"monthly_budget":"9000000"}'
+  expect:
+    status: 200
+    headers:
+      Content-Type: application/json
+    body_json:
+      period: *period
+      monthly_budget: "9000000.0000"
+      daily_pool: "9000000.0000"
+      unallocated: "9000000.0000"
+      allocations: []
+      commitments_budget: "0.0000"
+    cookies: {}
+    rows:
+      - sql: |
+          SELECT year_month = to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM') AS in_period,
+                 effective_on = ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date AS dated_today,
+                 monthly_budget::text AS amount
+          FROM monthly_budgets WHERE household_id = '0192f0a0-0000-7000-8000-000000000001'
+        rows: [{in_period: true, dated_today: true, amount: "9000000.0000"}]
+      - sql: SELECT count(*)::int AS n FROM budgets
+        rows: [{n: 1}]
+
+- name: budget - an empty PATCH materialises the Period and changes nothing else
+  issue: "130"
+  given: *signed-in
+  request:
+    method: PATCH
+    path: /budget
+    headers:
+      Content-Type: application/json
+    body: '{}'
+  expect:
+    status: 200
+    body_json:
+      period: *period
+      allocations: []
+      commitments_budget: "0.0000"
+    cookies: {}
+    rows:
+      - sql: SELECT (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM monthly_budgets)::int AS versions
+        rows: [{budgets: 1, versions: 0}]
+
+- name: budget - a second change the same Period Day overwrites the first
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+    - request:
+        method: PATCH
+        path: /budget
+        headers:
+          Content-Type: application/json
+        body: '{"monthly_budget":"9000000"}'
+      status: 200
+  request:
+    method: PATCH
+    path: /budget
+    headers:
+      Content-Type: application/json
+    body: '{"monthly_budget":"9500000"}'
+  expect:
+    status: 200
+    body_json:
+      period: *period
+      monthly_budget: "9500000.0000"
+      daily_pool: "9500000.0000"
+      unallocated: "9500000.0000"
+      allocations: []
+      commitments_budget: "0.0000"
+    cookies: {}
+    rows:
+      - sql: |
+          SELECT effective_on = ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date AS dated_today,
+                 monthly_budget::text AS amount
+          FROM monthly_budgets
+        rows: [{dated_today: true, amount: "9500000.0000"}]
+
+- name: budget - a change on a later day is a new version and the earlier one is untouched
+  issue: "130"
+  given:
+    - sql: |
+        INSERT INTO budgets (household_id, year_month) VALUES
+          ('0192f0a0-0000-7000-8000-000000000001', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'));
+        INSERT INTO monthly_budgets (household_id, year_month, effective_on, monthly_budget, updated_at) VALUES
+          ('0192f0a0-0000-7000-8000-000000000001', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'),
+           ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date - 1, 6000000, '2000-01-01T00:00:00Z')
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: PATCH
+    path: /budget
+    headers:
+      Content-Type: application/json
+    body: '{"monthly_budget":"7500000"}'
+  expect:
+    status: 200
+    body_json:
+      period: *period
+      monthly_budget: "7500000.0000"
+      daily_pool: "7500000.0000"
+      unallocated: "7500000.0000"
+      allocations: []
+      commitments_budget: "0.0000"
+    cookies: {}
+    rows:
+      - sql: |
+          SELECT effective_on = ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date AS dated_today,
+                 monthly_budget::text AS amount, updated_at > now() - interval '1 minute' AS touched
+          FROM monthly_budgets ORDER BY effective_on
+        rows:
+          - {dated_today: false, amount: "6000000.0000", touched: false}
+          - {dated_today: true, amount: "7500000.0000", touched: true}
+
+# S12, S13: carried forward on the first read of a Period, dated its first day,
+# from the latest version of the nearest earlier Period that has a Monthly Budget.
+- name: budget - a new Period carries the latest Monthly Budget forward, dated its first day
+  issue: "130"
+  given:
+    - sql: |
+        INSERT INTO budgets (household_id, year_month) VALUES
+          ('0192f0a0-0000-7000-8000-000000000001', to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month', 'YYYY-MM'));
+        INSERT INTO monthly_budgets (household_id, year_month, effective_on, monthly_budget) VALUES
+          ('0192f0a0-0000-7000-8000-000000000001', to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month', 'YYYY-MM'),
+           (date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month')::date, 6000000),
+          ('0192f0a0-0000-7000-8000-000000000001', to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month', 'YYYY-MM'),
+           (date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month')::date + 10, 7500000)
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: GET
+    path: /budget
+  expect:
+    status: 200
+    body_json:
+      period: *period
+      monthly_budget: "7500000.0000"
+      daily_pool: "7500000.0000"
+      unallocated: "7500000.0000"
+      allocations: []
+      commitments_budget: "0.0000"
+    cookies: {}
+    rows:
+      - sql: |
+          SELECT year_month = to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM') AS current_period,
+                 effective_on = date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date AS first_day,
+                 monthly_budget::text AS amount
+          FROM monthly_budgets
+          WHERE year_month = to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM')
+        rows: [{current_period: true, first_day: true, amount: "7500000.0000"}]
+      - sql: |
+          SELECT count(*)::int AS n FROM monthly_budgets
+          WHERE year_month = to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month', 'YYYY-MM')
+        rows: [{n: 2}]
+      - sql: SELECT count(*)::int AS n FROM budgets
+        rows: [{n: 2}]
+
+- name: budget - a Period nobody opened is skipped, and the next copies from the last that exists
+  issue: "130"
+  given:
+    - sql: |
+        INSERT INTO budgets (household_id, year_month) VALUES
+          ('0192f0a0-0000-7000-8000-000000000001', to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '3 months', 'YYYY-MM'));
+        INSERT INTO monthly_budgets (household_id, year_month, effective_on, monthly_budget) VALUES
+          ('0192f0a0-0000-7000-8000-000000000001', to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '3 months', 'YYYY-MM'),
+           (date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '3 months')::date, 4200000)
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: GET
+    path: /budget
+  expect:
+    status: 200
+    body_json:
+      period: *period
+      monthly_budget: "4200000.0000"
+      daily_pool: "4200000.0000"
+      unallocated: "4200000.0000"
+      allocations: []
+      commitments_budget: "0.0000"
+    cookies: {}
+    rows:
+      - sql: SELECT count(*)::int AS n FROM budgets
+        rows: [{n: 2}]
+
+# A Period with a marker and no Monthly Budget holds nothing to carry.
+- name: budget - a Period that holds a marker and no Monthly Budget is not a source
+  issue: "130"
+  given:
+    - sql: |
+        INSERT INTO budgets (household_id, year_month) VALUES
+          ('0192f0a0-0000-7000-8000-000000000001', to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '3 months', 'YYYY-MM')),
+          ('0192f0a0-0000-7000-8000-000000000001', to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month', 'YYYY-MM'));
+        INSERT INTO monthly_budgets (household_id, year_month, effective_on, monthly_budget) VALUES
+          ('0192f0a0-0000-7000-8000-000000000001', to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '3 months', 'YYYY-MM'),
+           (date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '3 months')::date, 4200000)
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: GET
+    path: /budget
+  expect:
+    status: 200
+    body_json:
+      period: *period
+      monthly_budget: "4200000.0000"
+      daily_pool: "4200000.0000"
+      unallocated: "4200000.0000"
+      allocations: []
+      commitments_budget: "0.0000"
+    cookies: {}
+
+# #113 D1: the window is derived from the Household's period_start_day every time.
+- name: budget - the window follows the Household's period_start_day
+  issue: "130"
+  given:
+    - sql: UPDATE households SET period_start_day = 28
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: GET
+    path: /budget
+  expect:
+    status: 200
+    body_json:
+      period:
+        year_month: "<re:[0-9]{4}-[0-9]{2}>"
+        starts_on: "<re:[0-9]{4}-[0-9]{2}-28>"
+        ends_on: "<re:[0-9]{4}-[0-9]{2}-27>"
+      allocations: []
+      commitments_budget: "0.0000"
+    cookies: {}
+    rows:
+      - sql: |
+          SELECT year_month = CASE WHEN extract(day FROM (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::int >= 28
+                                   THEN to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM')
+                                   ELSE to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month', 'YYYY-MM')
+                              END AS right_label
+          FROM budgets
+        rows: [{right_label: true}]
+
+# Today is the caller's own: a time zone is a User's, not the Household's.
+- name: budget - Today is the caller's own time zone's
+  issue: "130"
+  given:
+    - sql: UPDATE users SET time_zone = 'Pacific/Kiritimati' WHERE email = 'alice@example.com'
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: PATCH
+    path: /budget
+    headers:
+      Content-Type: application/json
+    body: '{"monthly_budget":"1000000"}'
+  expect:
+    status: 200
+    body_json:
+      period: *period
+      monthly_budget: "1000000.0000"
+      daily_pool: "1000000.0000"
+      unallocated: "1000000.0000"
+      allocations: []
+      commitments_budget: "0.0000"
+    cookies: {}
+    rows:
+      - sql: SELECT effective_on = ((now() AT TIME ZONE 'Pacific/Kiritimati') - interval '4 hours')::date AS dated_in_their_zone FROM monthly_budgets
+        rows: [{dated_in_their_zone: true}]
+
+# Tenancy. The other Household holds the same label with a different amount: the
+# caller reads and writes only its own, and its own copy never comes from theirs.
+- name: budget - another Household's Budget is invisible to a read and untouched by a change
+  issue: "130"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO budgets (household_id, year_month, created_at) VALUES
+          ('0192f0a0-0000-7000-8000-000000000002', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'), '2000-01-01T00:00:00Z');
+        INSERT INTO monthly_budgets (household_id, year_month, effective_on, monthly_budget, updated_at) VALUES
+          ('0192f0a0-0000-7000-8000-000000000002', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'),
+           ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date, 1234567, '2000-01-01T00:00:00Z')
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: GET
+    path: /budget
+  expect:
+    status: 200
+    body_json:
+      period: *period
+      allocations: []
+      commitments_budget: "0.0000"
+    cookies: {}
+    rows:
+      - sql: |
+          SELECT household_id::text AS household, created_at > now() - interval '1 minute' AS made_just_now
+          FROM budgets ORDER BY household_id
+        rows:
+          - {household: 0192f0a0-0000-7000-8000-000000000001, made_just_now: true}
+          - {household: 0192f0a0-0000-7000-8000-000000000002, made_just_now: false}
+      - sql: SELECT household_id::text AS household, monthly_budget::text AS amount, to_char(updated_at, 'YYYY') AS updated FROM monthly_budgets
+        rows: [{household: 0192f0a0-0000-7000-8000-000000000002, amount: "1234567.0000", updated: "2000"}]
+
+- name: budget - a change by one Household leaves another's rows as they were
+  issue: "130"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO budgets (household_id, year_month, created_at) VALUES
+          ('0192f0a0-0000-7000-8000-000000000002', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'), '2000-01-01T00:00:00Z');
+        INSERT INTO monthly_budgets (household_id, year_month, effective_on, monthly_budget, updated_at) VALUES
+          ('0192f0a0-0000-7000-8000-000000000002', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'),
+           ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date, 1234567, '2000-01-01T00:00:00Z')
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: PATCH
+    path: /budget
+    headers:
+      Content-Type: application/json
+    body: '{"monthly_budget":"9000000"}'
+  expect:
+    status: 200
+    body_json:
+      period: *period
+      monthly_budget: "9000000.0000"
+      daily_pool: "9000000.0000"
+      unallocated: "9000000.0000"
+      allocations: []
+      commitments_budget: "0.0000"
+    cookies: {}
+    rows:
+      - sql: SELECT household_id::text AS household, monthly_budget::text AS amount, updated_at > now() - interval '1 minute' AS touched FROM monthly_budgets ORDER BY household_id
+        rows:
+          - {household: 0192f0a0-0000-7000-8000-000000000001, amount: "9000000.0000", touched: true}
+          - {household: 0192f0a0-0000-7000-8000-000000000002, amount: "1234567.0000", touched: false}
+
+# The carry-forward reads only the caller's own Periods, even when another
+# Household holds a nearer one with a bigger number.
+- name: budget - a new Period never copies from another Household
+  issue: "130"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO budgets (household_id, year_month) VALUES
+          ('0192f0a0-0000-7000-8000-000000000001', to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '3 months', 'YYYY-MM')),
+          ('0192f0a0-0000-7000-8000-000000000002', to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month', 'YYYY-MM'));
+        INSERT INTO monthly_budgets (household_id, year_month, effective_on, monthly_budget) VALUES
+          ('0192f0a0-0000-7000-8000-000000000001', to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '3 months', 'YYYY-MM'),
+           (date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '3 months')::date, 4200000),
+          ('0192f0a0-0000-7000-8000-000000000002', to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month', 'YYYY-MM'),
+           (date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month')::date, 99999999)
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: GET
+    path: /budget
+  expect:
+    status: 200
+    body_json:
+      period: *period
+      monthly_budget: "4200000.0000"
+      daily_pool: "4200000.0000"
+      unallocated: "4200000.0000"
+      allocations: []
+      commitments_budget: "0.0000"
+    cookies: {}
+    rows:
+      - sql: SELECT count(*)::int AS n FROM monthly_budgets WHERE household_id = '0192f0a0-0000-7000-8000-000000000002'
+        rows: [{n: 1}]
+
+# Who may call it: a session, enforced from the contract's `security` ahead of
+# the body (#114), so a malformed body without one is still a 401.
+- name: budget - with no cookie a read is unauthorized and writes nothing
+  issue: "130"
+  request:
+    method: GET
+    path: /budget
+  expect:
+    status: 401
+    body_json: {code: UNAUTHORIZED}
+    cookies: {}
+    rows:
+      - sql: SELECT (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM monthly_budgets)::int AS versions
+        rows: [{budgets: 0, versions: 0}]
+
+- name: budget - with no cookie a change is unauthorized and writes nothing
+  issue: "130"
+  request:
+    method: PATCH
+    path: /budget
+    headers:
+      Content-Type: application/json
+    body: '{"monthly_budget":"9000000"}'
+  expect:
+    status: 401
+    body_json: {code: UNAUTHORIZED}
+    cookies: {}
+    rows:
+      - sql: SELECT (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM monthly_budgets)::int AS versions
+        rows: [{budgets: 0, versions: 0}]
+
+- name: budget - with no cookie, even a refused body is unauthorized
+  issue: "130"
+  request:
+    method: PATCH
+    path: /budget
+    headers:
+      Content-Type: application/json
+    body: '{"monthly_budget":"-1"}'
+  expect:
+    status: 401
+    body_json: {code: UNAUTHORIZED}
+    cookies: {}
+
+- name: budget - with no cookie, HEAD is unauthorized and writes nothing
+  issue: "130"
+  request:
+    method: HEAD
+    path: /budget
+  expect:
+    status: 401
+    body_empty: true
+    rows:
+      - sql: SELECT count(*)::int AS n FROM budgets
+        rows: [{n: 0}]

@@ -1,0 +1,1445 @@
+openapi: 3.0.3
+
+# Hand-written and authoritative (BOOTSTRAP.md §6, PRD N6/N7a). The Go server
+# interfaces and the frontend's TypeScript types are both generated from this
+# file; never hand-edit generated output.
+#
+# 3.0.3 rather than 3.1 deliberately: oapi-codegen has mature 3.0 support, and
+# 3.1's JSON-Schema alignment buys nothing this contract needs.
+#
+# Auth and session semantics deliberately mirror Balances (its ADR-0017,
+# ADR-0027, ADR-0039), so a household running both apps meets the same login,
+# the same session behaviour and the same error envelope in each. Afloat still
+# knows nothing about Balances at runtime (VISION.md §5) — this is shared shape,
+# not an integration.
+
+info:
+  title: Afloat
+  version: 0.1.0
+  description: |
+    Household spending-trajectory API.
+
+    Health check, authentication, the founding gate (BOOTSTRAP.md §5.1), the
+    Household's settings (PRD S3), the User's own (PRD S4: profile, email and
+    password), the Household's Pockets (PRD S10: list, create, rename,
+    deactivate, delete and restore) and the Budget of the current Budget
+    Period (PRD S9, S12, S13: the Monthly Budget, read and changed). Invitation
+    acceptance and the remaining domain resources land in step 9 and are
+    deliberately absent here.
+  license:
+    name: AGPL-3.0-only
+    url: https://www.gnu.org/licenses/agpl-3.0.html
+
+servers:
+  - url: /api
+
+tags:
+  - name: system
+    description: Instance liveness and pre-auth configuration. Unauthenticated.
+  - name: auth
+    description: Local email + password sessions (BOOTSTRAP.md §5).
+  - name: household
+    description: The caller's own Household and its settings (PRD S3).
+  - name: pocket
+    description: The Household's Pockets (PRD S10), the containers it spends from.
+  - name: budget
+    description: |
+      The Household's Budget for the Budget Period it is in now (PRD S9, S12,
+      S13): its Monthly Budget and the figures derived from it.
+  - name: onboarding
+    description: |
+      The gate between a registered credential and an account: a person who has
+      registered holds a short-lived handshake cookie, and commits their choice
+      here (BOOTSTRAP.md §5.1). Authenticated by that cookie, not a session.
+
+security:
+  - sessionCookie: []
+
+paths:
+  /health:
+    get:
+      tags: [system]
+      operationId: getHealth
+      summary: Liveness and readiness of this instance.
+      security: []
+      responses:
+        '200':
+          description: The instance is serving and its database is reachable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+        '503':
+          description: A dependency is unreachable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+
+  /auth/methods:
+    get:
+      tags: [system]
+      operationId: getAuthMethods
+      summary: Which identity providers this instance has enabled.
+      description: |
+        The pre-auth config surface: the SPA reads it before rendering a login
+        screen and shows only the methods that are live. In MVP `local` is the
+        only one that can be true; the field exists so enabling Google later is
+        additive on the client too.
+      security: []
+      responses:
+        '200':
+          description: The enabled providers.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthMethods'
+
+  /auth/local/login:
+    post:
+      tags: [auth]
+      operationId: localLogin
+      summary: Exchange email and password for a server-side session.
+      description: |
+        Namespaced `local` from day one so a future `/auth/google/*` is purely
+        additive (PRD §4.1).
+
+        On success the response carries a host-only session cookie
+        (BOOTSTRAP.md §5): no `Domain` attribute, `HttpOnly`, `Secure`,
+        `SameSite=Lax`. The body is empty — the client follows with `GET /me`.
+
+        Every failure mode — unknown email, a User with no credential, wrong
+        password — returns the same `INVALID_CREDENTIALS`, and the server pays
+        the hashing cost even when no credential exists, so neither the code nor
+        the timing enumerates accounts.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LocalLoginRequest'
+      responses:
+        '204':
+          description: Authenticated. A session cookie is set.
+          headers:
+            Set-Cookie:
+              schema:
+                type: string
+              description: The session cookie. Attributes per BOOTSTRAP.md §5.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /auth/local/register:
+    post:
+      tags: [auth]
+      operationId: localRegister
+      summary: Register a credential and open an onboarding handshake.
+      description: |
+        Creates no User, no Household and no session. It validates, hashes the
+        password and stores the credential in a short-lived onboarding
+        handshake; the account is born only when the person commits at the
+        gate (`POST /onboarding/choice`). On success the response carries the
+        handshake cookie (host-only, `HttpOnly`, `SameSite=Lax`, `Secure` per
+        deployment) and the client navigates to the gate.
+
+        Validation runs in this order: the email's shape, then the password
+        policy (before any hashing), then whether a live User already holds the
+        address. A `400` with `WEAK_PASSWORD` carries `args.reason`, `min` (under
+        10 code points) or `breached` (in the embedded common-password list,
+        compared case-insensitively). A `409 EMAIL_TAKEN` names a held address:
+        registration enumerates by design, where login never does.
+
+        Registration hashes on unauthenticated input, so it shares login's
+        Argon2 concurrency cap and has its own per-IP backoff: a request that
+        reaches the hash arms a window for its IP, and a request inside one is
+        a `429`.
+
+        With the local provider off, this route answers exactly as a path that
+        was never registered.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LocalRegisterRequest'
+      responses:
+        '204':
+          description: A handshake is open. The handshake cookie is set.
+          headers:
+            Set-Cookie:
+              schema:
+                type: string
+              description: The onboarding handshake cookie.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /auth/local/change-password:
+    post:
+      tags: [auth]
+      operationId: changeLocalPassword
+      summary: Change the signed-in User's password.
+      description: |
+        Needs the current password, which is a proof and not a property of the
+        User, so this is not a `PATCH /me`. Namespaced `local` with login and
+        register: with the local provider off, this route answers exactly as a
+        path that was never registered.
+
+        Validation runs in this order: the body's shape, then `new_password`
+        against the policy (`WEAK_PASSWORD`, before any hashing and before the
+        throttle, so a weak password costs and records nothing), then the
+        throttle, then the current password. A wrong one is `403`
+        `INVALID_CURRENT_PASSWORD` and arms a backoff keyed on the User, shared
+        with `POST /auth/local/change-email`; a request inside the window is a
+        `429` and no hash is run. A success clears it.
+
+        On success every session the User holds is revoked, the caller's
+        included, and a fresh one is minted for the caller, in one transaction:
+        the response carries its cookie. Another device's next request is a
+        `401`. `new_password` may equal `current_password`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChangePasswordRequest'
+      responses:
+        '204':
+          description: The password is changed. A new session cookie is set.
+          headers:
+            Set-Cookie:
+              schema:
+                type: string
+              description: |
+                The caller's new session cookie. Every earlier session of this
+                User is gone, the one that made this request included.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /auth/local/change-email:
+    post:
+      tags: [auth]
+      operationId: changeLocalEmail
+      summary: Change the signed-in User's sign-in address.
+      description: |
+        Needs the current password, checked and throttled exactly as
+        `POST /auth/local/change-password` does, under the same key. Only once
+        it has verified is the address looked at, so a caller who has not
+        proved the password learns nothing about whether an address is held.
+
+        The address is trimmed and lower-cased before it is stored, so
+        `Me.email` may differ in case from what was sent. The change takes
+        effect at once and is not verified: there is no mail transport (PRD
+        §4). Login by the new address works immediately and by the old does
+        not. An address a live User already holds is `409` `EMAIL_TAKEN`, the
+        caller's own address in any case is not. No session is touched.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChangeEmailRequest'
+      responses:
+        '200':
+          description: The User as they now stand.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Me'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /auth/logout:
+    post:
+      tags: [auth]
+      operationId: logout
+      summary: Destroy the current server-side session.
+      description: |
+        Provider-agnostic, and idempotent: calling it without a session is a
+        success, not an error, so a client clearing a stale cookie never has to
+        special-case the result. Revocation is the session row's deletion.
+      # Optional auth: the empty alternative lets a request with no session
+      # through, which the session-enforcing middleware would otherwise refuse.
+      security:
+        - sessionCookie: []
+        - {}
+      responses:
+        '204':
+          description: The session is destroyed and the cookie cleared.
+          headers:
+            Set-Cookie:
+              schema:
+                type: string
+              description: The session cookie, expired.
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /me:
+    get:
+      tags: [auth]
+      operationId: getMe
+      summary: The signed-in User and their Household's settings.
+      description: |
+        The client's first call after a successful login, and its session probe
+        on load. A 401 means "show the login screen".
+      responses:
+        '200':
+          description: The session is valid.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Me'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    patch:
+      tags: [auth]
+      operationId: updateMe
+      summary: Change the signed-in User's own settings.
+      description: |
+        The User is always the caller: there is no id to supply, and no way to
+        change another member's settings. Merge semantics, the update
+        convention (BOOTSTRAP.md §4): a property left out is unchanged, an
+        unknown property is `INVALID_JSON_BODY`, and `{}` is a valid no-op. The
+        answer is the whole `Me`. Last write wins, per field.
+
+        `email` and the password are not properties of this resource: they need
+        the current password and have their own operations
+        (`POST /auth/local/change-email`, `POST /auth/local/change-password`),
+        so a body naming either is `INVALID_JSON_BODY`.
+
+        `user_display_name` follows the registration rules, trimmed: blank is
+        `VALIDATION` `required` here, where registration defaults it. `locale`
+        is `en-GB` or `id-ID`; anything else is `INVALID_JSON_BODY`.
+        `appearance` is `system`, `light` or `dark`; anything else, `null`
+        included, is `INVALID_JSON_BODY`. `time_zone` must be an IANA name
+        the server knows (`VALIDATION`, `rule: timezone`). It takes effect at once, and is an input to Today;
+        the client derives nothing from it.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateMeRequest'
+      responses:
+        '200':
+          description: The User as they now stand.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Me'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /household:
+    patch:
+      tags: [household]
+      operationId: updateHousehold
+      summary: Change the caller's Household settings.
+      description: |
+        The Household is always the caller's own: there is no id to supply, so
+        nothing to forge across tenants. Any member may change these settings
+        (PRD S2: no roles).
+
+        Merge semantics, the update convention (BOOTSTRAP.md §4): a property
+        left out is unchanged, an unknown property is `INVALID_JSON_BODY`, and
+        `{}` is a valid no-op. The answer is the whole Household. Last write
+        wins, per field: two writers of different fields both land, and there is
+        no version to conflict on.
+
+        `household_display_name` follows the founding rules (BOOTSTRAP.md
+        §5.1.1): trimmed, not blank, at most 60 code points. `reporting_currency`
+        must be an ISO 4217 code (`VALIDATION`, `rule: iso4217`, when it is
+        well formed but not one). `period_start_day` takes effect at once and
+        re-dates every Budget Period; nothing is stored about the old value.
+
+        There is no `GET`: `GET /me` carries the Household. There is no
+        `DELETE`, and there never will be (BOOTSTRAP.md §4).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateHouseholdRequest'
+      responses:
+        '200':
+          description: The Household as it now stands.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Household'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /pockets:
+    get:
+      tags: [pocket]
+      operationId: listPockets
+      summary: The caller's Household's Pockets.
+      description: |
+        Every Pocket of the caller's Household that is not deleted, active or
+        inactive (an inactive one carries `active: false`), in creation order
+        (`created_at`, then `id`). A rename or a deactivation never moves a
+        Pocket in the order, and the client does not re-sort. Never paginated:
+        a Household holds a handful. An empty Household answers
+        `{"items": []}`. The Household is the caller's own, from the session;
+        nothing in the request names one.
+      responses:
+        '200':
+          description: The Pockets, in creation order.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PocketList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    post:
+      tags: [pocket]
+      operationId: createPocket
+      summary: Create a Pocket.
+      description: |
+        The client supplies the id (a UUIDv7) and it is the idempotency key
+        (BOOTSTRAP.md §4): the first write answers `201` with the Pocket, and a
+        repeat of the same id answers `200` with the Pocket **as it stands now**.
+        The rest of a repeated body is neither compared nor applied, so a retry
+        after a lost `201` that meets another member's rename sees the stored
+        name, not an error.
+
+        An id that is held by something other than a live Pocket of the caller's
+        own Household is `409 ID_TAKEN`: another Household's Pocket, or the
+        caller's own deleted one (an id names one Pocket for ever). The two are
+        one answer on purpose. A name already held, case-insensitively, by
+        another Pocket of the Household that is not deleted (active or
+        inactive) is `409 NAME_TAKEN`.
+
+        A body that is invalid is refused whatever the id holds. A new Pocket is
+        always active: `active` is not a property of this request. The Household
+        is the caller's own, from the session, never from the body.
+
+        `pocket_display_name` follows the Household's name rules (BOOTSTRAP.md
+        §5.1.1): trimmed, not blank, at most 60 code points.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreatePocketRequest'
+      responses:
+        '200':
+          description: The id already names a live Pocket of this Household, returned as stored.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Pocket'
+        '201':
+          description: The Pocket was created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Pocket'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /pockets/{id}:
+    patch:
+      tags: [pocket]
+      operationId: updatePocket
+      summary: Rename, deactivate or reactivate a Pocket.
+      description: |
+        Merge-style, as `PATCH /household`: a property left out is unchanged,
+        none is required, and `{}` is a no-op that answers the Pocket as it
+        stands. Two writers of different properties both land. The answer is the
+        whole Pocket.
+
+        `pocket_display_name` follows the same name rules as at creation
+        (BOOTSTRAP.md §5.1.1): trimmed, not blank, at most 60 code points. A name
+        already held, case-insensitively, by another Pocket of the Household
+        that is not deleted (active or inactive) is `409 NAME_TAKEN`, with
+        nothing changed; a rename to its own name in another case is not a
+        clash.
+
+        `active: false` deactivates: the Pocket keeps its name, its place in the
+        list and everything it labels, and is no longer offered for new capture.
+        `active: true` reactivates. Deactivating is not deleting. An inactive
+        Pocket can be renamed like any other, and is still listed by
+        `GET /pockets` (the client filters).
+
+        An id that is unknown, that belongs to another Household, or that is
+        deleted is `404 NOT_FOUND`, the same answer in every case, and it is
+        given even for `{}`: no request confirms another Household's id. The
+        Household is the caller's own, from the session, never from the request.
+        The id's shape and the body are checked before the lookup, so a foreign
+        id with a bad body answers what an unknown one does.
+      parameters:
+        - $ref: '#/components/parameters/PocketId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdatePocketRequest'
+      responses:
+        '200':
+          description: The Pocket as it now stands.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Pocket'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+    delete:
+      tags: [pocket]
+      operationId: deletePocket
+      summary: Delete a Pocket.
+      description: |
+        A **soft** delete: the verb is `DELETE` and the effect is not. The row
+        stays, with `deleted_at` set; nothing is ever removed from the database
+        by this API. A deleted Pocket is gone from `GET /pockets`, gives up its
+        name (a new Pocket may take it at once) and answers `404` to `PATCH`.
+        Only this operation and `POST /pockets/{id}/restore` can still see it.
+
+        Idempotent on the caller's own Pocket: deleting one that is already
+        deleted is `204` again and keeps the **first** deletion instant. An
+        inactive Pocket can be deleted too. No body, no confirmation: the act is
+        immediate and `POST /pockets/{id}/restore` is its Undo.
+
+        An id that is unknown or that belongs to another Household is `404
+        NOT_FOUND`, the same answer in both cases, so no request confirms
+        another Household's id. (A deleted Pocket of the caller's own is not
+        `404` here: deleting it again is the idempotent `204`.) The Household is
+        the caller's own, from the session, never from the request. The id's
+        shape is checked before the lookup.
+
+        Deleting is not deactivating: a Pocket that history labels is retired
+        with `PATCH {active: false}`, which keeps it listed, named and
+        labelling. A Pocket that any Expense references will be refused here
+        (`409 POCKET_IN_USE`) once Expenses exist; no Expense can reference a
+        Pocket yet, so that code is not in this contract.
+      parameters:
+        - $ref: '#/components/parameters/PocketId'
+      responses:
+        '204':
+          description: The Pocket is deleted, as it already was or as of this request.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /pockets/{id}/restore:
+    post:
+      tags: [pocket]
+      operationId: restorePocket
+      summary: Restore a deleted Pocket.
+      description: |
+        Undoes `DELETE /pockets/{id}`: clears `deleted_at` and answers `200`
+        with the Pocket, `active` as it was before the delete (a Pocket that was
+        inactive comes back inactive). No body. Idempotent: restoring a Pocket
+        that is not deleted is `200` with the Pocket as it stands, and changes
+        nothing.
+
+        A Pocket whose name another Pocket of the Household that is not deleted
+        (active or inactive) now holds, case-insensitively, is `409 NAME_TAKEN`
+        and stays deleted: a delete gave up the name, and a new Pocket may have
+        taken it. Rename the other Pocket, or leave this one deleted.
+
+        An id that is unknown or that belongs to another Household is `404
+        NOT_FOUND`, the same answer in both cases. The Household is the
+        caller's own, from the session, never from the request. The id's shape
+        is checked before the lookup.
+      parameters:
+        - $ref: '#/components/parameters/PocketId'
+      responses:
+        '200':
+          description: The Pocket, live again (or as it already was).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Pocket'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /budget:
+    get:
+      tags: [budget]
+      operationId: getBudget
+      summary: The Household's Budget for the current Budget Period.
+      description: |
+        The Budget Period is the one that contains the caller's Today, worked
+        out on the server from the User's `time_zone` and the Household's
+        `day_starts_at` (BOOTSTRAP.md §4): there is no id and no way to name
+        another Period. A Period that has not been read yet comes into being
+        by this first read (PRD S13, Q-09) and carries the Monthly Budget
+        forward from the nearest earlier Period that has one, so **this
+        operation may write once per Period**, and `HEAD` does too. A request
+        that finds the Period already there writes nothing, and what is
+        returned never differs from what a read that did not write would have
+        returned.
+
+        The Monthly Budget in force is the version with the latest
+        `effective_on` on or before Today, except that a Period's days before
+        its first Monthly Budget was set are read as of that first one (the
+        Budget a Household sets on day 14 is its Budget for the whole
+        Period). `monthly_budget`, `daily_pool` and `unallocated` are omitted
+        until a Monthly Budget exists. Every figure is computed here and the
+        client derives none (PRD N5a).
+      responses:
+        '200':
+          description: The Budget, as it stands now.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Budget'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    patch:
+      tags: [budget]
+      operationId: updateBudget
+      summary: Change the Household's Budget for the current Budget Period.
+      description: |
+        Merge semantics, the update convention (BOOTSTRAP.md §4): a property
+        left out is unchanged, an unknown property is `INVALID_JSON_BODY`, and
+        `{}` is a valid no-op. The answer is the whole Budget. Last write wins,
+        per field.
+
+        A change is recorded as a version effective on the writer's Today
+        (CONTEXT.md §Mid-period Budget changes): a second change on the same
+        Period Day overwrites the first, and one on a later day is a new
+        version, so the Period before it is not redrawn. The first Monthly
+        Budget of a Period is read as in force from the Period's first day.
+        Like `GET /budget`, this materialises the current Period if it is the
+        first request to find it missing, even for `{}`.
+
+        `monthly_budget` is a `MoneyInput`; more than four decimals is refused,
+        never rounded. A Monthly Budget cannot be cleared: `null` is
+        `INVALID_JSON_BODY`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateBudgetRequest'
+      responses:
+        '200':
+          description: The Budget as it now stands.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Budget'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /onboarding/options:
+    get:
+      tags: [onboarding]
+      operationId: getOnboardingOptions
+      summary: What the gate offers the holder of a handshake.
+      description: |
+        Authenticated by the handshake cookie alone. Today the gate offers
+        founding a Household; invitations arrive later as an additive field.
+      security:
+        - onboardingCookie: []
+      responses:
+        '200':
+          description: The handshake is live.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OnboardingOptions'
+        '401':
+          $ref: '#/components/responses/OnboardingUnauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /onboarding/choice:
+    post:
+      tags: [onboarding]
+      operationId: commitOnboardingChoice
+      summary: Commit the gate's choice, creating the account.
+      description: |
+        One transaction claims the handshake, creates the Household, the User
+        and the credential, and commits; only then is the session issued. Two
+        concurrent commits on one handshake cannot both found: the loser
+        answers `401`.
+
+        Founding disabled (`FOUNDING_DISABLED`) answers `403`; the address
+        having been taken since registration answers `409 EMAIL_TAKEN` and
+        creates nothing. The server mints the Household's and the User's ids,
+        UUIDv7 (BOOTSTRAP.md §5.1): founding is an online flow, not an
+        offline-capable write.
+      security:
+        - onboardingCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OnboardingChoiceRequest'
+      responses:
+        '204':
+          description: |
+            The account exists. The handshake cookie is cleared and the session
+            cookie is set.
+          headers:
+            Set-Cookie:
+              schema:
+                type: string
+              description: |
+                The session cookie (attributes per BOOTSTRAP.md §5), then a
+                second `Set-Cookie` line expiring the handshake cookie. Two
+                lines, though OpenAPI 3.0 can describe one header value only.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/OnboardingUnauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+components:
+  securitySchemes:
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      # Deliberately not Balances' bare `session`: the two apps are host-only
+      # cookies on separate hostnames today, but a self-hoster putting both
+      # behind one hostname would have them overwrite each other.
+      name: afloat_session
+
+    onboardingCookie:
+      type: apiKey
+      in: cookie
+      # The handshake token, hashed at rest like a session's. Its own name, so
+      # holding one is never mistaken for holding the other.
+      name: afloat_onboarding
+
+  parameters:
+    PocketId:
+      name: id
+      in: path
+      required: true
+      description: |
+        A Pocket's id. Deliberately no `pattern` and no `maxLength`: the spec
+        validator checks a path on its encoded form and the binder reads the
+        decoded one (#106), so a pattern here would refuse `%30192f...`, the
+        percent-encoded spelling of a valid id. A value that is not a UUID is
+        `400 VALIDATION {field: id, rule: invalid}`, from the binder.
+      schema:
+        type: string
+        format: uuid
+
+  schemas:
+    Health:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [ok, degraded]
+        version:
+          type: string
+          description: Build identifier of the running instance.
+          example: 0.1.0-a1b2c3d
+      additionalProperties: false
+
+    AuthMethods:
+      type: object
+      required: [local, google, founding_open]
+      properties:
+        local:
+          type: boolean
+          description: Email + password. The only method in MVP.
+        google:
+          type: boolean
+          description: Always false in MVP; planned, not built (PRD §4.1).
+        founding_open:
+          type: boolean
+          description: |
+            True unless the operator set `FOUNDING_DISABLED`. Display only: the
+            sign-in screen offers "Create account" from it, and the commit at
+            the gate is what enforces it.
+      additionalProperties: false
+
+    LocalLoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+          maxLength: 320
+        password:
+          type: string
+          format: password
+          minLength: 1
+          maxLength: 4096
+      additionalProperties: false
+
+    LocalRegisterRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+          maxLength: 320
+        password:
+          type: string
+          format: password
+          # No minLength: a short password is `400 WEAK_PASSWORD` with
+          # `reason: min`, not a schema failure. The cap is the same as the
+          # policy's own (counted in code points).
+          maxLength: 1024
+        user_display_name:
+          type: string
+          maxLength: 255
+          description: |
+            The registrant's own name; it becomes the User's
+            `user_display_name` at the commit. Defaults to the email's local
+            part when absent or blank.
+        locale:
+          type: string
+          description: |
+            `en-GB` or `id-ID`. Deliberately not an enum: anything else falls
+            back to `en-GB` rather than failing registration.
+      additionalProperties: false
+
+    OnboardingOptions:
+      type: object
+      required: [email, user_display_name, founding_open]
+      properties:
+        email:
+          type: string
+          format: email
+        user_display_name:
+          type: string
+          minLength: 1
+          maxLength: 255
+        founding_open:
+          type: boolean
+          description: |
+            False when the operator set `FOUNDING_DISABLED`; the gate then has
+            nothing to offer a stranger.
+      additionalProperties: false
+
+    OnboardingChoiceRequest:
+      type: object
+      description: |
+        A found choice, the only one today. A later slice adds a join choice to
+        this same body, additively.
+      required: [found, household_display_name]
+      properties:
+        found:
+          type: boolean
+          description: |
+            Must be `true`. Any other body is not a found choice and answers
+            `VALIDATION`.
+        household_display_name:
+          type: string
+          maxLength: 255
+          description: |
+            The Household's name, pre-filled by the client from its own
+            catalogue and editable. The server stores it trimmed; blank after
+            the trim is `VALIDATION` (`required`), and more than 60 code points
+            is `VALIDATION` (`max`). The same rules apply when it is edited
+            (`PATCH /household`).
+      additionalProperties: false
+
+    Me:
+      type: object
+      description: |
+        The User's own fields (PRD S4) and, nested, their Household's settings
+        (PRD S3) that the client needs to render anything. One call, because
+        every screen needs both and they change rarely; a change to either
+        invalidates it. It is the client's one read of the Household.
+      required:
+        - id
+        - email
+        - user_display_name
+        - locale
+        - time_zone
+        - appearance
+        - household
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: UUIDv7.
+        email:
+          type: string
+          format: email
+        user_display_name:
+          type: string
+          minLength: 1
+          maxLength: 255
+        locale:
+          $ref: '#/components/schemas/Locale'
+        time_zone:
+          type: string
+          description: IANA time zone identifier.
+          example: Asia/Jakarta
+        appearance:
+          $ref: '#/components/schemas/Appearance'
+        household:
+          $ref: '#/components/schemas/Household'
+      additionalProperties: false
+
+    Household:
+      type: object
+      description: |
+        A Household's settings (PRD S3): the whole set, read-only fields
+        included, so the shape does not change as more of them become writable.
+        A User belongs to exactly one Household and the binding is irreversible
+        (PRD S1).
+      required:
+        - id
+        - household_display_name
+        - reporting_currency
+        - period_start_day
+        - day_starts_at
+        - allowance_mode
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: UUIDv7.
+        household_display_name:
+          type: string
+          minLength: 1
+          maxLength: 255
+        reporting_currency:
+          type: string
+          description: ISO 4217 code. Default IDR.
+          minLength: 3
+          maxLength: 3
+          example: IDR
+        period_start_day:
+          type: integer
+          description: |
+            Day of month a Budget Period opens, 1 to 28: the highest day every
+            month has. Default 1.
+          minimum: 1
+          maximum: 28
+        day_starts_at:
+          type: string
+          description: |
+            Local time a Period Day rolls over, `HH:MM`. Default 04:00. The
+            server does all Period Day arithmetic; the client never derives it
+            (BOOTSTRAP.md §4).
+          pattern: '^([01][0-9]|2[0-3]):[0-5][0-9]$'
+          example: '04:00'
+        expected_monthly_income:
+          type: string
+          description: |
+            Decimal serialised as a string at exactly four decimal places (PRD
+            N2), denominated in `reporting_currency`. Omitted when the Household
+            has not supplied one.
+          example: '25000000.0000'
+        allowance_mode:
+          $ref: '#/components/schemas/AllowanceMode'
+      additionalProperties: false
+
+    UpdateHouseholdRequest:
+      type: object
+      description: |
+        The settings a Household may change today, merge-style: a property left
+        out is unchanged, and none is required. A property naming a setting not
+        listed here is not accepted. `null` is not accepted for any of them.
+      properties:
+        household_display_name:
+          type: string
+          # An outer bound that counts padding; the handler's 60 code points
+          # applies to the trimmed name.
+          maxLength: 255
+        reporting_currency:
+          type: string
+          pattern: '^[A-Z]{3}$'
+        period_start_day:
+          type: integer
+          minimum: 1
+          maximum: 28
+      additionalProperties: false
+
+    Pocket:
+      type: object
+      description: |
+        A practical container the Household spends from (PRD S10, CONTEXT.md):
+        a name, and no balance. A Pocket on the wire is never deleted, but it
+        may be inactive: kept for the history it labels, and not offered for
+        new capture.
+      required:
+        - id
+        - pocket_display_name
+        - active
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: UUIDv7, supplied by the client at creation.
+        pocket_display_name:
+          type: string
+          minLength: 1
+          maxLength: 255
+        active:
+          type: boolean
+          description: |
+            `false` for a Pocket that has been deactivated. A new Pocket is
+            always active.
+      additionalProperties: false
+
+    PocketList:
+      type: object
+      description: |
+        The Household's Pockets in creation order. An object rather than a bare
+        array so it can grow without breaking a client.
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Pocket'
+      additionalProperties: false
+
+    CreatePocketRequest:
+      type: object
+      required:
+        - id
+        - pocket_display_name
+      properties:
+        id:
+          type: string
+          format: uuid
+          # kin-openapi does not enforce format: uuid, and the generated decode
+          # accepts four spellings, so the pattern is the one gate on the
+          # canonical dashed form and on version 7 (RFC variant).
+          pattern: '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$'
+          description: UUIDv7, generated by the client. The idempotency key.
+        pocket_display_name:
+          type: string
+          # An outer bound that counts padding; the handler's 60 code points
+          # applies to the trimmed name.
+          maxLength: 255
+      additionalProperties: false
+
+    UpdatePocketRequest:
+      type: object
+      description: |
+        What a Pocket may change, merge-style: a property left out is unchanged,
+        and none is required. `id`, `household_id` and any other property are
+        not accepted, and `null` is not accepted for either listed one.
+      properties:
+        pocket_display_name:
+          type: string
+          # An outer bound that counts padding; the handler's 60 code points
+          # applies to the trimmed name.
+          maxLength: 255
+        active:
+          type: boolean
+          description: |
+            `false` deactivates the Pocket, `true` reactivates it.
+      additionalProperties: false
+
+    Money:
+      type: string
+      description: |
+        A decimal serialised as a string at exactly four decimal places (PRD
+        N2, BOOTSTRAP.md §4): `"9000000.0000"`, never a JSON number, never
+        trimmed, never exponent notation. In the Household's
+        `reporting_currency`; a Budget's money carries no `currency` of its own
+        (PRD N3). May be negative where it is a difference (`unallocated`).
+      pattern: '^-?[0-9]{1,16}\.[0-9]{4}$'
+      example: '9000000.0000'
+
+    MoneyInput:
+      type: string
+      description: |
+        A non-negative decimal sent as a string: at most 16 integer digits and
+        at most 4 decimals, no sign, no exponent, no separator and no
+        whitespace. More than four decimals is refused and never rounded. The
+        rule is the pattern, so a breach is `VALIDATION {rule: pattern}`; the
+        answer carries the amount as a `Money`.
+      pattern: '^[0-9]{1,16}(\.[0-9]{1,4})?$'
+      example: '9000000'
+
+    BudgetPeriod:
+      type: object
+      description: |
+        A Budget Period (CONTEXT.md): `year_month` is the `YYYY-MM` of the
+        calendar month in which it starts, and its window is derived from the
+        Household's current `period_start_day`, both ends inclusive. The
+        client derives neither.
+      required: [year_month, starts_on, ends_on]
+      properties:
+        year_month:
+          type: string
+          pattern: '^[0-9]{4}-(0[1-9]|1[0-2])$'
+          example: '2026-11'
+        starts_on:
+          type: string
+          format: date
+          example: '2026-11-01'
+        ends_on:
+          type: string
+          format: date
+          example: '2026-11-30'
+      additionalProperties: false
+
+    Allocation:
+      type: object
+      description: |
+        A Category's planned amount in the Budget's Period (PRD S8), in force
+        as of Today. Categories land with a later slice, so no allocation
+        exists yet and `Budget.allocations` is empty.
+      required: [category_id, allocation]
+      properties:
+        category_id:
+          type: string
+          format: uuid
+        allocation:
+          $ref: '#/components/schemas/Money'
+      additionalProperties: false
+
+    Budget:
+      type: object
+      description: |
+        The Household's plan for one Budget Period (CONTEXT.md): its Monthly
+        Budget and Category allocations, and the figures computed from them on
+        the server. The Commitments Budget is the sum of the allocations of
+        Commitment Categories, the Daily Pool is the Monthly Budget less it,
+        and Unallocated is the Daily Pool less the allocations of Daily
+        Categories. A Daily Pool or Unallocated below zero is sent as such: it
+        is information, never an error (PRD S9).
+      required: [period, allocations, commitments_budget]
+      properties:
+        period:
+          $ref: '#/components/schemas/BudgetPeriod'
+        monthly_budget:
+          $ref: '#/components/schemas/Money'
+        allocations:
+          type: array
+          description: |
+            The allocations in force as of Today whose Category is live. A
+            Category with none is absent. Empty until Categories exist.
+          items:
+            $ref: '#/components/schemas/Allocation'
+        commitments_budget:
+          $ref: '#/components/schemas/Money'
+        daily_pool:
+          $ref: '#/components/schemas/Money'
+        unallocated:
+          $ref: '#/components/schemas/Money'
+      additionalProperties: false
+
+    UpdateBudgetRequest:
+      type: object
+      description: |
+        What a Budget change may set, merge-style: a property left out is
+        unchanged and none is required. `null` is not accepted for any of
+        them. Allocations are added with the Categories slice.
+      properties:
+        monthly_budget:
+          $ref: '#/components/schemas/MoneyInput'
+      additionalProperties: false
+
+    ChangePasswordRequest:
+      type: object
+      required: [current_password, new_password]
+      properties:
+        current_password:
+          type: string
+          format: password
+          minLength: 1
+          maxLength: 4096
+        new_password:
+          type: string
+          format: password
+          # No minLength, as at registration: a short password is `400
+          # WEAK_PASSWORD` with `reason: min`, not a schema failure. The cap is
+          # the policy's own (counted in code points).
+          maxLength: 1024
+      additionalProperties: false
+
+    ChangeEmailRequest:
+      type: object
+      required: [email, current_password]
+      properties:
+        email:
+          type: string
+          format: email
+          maxLength: 320
+        current_password:
+          type: string
+          format: password
+          minLength: 1
+          maxLength: 4096
+      additionalProperties: false
+
+    UpdateMeRequest:
+      type: object
+      description: |
+        The settings a User may change on their own row, merge-style: a property
+        left out is unchanged, and none is required. `email` and the password
+        are not among them (see `POST /auth/local/change-email` and
+        `/change-password`). `null` is not accepted for any of them.
+      properties:
+        user_display_name:
+          type: string
+          # An outer bound that counts padding; the name stored is the trimmed
+          # one, and a trimmed name cannot exceed it.
+          maxLength: 255
+        locale:
+          $ref: '#/components/schemas/Locale'
+        time_zone:
+          type: string
+          minLength: 1
+          maxLength: 64
+          description: IANA time zone identifier.
+          example: Asia/Makassar
+        appearance:
+          $ref: '#/components/schemas/Appearance'
+      additionalProperties: false
+
+    AllowanceMode:
+      type: string
+      description: How the daily allowance is read. Default `adaptive`.
+      enum: [adaptive, fixed]
+
+    Locale:
+      type: string
+      description: |
+        Both locales are real from day one (PRD N12a); the frontend owns every
+        user-facing string.
+      enum: [en-GB, id-ID]
+
+    Appearance:
+      type: string
+      description: |
+        Light or dark, per User (PRD S4). `system` follows the device and is the
+        default. It is not the palette: Shallows stays the one palette, and a
+        value outside this list is `INVALID_JSON_BODY` where it is sent. The
+        client owns applying it (BOOTSTRAP.md §8); the server only stores it.
+      enum: [system, light, dark]
+
+    Error:
+      type: object
+      description: |
+        The one error envelope the API emits (PRD N7), identical in shape
+        to Balances ADR-0027. It carries **codes, not messages** — the frontend
+        looks `code` up in its i18n catalogue and interpolates `args`. There is
+        deliberately no `message` field: shipping English beside the code invites
+        copy drift between the two.
+      required: [code]
+      properties:
+        code:
+          $ref: '#/components/schemas/ErrorCode'
+        args:
+          type: object
+          description: |
+            Interpolation values for the catalogue string, keyed to its
+            placeholders. JSON primitives only, never nested — the frontend
+            passes them straight to `t(key, args)`.
+          additionalProperties: true
+      additionalProperties: false
+
+    ErrorCode:
+      type: string
+      description: |
+        `SCREAMING_SNAKE_CASE`, matching Balances ADR-0027 where a code means the
+        same thing. Closed set, extended as endpoints land; an unknown code
+        falls back to the client's generic string.
+
+        `VALIDATION` carries `{field, rule}` in `args` and reports only the
+        first failing field, as in Balances. `field` is the wire name of the
+        property, so a Household's name (`household_display_name`), a User's
+        (`user_display_name`) and a Pocket's (`pocket_display_name`) are never
+        confused; a Pocket's `id` is `id`; a Budget's Monthly Budget is
+        `monthly_budget`. `WEAK_PASSWORD` carries
+        `{reason}`, `min` or `breached`, at registration and at a password
+        change. `INVALID_CURRENT_PASSWORD` is the password change's and the
+        email change's own: the current password sent with the request is not
+        the User's. It carries no `args`. `ID_TAKEN` is a create whose
+        client-supplied id is held by something other than a live row of the
+        caller's own Household (another Household's, or one of its own that is
+        deleted). `NAME_TAKEN` is a name already held, case-insensitively, by
+        another row of the Household that is not deleted. Neither carries
+        `args`; `NAME_TAKEN` names no entity, so every entity with a name
+        shares it. `NOT_FOUND` is an `{id}` that names no live row of the
+        caller's own Household: unknown, another Household's and deleted all
+        answer it, with no `args`, so one cannot be told from another (delete
+        and restore, which may act on a deleted row, answer it for unknown and
+        foreign ids only). A path
+        that matches no route at all is not this: it answers a bare `404`.
+      enum:
+        - VALIDATION
+        - INVALID_JSON_BODY
+        - INVALID_CREDENTIALS
+        - TOO_MANY_ATTEMPTS
+        - UNAUTHORIZED
+        - CROSS_SITE_REQUEST_BLOCKED
+        - EMAIL_TAKEN
+        - WEAK_PASSWORD
+        - INVALID_CURRENT_PASSWORD
+        - FOUNDING_DISABLED
+        - ID_TAKEN
+        - NAME_TAKEN
+        - NOT_FOUND
+        - INTERNAL
+
+  responses:
+    BadRequest:
+      description: |
+        Malformed body, a field that failed validation, or (registration and a
+        password change only) a password the policy refuses: `WEAK_PASSWORD`.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Unauthorized:
+      description: No valid session, or credentials that do not authenticate.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    OnboardingUnauthorized:
+      description: |
+        No handshake, or an expired or unknown one. A stale handshake cookie is
+        cleared, so the client stops presenting it.
+      headers:
+        Set-Cookie:
+          schema:
+            type: string
+          description: The handshake cookie, expired. Present when one was sent.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Forbidden:
+      description: |
+        `FOUNDING_DISABLED`: the operator has closed this instance to new
+        Households. `INVALID_CURRENT_PASSWORD`: the current password sent with
+        a password or email change is not the User's.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    NotFound:
+      description: |
+        `NOT_FOUND`: the `{id}` names no live row of the caller's own
+        Household. An unknown id, another Household's and a deleted one answer
+        the same bytes. The two operations that can see a deleted row (delete
+        and restore) answer it for an unknown or another Household's id only.
+        A path that matches no route is a bare `404` with no body, not this.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Conflict:
+      description: |
+        `EMAIL_TAKEN`: a live User already holds the address, at registration, at
+        the commit or at an email change. `ID_TAKEN`: a create's client-supplied
+        id is held by another Household's row, or by the caller's own deleted
+        one. `NAME_TAKEN`: another row of the Household that is not deleted
+        already holds the name, case-insensitively, at a create, a rename or a
+        restore.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    TooManyRequests:
+      description: |
+        Login backoff (per-IP and per-email), registration's per-IP backoff, or
+        the current-password backoff of a password or email change (per User,
+        shared by both). `Retry-After` carries the wait in seconds. Backoff, never a hard lockout — a hard lock is a self-host
+        footgun.
+      headers:
+        Retry-After:
+          schema:
+            type: integer
+          description: Seconds to wait before retrying.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    InternalError:
+      description: Unexpected server-side failure.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'

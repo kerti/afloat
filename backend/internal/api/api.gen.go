@@ -5,17 +5,11 @@ package api
 
 import (
 	"bytes"
-	"compress/flate"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"net/url"
-	"path"
-	"strings"
 
-	"github.com/getkin/kin-openapi/openapi3"
 	"github.com/go-chi/chi/v5"
 	"github.com/oapi-codegen/runtime"
 	openapi_types "github.com/oapi-codegen/runtime/types"
@@ -150,6 +144,22 @@ func (e Locale) Valid() bool {
 	}
 }
 
+// Allocation A Category's planned amount in the Budget's Period (PRD S8), in force
+// as of Today. Categories land with a later slice, so no allocation
+// exists yet and `Budget.allocations` is empty.
+type Allocation struct {
+	// Allocation A decimal serialised as a string at exactly four decimal places (PRD
+	// N2, BOOTSTRAP.md §4): `"9000000.0000"`, never a JSON number, never
+	// trimmed, never exponent notation. In the Household's
+	// `reporting_currency`; a Budget's money carries no `currency` of its own
+	// (PRD N3). May be negative where it is a difference (`unallocated`).
+	//
+	//
+	// Example: 9000000.0000
+	Allocation Money              `json:"allocation"`
+	CategoryId openapi_types.UUID `json:"category_id"`
+}
+
 // AllowanceMode How the daily allowance is read. Default `adaptive`.
 type AllowanceMode string
 
@@ -171,6 +181,80 @@ type AuthMethods struct {
 
 	// Local Email + password. The only method in MVP.
 	Local bool `json:"local"`
+}
+
+// Budget The Household's plan for one Budget Period (CONTEXT.md): its Monthly
+// Budget and Category allocations, and the figures computed from them on
+// the server. The Commitments Budget is the sum of the allocations of
+// Commitment Categories, the Daily Pool is the Monthly Budget less it,
+// and Unallocated is the Daily Pool less the allocations of Daily
+// Categories. A Daily Pool or Unallocated below zero is sent as such: it
+// is information, never an error (PRD S9).
+type Budget struct {
+	// Allocations The allocations in force as of Today whose Category is live. A
+	// Category with none is absent. Empty until Categories exist.
+	Allocations []Allocation `json:"allocations"`
+
+	// CommitmentsBudget A decimal serialised as a string at exactly four decimal places (PRD
+	// N2, BOOTSTRAP.md §4): `"9000000.0000"`, never a JSON number, never
+	// trimmed, never exponent notation. In the Household's
+	// `reporting_currency`; a Budget's money carries no `currency` of its own
+	// (PRD N3). May be negative where it is a difference (`unallocated`).
+	//
+	//
+	// Example: 9000000.0000
+	CommitmentsBudget Money `json:"commitments_budget"`
+
+	// DailyPool A decimal serialised as a string at exactly four decimal places (PRD
+	// N2, BOOTSTRAP.md §4): `"9000000.0000"`, never a JSON number, never
+	// trimmed, never exponent notation. In the Household's
+	// `reporting_currency`; a Budget's money carries no `currency` of its own
+	// (PRD N3). May be negative where it is a difference (`unallocated`).
+	//
+	//
+	// Example: 9000000.0000
+	DailyPool *Money `json:"daily_pool,omitempty"`
+
+	// MonthlyBudget A decimal serialised as a string at exactly four decimal places (PRD
+	// N2, BOOTSTRAP.md §4): `"9000000.0000"`, never a JSON number, never
+	// trimmed, never exponent notation. In the Household's
+	// `reporting_currency`; a Budget's money carries no `currency` of its own
+	// (PRD N3). May be negative where it is a difference (`unallocated`).
+	//
+	//
+	// Example: 9000000.0000
+	MonthlyBudget *Money `json:"monthly_budget,omitempty"`
+
+	// Period A Budget Period (CONTEXT.md): `year_month` is the `YYYY-MM` of the
+	// calendar month in which it starts, and its window is derived from the
+	// Household's current `period_start_day`, both ends inclusive. The
+	// client derives neither.
+	Period BudgetPeriod `json:"period"`
+
+	// Unallocated A decimal serialised as a string at exactly four decimal places (PRD
+	// N2, BOOTSTRAP.md §4): `"9000000.0000"`, never a JSON number, never
+	// trimmed, never exponent notation. In the Household's
+	// `reporting_currency`; a Budget's money carries no `currency` of its own
+	// (PRD N3). May be negative where it is a difference (`unallocated`).
+	//
+	//
+	// Example: 9000000.0000
+	Unallocated *Money `json:"unallocated,omitempty"`
+}
+
+// BudgetPeriod A Budget Period (CONTEXT.md): `year_month` is the `YYYY-MM` of the
+// calendar month in which it starts, and its window is derived from the
+// Household's current `period_start_day`, both ends inclusive. The
+// client derives neither.
+type BudgetPeriod struct {
+	// EndsOn Example: 2026-11-30
+	EndsOn openapi_types.Date `json:"ends_on"`
+
+	// StartsOn Example: 2026-11-01
+	StartsOn openapi_types.Date `json:"starts_on"`
+
+	// YearMonth Example: 2026-11
+	YearMonth string `json:"year_month"`
 }
 
 // ChangeEmailRequest defines model for ChangeEmailRequest.
@@ -211,7 +295,8 @@ type Error struct {
 	// first failing field, as in Balances. `field` is the wire name of the
 	// property, so a Household's name (`household_display_name`), a User's
 	// (`user_display_name`) and a Pocket's (`pocket_display_name`) are never
-	// confused; a Pocket's `id` is `id`. `WEAK_PASSWORD` carries
+	// confused; a Pocket's `id` is `id`; a Budget's Monthly Budget is
+	// `monthly_budget`. `WEAK_PASSWORD` carries
 	// `{reason}`, `min` or `breached`, at registration and at a password
 	// change. `INVALID_CURRENT_PASSWORD` is the password change's and the
 	// email change's own: the current password sent with the request is not
@@ -238,7 +323,8 @@ type Error struct {
 // first failing field, as in Balances. `field` is the wire name of the
 // property, so a Household's name (`household_display_name`), a User's
 // (`user_display_name`) and a Pocket's (`pocket_display_name`) are never
-// confused; a Pocket's `id` is `id`. `WEAK_PASSWORD` carries
+// confused; a Pocket's `id` is `id`; a Budget's Monthly Budget is
+// `monthly_budget`. `WEAK_PASSWORD` carries
 // `{reason}`, `min` or `breached`, at registration and at a password
 // change. `INVALID_CURRENT_PASSWORD` is the password change's and the
 // email change's own: the current password sent with the request is not
@@ -364,6 +450,24 @@ type Me struct {
 	UserDisplayName string `json:"user_display_name"`
 }
 
+// Money A decimal serialised as a string at exactly four decimal places (PRD
+// N2, BOOTSTRAP.md §4): `"9000000.0000"`, never a JSON number, never
+// trimmed, never exponent notation. In the Household's
+// `reporting_currency`; a Budget's money carries no `currency` of its own
+// (PRD N3). May be negative where it is a difference (`unallocated`).
+//
+// Example: 9000000.0000
+type Money = string
+
+// MoneyInput A non-negative decimal sent as a string: at most 16 integer digits and
+// at most 4 decimals, no sign, no exponent, no separator and no
+// whitespace. More than four decimals is refused and never rounded. The
+// rule is the pattern, so a breach is `VALIDATION {rule: pattern}`; the
+// answer carries the amount as a `Money`.
+//
+// Example: 9000000
+type MoneyInput = string
+
 // OnboardingChoiceRequest A found choice, the only one today. A later slice adds a join choice to
 // this same body, additively.
 type OnboardingChoiceRequest struct {
@@ -407,6 +511,21 @@ type Pocket struct {
 // array so it can grow without breaking a client.
 type PocketList struct {
 	Items []Pocket `json:"items"`
+}
+
+// UpdateBudgetRequest What a Budget change may set, merge-style: a property left out is
+// unchanged and none is required. `null` is not accepted for any of
+// them. Allocations are added with the Categories slice.
+type UpdateBudgetRequest struct {
+	// MonthlyBudget A non-negative decimal sent as a string: at most 16 integer digits and
+	// at most 4 decimals, no sign, no exponent, no separator and no
+	// whitespace. More than four decimals is refused and never rounded. The
+	// rule is the pattern, so a breach is `VALIDATION {rule: pattern}`; the
+	// answer carries the amount as a `Money`.
+	//
+	//
+	// Example: 9000000
+	MonthlyBudget *MoneyInput `json:"monthly_budget,omitempty"`
 }
 
 // UpdateHouseholdRequest The settings a Household may change today, merge-style: a property left
@@ -520,6 +639,9 @@ type LocalLoginJSONRequestBody = LocalLoginRequest
 // LocalRegisterJSONRequestBody defines body for LocalRegister for application/json ContentType.
 type LocalRegisterJSONRequestBody = LocalRegisterRequest
 
+// UpdateBudgetJSONRequestBody defines body for UpdateBudget for application/json ContentType.
+type UpdateBudgetJSONRequestBody = UpdateBudgetRequest
+
 // UpdateHouseholdJSONRequestBody defines body for UpdateHousehold for application/json ContentType.
 type UpdateHouseholdJSONRequestBody = UpdateHouseholdRequest
 
@@ -555,6 +677,12 @@ type ServerInterface interface {
 	// GetAuthMethods Which identity providers this instance has enabled.
 	// (GET /auth/methods)
 	GetAuthMethods(w http.ResponseWriter, r *http.Request)
+	// GetBudget The Household's Budget for the current Budget Period.
+	// (GET /budget)
+	GetBudget(w http.ResponseWriter, r *http.Request)
+	// UpdateBudget Change the Household's Budget for the current Budget Period.
+	// (PATCH /budget)
+	UpdateBudget(w http.ResponseWriter, r *http.Request)
 	// GetHealth Liveness and readiness of this instance.
 	// (GET /health)
 	GetHealth(w http.ResponseWriter, r *http.Request)
@@ -627,6 +755,18 @@ func (_ Unimplemented) Logout(w http.ResponseWriter, r *http.Request) {
 // GetAuthMethods Which identity providers this instance has enabled.
 // (GET /auth/methods)
 func (_ Unimplemented) GetAuthMethods(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// GetBudget The Household's Budget for the current Budget Period.
+// (GET /budget)
+func (_ Unimplemented) GetBudget(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// UpdateBudget Change the Household's Budget for the current Budget Period.
+// (PATCH /budget)
+func (_ Unimplemented) UpdateBudget(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
@@ -780,6 +920,34 @@ func (siw *ServerInterfaceWrapper) GetAuthMethods(w http.ResponseWriter, r *http
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.GetAuthMethods(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetBudget operation middleware
+func (siw *ServerInterfaceWrapper) GetBudget(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetBudget(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// UpdateBudget operation middleware
+func (siw *ServerInterfaceWrapper) UpdateBudget(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.UpdateBudget(w, r)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -1136,6 +1304,12 @@ func HandlerWithOptions(si ServerInterface, options ChiServerOptions) http.Handl
 	})
 	r.Group(func(r chi.Router) {
 		r.Post(options.BaseURL+"/pockets/{id}/restore", wrapper.RestorePocket)
+	})
+	r.Group(func(r chi.Router) {
+		r.Get(options.BaseURL+"/budget", wrapper.GetBudget)
+	})
+	r.Group(func(r chi.Router) {
+		r.Patch(options.BaseURL+"/budget", wrapper.UpdateBudget)
 	})
 	r.Group(func(r chi.Router) {
 		r.Get(options.BaseURL+"/onboarding/options", wrapper.GetOnboardingOptions)
@@ -1603,6 +1777,119 @@ func (response GetAuthMethods200JSONResponse) VisitGetAuthMethodsResponse(w http
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetBudgetRequestObject struct {
+}
+
+type GetBudgetResponseObject interface {
+	VisitGetBudgetResponse(w http.ResponseWriter) error
+}
+
+type GetBudget200JSONResponse Budget
+
+func (response GetBudget200JSONResponse) VisitGetBudgetResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetBudget401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response GetBudget401JSONResponse) VisitGetBudgetResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetBudget500JSONResponse struct{ InternalErrorJSONResponse }
+
+func (response GetBudget500JSONResponse) VisitGetBudgetResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateBudgetRequestObject struct {
+	Body *UpdateBudgetJSONRequestBody
+}
+
+type UpdateBudgetResponseObject interface {
+	VisitUpdateBudgetResponse(w http.ResponseWriter) error
+}
+
+type UpdateBudget200JSONResponse Budget
+
+func (response UpdateBudget200JSONResponse) VisitUpdateBudgetResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateBudget400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response UpdateBudget400JSONResponse) VisitUpdateBudgetResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateBudget401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response UpdateBudget401JSONResponse) VisitUpdateBudgetResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateBudget500JSONResponse struct{ InternalErrorJSONResponse }
+
+func (response UpdateBudget500JSONResponse) VisitUpdateBudgetResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
 	_, err := buf.WriteTo(w)
 	return err
 }
@@ -2390,6 +2677,12 @@ type StrictServerInterface interface {
 	// GetAuthMethods Which identity providers this instance has enabled.
 	// (GET /auth/methods)
 	GetAuthMethods(ctx context.Context, request GetAuthMethodsRequestObject) (GetAuthMethodsResponseObject, error)
+	// GetBudget The Household's Budget for the current Budget Period.
+	// (GET /budget)
+	GetBudget(ctx context.Context, request GetBudgetRequestObject) (GetBudgetResponseObject, error)
+	// UpdateBudget Change the Household's Budget for the current Budget Period.
+	// (PATCH /budget)
+	UpdateBudget(ctx context.Context, request UpdateBudgetRequestObject) (UpdateBudgetResponseObject, error)
 	// GetHealth Liveness and readiness of this instance.
 	// (GET /health)
 	GetHealth(ctx context.Context, request GetHealthRequestObject) (GetHealthResponseObject, error)
@@ -2629,6 +2922,61 @@ func (sh *strictHandler) GetAuthMethods(w http.ResponseWriter, r *http.Request) 
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(GetAuthMethodsResponseObject); ok {
 		if err := validResponse.VisitGetAuthMethodsResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetBudget operation middleware
+func (sh *strictHandler) GetBudget(w http.ResponseWriter, r *http.Request) {
+	var request GetBudgetRequestObject
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetBudget(ctx, request.(GetBudgetRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetBudget")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetBudgetResponseObject); ok {
+		if err := validResponse.VisitGetBudgetResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// UpdateBudget operation middleware
+func (sh *strictHandler) UpdateBudget(w http.ResponseWriter, r *http.Request) {
+	var request UpdateBudgetRequestObject
+
+	var body UpdateBudgetJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.UpdateBudget(ctx, request.(UpdateBudgetRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "UpdateBudget")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(UpdateBudgetResponseObject); ok {
+		if err := validResponse.VisitUpdateBudgetResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {
@@ -2939,273 +3287,4 @@ func (sh *strictHandler) RestorePocket(w http.ResponseWriter, r *http.Request, i
 	} else if response != nil {
 		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
 	}
-}
-
-// Base64 encoded, compressed with deflate, json marshaled OpenAPI spec.
-// Stored as a slice of fixed-width chunks rather than one concatenated
-// const string: with thousands of chunks the chained `+` fold is several
-// times slower for the Go compiler than parsing a slice literal.
-var swaggerSpec = []string{
-	"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",
-	"BSR9PSRHymIVcqobCrSSQm7f3/7/AQA=",
-}
-
-// decodeSpec returns the embedded OpenAPI spec as raw JSON bytes,
-// after base64-decoding and flate-decompressing the embedded blob.
-func decodeSpec() ([]byte, error) {
-	encoded := strings.Join(swaggerSpec, "")
-	compressed, err := base64.StdEncoding.DecodeString(encoded)
-	if err != nil {
-		return nil, fmt.Errorf("error base64 decoding spec: %w", err)
-	}
-	zr := flate.NewReader(bytes.NewReader(compressed))
-	var buf bytes.Buffer
-	if _, err := buf.ReadFrom(zr); err != nil {
-		return nil, fmt.Errorf("read flate: %w", err)
-	}
-	if err := zr.Close(); err != nil {
-		return nil, fmt.Errorf("close flate reader: %w", err)
-	}
-
-	return buf.Bytes(), nil
-}
-
-var rawSpec = decodeSpecCached()
-
-// a naive cache of the decoded OpenAPI spec
-func decodeSpecCached() func() ([]byte, error) {
-	data, err := decodeSpec()
-	return func() ([]byte, error) {
-		return data, err
-	}
-}
-
-// Constructs a synthetic filesystem for resolving external references when loading openapi specifications.
-func PathToRawSpec(pathToFile string) map[string]func() ([]byte, error) {
-	res := make(map[string]func() ([]byte, error))
-	if len(pathToFile) > 0 {
-		res[pathToFile] = rawSpec
-	}
-
-	return res
-}
-
-// GetSpec returns the OpenAPI specification corresponding to the generated
-// code in this file. External references in the spec are resolved through
-// PathToRawSpec; externally-referenced files must be embedded in their
-// corresponding Go packages (via the import-mapping feature). URL-based
-// external refs are not supported.
-func GetSpec() (swagger *openapi3.T, err error) {
-	resolvePath := PathToRawSpec("")
-
-	loader := openapi3.NewLoader()
-	loader.IsExternalRefsAllowed = true
-	loader.ReadFromURIFunc = func(loader *openapi3.Loader, url *url.URL) ([]byte, error) {
-		pathToFile := url.String()
-		pathToFile = path.Clean(pathToFile)
-		getSpec, ok := resolvePath[pathToFile]
-		if !ok {
-			err1 := fmt.Errorf("path not found: %s", pathToFile)
-			return nil, err1
-		}
-		return getSpec()
-	}
-	var specData []byte
-	specData, err = rawSpec()
-	if err != nil {
-		return
-	}
-	swagger, err = loader.LoadFromData(specData)
-	if err != nil {
-		return
-	}
-	return
-}
-
-// GetSpecJSON returns the raw JSON bytes of the embedded OpenAPI
-// specification: decompressed but not unmarshaled. External references
-// are not resolved here; the bytes are the spec exactly as embedded by
-// codegen. The result is cached at package init time, so repeated calls
-// are cheap.
-func GetSpecJSON() ([]byte, error) {
-	return rawSpec()
-}
-
-// GetSwagger returns the OpenAPI specification corresponding to the
-// generated code in this file.
-//
-// Deprecated: GetSwagger predates kin-openapi renaming openapi3.Swagger
-// to openapi3.T. Use [GetSpec] instead. This wrapper is retained for
-// backwards compatibility.
-func GetSwagger() (*openapi3.T, error) {
-	return GetSpec()
 }

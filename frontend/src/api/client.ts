@@ -11,6 +11,8 @@ export type Pocket = components["schemas"]["Pocket"];
 export type PocketList = components["schemas"]["PocketList"];
 export type CreatePocketRequest = components["schemas"]["CreatePocketRequest"];
 export type UpdatePocketRequest = components["schemas"]["UpdatePocketRequest"];
+export type Budget = components["schemas"]["Budget"];
+export type UpdateBudgetRequest = components["schemas"]["UpdateBudgetRequest"];
 export type AuthMethods = components["schemas"]["AuthMethods"];
 export type LocalLoginRequest = components["schemas"]["LocalLoginRequest"];
 export type LocalRegisterRequest = components["schemas"]["LocalRegisterRequest"];
@@ -214,4 +216,22 @@ export async function restorePocket(id: string): Promise<Pocket> {
   return (
     await request(`/pockets/${encodeURIComponent(id)}/restore`, { method: "POST" })
   ).json() as Promise<Pocket>;
+}
+
+// The current Budget Period's Budget. The first read of a Period may write it
+// (the server carries the last Period forward); the figures are computed there,
+// and the client derives none.
+export async function getBudget(): Promise<Budget> {
+  return (await request("/budget")).json() as Promise<Budget>;
+}
+
+// Merge update: only the fields sent change. The answer is the whole Budget.
+export async function updateBudget(body: UpdateBudgetRequest): Promise<Budget> {
+  return (
+    await request("/budget", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    })
+  ).json() as Promise<Budget>;
 }

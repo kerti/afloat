@@ -173,7 +173,11 @@ JSON. Blank means not yet in the UI.
 | Period | periode anggaran | Household settings (#117) |
 | Expense | | |
 | Category | | |
-| Budget | | |
+| Budget | anggaran | Budget (#130 PR 1), provisional (R16) |
+| Monthly Budget | anggaran bulanan | Budget (#130 PR 1), provisional (R16) |
+| Commitments Budget | anggaran komitmen | Budget (#130 PR 1), provisional (R16) |
+| Daily Pool | dana harian | Budget (#130 PR 1), provisional (R16) |
+| Unallocated | belum dialokasikan | Budget (#130 PR 1), provisional (R16) |
 | State names, *ahead of pace*, Buffer Days | | **[OPEN Q-10]** |
 
 ---

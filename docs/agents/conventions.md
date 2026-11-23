@@ -5,8 +5,12 @@ for all of these — this file exists so an agent working a specific file doesn'
 whole scaffold sheet. If the two ever disagree, `BOOTSTRAP.md` wins and this file is out of date.
 
 - **Money:** `DECIMAL(20,4)` columns, strings on the wire. A JSON number or scientific notation is a
-  bug. Worth its own conformance test rather than trusting review.
-- **Ids:** UUIDv7, client-generated, column type `uuid`. Create is idempotent:
+  bug. Worth its own conformance test rather than trusting review. Out: exactly four decimals
+  (`StringFixed(4)`). In: an unsigned decimal string, at most 16 integer digits and 4 decimals, refused
+  and never rounded (`MoneyInput`'s `pattern`). The Household's plan (income, the Monthly Budget,
+  allocations) has no `currency` column: it is in `reporting_currency`.
+- **Ids:** UUIDv7, client-generated, column type `uuid`. A row only the server creates and no request
+  addresses by id (the Budget tables) has a composite natural key and no `id`. Create is idempotent:
   `INSERT ... ON CONFLICT (id) DO NOTHING RETURNING *` + read-back, 200 on replay (the row as stored;
   the rest of the body is not compared), 201 on first write. The contract's `pattern` enforces the
   canonical dashed v7 spelling. An id held by another Household or by the caller's own deleted row is
@@ -26,8 +30,8 @@ whole scaffold sheet. If the two ever disagree, `BOOTSTRAP.md` wins and this fil
 - **Dates:** `occurred_on` is a `date` (the Period Day); `captured_at` is `timestamptz`; everything
   else that's an instant is `timestamptz`. Period Day (`day_starts_at` + per-User `time_zone`) is
   computed server-side only — if the frontend also derives it, the two disagree at 03:59.
-- **Soft delete everywhere:** nullable `deleted_at`. No hard-delete endpoint. Scoped to
-  Household-scoped domain data — instance-local auth state (`sessions`, `credentials`,
+- **Soft delete everywhere:** nullable `deleted_at`. No hard-delete endpoint. A version log with no delete operation (the Budget tables) carries
+  no `deleted_at`. Scoped to Household-scoped domain data — instance-local auth state (`sessions`, `credentials`,
   `invitations`) is exempt and hard-deletes, because session revocation *is* the row delete.
   `DELETE /<entity>/{id}` is soft (`204`), `POST /<entity>/{id}/restore` is its Undo (`200` with the
   entity); both idempotent on the caller's own row in one `household_id`-scoped statement, a repeat

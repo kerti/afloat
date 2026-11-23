@@ -21,8 +21,9 @@ info:
 
     Health check, authentication, the founding gate (BOOTSTRAP.md §5.1), the
     Household's settings (PRD S3), the User's own (PRD S4: profile, email and
-    password) and the Household's Pockets (PRD S10: list, create, rename,
-    deactivate, delete and restore). Invitation
+    password), the Household's Pockets (PRD S10: list, create, rename,
+    deactivate, delete and restore) and the Budget of the current Budget
+    Period (PRD S9, S12, S13: the Monthly Budget, read and changed). Invitation
     acceptance and the remaining domain resources land in step 9 and are
     deliberately absent here.
   license:
@@ -41,6 +42,10 @@ tags:
     description: The caller's own Household and its settings (PRD S3).
   - name: pocket
     description: The Household's Pockets (PRD S10), the containers it spends from.
+  - name: budget
+    description: |
+      The Household's Budget for the Budget Period it is in now (PRD S9, S12,
+      S13): its Monthly Budget and the figures derived from it.
   - name: onboarding
     description: |
       The gate between a registered credential and an account: a person who has
@@ -622,6 +627,82 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
 
+  /budget:
+    get:
+      tags: [budget]
+      operationId: getBudget
+      summary: The Household's Budget for the current Budget Period.
+      description: |
+        The Budget Period is the one that contains the caller's Today, worked
+        out on the server from the User's `time_zone` and the Household's
+        `day_starts_at` (BOOTSTRAP.md §4): there is no id and no way to name
+        another Period. A Period that has not been read yet comes into being
+        by this first read (PRD S13, Q-09) and carries the Monthly Budget
+        forward from the nearest earlier Period that has one, so **this
+        operation may write once per Period**, and `HEAD` does too. A request
+        that finds the Period already there writes nothing, and what is
+        returned never differs from what a read that did not write would have
+        returned.
+
+        The Monthly Budget in force is the version with the latest
+        `effective_on` on or before Today, except that a Period's days before
+        its first Monthly Budget was set are read as of that first one (the
+        Budget a Household sets on day 14 is its Budget for the whole
+        Period). `monthly_budget`, `daily_pool` and `unallocated` are omitted
+        until a Monthly Budget exists. Every figure is computed here and the
+        client derives none (PRD N5a).
+      responses:
+        '200':
+          description: The Budget, as it stands now.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Budget'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    patch:
+      tags: [budget]
+      operationId: updateBudget
+      summary: Change the Household's Budget for the current Budget Period.
+      description: |
+        Merge semantics, the update convention (BOOTSTRAP.md §4): a property
+        left out is unchanged, an unknown property is `INVALID_JSON_BODY`, and
+        `{}` is a valid no-op. The answer is the whole Budget. Last write wins,
+        per field.
+
+        A change is recorded as a version effective on the writer's Today
+        (CONTEXT.md §Mid-period Budget changes): a second change on the same
+        Period Day overwrites the first, and one on a later day is a new
+        version, so the Period before it is not redrawn. The first Monthly
+        Budget of a Period is read as in force from the Period's first day.
+        Like `GET /budget`, this materialises the current Period if it is the
+        first request to find it missing, even for `{}`.
+
+        `monthly_budget` is a `MoneyInput`; more than four decimals is refused,
+        never rounded. A Monthly Budget cannot be cleared: `null` is
+        `INVALID_JSON_BODY`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateBudgetRequest'
+      responses:
+        '200':
+          description: The Budget as it now stands.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Budget'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
   /onboarding/options:
     get:
       tags: [onboarding]
@@ -1035,6 +1116,108 @@ components:
             `false` deactivates the Pocket, `true` reactivates it.
       additionalProperties: false
 
+    Money:
+      type: string
+      description: |
+        A decimal serialised as a string at exactly four decimal places (PRD
+        N2, BOOTSTRAP.md §4): `"9000000.0000"`, never a JSON number, never
+        trimmed, never exponent notation. In the Household's
+        `reporting_currency`; a Budget's money carries no `currency` of its own
+        (PRD N3). May be negative where it is a difference (`unallocated`).
+      pattern: '^-?[0-9]{1,16}\.[0-9]{4}$'
+      example: '9000000.0000'
+
+    MoneyInput:
+      type: string
+      description: |
+        A non-negative decimal sent as a string: at most 16 integer digits and
+        at most 4 decimals, no sign, no exponent, no separator and no
+        whitespace. More than four decimals is refused and never rounded. The
+        rule is the pattern, so a breach is `VALIDATION {rule: pattern}`; the
+        answer carries the amount as a `Money`.
+      pattern: '^[0-9]{1,16}(\.[0-9]{1,4})?$'
+      example: '9000000'
+
+    BudgetPeriod:
+      type: object
+      description: |
+        A Budget Period (CONTEXT.md): `year_month` is the `YYYY-MM` of the
+        calendar month in which it starts, and its window is derived from the
+        Household's current `period_start_day`, both ends inclusive. The
+        client derives neither.
+      required: [year_month, starts_on, ends_on]
+      properties:
+        year_month:
+          type: string
+          pattern: '^[0-9]{4}-(0[1-9]|1[0-2])$'
+          example: '2026-11'
+        starts_on:
+          type: string
+          format: date
+          example: '2026-11-01'
+        ends_on:
+          type: string
+          format: date
+          example: '2026-11-30'
+      additionalProperties: false
+
+    Allocation:
+      type: object
+      description: |
+        A Category's planned amount in the Budget's Period (PRD S8), in force
+        as of Today. Categories land with a later slice, so no allocation
+        exists yet and `Budget.allocations` is empty.
+      required: [category_id, allocation]
+      properties:
+        category_id:
+          type: string
+          format: uuid
+        allocation:
+          $ref: '#/components/schemas/Money'
+      additionalProperties: false
+
+    Budget:
+      type: object
+      description: |
+        The Household's plan for one Budget Period (CONTEXT.md): its Monthly
+        Budget and Category allocations, and the figures computed from them on
+        the server. The Commitments Budget is the sum of the allocations of
+        Commitment Categories, the Daily Pool is the Monthly Budget less it,
+        and Unallocated is the Daily Pool less the allocations of Daily
+        Categories. A Daily Pool or Unallocated below zero is sent as such: it
+        is information, never an error (PRD S9).
+      required: [period, allocations, commitments_budget]
+      properties:
+        period:
+          $ref: '#/components/schemas/BudgetPeriod'
+        monthly_budget:
+          $ref: '#/components/schemas/Money'
+        allocations:
+          type: array
+          description: |
+            The allocations in force as of Today whose Category is live. A
+            Category with none is absent. Empty until Categories exist.
+          items:
+            $ref: '#/components/schemas/Allocation'
+        commitments_budget:
+          $ref: '#/components/schemas/Money'
+        daily_pool:
+          $ref: '#/components/schemas/Money'
+        unallocated:
+          $ref: '#/components/schemas/Money'
+      additionalProperties: false
+
+    UpdateBudgetRequest:
+      type: object
+      description: |
+        What a Budget change may set, merge-style: a property left out is
+        unchanged and none is required. `null` is not accepted for any of
+        them. Allocations are added with the Categories slice.
+      properties:
+        monthly_budget:
+          $ref: '#/components/schemas/MoneyInput'
+      additionalProperties: false
+
     ChangePasswordRequest:
       type: object
       required: [current_password, new_password]
@@ -1146,7 +1329,8 @@ components:
         first failing field, as in Balances. `field` is the wire name of the
         property, so a Household's name (`household_display_name`), a User's
         (`user_display_name`) and a Pocket's (`pocket_display_name`) are never
-        confused; a Pocket's `id` is `id`. `WEAK_PASSWORD` carries
+        confused; a Pocket's `id` is `id`; a Budget's Monthly Budget is
+        `monthly_budget`. `WEAK_PASSWORD` carries
         `{reason}`, `min` or `breached`, at registration and at a password
         change. `INVALID_CURRENT_PASSWORD` is the password change's and the
         email change's own: the current password sent with the request is not

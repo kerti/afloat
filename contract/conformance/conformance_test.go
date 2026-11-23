@@ -383,8 +383,8 @@ func assertExpected(t *testing.T, c conformance.Case, got response) {
 		// map[string]any typing match the decoder's, rather than failing on a
 		// difference that is only in Go's type system.
 		want := normalise(t, c.Expect.BodyJSON)
-		if !reflect.DeepEqual(have, want) {
-			t.Errorf("body: want %v, got %v", want, have)
+		if err := conformance.MatchBody(want, have); err != nil {
+			t.Errorf("body: %v\nwant %v\n got %v", err, want, have)
 		}
 	}
 }

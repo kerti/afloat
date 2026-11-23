@@ -119,6 +119,12 @@ with zoneinfo answers from it, so a case-insensitive filesystem (a Mac) also acc
   (minted in Go). Founding is an online authentication flow, not an offline-capable write: there is
   no queue to replay, and the handshake's single-use claim is what makes a double submit safe
   (§5.1.1). The rule above stands for every domain `POST`.
+  *A clarification, not a second exception (#130, R14):* the rule is about **rows a client creates**.
+  A row that **only the server creates, and no request ever addresses by id** (the Budget tables:
+  `budgets` and `monthly_budgets`, which materialise on the first read of a Budget Period) has a
+  **composite natural key** (`household_id`, `year_month`, and for a version log its `effective_on`)
+  and no `id` column. Minting a UUIDv7 for it in Go would be a second server-minted key with nothing
+  to ever name it by.
 - **Idempotent create:** `POST` accepts the client-supplied id; a replay returns **200** with the
   existing resource, a first write returns **201**. Implemented as `INSERT ... ON CONFLICT (id) DO
   NOTHING RETURNING *` plus a read-back (#121, the first one; every later create copies it):
@@ -169,13 +175,26 @@ with zoneinfo answers from it, so a case-insensitive filesystem (a Mac) also acc
   both wrong for a `25000000.0000` row; `"25000000.0000"` is the only correct rendering. In Go, use
   `decimal.Decimal.StringFixed(4)`, not `.String()`, which strips trailing zeros. Worth an early
   conformance test.
+  **On the way in** an amount is a `MoneyInput` (#130, R11): an unsigned decimal **string**, at most 16
+  integer digits and 4 decimals, with no sign, exponent, separator or whitespace, enforced by the
+  contract's `pattern` (`VALIDATION {rule: pattern}`). More than 4 decimals is refused, **never
+  rounded**. A JSON number is `INVALID_JSON_BODY` (no scalar coercion). Out is a `Money`: the same
+  number at exactly four decimals, and negative only where it is a difference.
 - **Currency:** every monetary value carries its `currency` column even though the MVP UI is pinned to
-  the Household's reporting currency.
+  the Household's reporting currency. **The exception is the Household's plan** (#130, R11, PRD N3):
+  `households.expected_monthly_income` and the Budget's amounts (`monthly_budgets.monthly_budget`, and a
+  Category's allocation when those land) have no `currency` column and are in the Household's
+  `reporting_currency`, because a plan is what reporting-currency spend is compared to. Changing
+  `reporting_currency` relabels them and converts nothing.
 - **Dates:** `occurred_on` is a `date` (the Period Day). `captured_at` is `timestamptz`. Everything
-  else that is an instant is `timestamptz`.
+  else that is an instant is `timestamptz`. A Budget version's `effective_on` is a `date`, the writer's
+  Today (#130).
 - **Period Day is computed server-side only.** `day_starts_at` plus per-User `time_zone` is real
   arithmetic; if the frontend also derives it, the two disagree at 03:59.
-- **Soft delete everywhere:** nullable `deleted_at`. Hard delete is not exposed. **Deactivating is not
+- **Soft delete everywhere:** nullable `deleted_at`. Hard delete is not exposed. *A clarification
+  (#130, R14):* the rule covers **anything that can be deleted**. A version log that has **no delete
+  operation** (a Budget is never removed, and a changed amount is a newer version, not a delete) carries
+  no `deleted_at`: a column nothing sets is a filter every read must remember. **Deactivating is not
   a delete** (#121, R1): a row that history references is retired with an `active` boolean, changed by
   an ordinary merge `PATCH`. It stays visible and in the list (the client filters), keeps its name and
   keeps labelling what it labels. Only a delete gives up the name and disappears.
@@ -793,6 +812,13 @@ nothing. This keeps one source of truth.
 **`contract/testdata/trajectory.json` is a test fixture** holding the reference rows from
 `CONTEXT.md` §Worked check. The backend's unit tests read it. The conformance harness proves the
 backend serves the contract's *shape*; only this proves it computes the right *numbers*.
+
+**`contract/testdata/periods.json` pins the Period Day arithmetic** (#130): which day Today is across
+04:00, zone changes and daylight saving, which Budget Period a date belongs to for a `period_start_day`
+of 1 to 28, and a label's window. The `period` package's unit test reads it, and the client derives
+none of it. Handlers take their clock as a dependency (`budget.Deps.Now`, `time.Now` in production), so
+the backend's own tests assert exact dates; the conformance harness cannot pin a clock, so its cases
+build state from Postgres's own and match a date by `<re:...>`.
 
 ## 7. Migrations — correction to the Decisions draft
 

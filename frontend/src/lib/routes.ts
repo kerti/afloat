@@ -10,4 +10,5 @@ export const routes = {
   householdSettings: "/settings/household",
   userSettings: "/settings/user",
   pockets: "/pockets",
+  budget: "/budget",
 } as const;

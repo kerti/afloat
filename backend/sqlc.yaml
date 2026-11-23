@@ -24,8 +24,15 @@ sql:
           # to do arithmetic with and easy to serialise wrongly; shopspring is
           # what the trajectory calculation will need in step 9, and it
           # round-trips to a string rather than a float.
+          # Both overrides spell the import the same way (the struct form):
+          # sqlc emits one import line per spelling, so the string form beside
+          # the struct form is two imports of one package and does not compile
+          # once a model has both a numeric and a nullable numeric column.
           - db_type: "pg_catalog.numeric"
-            go_type: "github.com/shopspring/decimal.Decimal"
+            go_type:
+              import: "github.com/shopspring/decimal"
+              package: "decimal"
+              type: "Decimal"
           - db_type: "pg_catalog.numeric"
             nullable: true
             go_type:

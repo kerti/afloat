@@ -76,7 +76,9 @@ the decisions in this milestone.
   expect:
     status: 200
     headers: {}          # compared exactly, by value
-    body_json: {...}     # parsed and deep-compared; key order does not matter
+    body_json: {...}     # parsed and deep-compared; key order does not matter.
+                         #   A string "<re:REGEXP>" matches any string the whole of
+                         #   which REGEXP matches (see below)
     # body_raw: "..."    # or: the bytes themselves are the assertion
     # body_empty: true   # or: assert a zero-length body, as every 204 requires
     # same_as:           # or alongside: this answer must equal the server's
@@ -145,6 +147,18 @@ rebuilds in its own time, and a case must not fail for the one before it.
 not as bytes. A minted value is matched by `value_pattern`; `Expires` is
 compared by meaning (`absent`, `past`, or `max-age`: Date plus Max-Age, to
 within two seconds). Any attribute the case does not expect is a failure.
+
+### `<re:...>`: an answer that carries the server's own date
+
+`body_json` is compared exactly, key for key. A string of the form
+`"<re:REGEXP>"` is the one exception: it matches any string the whole of which
+the regexp matches, and nothing else in the body is loosened. It exists for the
+Budget (#130), whose answer names the Budget Period Today falls in: Today comes
+from the server's clock, which a black-box case cannot pin, so the case states
+the *shape* of the dates (`"<re:[0-9]{4}-[0-9]{2}-01>"`) and checks the rows
+relative to Postgres's own clock. Exact-date assertions live in the backend's
+suite, which injects a clock. A pattern that does not compile is refused when
+the file loads.
 
 ### Persisted state
 

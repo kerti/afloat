@@ -594,3 +594,76 @@
     rows:
       - sql: SELECT pocket_display_name AS name, (deleted_at IS NOT NULL) AS deleted FROM pockets
         rows: [{name: OVO, deleted: true}]
+
+# /budget serves GET (and HEAD, which answers like it) and PATCH (#130). There
+# is one Budget per Period and it is the server's to create, so POST creates
+# nothing, and nothing deletes it: the Budget has no DELETE, soft or otherwise.
+
+- name: http methods - POST on the Budget is method not allowed and writes nothing
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /budget
+    headers:
+      Content-Type: application/json
+    body: '{"monthly_budget":"1"}'
+  expect:
+    status: 405
+    body_empty: true
+    rows:
+      - sql: SELECT (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM monthly_budgets)::int AS versions
+        rows: [{budgets: 0, versions: 0}]
+
+- name: http methods - PUT on the Budget is method not allowed and writes nothing
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: PUT
+    path: /budget
+    headers:
+      Content-Type: application/json
+    body: '{"monthly_budget":"1"}'
+  expect:
+    status: 405
+    body_empty: true
+    rows:
+      - sql: SELECT (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM monthly_budgets)::int AS versions
+        rows: [{budgets: 0, versions: 0}]
+
+- name: http methods - DELETE on the Budget is method not allowed and writes nothing
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: DELETE
+    path: /budget
+    headers:
+      Content-Type: application/json
+    body: '{"monthly_budget":"1"}'
+  expect:
+    status: 405
+    body_empty: true
+    rows:
+      - sql: SELECT (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM monthly_budgets)::int AS versions
+        rows: [{budgets: 0, versions: 0}]

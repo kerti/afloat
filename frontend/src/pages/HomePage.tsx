@@ -20,6 +20,7 @@ export function HomePage({ me }: { me: Me }) {
       <TextLink to={routes.householdSettings}>{t("home.settingsLink")}</TextLink>
       <TextLink to={routes.userSettings}>{t("home.userSettingsLink")}</TextLink>
       <TextLink to={routes.pockets}>{t("home.pocketsLink")}</TextLink>
+      <TextLink to={routes.budget}>{t("home.budgetLink")}</TextLink>
       <MutedText>{t("home.comingSoon")}</MutedText>
     </>
   );

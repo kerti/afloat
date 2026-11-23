@@ -22,15 +22,22 @@ const (
 	uniqueViolation = "23505"
 	fkViolation     = "23503"
 
-	hh = "019212e0-0000-7000-8000-000000000001"
-	u1 = "019212e0-0000-7000-8000-000000000002"
-	u2 = "019212e0-0000-7000-8000-000000000003"
-	p1 = "019212e0-0000-7000-8000-000000000011"
+	hh      = "019212e0-0000-7000-8000-000000000001"
+	hhOther = "019212e0-0000-7000-8000-0000000000bb"
+	u1      = "019212e0-0000-7000-8000-000000000002"
+	u2      = "019212e0-0000-7000-8000-000000000003"
+	p1      = "019212e0-0000-7000-8000-000000000011"
 )
 
 // pocketInsert is the INSERT of a live, active Pocket.
 func pocketInsert(id, household, name string) string {
 	return `INSERT INTO pockets (id, household_id, pocket_display_name) VALUES ('` + id + `', '` + household + `', '` + name + `')`
+}
+
+// budgetInsert is the INSERT of a Budget row, the marker a Monthly Budget hangs
+// from.
+func budgetInsert(yearMonth string) string {
+	return `INSERT INTO budgets (household_id, year_month) VALUES ('` + hh + `', '` + yearMonth + `')`
 }
 
 // seeded is a clean database holding one Household and one User with a
@@ -118,6 +125,34 @@ func TestSchemaRefuses(t *testing.T) {
 			uniqueViolation, "pockets_household_name_idx"},
 		{"Pocket for a Household that doesn't exist", `INSERT INTO pockets (id, household_id, pocket_display_name) VALUES (gen_random_uuid(), gen_random_uuid(), 'x')`,
 			fkViolation, "pockets_household_id_fkey"},
+		{"a Budget for a Household that doesn't exist", `INSERT INTO budgets (household_id, year_month) VALUES (gen_random_uuid(), '2026-11')`,
+			fkViolation, "budgets_household_id_fkey"},
+		{"a second Budget for one Household and Period", `INSERT INTO budgets (household_id, year_month) VALUES ('` + hh + `', '2026-11'), ('` + hh + `', '2026-11')`,
+			uniqueViolation, "budgets_pkey"},
+		{"a malformed year_month", `INSERT INTO budgets (household_id, year_month) VALUES ('` + hh + `', '2026-1')`,
+			checkViolation, "budgets_year_month_shape"},
+		{"a year_month with month 13", `INSERT INTO budgets (household_id, year_month) VALUES ('` + hh + `', '2026-13')`,
+			checkViolation, "budgets_year_month_shape"},
+		{"a year_month with month 00", `INSERT INTO budgets (household_id, year_month) VALUES ('` + hh + `', '2026-00')`,
+			checkViolation, "budgets_year_month_shape"},
+		{"a year_month with a date's day on it", `INSERT INTO budgets (household_id, year_month) VALUES ('` + hh + `', '2026-11-01')`,
+			checkViolation, "budgets_year_month_shape"},
+		{"a negative Monthly Budget", budgetInsert("2026-11") + `;
+			INSERT INTO monthly_budgets (household_id, year_month, effective_on, monthly_budget) VALUES ('` + hh + `', '2026-11', '2026-11-01', -0.0001)`,
+			checkViolation, "monthly_budgets_monthly_budget_non_negative"},
+		{"a Monthly Budget for a Period with no Budget row", `INSERT INTO monthly_budgets (household_id, year_month, effective_on, monthly_budget) VALUES ('` + hh + `', '2026-11', '2026-11-01', 1)`,
+			fkViolation, "monthly_budgets_household_id_year_month_fkey"},
+		{"a Monthly Budget under another Household's Budget", budgetInsert("2026-11") + `;
+			INSERT INTO households (id, household_display_name) VALUES ('` + hhOther + `', 'Other');
+			INSERT INTO monthly_budgets (household_id, year_month, effective_on, monthly_budget) VALUES ('` + hhOther + `', '2026-11', '2026-11-01', 1)`,
+			fkViolation, "monthly_budgets_household_id_year_month_fkey"},
+		{"two Monthly Budget versions on one day", budgetInsert("2026-11") + `;
+			INSERT INTO monthly_budgets (household_id, year_month, effective_on, monthly_budget) VALUES ('` + hh + `', '2026-11', '2026-11-01', 1), ('` + hh + `', '2026-11', '2026-11-01', 2)`,
+			uniqueViolation, "monthly_budgets_pkey"},
+		// A Monthly Budget that is more than the type holds is refused, not rounded.
+		{"a Monthly Budget past DECIMAL(20,4)", budgetInsert("2026-11") + `;
+			INSERT INTO monthly_budgets (household_id, year_month, effective_on, monthly_budget) VALUES ('` + hh + `', '2026-11', '2026-11-01', 100000000000000000)`,
+			"22003", ""},
 		// Users are soft-deleted, so a live one always holds its Household.
 		{"household delete under live users", `DELETE FROM households WHERE id = '` + hh + `'`,
 			fkViolation, "users_household_id_fkey"},
@@ -162,6 +197,15 @@ func TestSchemaAccepts(t *testing.T) {
 		{"a name whose earlier holder is soft-deleted", `INSERT INTO pockets (id, household_id, pocket_display_name, deleted_at) VALUES (gen_random_uuid(), '` + hh + `', 'OVO', now());
 			INSERT INTO pockets (id, household_id, pocket_display_name) VALUES (gen_random_uuid(), '` + hh + `', 'ovo')`},
 		{"two soft-deleted Pockets under one name", `INSERT INTO pockets (id, household_id, pocket_display_name, deleted_at) VALUES (gen_random_uuid(), '` + hh + `', 'OVO', now()), (gen_random_uuid(), '` + hh + `', 'OVO', now())`},
+		{"a Monthly Budget of zero: a real answer", budgetInsert("2026-11") + `;
+			INSERT INTO monthly_budgets (household_id, year_month, effective_on, monthly_budget) VALUES ('` + hh + `', '2026-11', '2026-11-01', 0)`},
+		{"the largest Monthly Budget the type holds", budgetInsert("2026-11") + `;
+			INSERT INTO monthly_budgets (household_id, year_month, effective_on, monthly_budget) VALUES ('` + hh + `', '2026-11', '2026-11-01', 9999999999999999.9999)`},
+		{"two versions on different days of one Period", budgetInsert("2026-11") + `;
+			INSERT INTO monthly_budgets (household_id, year_month, effective_on, monthly_budget) VALUES ('` + hh + `', '2026-11', '2026-11-01', 1), ('` + hh + `', '2026-11', '2026-11-14', 2)`},
+		{"the same Period for two Households", `INSERT INTO households (id, household_display_name) VALUES ('` + hhOther + `', 'Other');
+			INSERT INTO budgets (household_id, year_month) VALUES ('` + hh + `', '2026-11'), ('` + hhOther + `', '2026-11')`},
+		{"a December Period and the January after it", `INSERT INTO budgets (household_id, year_month) VALUES ('` + hh + `', '2026-12'), ('` + hh + `', '2027-01')`},
 		{"login_attempts row", `INSERT INTO login_attempts (key, failure_count, backoff_until) VALUES ('ip:203.0.113.7', 3, now() + interval '4 seconds')`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -226,5 +270,37 @@ func TestHardDeletingAUserCascadesItsAuthState(t *testing.T) {
 
 	if got := scalar(t, tdb, `SELECT (SELECT count(*) FROM credentials) || '/' || (SELECT count(*) FROM sessions) || '/' || (SELECT count(*) FROM invitations)`); got != "0/0/0" {
 		t.Errorf("credentials/sessions/invitations left = %s, want 0/0/0", got)
+	}
+}
+
+// The Budget tables' shape is a set of rulings (#130 R11, R14): composite
+// natural keys with no id, no deleted_at because nothing deletes from a version
+// log, and no currency because a plan is in the Household's reporting_currency.
+// A column added to one of them by a later edit should be a decision, so the
+// columns are pinned.
+func TestBudgetTablesHaveExactlyTheRuledColumns(t *testing.T) {
+	tdb := seeded(t)
+	for table, want := range map[string]string{
+		"budgets":         "created_at,household_id,year_month",
+		"monthly_budgets": "effective_on,household_id,monthly_budget,updated_at,year_month",
+	} {
+		got := scalar(t, tdb, `SELECT string_agg(column_name, ',' ORDER BY column_name)
+			FROM information_schema.columns WHERE table_schema = 'public' AND table_name = '`+table+`'`)
+		if got != want {
+			t.Errorf("%s columns = %s, want %s", table, got, want)
+		}
+	}
+}
+
+func TestBudgetDefaults(t *testing.T) {
+	tdb := seeded(t)
+	mustExec(t, tdb, budgetInsert("2026-11"))
+	mustExec(t, tdb, `INSERT INTO monthly_budgets (household_id, year_month, effective_on, monthly_budget) VALUES ('`+hh+`', '2026-11', '2026-11-01', 9000000)`)
+	if got := scalar(t, tdb, `SELECT (created_at IS NOT NULL)::text FROM budgets`); got != "true" {
+		t.Errorf("budgets.created_at defaulted = %s, want true", got)
+	}
+	// Stored at the scale, whatever scale it was written at.
+	if got := scalar(t, tdb, `SELECT monthly_budget::text FROM monthly_budgets`); got != "9000000.0000" {
+		t.Errorf("monthly_budget = %s, want 9000000.0000", got)
 	}
 }

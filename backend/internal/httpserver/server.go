@@ -13,6 +13,7 @@ import (
 	"github.com/kerti/afloat/backend/internal/api"
 	"github.com/kerti/afloat/backend/internal/auth"
 	"github.com/kerti/afloat/backend/internal/budget"
+	"github.com/kerti/afloat/backend/internal/category"
 	"github.com/kerti/afloat/backend/internal/household"
 	"github.com/kerti/afloat/backend/internal/pocket"
 	"github.com/kerti/afloat/backend/internal/system"
@@ -30,6 +31,7 @@ type Server struct {
 	household *household.Handlers
 	pocket    *pocket.Handlers
 	budget    *budget.Handlers
+	category  *category.Handlers
 }
 
 type Deps struct {
@@ -38,6 +40,7 @@ type Deps struct {
 	Household *household.Handlers
 	Pocket    *pocket.Handlers
 	Budget    *budget.Handlers
+	Category  *category.Handlers
 
 	// Web serves the built frontend (web.Handler, BOOTSTRAP.md §8) on every
 	// GET and HEAD outside the API. Nil in a binary built without one: the
@@ -119,6 +122,14 @@ func (s *Server) RestorePocket(ctx context.Context, r api.RestorePocketRequestOb
 	return s.pocket.RestorePocket(ctx, r)
 }
 
+func (s *Server) ListCategories(ctx context.Context, r api.ListCategoriesRequestObject) (api.ListCategoriesResponseObject, error) {
+	return s.category.ListCategories(ctx, r)
+}
+
+func (s *Server) CreateCategory(ctx context.Context, r api.CreateCategoryRequestObject) (api.CreateCategoryResponseObject, error) {
+	return s.category.CreateCategory(ctx, r)
+}
+
 func (s *Server) GetBudget(ctx context.Context, r api.GetBudgetRequestObject) (api.GetBudgetResponseObject, error) {
 	return s.budget.GetBudget(ctx, r)
 }
@@ -133,7 +144,7 @@ func (s *Server) UpdateBudget(ctx context.Context, r api.UpdateBudgetRequestObje
 // Middleware is written as func(http.Handler) http.Handler and stays free of
 // chi types, so the stdlib exit ADR-0001 describes remains cheap.
 func New(d Deps) http.Handler {
-	srv := &Server{system: d.System, auth: d.Auth, household: d.Household, pocket: d.Pocket, budget: d.Budget}
+	srv := &Server{system: d.System, auth: d.Auth, household: d.Household, pocket: d.Pocket, budget: d.Budget, category: d.Category}
 
 	r := chi.NewRouter()
 	// First, so every response this router produces carries the id and the

@@ -25,27 +25,84 @@ VALUES (sqlc.arg(household_id), sqlc.arg(year_month))
 ON CONFLICT (household_id, year_month) DO NOTHING
 RETURNING year_month;
 
--- Carries the Monthly Budget into a Period being materialised (PRD S12): the
--- latest version of the nearest EARLIER Period that has one, else of the nearest
--- LATER one (reachable only after a period_start_day change re-labelled Today,
--- #130 C3), else nothing, which is the Household's first Period. The copy is
--- dated the Period's first day. The target is never its own source: the
--- comparisons are strict, and the marker was just created in this transaction.
+-- Where a Period being materialised copies from (PRD S12): the nearest EARLIER
+-- Period that holds a Monthly Budget or an allocation, else the nearest LATER
+-- one (reachable only after a period_start_day change re-labelled Today, #130
+-- C3), else no row (the HAVING: an aggregate would otherwise answer one NULL),
+-- which is the Household's first Period. A marker alone is
+-- not a source, and a Period whose allocations were all cleared still is (its
+-- latest state is "none"). The target is never its own source: the comparisons
+-- are strict, and the marker was just created in this transaction.
 --
--- The source choice is this one statement. A standing default (Q-17) would be
--- consulted here, first, and no stored row would change.
+-- This is the ONE statement that chooses a source, for the Monthly Budget and
+-- the allocations alike. A standing default (Q-17) would be consulted here,
+-- first, and no stored row would change.
+-- name: CopySource :one
+SELECT coalesce(max(b.year_month) FILTER (WHERE b.year_month < sqlc.arg(year_month)),
+                min(b.year_month) FILTER (WHERE b.year_month > sqlc.arg(year_month)))::text AS year_month
+FROM budgets b
+WHERE b.household_id = sqlc.arg(household_id) AND b.year_month <> sqlc.arg(year_month)
+  AND (EXISTS (SELECT 1 FROM monthly_budgets m WHERE m.household_id = b.household_id AND m.year_month = b.year_month)
+    OR EXISTS (SELECT 1 FROM allocations x WHERE x.household_id = b.household_id AND x.year_month = b.year_month))
+HAVING count(*) > 0;
+
+-- Carries the Monthly Budget's latest version from the source into the Period
+-- being materialised, dated the Period's first day (PRD S12). Nothing when the
+-- source holds none.
 -- name: CopyMonthlyBudgetForward :execrows
 INSERT INTO monthly_budgets (household_id, year_month, effective_on, monthly_budget)
 SELECT m.household_id, sqlc.arg(year_month), sqlc.arg(effective_on), m.monthly_budget
 FROM monthly_budgets m
-WHERE m.household_id = sqlc.arg(household_id)
-  AND m.year_month = coalesce(
-        (SELECT max(e.year_month) FROM monthly_budgets e
-          WHERE e.household_id = sqlc.arg(household_id) AND e.year_month < sqlc.arg(year_month)),
-        (SELECT min(l.year_month) FROM monthly_budgets l
-          WHERE l.household_id = sqlc.arg(household_id) AND l.year_month > sqlc.arg(year_month)))
+WHERE m.household_id = sqlc.arg(household_id) AND m.year_month = sqlc.arg(source)
 ORDER BY m.effective_on DESC
 LIMIT 1;
+
+-- Carries every allocation's latest state from the source into the Period being
+-- materialised, dated the Period's first day: only the non-null ones (a Category
+-- whose latest row is "none" has nothing to carry), and only Categories that
+-- are not deleted, inactive ones included, so deactivating changes no figure
+-- (#130 C8). FOR SHARE on the Category rows it reads, so a delete (which takes
+-- FOR UPDATE on the row) and this copy cannot both succeed against one Category.
+-- name: CopyAllocationsForward :execrows
+INSERT INTO allocations (household_id, year_month, effective_on, category_id, allocation)
+SELECT c.household_id, sqlc.arg(year_month), sqlc.arg(effective_on), c.id, a.allocation
+FROM (SELECT DISTINCT ON (s.category_id) s.category_id, s.allocation
+      FROM allocations s
+      WHERE s.household_id = sqlc.arg(household_id) AND s.year_month = sqlc.arg(source)
+      ORDER BY s.category_id, s.effective_on DESC) a
+JOIN categories c ON c.id = a.category_id AND c.household_id = sqlc.arg(household_id) AND c.deleted_at IS NULL
+WHERE a.allocation IS NOT NULL
+FOR SHARE OF c;
+
+-- The allocations in force on a day, for the Categories that are live, active or
+-- inactive, non-null only (a Category with none is absent). The day is the one
+-- budget.InForceDay works out, passed in: the as-of rule is written once, in Go.
+-- bucket rides along because the figures sum by it. The order follows the
+-- Category list's, so the wire is stable.
+-- name: AllocationsAsOf :many
+SELECT c.id AS category_id, c.bucket, a.allocation
+FROM (SELECT DISTINCT ON (s.category_id) s.category_id, s.allocation
+      FROM allocations s
+      WHERE s.household_id = sqlc.arg(household_id) AND s.year_month = sqlc.arg(year_month)
+        AND s.effective_on <= sqlc.arg(as_of)
+      ORDER BY s.category_id, s.effective_on DESC) a
+JOIN categories c ON c.id = a.category_id AND c.household_id = sqlc.arg(household_id) AND c.deleted_at IS NULL
+WHERE a.allocation IS NOT NULL
+ORDER BY c.created_at, c.id;
+
+-- One statement per field, keyed by the version's date and Category, so two
+-- writers of different Categories both land and a second change on the same
+-- Period Day overwrites the first. effective_on is the writer's Today. The
+-- Category must be the Household's own and live, checked and share-locked in the
+-- same statement: zero rows means it is not.
+-- name: UpsertAllocation :execrows
+INSERT INTO allocations (household_id, year_month, effective_on, category_id, allocation)
+SELECT c.household_id, sqlc.arg(year_month), sqlc.arg(effective_on), c.id, sqlc.narg(allocation)
+FROM categories c
+WHERE c.id = sqlc.arg(category_id) AND c.household_id = sqlc.arg(household_id) AND c.deleted_at IS NULL
+FOR SHARE OF c
+ON CONFLICT (household_id, year_month, effective_on, category_id)
+DO UPDATE SET allocation = EXCLUDED.allocation, updated_at = now();
 
 -- Every version of the Period's Monthly Budget, oldest first. A Period holds at
 -- most one per day it was edited, so the list is short, and the as-of rule

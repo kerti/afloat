@@ -99,7 +99,10 @@ tag each, so it has components only. A missing element is proposed first (see Ho
 - `Badge` (`components/Badge.tsx`): the "Inactive" pill. Neutral only.
 - `FigureRow` (`components/FigureRow.tsx`): a read-only `li` for a `ListCard`, label left, amount
   right in `tabular-nums` medium. A negative figure is neutral, never coloured. A figure that cannot
-  be computed yet is hidden, not shown as zero. (Confirmed by the maintainer, 23 Nov 2026, for #130.)
+  be computed yet is hidden, not shown as zero. An optional `badge` (the "Inactive" `Badge`) sits
+  beside the label, and `muted` sets the words that stand where an amount would ("No allocation") in
+  the muted colour at regular weight. A Category with no allocation reads "No allocation" there and
+  is never shown as zero. (Confirmed by the maintainer, 23 Nov 2026, for #130.)
 
 **States** (`components/states.tsx`): `Loading`, `ErrorState`. `UpdatePrompt`
 (`components/UpdatePrompt.tsx`): the update banner.
@@ -193,6 +196,10 @@ role table follows Uruni `docs/Design-System.md` § Typography.)
   in a chevron; a row that opens a dialog does not. (Uruni `TransactionList`, list cards.)
 - **The create action** is one full-width button below the list ("Add a Pocket"), the same button the
   empty state offers. No header "+" and no floating button. (Uruni Locations.)
+- **An inactive Category on `/budget`** is listed only while it has a non-zero allocation in the
+  current Period (#130 R9), so every figure's inputs are on screen; otherwise it is hidden, as an
+  inactive Pocket is. It wears the "Inactive" `Badge`. (Confirmed by the maintainer, 23 Nov 2026,
+  for #130.)
 - **Record-level acts live in `DetailActions`**, not the footer: Deactivate or Reactivate, then
   Delete, in a two-column grid below a hairline and above the footer. Deactivate and Delete both close
   the dialog at once and raise the Undo toast; Delete has no confirm (R3, P6). (Uruni #768; ruled 22 Nov.)
@@ -200,9 +207,11 @@ role table follows Uruni `docs/Design-System.md` § Typography.)
   Cancel; the X, Esc, back and an outside tap close it. So the edit dialog reads: field, hairline,
   [Deactivate or Reactivate | Delete], footer [Save]. A screen with more than three buttons needs a
   reason. (Uruni `Locations.tsx`, `DetailActions.tsx`; ruled 22 Nov.)
-- **Outside tap:** only a dialog that **records money** ignores a tap outside it (`posts` on
-  `DialogContent`); it closes by its X, Esc or its buttons. Every other dialog, a Pocket's create and
-  edit included, closes on an outside tap. Uruni's reason: a money record dismissible by a stray tap is
+- **Outside tap:** only a dialog that **records money** (an Expense, a payment: a fact that happened)
+  ignores a tap outside it (`posts` on `DialogContent`); it closes by its X, Esc or its buttons. A
+  dialog that sets a plan, such as a Category's allocation, is not a record of money and closes on an
+  outside tap, like every other dialog, a Pocket's create and edit included. (Confirmed by the
+  maintainer, 23 Nov 2026, for #130.) Uruni's reason: a money record dismissible by a stray tap is
   the wrong shape for the one thing the app must not get wrong. (Uruni ADR-046, `dialog.tsx` `posts`.)
 - **Dialog chrome:** the card is inset 1rem from the screen edge, with a plain header, a muted footer
   strip and a 44px close button whose label the caller translates. On open, focus lands in the first
@@ -216,12 +225,14 @@ role table follows Uruni `docs/Design-System.md` § Typography.)
 
 - Every form is the `Form` component, which is `noValidate`; Afloat renders its own errors.
 - **Submit is disabled only while the write is in flight, or when nothing has changed.** Invalid input
-  leaves it enabled: submitting shows why. Field errors appear on blur and, all at once, on submit.
-  (Hybrid, ruled: Uruni's no-op rule, Balances' validation timing.)
+  leaves it enabled: submitting shows why. Field errors appear on blur once the field has been
+  edited and, all at once, on submit. A blur alone, such as the outside tap that closes a dialog,
+  shows nothing. (Hybrid, ruled: Uruni's no-op rule, Balances' validation timing; "edited" confirmed
+  by the maintainer, 23 Nov 2026, for #130, after the blur flashed an error as a dialog closed.)
 - **Unchanged** compares trimmed text to the stored value, so a trailing space doesn't enable Save.
   The value is sent as typed; the server trims. (Uruni's no-op rule.)
 - **Client checks mirror the server's**, with the server's code winning: a required field shows its
-  own message ("Enter a Pocket name.") on blur once touched and on submit; typing clears a server
+  own message ("Enter a Pocket name.") on blur once edited and on submit; typing clears a server
   error. (Balances validation timing.)
 - **Pending:** the label changes ("Saving…", "Adding…") and the inputs are disabled.
 - **A create keeps one client id per attempt**, in page state: closing and reopening the dialog after
@@ -237,6 +248,8 @@ role table follows Uruni `docs/Design-System.md` § Typography.)
   (1 to 28). Language is a Radix Select. A picker starts blank unless there is only one choice. The
   capture date field is decided in that slice. (Uruni, adapted.) The Appearance select lists System,
   Light, Dark, the default first. (Confirmed by the maintainer, 23 Nov 2026, for #124.)
+- **A Category's bucket field** is labelled "Kind" in en-GB ("Jenis" in id-ID), never "Type", and
+  its options read Daily, then Commitment. (Confirmed by the maintainer, 23 Nov 2026, for #130.)
 - **Money input** groups digits live, in the app locale, as the user types, and keeps the caret after
   the same digit when separators come and go (Uruni `AmountInput`, #749). A typed `.` or `,` is the
   decimal point; paste goes through a strict locale parser; the value on the wire is a canonical
@@ -296,6 +309,10 @@ role table follows Uruni `docs/Design-System.md` § Typography.)
   light `#b4453c`, dark `#ec8b80`, until the brand session. Nothing is coloured good/bad red/green (PRD §9). The attention colour itself is the brand
   session's; until then `--attention` (`styles/theme.css`) holds a provisional terracotta, AA for text
   on the background, card and muted surfaces in both light and dark appearance. (Uruni.)
+- **A negative Unallocated** (allocations above the Daily Pool) is information, not a fault: the
+  figure stays neutral and a `MutedText` line under the figures says so ("Your Category allocations
+  add up to more than your Daily Pool. That's fine; it's just information."). No attention colour.
+  (#130 C15; confirmed by the maintainer, 23 Nov 2026.)
 - **Raw Tailwind palette classes** (`text-red-500`, `bg-green-…`, `bg-white`, `bg-[#…]`) are banned in
   components; use the theme tokens. A test enforces it (`components/noRawColours.test.ts`). (Balances.)
 - **Light and dark** both real (PRD §9), via the tokens in `theme.css`; the appearance picker is #124.

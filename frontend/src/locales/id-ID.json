@@ -12,7 +12,10 @@
     "userDisplayName": "Nama Anda (opsional)",
     "pocketDisplayName": "Nama kantong",
     "householdDisplayName": "Nama rumah tangga",
-    "monthlyBudget": "Anggaran bulanan"
+    "monthlyBudget": "Anggaran bulanan",
+    "categoryDisplayName": "Nama kategori",
+    "categoryBucket": "Jenis",
+    "allocation": "Alokasi"
   },
   "fieldNames": {
     "reporting_currency": "mata uang pelaporan",
@@ -26,7 +29,10 @@
     "locale": "bahasa",
     "current_password": "kata sandi saat ini",
     "new_password": "kata sandi baru",
-    "monthly_budget": "anggaran bulanan"
+    "monthly_budget": "anggaran bulanan",
+    "category_display_name": "nama kategori",
+    "bucket": "jenis",
+    "allocation": "alokasi"
   },
   "login": {
     "title": "Masuk",
@@ -178,6 +184,26 @@
     "empty": "Atur anggaran bulanan Anda untuk melihat sisa yang bisa dibelanjakan.",
     "commitmentsBudget": "Anggaran komitmen",
     "dailyPool": "Dana harian",
-    "unallocated": "Belum dialokasikan"
+    "unallocated": "Belum dialokasikan",
+    "overAllocated": "Alokasi kategori Anda melebihi dana harian. Tidak apa-apa; ini hanya informasi."
+  },
+  "categories": {
+    "commitmentsHeading": "Komitmen",
+    "dailyHeading": "Harian",
+    "commitmentsEmpty": "Komitmen Anda akan tampil di sini.",
+    "dailyEmpty": "Kategori harian Anda akan tampil di sini.",
+    "addHeading": "Tambah kategori",
+    "add": "Tambah",
+    "adding": "Menambahkan…",
+    "cancel": "Batal",
+    "namePlaceholder": "Misalnya: Sewa, Belanja, Transportasi",
+    "kindCommitment": "Komitmen",
+    "kindDaily": "Harian",
+    "nameRequired": "Masukkan nama kategori.",
+    "kindRequired": "Pilih jenis.",
+    "allocationRequired": "Masukkan alokasi.",
+    "allocationCommitmentHint": "Rencana untuk komitmen ini pada periode anggaran ini. Isi 0 jika belum ada.",
+    "allocationDailyHint": "Opsional. Rencana untuk kategori ini pada periode anggaran ini.",
+    "noAllocation": "Belum ada alokasi"
   }
 }

@@ -78,7 +78,7 @@ func (h *Handlers) GetBudget(ctx context.Context, _ api.GetBudgetRequestObject) 
 		return getInternalError(), nil
 	}
 
-	exists, err := h.q.BudgetExists(ctx, db.BudgetExistsParams{HouseholdID: user.HouseholdID, YearMonth: where.period.YearMonth})
+	exists, err := h.q.BudgetExists(ctx, db.BudgetExistsParams{HouseholdID: user.HouseholdID, YearMonth: where.Period.YearMonth})
 	if err != nil {
 		slog.Error("get budget: look up the period", "err", err)
 		return getInternalError(), nil
@@ -88,7 +88,7 @@ func (h *Handlers) GetBudget(ctx context.Context, _ api.GetBudgetRequestObject) 
 		out, err = read(ctx, h.q, user.HouseholdID, where)
 	} else {
 		err = h.inTx(ctx, func(q *db.Queries) error {
-			if err := materialise(ctx, q, user.HouseholdID, where.period); err != nil {
+			if err := Materialise(ctx, q, user.HouseholdID, where.Period); err != nil {
 				return err
 			}
 			out, err = read(ctx, q, user.HouseholdID, where)
@@ -150,14 +150,14 @@ func (h *Handlers) UpdateBudget(ctx context.Context, request api.UpdateBudgetReq
 
 	var out api.Budget
 	err = h.inTx(ctx, func(q *db.Queries) error {
-		if err := materialise(ctx, q, user.HouseholdID, where.period); err != nil {
+		if err := Materialise(ctx, q, user.HouseholdID, where.Period); err != nil {
 			return err
 		}
 		if monthly != nil {
 			if err := q.UpsertMonthlyBudget(ctx, db.UpsertMonthlyBudgetParams{
 				HouseholdID:   user.HouseholdID,
-				YearMonth:     where.period.YearMonth,
-				EffectiveOn:   pgDate(where.today),
+				YearMonth:     where.Period.YearMonth,
+				EffectiveOn:   pgDate(where.Today),
 				MonthlyBudget: *monthly,
 			}); err != nil {
 				return fmt.Errorf("upsert monthly budget: %w", err)
@@ -174,37 +174,43 @@ func (h *Handlers) UpdateBudget(ctx context.Context, request api.UpdateBudgetReq
 	return api.UpdateBudget200JSONResponse(out), nil
 }
 
-// whereAndWhen is the Household's current position: the Period Day it is on
-// and the Budget Period that day belongs to.
-type whereAndWhen struct {
-	today  period.Date
-	period period.Period
+// Position is the Household's current position: the Period Day it is on and the
+// Budget Period that day belongs to. The Category package, which writes an
+// allocation in its own transaction, asks for it through Locate.
+type Position struct {
+	Today  period.Date
+	Period period.Period
 }
 
-// where works out Today from the User's own time zone and the Household's
+// where is Locate on the handlers' own querier and clock.
+func (h *Handlers) where(ctx context.Context, user db.User) (Position, error) {
+	return Locate(ctx, h.q, h.now, user)
+}
+
+// Locate works out Today from the User's own time zone and the Household's
 // day_starts_at, and the Period it falls in from the Household's current
 // period_start_day. The only place a request's date is derived (BOOTSTRAP.md
 // §4): the client never sends one and never computes one.
-func (h *Handlers) where(ctx context.Context, user db.User) (whereAndWhen, error) {
-	household, err := h.q.GetHouseholdByID(ctx, user.HouseholdID)
+func Locate(ctx context.Context, q db.Querier, now func() time.Time, user db.User) (Position, error) {
+	household, err := q.GetHouseholdByID(ctx, user.HouseholdID)
 	if err != nil {
-		return whereAndWhen{}, fmt.Errorf("look up household: %w", err)
+		return Position{}, fmt.Errorf("look up household: %w", err)
 	}
 	loc, err := time.LoadLocation(user.TimeZone)
 	if err != nil {
-		return whereAndWhen{}, fmt.Errorf("load time zone: %w", err)
+		return Position{}, fmt.Errorf("load time zone: %w", err)
 	}
 	if !household.DayStartsAt.Valid {
-		return whereAndWhen{}, errors.New("household has no day_starts_at")
+		return Position{}, errors.New("household has no day_starts_at")
 	}
 	dayStartsAt := time.Duration(household.DayStartsAt.Microseconds) * time.Microsecond
 
-	today := period.Today(h.now(), loc, dayStartsAt)
+	today := period.Today(now(), loc, dayStartsAt)
 	p, err := period.Of(today, int(household.PeriodStartDay))
 	if err != nil {
-		return whereAndWhen{}, err
+		return Position{}, err
 	}
-	return whereAndWhen{today: today, period: p}, nil
+	return Position{Today: today, Period: p}, nil
 }
 
 // inTx runs fn in a transaction, committed only if fn returns nil.
@@ -225,7 +231,7 @@ func (h *Handlers) inTx(ctx context.Context, fn func(q *db.Queries) error) error
 	return nil
 }
 
-// materialise brings a Budget Period into being (PRD S12, S13), idempotently
+// Materialise brings a Budget Period into being (PRD S12, S13), idempotently
 // and safely under concurrency: the marker insert is ON CONFLICT DO NOTHING, and
 // only the request that actually inserted it copies. A request that loses the
 // race waits on the winner's uncommitted marker, then finds it and does
@@ -233,9 +239,9 @@ func (h *Handlers) inTx(ctx context.Context, fn func(q *db.Queries) error) error
 // transaction as everything that depends on the marker, so no request ever
 // sees a marker without its copy.
 //
-// What is carried forward, and from where, is CopyMonthlyBudgetForward's: the
-// one place that chooses a source.
-func materialise(ctx context.Context, q *db.Queries, householdID pgtype.UUID, p period.Period) error {
+// What is carried forward, and from where, is CopySource's: the one place that
+// chooses a source, for the Monthly Budget and the allocations alike.
+func Materialise(ctx context.Context, q *db.Queries, householdID pgtype.UUID, p period.Period) error {
 	_, err := q.InsertBudget(ctx, db.InsertBudgetParams{HouseholdID: householdID, YearMonth: p.YearMonth})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil
@@ -243,23 +249,70 @@ func materialise(ctx context.Context, q *db.Queries, householdID pgtype.UUID, p 
 	if err != nil {
 		return fmt.Errorf("insert budget: %w", err)
 	}
+	source, err := q.CopySource(ctx, db.CopySourceParams{HouseholdID: householdID, YearMonth: p.YearMonth})
+	if errors.Is(err, pgx.ErrNoRows) {
+		// The Household's first Period: nothing to carry, which is what its
+		// first read answers.
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("choose the copy source: %w", err)
+	}
 	if _, err := q.CopyMonthlyBudgetForward(ctx, db.CopyMonthlyBudgetForwardParams{
 		HouseholdID: householdID,
 		YearMonth:   p.YearMonth,
 		EffectiveOn: pgDate(p.StartsOn),
+		Source:      source,
 	}); err != nil {
 		return fmt.Errorf("copy monthly budget forward: %w", err)
+	}
+	if _, err := q.CopyAllocationsForward(ctx, db.CopyAllocationsForwardParams{
+		HouseholdID: householdID,
+		YearMonth:   p.YearMonth,
+		EffectiveOn: pgDate(p.StartsOn),
+		Source:      source,
+	}); err != nil {
+		return fmt.Errorf("copy allocations forward: %w", err)
 	}
 	return nil
 }
 
-// read answers the Budget as of Today. Everything comes from one statement's
-// snapshot of the Monthly Budget's versions; the figures are computed here, and
-// the client derives none (PRD N5a).
-func read(ctx context.Context, q db.Querier, householdID pgtype.UUID, at whereAndWhen) (api.Budget, error) {
+// SetAllocation records a Category's allocation as a version dated the writer's
+// Today in the Period they are in, which the caller has materialised in the same
+// transaction. One upsert on its key: a second change the same Period Day
+// overwrites the first, and two writers of different Categories both land. The
+// statement checks the Category is the Household's own and live, and share-locks
+// it; zero rows is a Category that is not.
+func SetAllocation(ctx context.Context, q *db.Queries, householdID pgtype.UUID, at Position, categoryID pgtype.UUID, amount decimal.Decimal) error {
+	n, err := q.UpsertAllocation(ctx, db.UpsertAllocationParams{
+		HouseholdID: householdID,
+		YearMonth:   at.Period.YearMonth,
+		EffectiveOn: pgDate(at.Today),
+		CategoryID:  categoryID,
+		Allocation:  decimal.NullDecimal{Decimal: amount, Valid: true},
+	})
+	if err != nil {
+		return fmt.Errorf("upsert allocation: %w", err)
+	}
+	if n == 0 {
+		return ErrCategoryNotLive
+	}
+	return nil
+}
+
+// ErrCategoryNotLive is SetAllocation's answer for a Category that is unknown,
+// another Household's or deleted: the three are one.
+var ErrCategoryNotLive = errors.New("the Category is not a live Category of the Household")
+
+// read answers the Budget as of Today. The figures are computed here, and the
+// client derives none (PRD N5a). The Monthly Budget's versions come from one
+// statement and the allocations from another, both read as of the one day
+// InForceDay names, and every allocation figure is summed from the one list
+// that is sent, so the list and the sums cannot disagree.
+func read(ctx context.Context, q db.Querier, householdID pgtype.UUID, at Position) (api.Budget, error) {
 	rows, err := q.ListMonthlyBudgetVersions(ctx, db.ListMonthlyBudgetVersionsParams{
 		HouseholdID: householdID,
-		YearMonth:   at.period.YearMonth,
+		YearMonth:   at.Period.YearMonth,
 	})
 	if err != nil {
 		return api.Budget{}, fmt.Errorf("list monthly budget versions: %w", err)
@@ -271,20 +324,44 @@ func read(ctx context.Context, q db.Querier, householdID pgtype.UUID, at whereAn
 			MonthlyBudget: row.MonthlyBudget,
 		})
 	}
-	monthly, has := MonthlyBudgetAsOf(versions, at.today)
+	monthly, has := MonthlyBudgetAsOf(versions, at.Today)
 
-	// No Category exists yet, so there is nothing to allocate: the Commitments
-	// Budget and the Daily allocations are both nothing. The slice that adds
-	// Categories feeds their sums in here.
-	f := ComputeFigures(monthly, has, decimal.Zero, decimal.Zero)
+	allocated, err := q.AllocationsAsOf(ctx, db.AllocationsAsOfParams{
+		HouseholdID: householdID,
+		YearMonth:   at.Period.YearMonth,
+		AsOf:        pgDate(InForceDay(versions, at.Today)),
+	})
+	if err != nil {
+		return api.Budget{}, fmt.Errorf("list allocations: %w", err)
+	}
+	allocations := make([]api.Allocation, 0, len(allocated))
+	commitments, daily := decimal.Zero, decimal.Zero
+	for _, row := range allocated {
+		allocations = append(allocations, api.Allocation{
+			CategoryId: openapi_types.UUID(row.CategoryID.Bytes),
+			Allocation: money(row.Allocation.Decimal),
+		})
+		switch api.Bucket(row.Bucket) {
+		case api.Commitment:
+			commitments = commitments.Add(row.Allocation.Decimal)
+		case api.Daily:
+			daily = daily.Add(row.Allocation.Decimal)
+		default:
+			// The CHECK on categories.bucket makes this unreachable; failing
+			// loudly beats a figure that quietly leaves a Category out.
+			return api.Budget{}, fmt.Errorf("a Category has the bucket %q", row.Bucket)
+		}
+	}
+
+	f := ComputeFigures(monthly, has, commitments, daily)
 
 	out := api.Budget{
 		Period: api.BudgetPeriod{
-			YearMonth: at.period.YearMonth,
-			StartsOn:  openapi_types.Date{Time: at.period.StartsOn.Time()},
-			EndsOn:    openapi_types.Date{Time: at.period.EndsOn.Time()},
+			YearMonth: at.Period.YearMonth,
+			StartsOn:  openapi_types.Date{Time: at.Period.StartsOn.Time()},
+			EndsOn:    openapi_types.Date{Time: at.Period.EndsOn.Time()},
 		},
-		Allocations:       []api.Allocation{},
+		Allocations:       allocations,
 		CommitmentsBudget: money(f.CommitmentsBudget),
 	}
 	if f.HasMonthlyBudget {

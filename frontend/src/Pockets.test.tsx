@@ -343,15 +343,19 @@ describe("creating a Pocket", () => {
     expect(submit()).toBeEnabled();
   });
 
-  it("shows the blank error on blur, before any submit", async () => {
+  it("shows the blank error on blur once the name was edited, before any submit", async () => {
     server.use(...defaultHandlers(signedIn()));
     const user = userEvent.setup();
     renderApp("/pockets");
 
     const dialog = await openCreate(user);
-    expect(within(dialog).queryByRole("alert")).not.toBeInTheDocument();
+    const field = within(dialog).getByLabelText(enGB.fields.pocketDisplayName);
     await user.tab();
+    expect(within(dialog).queryByRole("alert")).not.toBeInTheDocument();
 
+    await user.type(field, "x");
+    await user.clear(field);
+    await user.tab();
     expect(await within(dialog).findByRole("alert")).toHaveTextContent(p.nameRequired);
   });
 

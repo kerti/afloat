@@ -667,3 +667,77 @@
     rows:
       - sql: SELECT (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM monthly_budgets)::int AS versions
         rows: [{budgets: 0, versions: 0}]
+
+# /categories serves GET (and HEAD, which answers like it) and POST (#130). The
+# verbs that act on one Category (PATCH, DELETE) are the {id} path's, and a
+# collection never replaces, patches or deletes: every other verb is a 405 and
+# writes nothing.
+
+- name: http methods - PUT on the Categories collection is method not allowed and writes nothing
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: PUT
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000001","category_display_name":"Rent","bucket":"commitment","allocation":"3000000"}'
+  expect:
+    status: 405
+    body_empty: true
+    rows:
+      - sql: SELECT (SELECT count(*) FROM categories)::int AS categories, (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM allocations)::int AS allocations
+        rows: [{categories: 0, budgets: 0, allocations: 0}]
+
+- name: http methods - PATCH on the Categories collection is method not allowed and writes nothing
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: PATCH
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000001","category_display_name":"Rent","bucket":"commitment","allocation":"3000000"}'
+  expect:
+    status: 405
+    body_empty: true
+    rows:
+      - sql: SELECT (SELECT count(*) FROM categories)::int AS categories, (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM allocations)::int AS allocations
+        rows: [{categories: 0, budgets: 0, allocations: 0}]
+
+- name: http methods - DELETE on the Categories collection is method not allowed and writes nothing
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: DELETE
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000001","category_display_name":"Rent","bucket":"commitment","allocation":"3000000"}'
+  expect:
+    status: 405
+    body_empty: true
+    rows:
+      - sql: SELECT (SELECT count(*) FROM categories)::int AS categories, (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM allocations)::int AS allocations
+        rows: [{categories: 0, budgets: 0, allocations: 0}]

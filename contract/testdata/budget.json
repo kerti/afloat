@@ -1,0 +1,156 @@
+{
+  "_comment": [
+    "The Budget's derived figures as pinned (docs/CONTEXT.md §Money and buckets, PRD S8, S9, issue #130 C11).",
+    "The backend's budget tests read this file and keep no copy of the rows: each row builds a Household, the",
+    "Categories below and their allocations in the current Budget Period, and compares what GET /budget answers.",
+    "Commitments Budget = the sum of the allocations of live Commitment Categories; Daily Pool = Monthly Budget",
+    "- Commitments Budget; Unallocated = Daily Pool - the sum of the allocations of live Daily Categories.",
+    "Inactive Categories count and deleted ones do not. A negative Daily Pool or Unallocated is information,",
+    "never an error, and is sent as such (S9; whether and how a zero or negative pool is shown is the trajectory",
+    "slice's, with Q-06). Every figure is a string at exactly four decimals. `monthly_budget` null means none has",
+    "been set: the Daily Pool and Unallocated are then omitted, the Commitments Budget is not. A Category with a",
+    "null `allocation` has none and is absent from `allocations`, which lists live Categories in creation order.",
+    "The categories are created in the order written. Every expected value was worked out independently of the",
+    "backend, with exact decimal arithmetic."
+  ],
+  "rows": [
+    {
+      "name": "CONTEXT's worked case: 9.000.000 with 3.000.000 of rent leaves a Daily Pool of 6.000.000",
+      "monthly_budget": "9000000",
+      "categories": [
+        {"name": "Rent", "bucket": "commitment", "allocation": "3000000", "active": true, "deleted": false}
+      ],
+      "expected": {"commitments_budget": "3000000.0000", "daily_pool": "6000000.0000", "unallocated": "6000000.0000", "allocations": [{"category": "Rent", "allocation": "3000000.0000"}]}
+    },
+    {
+      "name": "Daily allocations move only Unallocated",
+      "monthly_budget": "9000000",
+      "categories": [
+        {"name": "Rent", "bucket": "commitment", "allocation": "3000000", "active": true, "deleted": false},
+        {"name": "Groceries", "bucket": "daily", "allocation": "2000000", "active": true, "deleted": false},
+        {"name": "Transport", "bucket": "daily", "allocation": "1000000", "active": true, "deleted": false}
+      ],
+      "expected": {"commitments_budget": "3000000.0000", "daily_pool": "6000000.0000", "unallocated": "3000000.0000", "allocations": [{"category": "Rent", "allocation": "3000000.0000"}, {"category": "Groceries", "allocation": "2000000.0000"}, {"category": "Transport", "allocation": "1000000.0000"}]}
+    },
+    {
+      "name": "Daily allocations beyond the Daily Pool leave Unallocated negative (S9: information, not an error)",
+      "monthly_budget": "9000000",
+      "categories": [
+        {"name": "Rent", "bucket": "commitment", "allocation": "3000000", "active": true, "deleted": false},
+        {"name": "Groceries", "bucket": "daily", "allocation": "7000000", "active": true, "deleted": false}
+      ],
+      "expected": {"commitments_budget": "3000000.0000", "daily_pool": "6000000.0000", "unallocated": "-1000000.0000", "allocations": [{"category": "Rent", "allocation": "3000000.0000"}, {"category": "Groceries", "allocation": "7000000.0000"}]}
+    },
+    {
+      "name": "No Daily allocations: Unallocated is the Daily Pool",
+      "monthly_budget": "9000000",
+      "categories": [
+        {"name": "Rent", "bucket": "commitment", "allocation": "3000000", "active": true, "deleted": false},
+        {"name": "Groceries", "bucket": "daily", "allocation": null, "active": true, "deleted": false}
+      ],
+      "expected": {"commitments_budget": "3000000.0000", "daily_pool": "6000000.0000", "unallocated": "6000000.0000", "allocations": [{"category": "Rent", "allocation": "3000000.0000"}]}
+    },
+    {
+      "name": "Commitments above the Monthly Budget leave a negative Daily Pool (S9)",
+      "monthly_budget": "2000000",
+      "categories": [
+        {"name": "Rent", "bucket": "commitment", "allocation": "3000000", "active": true, "deleted": false}
+      ],
+      "expected": {"commitments_budget": "3000000.0000", "daily_pool": "-1000000.0000", "unallocated": "-1000000.0000", "allocations": [{"category": "Rent", "allocation": "3000000.0000"}]}
+    },
+    {
+      "name": "A Monthly Budget of zero and nothing allocated: every figure is zero",
+      "monthly_budget": "0",
+      "categories": [
+      ],
+      "expected": {"commitments_budget": "0.0000", "daily_pool": "0.0000", "unallocated": "0.0000", "allocations": []}
+    },
+    {
+      "name": "A Monthly Budget and no Category at all",
+      "monthly_budget": "9000000",
+      "categories": [
+      ],
+      "expected": {"commitments_budget": "0.0000", "daily_pool": "9000000.0000", "unallocated": "9000000.0000", "allocations": []}
+    },
+    {
+      "name": "A Commitment allocated zero (how a retired one is freed) moves nothing",
+      "monthly_budget": "9000000",
+      "categories": [
+        {"name": "Old gym", "bucket": "commitment", "allocation": "0", "active": true, "deleted": false},
+        {"name": "Rent", "bucket": "commitment", "allocation": "3000000", "active": true, "deleted": false}
+      ],
+      "expected": {"commitments_budget": "3000000.0000", "daily_pool": "6000000.0000", "unallocated": "6000000.0000", "allocations": [{"category": "Old gym", "allocation": "0.0000"}, {"category": "Rent", "allocation": "3000000.0000"}]}
+    },
+    {
+      "name": "An inactive Commitment still counts: deactivating changes no figure",
+      "monthly_budget": "9000000",
+      "categories": [
+        {"name": "Rent", "bucket": "commitment", "allocation": "3000000", "active": true, "deleted": false},
+        {"name": "Old gym", "bucket": "commitment", "allocation": "500000", "active": false, "deleted": false}
+      ],
+      "expected": {"commitments_budget": "3500000.0000", "daily_pool": "5500000.0000", "unallocated": "5500000.0000", "allocations": [{"category": "Rent", "allocation": "3000000.0000"}, {"category": "Old gym", "allocation": "500000.0000"}]}
+    },
+    {
+      "name": "An inactive Daily Category still counts against Unallocated",
+      "monthly_budget": "9000000",
+      "categories": [
+        {"name": "Groceries", "bucket": "daily", "allocation": "2000000", "active": false, "deleted": false}
+      ],
+      "expected": {"commitments_budget": "0.0000", "daily_pool": "9000000.0000", "unallocated": "7000000.0000", "allocations": [{"category": "Groceries", "allocation": "2000000.0000"}]}
+    },
+    {
+      "name": "A deleted Category counts for nothing and is not listed",
+      "monthly_budget": "9000000",
+      "categories": [
+        {"name": "Rent", "bucket": "commitment", "allocation": "3000000", "active": true, "deleted": false},
+        {"name": "Mistake", "bucket": "commitment", "allocation": "1000000", "active": true, "deleted": true},
+        {"name": "Typo", "bucket": "daily", "allocation": "1000000", "active": true, "deleted": true}
+      ],
+      "expected": {"commitments_budget": "3000000.0000", "daily_pool": "6000000.0000", "unallocated": "6000000.0000", "allocations": [{"category": "Rent", "allocation": "3000000.0000"}]}
+    },
+    {
+      "name": "Several Commitments add up",
+      "monthly_budget": "12000000",
+      "categories": [
+        {"name": "Rent", "bucket": "commitment", "allocation": "3500000", "active": true, "deleted": false},
+        {"name": "Insurance", "bucket": "commitment", "allocation": "750000", "active": true, "deleted": false},
+        {"name": "School", "bucket": "commitment", "allocation": "1250000", "active": true, "deleted": false},
+        {"name": "Groceries", "bucket": "daily", "allocation": "2000000", "active": true, "deleted": false}
+      ],
+      "expected": {"commitments_budget": "5500000.0000", "daily_pool": "6500000.0000", "unallocated": "4500000.0000", "allocations": [{"category": "Rent", "allocation": "3500000.0000"}, {"category": "Insurance", "allocation": "750000.0000"}, {"category": "School", "allocation": "1250000.0000"}, {"category": "Groceries", "allocation": "2000000.0000"}]}
+    },
+    {
+      "name": "Cents are exact: four decimals in, four out, no rounding",
+      "monthly_budget": "1000.5",
+      "categories": [
+        {"name": "Rent", "bucket": "commitment", "allocation": "0.0001", "active": true, "deleted": false},
+        {"name": "Groceries", "bucket": "daily", "allocation": "10.1234", "active": true, "deleted": false}
+      ],
+      "expected": {"commitments_budget": "0.0001", "daily_pool": "1000.4999", "unallocated": "990.3765", "allocations": [{"category": "Rent", "allocation": "0.0001"}, {"category": "Groceries", "allocation": "10.1234"}]}
+    },
+    {
+      "name": "The largest amount the type holds, allocated in full, leaves a Daily Pool of zero",
+      "monthly_budget": "9999999999999999.9999",
+      "categories": [
+        {"name": "Rent", "bucket": "commitment", "allocation": "9999999999999999.9999", "active": true, "deleted": false}
+      ],
+      "expected": {"commitments_budget": "9999999999999999.9999", "daily_pool": "0.0000", "unallocated": "0.0000", "allocations": [{"category": "Rent", "allocation": "9999999999999999.9999"}]}
+    },
+    {
+      "name": "No Monthly Budget yet: the Commitments Budget is there, the Daily Pool and Unallocated are omitted",
+      "monthly_budget": null,
+      "categories": [
+        {"name": "Rent", "bucket": "commitment", "allocation": "3000000", "active": true, "deleted": false},
+        {"name": "Groceries", "bucket": "daily", "allocation": "2000000", "active": true, "deleted": false}
+      ],
+      "expected": {"commitments_budget": "3000000.0000", "allocations": [{"category": "Rent", "allocation": "3000000.0000"}, {"category": "Groceries", "allocation": "2000000.0000"}]}
+    },
+    {
+      "name": "No Monthly Budget and no Category: only a zero Commitments Budget",
+      "monthly_budget": null,
+      "categories": [
+      ],
+      "expected": {"commitments_budget": "0.0000", "allocations": []}
+    }
+  ]
+}

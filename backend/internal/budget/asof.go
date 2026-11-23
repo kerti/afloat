@@ -27,15 +27,7 @@ func MonthlyBudgetAsOf(versions []Version, day period.Date) (decimal.Decimal, bo
 	if len(versions) == 0 {
 		return decimal.Zero, false
 	}
-	first := versions[0].EffectiveOn
-	for _, v := range versions[1:] {
-		if v.EffectiveOn.Before(first) {
-			first = v.EffectiveOn
-		}
-	}
-	if day.Before(first) {
-		day = first
-	}
+	day = InForceDay(versions, day)
 	var best *Version
 	for i := range versions {
 		v := &versions[i]
@@ -46,6 +38,27 @@ func MonthlyBudgetAsOf(versions []Version, day period.Date) (decimal.Decimal, bo
 			best = v
 		}
 	}
-	// day >= first, so the first version qualifies and best is set.
+	// day >= the first version's, so that version qualifies and best is set.
 	return best.MonthlyBudget, true
+}
+
+// InForceDay is the day a Period Day is read as of: the day itself, except that
+// one before the Period's first Monthly Budget is read as of that first one.
+// Allocations are read as of the same day (#130 C4), so a Commitment typed
+// before the Monthly Budget is part of the same setup. Before any Monthly
+// Budget exists the day is its own.
+func InForceDay(versions []Version, day period.Date) period.Date {
+	if len(versions) == 0 {
+		return day
+	}
+	first := versions[0].EffectiveOn
+	for _, v := range versions[1:] {
+		if v.EffectiveOn.Before(first) {
+			first = v.EffectiveOn
+		}
+	}
+	if day.Before(first) {
+		return first
+	}
+	return day
 }

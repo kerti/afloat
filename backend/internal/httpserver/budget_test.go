@@ -12,6 +12,7 @@ import (
 
 	"github.com/kerti/afloat/backend/internal/auth"
 	"github.com/kerti/afloat/backend/internal/budget"
+	"github.com/kerti/afloat/backend/internal/category"
 	"github.com/kerti/afloat/backend/internal/db"
 	"github.com/kerti/afloat/backend/internal/system"
 	"github.com/kerti/afloat/backend/internal/testutil"
@@ -57,13 +58,18 @@ func newBudgetFixture(t *testing.T) budgetFixture {
 			CookieSecure:       true,
 		}),
 		Budget:         budget.New(budget.Deps{Querier: tdb.Queries, Beginner: tdb.Pool, Now: func() time.Time { return now }}),
+		Category:       category.New(category.Deps{Querier: tdb.Queries, Beginner: tdb.Pool, Now: func() time.Time { return now }}),
 		HandlerTimeout: testHandlerTimeout,
 	})
 	return budgetFixture{tdb: tdb, srv: srv, householdID: householdID, cookie: auth.SessionCookieName + "=" + token}
 }
 
 func (f budgetFixture) do(method, body string, mutate ...func(*http.Request)) *httptest.ResponseRecorder {
-	req := httptest.NewRequest(method, "/api/budget", strings.NewReader(body))
+	return f.doAt(method, "/api/budget", body, mutate...)
+}
+
+func (f budgetFixture) doAt(method, path, body string, mutate ...func(*http.Request)) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(method, path, strings.NewReader(body))
 	if body != "" {
 		req.Header.Set("Content-Type", "application/json")
 	}

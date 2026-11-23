@@ -4,12 +4,14 @@ import {
   changeEmail,
   changePassword,
   commitOnboardingChoice,
+  createCategory,
   createPocket,
   deletePocket,
   getAuthMethods,
   getBudget,
   getMe,
   getOnboardingOptions,
+  listCategories,
   listPockets,
   localLogin,
   localRegister,
@@ -19,6 +21,9 @@ import {
   updateHousehold,
   updateMe,
   type Budget,
+  type Category,
+  type CategoryList,
+  type CreateCategoryRequest,
   type ChangeEmailRequest,
   type ChangePasswordRequest,
   type CreatePocketRequest,
@@ -206,5 +211,25 @@ export function useUpdateBudget() {
   return useMutation<Budget, ApiError, UpdateBudgetRequest>({
     mutationFn: updateBudget,
     onSuccess: () => qc.invalidateQueries({ queryKey: budgetKey }),
+  });
+}
+
+export const categoriesKey = ["categories"] as const;
+
+export function useCategories() {
+  return useQuery<CategoryList, ApiError>({ queryKey: categoriesKey, queryFn: listCategories });
+}
+
+// A new Category may carry an allocation, which moves the Budget's figures, so
+// both reads are invalidated and the write settles after they have refetched.
+export function useCreateCategory() {
+  const qc = useQueryClient();
+  return useMutation<Category, ApiError, CreateCategoryRequest>({
+    mutationFn: createCategory,
+    onSuccess: () =>
+      Promise.all([
+        qc.invalidateQueries({ queryKey: categoriesKey }),
+        qc.invalidateQueries({ queryKey: budgetKey }),
+      ]),
   });
 }

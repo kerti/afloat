@@ -64,6 +64,9 @@ function PocketForm({
   // Initialised from the record, never reset in an effect; the caller keys the
   // form on the Pocket's id.
   const [name, setName] = useState(() => pocket?.pocket_display_name ?? "");
+  // Touched means edited then left: a blur alone (the outside tap that closes
+  // the dialog) must not flash the blank error (ui-conventions, Forms).
+  const [edited, setEdited] = useState(false);
   const [touched, setTouched] = useState(false);
   const [submitted, setSubmitted] = useState(false);
 
@@ -134,9 +137,10 @@ function PocketForm({
           disabled={pending}
           onChange={(e) => {
             setName(e.target.value);
+            setEdited(true);
             if (err) write.reset();
           }}
-          onBlur={() => setTouched(true)}
+          onBlur={() => edited && setTouched(true)}
           aria-invalid={fieldMessage ? true : undefined}
           aria-describedby={fieldMessage ? "pocket-name-error" : undefined}
         />

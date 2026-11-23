@@ -82,12 +82,15 @@ Per `docs/scratch/Decisions Draft.md` §3, with migrations corrected per §7 bel
 afloat/
 ├── backend/                        # Go backend
 │   └── internal/
+│       ├── period/                 # Period Day and Budget Period arithmetic, pure — §6 (#130)
+│       ├── budget/                 # the Budget of the current Period, its materialisation (#130)
+│       ├── category/               # Categories, and the allocation one starts with (#130)
 │       ├── migrations/             # CANONICAL goose migrations, hand-written, //go:embed — §7
 │       └── auth/common_passwords.txt  # the password denylist — §5.1
 ├── frontend/                       # React app
 ├── contract/
 │   ├── openapi.yaml                # single source of truth for the API
-│   ├── testdata/                   # fixtures the backend's unit tests read — see §6
+│   ├── testdata/                   # fixtures the backend's tests read (trajectory, periods, budget…) — §6
 │   └── conformance/                # black-box HTTP cases against the real backend
 ├── docs/{adr/go,brand,qa}/
 ├── scripts/                        # repo tooling the Makefile shells out to
@@ -121,9 +124,10 @@ with zoneinfo answers from it, so a case-insensitive filesystem (a Mac) also acc
   (§5.1.1). The rule above stands for every domain `POST`.
   *A clarification, not a second exception (#130, R14):* the rule is about **rows a client creates**.
   A row that **only the server creates, and no request ever addresses by id** (the Budget tables:
-  `budgets` and `monthly_budgets`, which materialise on the first read of a Budget Period) has a
-  **composite natural key** (`household_id`, `year_month`, and for a version log its `effective_on`)
-  and no `id` column. Minting a UUIDv7 for it in Go would be a second server-minted key with nothing
+  `budgets`, `monthly_budgets` and `allocations`, which materialise on the first read of a Budget
+  Period) has a **composite natural key** (`household_id`, `year_month`, and for a version log its
+  `effective_on`, and for `allocations` its `category_id`) and no `id` column. Minting a UUIDv7 for
+  it in Go would be a second server-minted key with nothing
   to ever name it by.
 - **Idempotent create:** `POST` accepts the client-supplied id; a replay returns **200** with the
   existing resource, a first write returns **201**. Implemented as `INSERT ... ON CONFLICT (id) DO
@@ -151,16 +155,27 @@ with zoneinfo answers from it, so a case-insensitive filesystem (a Mac) also acc
     its tuple and trips over the first's name-index entry. So a name-index `23505` is read back by
     id first: a live row of the caller's own Household under that id is the `200`, and only no row
     is `NAME_TAKEN`. Without it a double tap answers the loser "name taken" for its own Pocket.
+    **The same holds for every other unique index on the id.** A Category's id is unique twice: the
+    primary key and `UNIQUE (household_id, id)`, which the composite foreign key from `allocations`
+    needs (#130). `ON CONFLICT (id)` arbitrates only the first, so a concurrent replay of one id can
+    trip over the second (`23505` on `categories_household_id_id_key`), which is read back by id
+    too:
+    the live row is the `200`, no row is `ID_TAKEN`. Found by the concurrent-create test, as a
+    `500`.
   - **No transaction and no detached context:** it is one statement, and retrying with the same id
     is the recovery.
 - **Names are `<entity>_display_name`** on the wire, in SQL, in Go and in i18n keys (#113 D5, #121):
-  `household_display_name`, `user_display_name`, `pocket_display_name`. A bare `name` would be one
+  `household_display_name`, `user_display_name`, `pocket_display_name`, `category_display_name`. A
+  bare `name` would be one
   `VALIDATION` `args.field` meaning several things. **A bounded name follows one rule:** trimmed;
   nothing visible (blank, or only whitespace and Unicode Cf) is `required`; more than the entity's cap
   in code points is `max`; U+0000 is `pattern`; a Cf character inside a visible name is kept. It is one
   function (`auth.CheckBoundedName`), so no two entities can disagree about what a name is; only the
-  cap differs (60 for a Household and a Pocket). The contract's `maxLength: 255` is an outer bound that
-  counts padding. **A name may be unique among an entity's live rows** (a Pocket's is): a partial
+  cap differs (60 for a Household, a Pocket and a Category). The contract's `maxLength: 255` is an
+  outer bound that
+  counts padding. **A name may be unique among an entity's live rows** (a Pocket's and a Category's
+  are, a Category's
+  across both buckets): a partial
   unique index on `(household_id, lower(name)) WHERE deleted_at IS NULL`, so a deleted row releases its
   name and an inactive one keeps it. A clash is `409 NAME_TAKEN`, one entity-free code that every
   named entity shares. `lower()` follows the database's locale, so no fixture pins a non-ASCII fold.
@@ -182,8 +197,9 @@ with zoneinfo answers from it, so a case-insensitive filesystem (a Mac) also acc
   number at exactly four decimals, and negative only where it is a difference.
 - **Currency:** every monetary value carries its `currency` column even though the MVP UI is pinned to
   the Household's reporting currency. **The exception is the Household's plan** (#130, R11, PRD N3):
-  `households.expected_monthly_income` and the Budget's amounts (`monthly_budgets.monthly_budget`, and a
-  Category's allocation when those land) have no `currency` column and are in the Household's
+  `households.expected_monthly_income` and the Budget's amounts (`monthly_budgets.monthly_budget`
+  and
+  `allocations.allocation`) have no `currency` column and are in the Household's
   `reporting_currency`, because a plan is what reporting-currency spend is compared to. Changing
   `reporting_currency` relabels them and converts nothing.
 - **Dates:** `occurred_on` is a `date` (the Period Day). `captured_at` is `timestamptz`. Everything
@@ -193,8 +209,9 @@ with zoneinfo answers from it, so a case-insensitive filesystem (a Mac) also acc
   arithmetic; if the frontend also derives it, the two disagree at 03:59.
 - **Soft delete everywhere:** nullable `deleted_at`. Hard delete is not exposed. *A clarification
   (#130, R14):* the rule covers **anything that can be deleted**. A version log that has **no delete
-  operation** (a Budget is never removed, and a changed amount is a newer version, not a delete) carries
-  no `deleted_at`: a column nothing sets is a filter every read must remember. **Deactivating is not
+  operation** (a Budget is never removed, and a changed amount is a newer version, not a delete:
+  `budgets`, `monthly_budgets`, `allocations`) carries no `deleted_at`: a column nothing sets is a
+  filter every read must remember. **Deactivating is not
   a delete** (#121, R1): a row that history references is retired with an `active` boolean, changed by
   an ordinary merge `PATCH`. It stays visible and in the list (the client filters), keeps its name and
   keeps labelling what it labels. Only a delete gives up the name and disappears.
@@ -819,6 +836,14 @@ of 1 to 28, and a label's window. The `period` package's unit test reads it, and
 none of it. Handlers take their clock as a dependency (`budget.Deps.Now`, `time.Now` in production), so
 the backend's own tests assert exact dates; the conformance harness cannot pin a clock, so its cases
 build state from Postgres's own and match a date by `<re:...>`.
+
+**`contract/testdata/budget.json` pins the Budget's derived figures** (#130, PR 2): the Commitments
+Budget, Daily Pool and Unallocated for a Monthly Budget and a set of Categories (CONTEXT's worked
+case,
+over-allocation, Commitments above the Budget, a zero allocation, an inactive Category counted, a
+deleted one not, no Monthly Budget yet). The backend's budget tests read it row by row through
+`GET /budget` and keep no copy of the numbers. `trajectory.json` is untouched: `Calculate` takes the
+Daily Pool as an input, and these rows are where that pool comes from.
 
 ## 7. Migrations — correction to the Decisions draft
 

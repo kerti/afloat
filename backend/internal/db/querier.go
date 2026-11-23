@@ -11,6 +11,12 @@ import (
 )
 
 type Querier interface {
+	// The allocations in force on a day, for the Categories that are live, active or
+	// inactive, non-null only (a Category with none is absent). The day is the one
+	// budget.InForceDay works out, passed in: the as-of rule is written once, in Go.
+	// bucket rides along because the figures sum by it. The order follows the
+	// Category list's, so the wire is stable.
+	AllocationsAsOf(ctx context.Context, arg AllocationsAsOfParams) ([]AllocationsAsOfRow, error)
 	// Budgets (PRD S9, S12, S13). Tenant-scoped in SQL: every statement filters on
 	// the authenticated User's household_id, never anything the request supplied
 	// (BOOTSTRAP.md §4). year_month is the Budget Period's label, derived by the
@@ -23,16 +29,34 @@ type Querier interface {
 	// commits, then finds it gone and gets no row, so only one of them can found.
 	ClaimOnboardingHandshake(ctx context.Context, id string) (OnboardingHandshake, error)
 	ClearLoginAttempts(ctx context.Context, keys []string) error
-	// Carries the Monthly Budget into a Period being materialised (PRD S12): the
-	// latest version of the nearest EARLIER Period that has one, else of the nearest
-	// LATER one (reachable only after a period_start_day change re-labelled Today,
-	// #130 C3), else nothing, which is the Household's first Period. The copy is
-	// dated the Period's first day. The target is never its own source: the
-	// comparisons are strict, and the marker was just created in this transaction.
-	//
-	// The source choice is this one statement. A standing default (Q-17) would be
-	// consulted here, first, and no stored row would change.
+	// Carries every allocation's latest state from the source into the Period being
+	// materialised, dated the Period's first day: only the non-null ones (a Category
+	// whose latest row is "none" has nothing to carry), and only Categories that
+	// are not deleted, inactive ones included, so deactivating changes no figure
+	// (#130 C8). FOR SHARE on the Category rows it reads, so a delete (which takes
+	// FOR UPDATE on the row) and this copy cannot both succeed against one Category.
+	CopyAllocationsForward(ctx context.Context, arg CopyAllocationsForwardParams) (int64, error)
+	// Carries the Monthly Budget's latest version from the source into the Period
+	// being materialised, dated the Period's first day (PRD S12). Nothing when the
+	// source holds none.
 	CopyMonthlyBudgetForward(ctx context.Context, arg CopyMonthlyBudgetForwardParams) (int64, error)
+	// Where a Period being materialised copies from (PRD S12): the nearest EARLIER
+	// Period that holds a Monthly Budget or an allocation, else the nearest LATER
+	// one (reachable only after a period_start_day change re-labelled Today, #130
+	// C3), else no row (the HAVING: an aggregate would otherwise answer one NULL),
+	// which is the Household's first Period. A marker alone is
+	// not a source, and a Period whose allocations were all cleared still is (its
+	// latest state is "none"). The target is never its own source: the comparisons
+	// are strict, and the marker was just created in this transaction.
+	//
+	// This is the ONE statement that chooses a source, for the Monthly Budget and
+	// the allocations alike. A standing default (Q-17) would be consulted here,
+	// first, and no stored row would change.
+	CopySource(ctx context.Context, arg CopySourceParams) (string, error)
+	// ON CONFLICT (id) arbitrates the primary key only: a row back is a create, no
+	// row is the id already being held (see GetLiveCategory). A name clash is not
+	// arbitrated and still raises 23505 on categories_household_name_idx.
+	CreateCategory(ctx context.Context, arg CreateCategoryParams) (Category, error)
 	// Plain INSERT, not UpsertCredential: a founding never overwrites one.
 	CreateCredential(ctx context.Context, arg CreateCredentialParams) error
 	// Founding. Ids are minted by the server, UUIDv7 (BOOTSTRAP.md §4): founding is
@@ -65,6 +89,10 @@ type Querier interface {
 	// authenticate. A legitimate state, so this returning no rows is not an error.
 	GetCredentialByUserID(ctx context.Context, userID pgtype.UUID) (Credential, error)
 	GetHouseholdByID(ctx context.Context, id pgtype.UUID) (Household, error)
+	// The read-back of a create that found its id taken: a replay when the row is
+	// the caller's own live Category, and no row for anything else (another
+	// Household's, or a deleted one).
+	GetLiveCategory(ctx context.Context, arg GetLiveCategoryParams) (Category, error)
 	// A read, not a claim: it lets a request be refused (400, 403) without
 	// spending the handshake. The commit's own claim is ClaimOnboardingHandshake.
 	GetLiveOnboardingHandshake(ctx context.Context, id string) (OnboardingHandshake, error)
@@ -105,6 +133,14 @@ type Querier interface {
 	// transaction (see CopyMonthlyBudgetForward): a marker committed alone would be
 	// a Period that looks materialised and is empty.
 	InsertBudget(ctx context.Context, arg InsertBudgetParams) (string, error)
+	// Categories (PRD S8). Tenant-scoped in SQL: every statement filters on the
+	// authenticated User's household_id, never anything the request supplied
+	// (BOOTSTRAP.md §4). A Category carries no allocation: that is the Budget's
+	// (queries/budget.sql).
+	// Every Category not deleted, inactive ones included, the two buckets
+	// together. created_at then id: a rename or a deactivation must not reshuffle
+	// the list, and the order is independent of the database's collation.
+	ListCategories(ctx context.Context, householdID pgtype.UUID) ([]Category, error)
 	// Every version of the Period's Monthly Budget, oldest first. A Period holds at
 	// most one per day it was edited, so the list is short, and the as-of rule
 	// (budget.MonthlyBudgetAsOf) is one Go function over it rather than a second copy in SQL.
@@ -193,6 +229,12 @@ type Querier interface {
 	// only) is the race-free answer to "is it taken": a violation is EMAIL_TAKEN,
 	// and there is no lookup beforehand for it to race (BOOTSTRAP.md §5.1.1).
 	UpdateUserEmail(ctx context.Context, arg UpdateUserEmailParams) (User, error)
+	// One statement per field, keyed by the version's date and Category, so two
+	// writers of different Categories both land and a second change on the same
+	// Period Day overwrites the first. effective_on is the writer's Today. The
+	// Category must be the Household's own and live, checked and share-locked in the
+	// same statement: zero rows means it is not.
+	UpsertAllocation(ctx context.Context, arg UpsertAllocationParams) (int64, error)
 	UpsertCredential(ctx context.Context, arg UpsertCredentialParams) error
 	// One statement per field, keyed by the version's date, so two writers of
 	// different fields both land (BOOTSTRAP.md §4) and a second change on the same

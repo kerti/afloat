@@ -9,6 +9,12 @@ import (
 	decimal "github.com/shopspring/decimal"
 )
 
+type Budget struct {
+	HouseholdID pgtype.UUID
+	YearMonth   string
+	CreatedAt   pgtype.Timestamptz
+}
+
 type Credential struct {
 	UserID       pgtype.UUID
 	PasswordHash string
@@ -45,6 +51,14 @@ type LoginAttempt struct {
 	FailureCount int32
 	BackoffUntil pgtype.Timestamptz
 	UpdatedAt    pgtype.Timestamptz
+}
+
+type MonthlyBudget struct {
+	HouseholdID   pgtype.UUID
+	YearMonth     string
+	EffectiveOn   pgtype.Date
+	MonthlyBudget decimal.Decimal
+	UpdatedAt     pgtype.Timestamptz
 }
 
 type OnboardingHandshake struct {

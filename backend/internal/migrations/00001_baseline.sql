@@ -2,9 +2,10 @@
 -- domain tables as their slices land in step 9, edited in place until the
 -- freeze (BOOTSTRAP.md §7.1).
 -- Households, Users, credentials, sessions, onboarding handshakes, invitations,
--- login backoff, Pockets. The rest of the domain (categories, budgets,
--- expenses) lands with its own slice; a dev database already at version 1 does
--- not gain a table added here, so run `make db-reset` after pulling one.
+-- login backoff, Pockets, Budgets. The rest of the domain (categories,
+-- allocations, expenses) lands with its own slice; a dev database already at
+-- version 1 does not gain a table added here, so run `make db-reset` after
+-- pulling one.
 --
 -- Canonical and hand-written: the binary embeds it, goose applies it, and sqlc
 -- reads its Up section as the schema (BOOTSTRAP.md §7).
@@ -17,7 +18,12 @@
 --   * Soft delete on Household-scoped domain data. Instance-local auth state
 --     (credentials, sessions, onboarding_handshakes, invitations,
 --     login_attempts) hard-deletes:
---     revocation IS the row delete.
+--     revocation IS the row delete. A version log no operation deletes from
+--     (budgets, monthly_budgets) has no deleted_at: a column nothing sets is
+--     a filter every read must remember.
+--   * Rows only the server creates, never addressed by id on the wire (the
+--     Budget tables), have composite natural keys and no id column. The first
+--     rule above is about rows a client creates.
 
 -- +goose Up
 -- ---------------------------------------------------------------------------
@@ -269,9 +275,51 @@ CREATE UNIQUE INDEX pockets_household_name_idx
     ON pockets (household_id, lower(pocket_display_name))
     WHERE deleted_at IS NULL;
 
+-- ---------------------------------------------------------------------------
+-- budgets, monthly_budgets
+-- ---------------------------------------------------------------------------
+
+-- One Budget per Household per Budget Period (CONTEXT, PRD S12, S13). The row
+-- is the materialisation marker: it commits in the same transaction as whatever
+-- is copied into the Period, so a Period that looks materialised never is
+-- empty. year_month is the YYYY-MM of the calendar month in which the Period
+-- starts; the window is derived from households.period_start_day each time and
+-- stored nowhere (#113 D1). The server creates these; no request names one, so
+-- there is no id and no deleted_at (BOOTSTRAP.md §4).
+CREATE TABLE budgets (
+    household_id uuid NOT NULL REFERENCES households (id),
+    year_month   text NOT NULL,
+    created_at   timestamptz NOT NULL DEFAULT now(),
+
+    PRIMARY KEY (household_id, year_month),
+    CONSTRAINT budgets_year_month_shape
+        CHECK (year_month ~ '^[0-9]{4}-(0[1-9]|1[0-2])$')
+);
+
+-- The Monthly Budget, as a version log within its Period (CONTEXT §Mid-period
+-- Budget changes). The value on a day is the row with the greatest effective_on
+-- on or before it. A write is an upsert on the key, so a second change on the
+-- same Period Day overwrites the first. No currency column: the amount is in the
+-- Household's reporting_currency, as expected_monthly_income is (PRD N3).
+CREATE TABLE monthly_budgets (
+    household_id   uuid NOT NULL,
+    year_month     text NOT NULL,
+    effective_on   date NOT NULL,
+    monthly_budget numeric(20,4) NOT NULL,
+    updated_at     timestamptz NOT NULL DEFAULT now(),
+
+    PRIMARY KEY (household_id, year_month, effective_on),
+    FOREIGN KEY (household_id, year_month) REFERENCES budgets (household_id, year_month),
+    -- A plan is not a refund: zero is a real answer, negative is not.
+    CONSTRAINT monthly_budgets_monthly_budget_non_negative
+        CHECK (monthly_budget >= 0)
+);
+
 -- +goose Down
 -- Reverse order of creation, so foreign keys drop before their targets.
 
+DROP TABLE IF EXISTS monthly_budgets;
+DROP TABLE IF EXISTS budgets;
 DROP TABLE IF EXISTS pockets;
 DROP TABLE IF EXISTS login_attempts;
 DROP TABLE IF EXISTS invitations;

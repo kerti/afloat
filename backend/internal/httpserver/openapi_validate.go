@@ -108,10 +108,8 @@ func strictJSONBodyDecoder(body io.Reader, _ http.Header, _ *openapi3.SchemaRef,
 	return value, nil
 }
 
-// openapiRequestValidator builds the middleware from the embedded spec
-// (api.GetSpec, generated via oapi-codegen.yaml's embedded-spec: true —
-// never hand-patch api.gen.go to add this; the generator config already
-// owns it).
+// openapiRequestValidator builds the middleware from the embedded contract
+// (api.GetSpec, internal/api/spec.go).
 //
 // AuthenticationFunc is a no-op: the contract's `security` is enforced by
 // sessionRequired (session_required.go), which runs ahead of this middleware
@@ -128,9 +126,9 @@ func openapiRequestValidator() func(http.Handler) http.Handler {
 
 	spec, err := api.GetSpec()
 	if err != nil {
-		// Only reachable if the embedded spec itself is corrupt, which means
-		// oapi-codegen's own generation was broken — every other generated
-		// type would be suspect too. Nothing about this process is trustworthy.
+		// Only reachable if the embedded contract itself is corrupt: the same
+		// file just generated every type in package api, so nothing about this
+		// build is trustworthy.
 		panic("httpserver: load embedded openapi spec: " + err.Error())
 	}
 	withoutSecurityRequirements(spec)

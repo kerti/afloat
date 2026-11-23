@@ -12,6 +12,8 @@ type ChangePasswordBody = components["schemas"]["ChangePasswordRequest"];
 type Pocket = components["schemas"]["Pocket"];
 type CreatePocketBody = components["schemas"]["CreatePocketRequest"];
 type UpdatePocketBody = components["schemas"]["UpdatePocketRequest"];
+type Budget = components["schemas"]["Budget"];
+type UpdateBudgetBody = components["schemas"]["UpdateBudgetRequest"];
 type ChoiceBody = components["schemas"]["OnboardingChoiceRequest"];
 
 // The handshake a registration opens, as the fake server holds it.
@@ -42,6 +44,10 @@ export type State = {
   deletedPockets?: Pocket[];
   pocketDeletes?: string[];
   pocketRestores?: string[];
+  // The fake server's Budget for the current Period (absent: a first read
+  // answers an empty one), and every PATCH /budget body, in order.
+  budget?: Budget;
+  budgetPatches?: UpdateBudgetBody[];
   // The one password the fake server accepts as "current". Defaults to the
   // login fixture's.
   password?: string;
@@ -64,6 +70,13 @@ export const alice: Me = {
     day_starts_at: "04:00",
     allowance_mode: "adaptive",
   },
+};
+
+// A Household's first read of a Period: a window and nothing planned yet.
+export const emptyBudget: Budget = {
+  period: { year_month: "2026-11", starts_on: "2026-11-01", ends_on: "2026-11-30" },
+  allocations: [],
+  commitments_budget: "0.0000",
 };
 
 export const envelope = (code: ErrorBody["code"], args?: ErrorBody["args"]): ErrorBody =>
@@ -256,6 +269,23 @@ export function defaultHandlers(state: State = { signedIn: false, me: alice }) {
       state.deletedPockets = state.deletedPockets!.filter((p) => p !== gone);
       list.push(gone);
       return HttpResponse.json(gone);
+    }),
+    http.get("/api/budget", () => {
+      if (!state.signedIn) return HttpResponse.json(envelope("UNAUTHORIZED"), { status: 401 });
+      return HttpResponse.json((state.budget ??= emptyBudget));
+    }),
+    http.patch("/api/budget", async ({ request }) => {
+      if (!state.signedIn) return HttpResponse.json(envelope("UNAUTHORIZED"), { status: 401 });
+      const body = (await request.json()) as UpdateBudgetBody;
+      (state.budgetPatches ??= []).push(body);
+      const held = (state.budget ??= emptyBudget);
+      if (body.monthly_budget !== undefined) {
+        // As the server: the amount comes back at exactly four decimals.
+        const [int = "0", frac = ""] = body.monthly_budget.split(".");
+        const amount = `${int}.${frac.padEnd(4, "0")}`;
+        state.budget = { ...held, monthly_budget: amount, daily_pool: amount, unallocated: amount };
+      }
+      return HttpResponse.json(state.budget);
     }),
     http.post("/api/auth/logout", () => {
       state.signedIn = false;

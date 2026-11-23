@@ -247,3 +247,49 @@ func TestSentBodyExpandsThePad(t *testing.T) {
 		t.Fatalf("with no pad, SentBody() = %q, want the body verbatim", got)
 	}
 }
+
+// A leaf of the form "<re:...>" matches by pattern, so a case can assert an
+// answer that carries the server's own date without leaving the rest of the
+// body unchecked.
+func TestMatchBody(t *testing.T) {
+	date := "<re:[0-9]{4}-[0-9]{2}-[0-9]{2}>"
+	for _, tc := range []struct {
+		name       string
+		want, have any
+		ok         bool
+	}{
+		{"equal leaves", map[string]any{"a": "1"}, map[string]any{"a": "1"}, true},
+		{"a different leaf", map[string]any{"a": "1"}, map[string]any{"a": "2"}, false},
+		{"a pattern that matches", map[string]any{"d": date}, map[string]any{"d": "2026-11-23"}, true},
+		{"a pattern is anchored at the start", map[string]any{"d": date}, map[string]any{"d": "x2026-11-23"}, false},
+		{"a pattern is anchored at the end", map[string]any{"d": date}, map[string]any{"d": "2026-11-23x"}, false},
+		{"a pattern against a number", map[string]any{"d": date}, map[string]any{"d": 20261123.0}, false},
+		{"a pattern against null", map[string]any{"d": date}, map[string]any{"d": nil}, false},
+		{"an alternation is anchored as a whole", map[string]any{"d": "<re:a|b>"}, map[string]any{"d": "ab"}, false},
+		{"a key the answer has and the case does not name", map[string]any{"a": "1"}, map[string]any{"a": "1", "b": "2"}, false},
+		{"a key the case names and the answer lacks", map[string]any{"a": "1", "b": "2"}, map[string]any{"a": "1"}, false},
+		{"nested", map[string]any{"p": map[string]any{"d": date}}, map[string]any{"p": map[string]any{"d": "2026-01-01"}}, true},
+		{"an empty array is exactly empty", map[string]any{"l": []any{}}, map[string]any{"l": []any{}}, true},
+		{"an array of the wrong length", map[string]any{"l": []any{}}, map[string]any{"l": []any{"x"}}, false},
+		{"null is not an empty array", map[string]any{"l": []any{}}, map[string]any{"l": nil}, false},
+		{"a pattern inside an array", []any{date}, []any{"2026-11-23"}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := conformance.MatchBody(tc.want, tc.have)
+			if tc.ok && err != nil {
+				t.Errorf("MatchBody = %v, want a match", err)
+			}
+			if !tc.ok && err == nil {
+				t.Error("MatchBody matched, want a mismatch")
+			}
+		})
+	}
+}
+
+func TestLoadRejectsAPlaceholderThatIsNotARegexp(t *testing.T) {
+	dir := writeCases(t, "- name: x\n  request: {method: GET, path: /health}\n  expect: {status: 200, body_json: {a: \"<re:[>\"}}\n")
+	_, err := conformance.Load(dir)
+	if err == nil || !strings.Contains(err.Error(), "body_json") {
+		t.Fatalf("want a body_json error, got %v", err)
+	}
+}

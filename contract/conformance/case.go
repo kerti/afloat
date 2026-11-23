@@ -131,7 +131,11 @@ type Expect struct {
 	Headers map[string]string `yaml:"headers"`
 
 	// BodyJSON is compared as parsed JSON, so key order and whitespace do not
-	// matter. Use BodyRaw when the bytes themselves are the assertion.
+	// matter. Use BodyRaw when the bytes themselves are the assertion. A string
+	// of the form "<re:REGEXP>" matches any string the whole of which REGEXP
+	// matches, for the one thing no case can know: a date derived from the
+	// server's clock (see MatchBody). Everything else is compared exactly, so a
+	// key the case does not name is still a failure.
 	BodyJSON any    `yaml:"body_json"`
 	BodyRaw  string `yaml:"body_raw"`
 
@@ -273,6 +277,9 @@ func (c *Case) validate() error {
 	if c.Expect.BodyJSON != nil && c.Expect.BodyRaw != "" {
 		return fmt.Errorf("%s: expect.body_json and expect.body_raw are mutually exclusive", c.Name)
 	}
+	if err := validateBodyPlaceholders(c.Expect.BodyJSON); err != nil {
+		return fmt.Errorf("%s: expect.body_json: %w", c.Name, err)
+	}
 	if c.Expect.BodyEmpty && (c.Expect.BodyJSON != nil || c.Expect.BodyRaw != "") {
 		return fmt.Errorf("%s: expect.body_empty cannot be combined with a body assertion", c.Name)
 	}
@@ -333,6 +340,94 @@ func (c *Case) validate() error {
 		}
 		if r.Rows == nil {
 			return fmt.Errorf("%s: expect.rows[%d].rows is required; write `rows: []` to assert none", c.Name, i)
+		}
+	}
+	return nil
+}
+
+// bodyPlaceholder is the "<re:...>" spelling of a leaf that matches a pattern
+// and not a value.
+var bodyPlaceholder = regexp.MustCompile(`^<re:(.*)>$`)
+
+// MatchBody compares an answer's parsed JSON with a case's expectation: objects
+// by exactly their keys, arrays by length and position, and every leaf by value,
+// except that an expected string of the form "<re:REGEXP>" matches a string the
+// whole of which REGEXP matches. It returns nil on a match, else why not.
+func MatchBody(want, have any) error {
+	switch w := want.(type) {
+	case map[string]any:
+		h, ok := have.(map[string]any)
+		if !ok {
+			return fmt.Errorf("want an object, got %v", have)
+		}
+		for k := range h {
+			if _, named := w[k]; !named {
+				return fmt.Errorf("unexpected key %q", k)
+			}
+		}
+		for k, wv := range w {
+			hv, present := h[k]
+			if !present {
+				return fmt.Errorf("missing key %q", k)
+			}
+			if err := MatchBody(wv, hv); err != nil {
+				return fmt.Errorf("%s: %w", k, err)
+			}
+		}
+		return nil
+	case []any:
+		h, ok := have.([]any)
+		if !ok {
+			return fmt.Errorf("want an array, got %v", have)
+		}
+		if len(h) != len(w) {
+			return fmt.Errorf("want %d items, got %d", len(w), len(h))
+		}
+		for i := range w {
+			if err := MatchBody(w[i], h[i]); err != nil {
+				return fmt.Errorf("[%d]: %w", i, err)
+			}
+		}
+		return nil
+	case string:
+		if m := bodyPlaceholder.FindStringSubmatch(w); m != nil {
+			hs, ok := have.(string)
+			if !ok {
+				return fmt.Errorf("want a string matching %s, got %v", m[1], have)
+			}
+			if !regexp.MustCompile(`^(?:` + m[1] + `)$`).MatchString(hs) {
+				return fmt.Errorf("%q does not match %s", hs, m[1])
+			}
+			return nil
+		}
+	}
+	if !reflect.DeepEqual(want, have) {
+		return fmt.Errorf("want %v, got %v", want, have)
+	}
+	return nil
+}
+
+// validateBodyPlaceholders refuses an expectation holding a "<re:...>" whose
+// regexp does not compile, at load time rather than in the middle of a run.
+func validateBodyPlaceholders(v any) error {
+	switch t := v.(type) {
+	case map[string]any:
+		for _, e := range t {
+			if err := validateBodyPlaceholders(e); err != nil {
+				return err
+			}
+		}
+	case []any:
+		for _, e := range t {
+			if err := validateBodyPlaceholders(e); err != nil {
+				return err
+			}
+		}
+	case string:
+		if m := bodyPlaceholder.FindStringSubmatch(t); m != nil {
+			if _, err := regexp.Compile(m[1]); err != nil {
+				return fmt.Errorf("%q: %w", t, err)
+			}
 		}
 	}
 	return nil

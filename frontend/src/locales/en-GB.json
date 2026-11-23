@@ -11,7 +11,8 @@
     "password": "Password",
     "userDisplayName": "Your name (optional)",
     "pocketDisplayName": "Pocket name",
-    "householdDisplayName": "Household name"
+    "householdDisplayName": "Household name",
+    "monthlyBudget": "Monthly Budget"
   },
   "fieldNames": {
     "reporting_currency": "reporting currency",
@@ -24,7 +25,8 @@
     "time_zone": "time zone",
     "locale": "language",
     "current_password": "current password",
-    "new_password": "new password"
+    "new_password": "new password",
+    "monthly_budget": "Monthly Budget"
   },
   "login": {
     "title": "Sign in",
@@ -40,7 +42,8 @@
     "comingSoon": "Your dashboard will appear here.",
     "settingsLink": "Household settings",
     "userSettingsLink": "Your settings",
-    "pocketsLink": "Pockets"
+    "pocketsLink": "Pockets",
+    "budgetLink": "Budget"
   },
   "pwa": {
     "updateReady": "A new version of Afloat is ready.",
@@ -170,5 +173,13 @@
   },
   "shell": {
     "signOut": "Sign out"
+  },
+  "budget": {
+    "title": "Budget",
+    "window": "{{start}} to {{end}}",
+    "empty": "Set your Monthly Budget to see what is left to spend.",
+    "commitmentsBudget": "Commitments Budget",
+    "dailyPool": "Daily Pool",
+    "unallocated": "Unallocated"
   }
 }

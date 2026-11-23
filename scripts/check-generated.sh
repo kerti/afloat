@@ -48,6 +48,11 @@ if diff -q "$tmp/api.gen.go" backend/internal/api/api.gen.go >/dev/null 2>&1; th
 else
   report "backend/internal/api (oapi-codegen)" "stale or hand-edited; run make gen-oapi"
 fi
+if cmp -s contract/openapi.yaml backend/internal/api/openapi.yaml; then
+  report "backend/internal/api/openapi.yaml (embedded contract)" ok
+else
+  report "backend/internal/api/openapi.yaml (embedded contract)" "stale or hand-edited; run make gen-oapi"
+fi
 
 # --- migrations + queries -> typed queries --------------------------------
 # sqlc takes its output path from the config file, so the check runs a copy with

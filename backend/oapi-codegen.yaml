@@ -11,7 +11,7 @@ generate:
   chi-server: true
   strict-server: true
   models: true
-  embedded-spec: true
+  embedded-spec: false
 output-options:
   skip-prune: true
   # format: email is checked once, by the spec-validating middleware

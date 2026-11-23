@@ -119,7 +119,8 @@ doctor:
 # hand-edited; check regenerates and diffs.
 gen-oapi:
 	@cd backend && go tool oapi-codegen -config oapi-codegen.yaml ../contract/openapi.yaml
-	@echo 'ok backend/internal/api/api.gen.go'
+	@cp contract/openapi.yaml backend/internal/api/openapi.yaml
+	@echo 'ok backend/internal/api/api.gen.go, backend/internal/api/openapi.yaml'
 
 gen-sqlc:
 	@cd backend && go tool sqlc generate

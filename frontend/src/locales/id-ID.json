@@ -11,7 +11,8 @@
     "password": "Kata sandi",
     "userDisplayName": "Nama Anda (opsional)",
     "pocketDisplayName": "Nama kantong",
-    "householdDisplayName": "Nama rumah tangga"
+    "householdDisplayName": "Nama rumah tangga",
+    "monthlyBudget": "Anggaran bulanan"
   },
   "fieldNames": {
     "reporting_currency": "mata uang pelaporan",
@@ -24,7 +25,8 @@
     "time_zone": "zona waktu",
     "locale": "bahasa",
     "current_password": "kata sandi saat ini",
-    "new_password": "kata sandi baru"
+    "new_password": "kata sandi baru",
+    "monthly_budget": "anggaran bulanan"
   },
   "login": {
     "title": "Masuk",
@@ -40,7 +42,8 @@
     "comingSoon": "Dasbor Anda akan muncul di sini.",
     "settingsLink": "Pengaturan rumah tangga",
     "userSettingsLink": "Pengaturan Anda",
-    "pocketsLink": "Kantong"
+    "pocketsLink": "Kantong",
+    "budgetLink": "Anggaran"
   },
   "pwa": {
     "updateReady": "Versi baru Afloat sudah siap.",
@@ -168,5 +171,13 @@
   },
   "shell": {
     "signOut": "Keluar"
+  },
+  "budget": {
+    "title": "Anggaran",
+    "window": "{{start}} sampai {{end}}",
+    "empty": "Atur anggaran bulanan Anda untuk melihat sisa yang bisa dibelanjakan.",
+    "commitmentsBudget": "Anggaran komitmen",
+    "dailyPool": "Dana harian",
+    "unallocated": "Belum dialokasikan"
   }
 }

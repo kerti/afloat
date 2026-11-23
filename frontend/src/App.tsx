@@ -4,6 +4,7 @@ import { RequireSession } from "@/components/RequireSession";
 import { Toaster } from "@/components/ui/sonner";
 import { UpdatePrompt } from "@/components/UpdatePrompt";
 import { routes } from "@/lib/routes";
+import { BudgetPage } from "@/pages/BudgetPage";
 import { HomePage } from "@/pages/HomePage";
 import { HouseholdSettingsPage } from "@/pages/HouseholdSettingsPage";
 import { LoginPage } from "@/pages/LoginPage";
@@ -34,6 +35,10 @@ export function App() {
         <Route
           path={routes.pockets}
           element={<RequireSession>{() => <PocketsPage />}</RequireSession>}
+        />
+        <Route
+          path={routes.budget}
+          element={<RequireSession>{(me) => <BudgetPage me={me} />}</RequireSession>}
         />
         <Route path="*" element={<Navigate to={routes.home} replace />} />
       </Routes>

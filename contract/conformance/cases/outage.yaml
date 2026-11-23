@@ -169,3 +169,53 @@
           SELECT (SELECT count(*) FROM households)::int AS households, (SELECT count(*) FROM users)::int AS users,
                  (SELECT count(*) FROM sessions)::int AS sessions, (SELECT count(*) FROM onboarding_handshakes)::int AS handshakes
         rows: [{households: 1, users: 3, sessions: 0, handshakes: 1}]
+
+# The session is unreadable, so the answer is 500 and the cookie is kept, as
+# for every route that needs one (#27). The Budget's own failures (a Period that
+# will not materialise whole) are the backend's suite's.
+- name: outage - budget with a session is 500 and writes nothing
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+    - outage: true
+  request:
+    method: GET
+    path: /budget
+  expect:
+    status: 500
+    body_json: {code: INTERNAL}
+    cookies: {}
+    rows:
+      - sql: SELECT (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM monthly_budgets)::int AS versions
+        rows: [{budgets: 0, versions: 0}]
+
+- name: outage - a budget change with a session is 500 and writes nothing
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+    - outage: true
+  request:
+    method: PATCH
+    path: /budget
+    headers:
+      Content-Type: application/json
+    body: '{"monthly_budget":"9000000"}'
+  expect:
+    status: 500
+    body_json: {code: INTERNAL}
+    cookies: {}
+    rows:
+      - sql: SELECT (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM monthly_budgets)::int AS versions
+        rows: [{budgets: 0, versions: 0}]

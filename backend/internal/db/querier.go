@@ -24,6 +24,12 @@ type Querier interface {
 	// Whether the Period has been materialised. A request that finds it writes
 	// nothing, so only the first request after a boundary pays for the copy.
 	BudgetExists(ctx context.Context, arg BudgetExistsParams) (bool, error)
+	// The in-use guard (#130 C8, R9): does the Category hold an allocation, a
+	// non-null amount, in any Budget Period but the current one? Any row counts, not
+	// only the latest of a Period: a Category an earlier Period held an amount for
+	// is part of that Period's record, even if a later version cleared it. Run
+	// after LockCategory, in the same transaction, and never inside the UPDATE.
+	CategoryHeldElsewhere(ctx context.Context, arg CategoryHeldElsewhereParams) (bool, error)
 	// The commit's claim. Run inside the founding transaction: a second concurrent
 	// commit on the same handshake blocks on this row's lock until the first
 	// commits, then finds it gone and gets no row, so only one of them can found.
@@ -35,6 +41,14 @@ type Querier interface {
 	// are not deleted, inactive ones included, so deactivating changes no figure
 	// (#130 C8). FOR SHARE on the Category rows it reads, so a delete (which takes
 	// FOR UPDATE on the row) and this copy cannot both succeed against one Category.
+	//
+	// With a category_id it carries that Category alone, which is what a restore does
+	// (the source then comes from CopySource with the same category_id): the same
+	// rule, so there is one place that decides what a Period starts with. A Category
+	// that already has ANY row in the Period is left alone (nothing to carry: it was
+	// deleted and restored within the Period, or the copy already took it), and ON
+	// CONFLICT DO NOTHING on the natural key covers a copy and a restore that meet on
+	// the same first-day row, so the second writes nothing and fails nothing.
 	CopyAllocationsForward(ctx context.Context, arg CopyAllocationsForwardParams) (int64, error)
 	// Carries the Monthly Budget's latest version from the source into the Period
 	// being materialised, dated the Period's first day (PRD S12). Nothing when the
@@ -49,9 +63,16 @@ type Querier interface {
 	// latest state is "none"). The target is never its own source: the comparisons
 	// are strict, and the marker was just created in this transaction.
 	//
-	// This is the ONE statement that chooses a source, for the Monthly Budget and
-	// the allocations alike. A standing default (Q-17) would be consulted here,
-	// first, and no stored row would change.
+	// With a category_id the question is the same for ONE Category (a restore carrying
+	// a Category the Period's copy skipped while it was deleted, #130 C8): the nearest
+	// earlier Period that holds an allocation row FOR IT, a Monthly Budget or another
+	// Category's row not counting. The Period's copy may have come from a Period that
+	// never held the Category (it was deleted there), and "as if it was never deleted"
+	// is the Period that did.
+	//
+	// This is the ONE statement that chooses a source, for the Monthly Budget and the
+	// allocations alike, whole Period or one Category. A standing default (Q-17) or an
+	// annual plan (Q-20) would be consulted here, first, and no stored row would change.
 	CopySource(ctx context.Context, arg CopySourceParams) (string, error)
 	// ON CONFLICT (id) arbitrates the primary key only: a row back is a create, no
 	// row is the id already being held (see GetLiveCategory). A name clash is not
@@ -154,12 +175,32 @@ type Querier interface {
 	// rename or a deactivation must not reshuffle the list, and the order is
 	// independent of the database's collation.
 	ListPockets(ctx context.Context, householdID pgtype.UUID) ([]Pocket, error)
+	// The first statement of a delete, in the delete's own transaction: it takes the
+	// Category's row lock (FOR UPDATE, which conflicts with the FOR SHARE every
+	// allocation write holds, and with the key-share an allocation insert takes) and
+	// answers whether the row is deleted already. The guard that follows
+	// (CategoryHeldElsewhere) must be a SEPARATE, LATER statement: under READ
+	// COMMITTED a statement's snapshot is taken when it starts, so a guard folded
+	// into the UPDATE's WHERE would have been evaluated before the lock wait ended
+	// and would not see the allocation committed during it (BOOTSTRAP.md §4, #130
+	// C8). Another Household's or an unknown id is no row. This is the one place
+	// that reads a deleted Category on purpose.
+	LockCategory(ctx context.Context, arg LockCategoryParams) (pgtype.Timestamptz, error)
 	// Readiness probe for GET /health. A round-trip through the pool proves more
 	// than pgx's own Ping: it takes a connection from the pool, executes, and scans,
 	// which is the path every real query takes. A pool that is exhausted or pointed
 	// at a database the role cannot read fails here and passes a bare Ping.
 	Ping(ctx context.Context) (int32, error)
 	RecordLoginFailure(ctx context.Context, arg RecordLoginFailureParams) error
+	// The Undo of SoftDeleteCategory, as RestorePocket: clears deleted_at and
+	// returns the row, active as it was. Idempotent (a live Category is a row and
+	// comes back unchanged). Another Household's or an unknown id is no row.
+	// Re-entering the partial unique name index is what a held name trips: 23505 on
+	// categories_household_name_idx, answered NAME_TAKEN with the row still deleted,
+	// decided by the index and never by a lookup. This statement writes no
+	// allocation: the handler carries the Category forward after it, in the same
+	// transaction (budget.CarryCategoryForward).
+	RestoreCategory(ctx context.Context, arg RestoreCategoryParams) (Category, error)
 	// The Undo of SoftDeletePocket: clears deleted_at and returns the row, active
 	// as it was. Idempotent: a Pocket that is not deleted is a row and comes back
 	// unchanged (updated_at moves only when this statement restored). A row that is
@@ -169,6 +210,12 @@ type Querier interface {
 	// lookup, decides it, so two concurrent restores into one name cannot both
 	// win and cannot 500.
 	RestorePocket(ctx context.Context, arg RestorePocketParams) (Pocket, error)
+	// A soft delete (BOOTSTRAP.md §4), as SoftDeletePocket: the row stays, the first
+	// deleted_at is kept, and updated_at moves only for the statement that did the
+	// work. Called only after LockCategory and a clear guard. It touches no
+	// allocation: a delete drops the Category out of every figure because reads join
+	// live Categories, and a restore brings the figures back exactly.
+	SoftDeleteCategory(ctx context.Context, arg SoftDeleteCategoryParams) (int64, error)
 	// A soft delete (BOOTSTRAP.md §4): the row stays. Idempotent on the caller's own
 	// Pocket and keeping the FIRST deletion instant, in one statement: coalesce
 	// leaves an existing deleted_at alone, and updated_at moves only when this

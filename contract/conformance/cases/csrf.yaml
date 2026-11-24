@@ -809,3 +809,145 @@
     rows:
       - sql: SELECT (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM allocations)::int AS allocations
         rows: [{budgets: 0, allocations: 0}]
+
+# DELETE and restore of a Category (#130, PR 4): a cross-site page must not be able
+# to delete or restore one. The guard answers before the session and the binder, so
+# a refused request deletes and restores nothing, and an id that would not bind, or a
+# request with no session, is refused first.
+
+- name: csrf - a cross-site category delete is blocked and the Category is not deleted
+  issue: "130"
+  given:
+    - sql: INSERT INTO categories (id, household_id, category_display_name, bucket) VALUES ('0192f0a0-0000-7000-8003-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'Rent', 'commitment')
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: DELETE
+    path: /categories/0192f0a0-0000-7000-8003-000000000001
+    headers:
+      Sec-Fetch-Site: cross-site
+  expect:
+    status: 403
+    body_json: {code: CROSS_SITE_REQUEST_BLOCKED}
+    cookies: {}
+    rows:
+      - sql: SELECT category_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM categories
+        rows: [{name: Rent, active: true, deleted: false}]
+
+- name: csrf - a foreign Origin on a category delete is blocked and the Category is not deleted
+  issue: "130"
+  given:
+    - sql: INSERT INTO categories (id, household_id, category_display_name, bucket) VALUES ('0192f0a0-0000-7000-8003-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'Rent', 'commitment')
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: DELETE
+    path: /categories/0192f0a0-0000-7000-8003-000000000001
+    headers:
+      Origin: https://evil.example
+  expect:
+    status: 403
+    body_json: {code: CROSS_SITE_REQUEST_BLOCKED}
+    cookies: {}
+    rows:
+      - sql: SELECT category_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM categories
+        rows: [{name: Rent, active: true, deleted: false}]
+
+- name: csrf - a foreign Origin on a category delete with a malformed id is blocked before the binder
+  issue: "130"
+  given:
+    - sql: INSERT INTO categories (id, household_id, category_display_name, bucket) VALUES ('0192f0a0-0000-7000-8003-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'Rent', 'commitment')
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: DELETE
+    path: /categories/not-a-uuid
+    headers:
+      Origin: https://evil.example
+  expect:
+    status: 403
+    body_json: {code: CROSS_SITE_REQUEST_BLOCKED}
+    cookies: {}
+    rows:
+      - sql: SELECT category_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM categories
+        rows: [{name: Rent, active: true, deleted: false}]
+
+- name: csrf - a cross-site category restore is blocked and the Category stays deleted
+  issue: "130"
+  given:
+    - sql: INSERT INTO categories (id, household_id, category_display_name, bucket, deleted_at) VALUES ('0192f0a0-0000-7000-8003-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'Rent', 'commitment', now())
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories/0192f0a0-0000-7000-8003-000000000001/restore
+    headers:
+      Sec-Fetch-Site: cross-site
+  expect:
+    status: 403
+    body_json: {code: CROSS_SITE_REQUEST_BLOCKED}
+    cookies: {}
+    rows:
+      - sql: SELECT category_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM categories
+        rows: [{name: Rent, active: true, deleted: true}]
+
+- name: csrf - a foreign Origin on a category restore is blocked and the Category stays deleted
+  issue: "130"
+  given:
+    - sql: INSERT INTO categories (id, household_id, category_display_name, bucket, deleted_at) VALUES ('0192f0a0-0000-7000-8003-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'Rent', 'commitment', now())
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories/0192f0a0-0000-7000-8003-000000000001/restore
+    headers:
+      Origin: https://evil.example
+  expect:
+    status: 403
+    body_json: {code: CROSS_SITE_REQUEST_BLOCKED}
+    cookies: {}
+    rows:
+      - sql: SELECT category_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM categories
+        rows: [{name: Rent, active: true, deleted: true}]
+
+- name: csrf - a cross-site category delete with no session is blocked, not unauthorized
+  issue: "130"
+  given:
+    - sql: INSERT INTO categories (id, household_id, category_display_name, bucket) VALUES ('0192f0a0-0000-7000-8003-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'Rent', 'commitment')
+  request:
+    method: DELETE
+    path: /categories/0192f0a0-0000-7000-8003-000000000001
+    headers:
+      Sec-Fetch-Site: cross-site
+  expect:
+    status: 403
+    body_json: {code: CROSS_SITE_REQUEST_BLOCKED}
+    cookies: {}
+    rows:
+      - sql: SELECT category_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM categories
+        rows: [{name: Rent, active: true, deleted: false}]

@@ -92,6 +92,16 @@ is never cleared (a Daily Category's can be: "none" is a value too). Changing on
 read. A Commitment's allocation is part of the Commitments Budget and so moves the Daily Pool; a Daily
 Category's moves only Unallocated.
 
+**Deleting a Category** is soft and is the Undo-able act: it takes the Category out of every figure of the
+current Period at once, touches no allocation row, and a restore returns the figures exactly. It is
+refused (`CATEGORY_IN_USE`) while any **other** Period holds an allocation for the Category, because that
+Period's Budget is a record; the current Period's own allocation never blocks. A Category that cannot be
+deleted is **deactivated**, which changes no figure. **Restoring** is "as if it was never deleted": within the Period it was
+deleted in the figures come back exactly; after a following Period was first read (its carry-forward
+skipped the Category) the restore gives the Category what that carry-forward would have, its latest
+state from the nearest earlier Period that holds an allocation for it, dated the current Period's first
+day. A Daily Category whose latest state is "none", or that never had one, comes back with none.
+
 > **Cross-app note:** Balances reserves **Category** for *Income* categories and **Tag** for
 > user-defined grouping labels. Afloat's Category is a *spending* bucket. The two apps own separate
 > vocabularies; the collision is documented rather than resolved. See §Flagged ambiguities.

@@ -96,7 +96,11 @@ FROM (SELECT DISTINCT ON (s.category_id) s.category_id, s.allocation
       ORDER BY s.category_id, s.effective_on DESC) a
 JOIN categories c ON c.id = a.category_id AND c.household_id = $3 AND c.deleted_at IS NULL
 WHERE a.allocation IS NOT NULL
+  AND ($5::uuid IS NULL OR c.id = $5::uuid)
+  AND NOT EXISTS (SELECT 1 FROM allocations e
+                  WHERE e.household_id = c.household_id AND e.year_month = $1 AND e.category_id = c.id)
 FOR SHARE OF c
+ON CONFLICT (household_id, year_month, effective_on, category_id) DO NOTHING
 `
 
 type CopyAllocationsForwardParams struct {
@@ -104,6 +108,7 @@ type CopyAllocationsForwardParams struct {
 	EffectiveOn pgtype.Date
 	HouseholdID pgtype.UUID
 	Source      string
+	CategoryID  pgtype.UUID
 }
 
 // Carries every allocation's latest state from the source into the Period being
@@ -112,12 +117,21 @@ type CopyAllocationsForwardParams struct {
 // are not deleted, inactive ones included, so deactivating changes no figure
 // (#130 C8). FOR SHARE on the Category rows it reads, so a delete (which takes
 // FOR UPDATE on the row) and this copy cannot both succeed against one Category.
+//
+// With a category_id it carries that Category alone, which is what a restore does
+// (the source then comes from CopySource with the same category_id): the same
+// rule, so there is one place that decides what a Period starts with. A Category
+// that already has ANY row in the Period is left alone (nothing to carry: it was
+// deleted and restored within the Period, or the copy already took it), and ON
+// CONFLICT DO NOTHING on the natural key covers a copy and a restore that meet on
+// the same first-day row, so the second writes nothing and fails nothing.
 func (q *Queries) CopyAllocationsForward(ctx context.Context, arg CopyAllocationsForwardParams) (int64, error) {
 	result, err := q.db.Exec(ctx, copyAllocationsForward,
 		arg.YearMonth,
 		arg.EffectiveOn,
 		arg.HouseholdID,
 		arg.Source,
+		arg.CategoryID,
 	)
 	if err != nil {
 		return 0, err
@@ -162,14 +176,19 @@ SELECT coalesce(max(b.year_month) FILTER (WHERE b.year_month < $1),
                 min(b.year_month) FILTER (WHERE b.year_month > $1))::text AS year_month
 FROM budgets b
 WHERE b.household_id = $2 AND b.year_month <> $1
-  AND (EXISTS (SELECT 1 FROM monthly_budgets m WHERE m.household_id = b.household_id AND m.year_month = b.year_month)
-    OR EXISTS (SELECT 1 FROM allocations x WHERE x.household_id = b.household_id AND x.year_month = b.year_month))
+  AND CASE WHEN $3::uuid IS NULL
+        THEN (EXISTS (SELECT 1 FROM monthly_budgets m WHERE m.household_id = b.household_id AND m.year_month = b.year_month)
+           OR EXISTS (SELECT 1 FROM allocations x WHERE x.household_id = b.household_id AND x.year_month = b.year_month))
+        ELSE EXISTS (SELECT 1 FROM allocations x WHERE x.household_id = b.household_id AND x.year_month = b.year_month
+                       AND x.category_id = $3::uuid)
+      END
 HAVING count(*) > 0
 `
 
 type CopySourceParams struct {
 	YearMonth   string
 	HouseholdID pgtype.UUID
+	CategoryID  pgtype.UUID
 }
 
 // Where a Period being materialised copies from (PRD S12): the nearest EARLIER
@@ -181,11 +200,18 @@ type CopySourceParams struct {
 // latest state is "none"). The target is never its own source: the comparisons
 // are strict, and the marker was just created in this transaction.
 //
-// This is the ONE statement that chooses a source, for the Monthly Budget and
-// the allocations alike. A standing default (Q-17) would be consulted here,
-// first, and no stored row would change.
+// With a category_id the question is the same for ONE Category (a restore carrying
+// a Category the Period's copy skipped while it was deleted, #130 C8): the nearest
+// earlier Period that holds an allocation row FOR IT, a Monthly Budget or another
+// Category's row not counting. The Period's copy may have come from a Period that
+// never held the Category (it was deleted there), and "as if it was never deleted"
+// is the Period that did.
+//
+// This is the ONE statement that chooses a source, for the Monthly Budget and the
+// allocations alike, whole Period or one Category. A standing default (Q-17) or an
+// annual plan (Q-20) would be consulted here, first, and no stored row would change.
 func (q *Queries) CopySource(ctx context.Context, arg CopySourceParams) (string, error) {
-	row := q.db.QueryRow(ctx, copySource, arg.YearMonth, arg.HouseholdID)
+	row := q.db.QueryRow(ctx, copySource, arg.YearMonth, arg.HouseholdID, arg.CategoryID)
 	var year_month string
 	err := row.Scan(&year_month)
 	return year_month, err

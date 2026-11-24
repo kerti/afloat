@@ -228,11 +228,43 @@ with zoneinfo answers from it, so a case-insensitive filesystem (a Mac) also acc
     index decides it, mapped by constraint name as a create's is, never a lookup before the
     `UPDATE`: two concurrent restores into one name answer one `200` and one `409`, never a `500`.
   - **An entity that history references cannot be deleted while it is referenced (#121, R1):**
-    `409 POCKET_IN_USE` for a Pocket, soft-deleted Expenses included. It is built by the slice that
-    adds the referencing table, **inside the delete statement** (a `NOT EXISTS` in its `WHERE`, with
-    the referencing write taking `FOR SHARE` on the row), because a check before the delete races
-    a concurrent create under `READ COMMITTED`. Until that table exists nothing can reference a Pocket,
-    so the code is not in the contract.
+    `409 POCKET_IN_USE` for a Pocket, soft-deleted Expenses included (built by the Expenses slice,
+    which adds the referencing table; until then nothing can reference a Pocket, so the code is not
+    in the contract), and `409 CATEGORY_IN_USE` for a Category (#130, PR 4), which today means an
+    allocation, a non-null amount, in a Budget Period **other than the current one** (the Expenses
+    slice extends it to any Expense, soft-deleted ones included). **The guard is not a `NOT EXISTS`
+    in the delete's `WHERE`** (this bullet said so until #130): under `READ COMMITTED` an `UPDATE`
+    whose target row is locked waits for the locker, then proceeds on the row's new version **without
+    re-running its subquery**, so a referencing row committed during the wait is never seen. The
+    shape that holds is one transaction of three statements, **in this order**: (1) `SELECT ... FOR
+    UPDATE` of the entity's row (an unknown or another Household's id is no row, `404`; a row already
+    deleted is the idempotent `204`, and the guard does not apply to it); (2) the `EXISTS` check, as a
+    **separate statement**, which takes its snapshot only after the lock was granted and so sees
+    everything committed by every writer that held the row; (3) the soft delete. Every write that
+    inserts a referencing row takes `FOR SHARE` on the entity's row **in the same statement that
+    verifies it is live** (`INSERT ... SELECT ... FROM categories ... FOR SHARE`), so a writer that
+    comes after the delete finds it deleted and refuses, and one that came first is seen by the check.
+    Lock order: the delete holds one row, so it cannot deadlock with the writers, which take their
+    rows in key order (the sorted allocation writes, above). The test for a guard of this kind runs
+    the same scenario against a single `UPDATE ... WHERE NOT EXISTS` and shows it lose
+    (`category_delete_integration_test.go`).
+  - **A restore is "as if it was never deleted"** (#130, the maintainer's ruling). It clears
+    `deleted_at` and, **in the same transaction**, redoes what a carry-forward skipped while the row
+    was deleted: it locks the row `FOR UPDATE` (as the delete does), clears `deleted_at`, brings the
+    current Budget Period into being (`budget.Materialise`, idempotent) and carries the Category's
+    allocation forward with `budget.CarryCategoryForward`. That is **the carry-forward's own rule, not
+    a second one**: `CopySource` and `CopyAllocationsForward` take an optional `category_id`, so there
+    is one place that decides what a Period starts with (the hook for a recurring default, Q-17, or an
+    annual plan, Q-20). The source for one Category is the nearest earlier Period that holds an
+    allocation row **for it** (the Period's own copy may have come from one that never did); its latest
+    state is carried when it is an amount, dated the Period's first day. Nothing is written when the
+    Category already has any row in the Period, when its latest state is "none", or when no other
+    Period holds one. Writes to `allocations` that can meet (the first-read copy and a restore) are
+    `ON CONFLICT (natural key) DO NOTHING` and the copy has a `NOT EXISTS`, so two rows or a `23505`
+    cannot result. Lock order: the restore holds the Category's row and may wait on a materialiser's
+    marker, never the reverse (a materialiser's copy reads only live Categories and the row being
+    restored is deleted to every snapshot but the restore's own), so there is no cycle. A restore of a
+    row that is not deleted writes nothing and materialises nothing.
   - The cross-site guard (§5) covers `DELETE` like every non-safe method; it was first exercised by
     `DELETE /pockets/{id}`, and a refused request deletes nothing.
   - *Scope: Household-scoped domain data.* Instance-local auth state — `sessions`, `credentials`,

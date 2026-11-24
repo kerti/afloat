@@ -69,6 +69,7 @@
     "INTERNAL": "Afloat couldn't complete that. Try again in a moment.",
     "ID_TAKEN": "Afloat couldn't save that. Try again in a moment.",
     "NAME_TAKEN": "That name is already in use.",
+    "CATEGORY_IN_USE": "This Category has an allocation in another Budget Period, so it can't be deleted.",
     "NETWORK": "Can't reach Afloat. Check your connection and try again.",
     "UNKNOWN": "Something went wrong. Try again in a moment.",
     "EMAIL_TAKEN": "An account with that email already exists. Sign in instead.",
@@ -216,6 +217,7 @@
     "deactivate": "Deactivate",
     "reactivate": "Reactivate",
     "showInactive": "Show inactive Categories ({{count}})",
-    "allocationDailyEditHint": "Optional. Clear it to give this Category no allocation for this Budget Period."
+    "allocationDailyEditHint": "Optional. Clear it to give this Category no allocation for this Budget Period.",
+    "delete": "Delete"
   }
 }

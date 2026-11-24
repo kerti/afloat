@@ -206,12 +206,19 @@ role table follows Uruni `docs/Design-System.md` § Typography.)
   inactive Pocket is. It wears the "Inactive" `Badge`. (Confirmed by the maintainer, 23 Nov 2026,
   for #130.)
 - **Record-level acts live in `DetailActions`**, not the footer: Deactivate or Reactivate, then
-  Delete, in a two-column grid below a hairline and above the footer. Deactivate and Delete both close
-  the dialog at once and raise the Undo toast; Delete has no confirm (R3, P6). (Uruni #768; ruled 22 Nov.)
+  Delete, in a two-column grid below a hairline and above the footer. Deactivate always closes the
+  dialog at once and raises the Undo toast. A Delete that cannot be refused does the same, with no
+  confirm (R3, P6). **A Delete the server can refuse waits for the answer with the dialog open**
+  (a Category's, `CATEGORY_IN_USE`): on success it closes and raises the Undo toast; a refusal shows
+  as a form-level `FieldError` (`role="alert"`) above `DetailActions`, and the dialog cannot be
+  dismissed while the Delete is in flight (outside tap, Esc and the X are ignored only while it is
+  pending). Pockets adopt the waiting behaviour when the Expenses slice adds `POCKET_IN_USE`.
+  (Uruni #768; ruled 22 Nov. The refusable Delete: confirmed by the maintainer, 24 Nov 2026, for
+  #130 PR 4.)
 - **Footer:** holds only the dialog's decision. Create: [Cancel | Add]. Edit: [Save] alone, with no
   Cancel; the X, Esc, back and an outside tap close it. So the edit dialog reads: field, hairline,
   [Deactivate or Reactivate | Delete], footer [Save]. The Category edit dialog reads: name, Kind,
-  allocation, DetailActions with Deactivate or Reactivate alone (full row), footer [Save]. (Confirmed by the maintainer, 23 Nov 2026, for #130 PR 3.) A screen with more than three buttons needs a
+  allocation, DetailActions with [Deactivate or Reactivate | Delete], footer [Save]. (Confirmed by the maintainer, 23 Nov 2026, for #130 PR 3; Delete added, 24 Nov 2026, for #130 PR 4.) A screen with more than three buttons needs a
   reason. (Uruni `Locations.tsx`, `DetailActions.tsx`; ruled 22 Nov.)
 - **A field that is fixed** once the record exists (a Category's Kind) is shown in the edit dialog as
   the create dialog's own control, disabled, never as plain text or dropped. (Confirmed by the maintainer, 23 Nov 2026, for #130 PR 3.)

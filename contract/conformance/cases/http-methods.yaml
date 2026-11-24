@@ -742,9 +742,9 @@
       - sql: SELECT (SELECT count(*) FROM categories)::int AS categories, (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM allocations)::int AS allocations
         rows: [{categories: 0, budgets: 0, allocations: 0}]
 
-# /categories/{id} serves PATCH (#130, PR 3) and, for now, nothing else: its
-# DELETE and restore are the next slice's. Every other method is 405 with no
-# body, and writes nothing. HEAD has no GET to answer it.
+# /categories/{id} serves PATCH (#130, PR 3) and DELETE (PR 4), and
+# /categories/{id}/restore serves POST. Every other method on either is 405 with
+# no body, and writes nothing. HEAD has no GET to answer it.
 - name: http methods - PUT on a Category is method not allowed and changes nothing
   issue: "130"
   given: &category-one
@@ -769,18 +769,18 @@
       - sql: SELECT category_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM categories
         rows: [{name: Rent, active: true, deleted: false}]
 
-- name: http methods - DELETE on a Category is method not allowed until the slice that builds it, and deletes nothing
+- name: http methods - DELETE on a Category is served, and deletes it softly
   issue: "130"
   given: *category-one
   request:
     method: DELETE
     path: /categories/0192f0a0-0000-7000-8003-000000000001
   expect:
-    status: 405
+    status: 204
     body_empty: true
     rows:
       - sql: SELECT category_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM categories
-        rows: [{name: Rent, active: true, deleted: false}]
+        rows: [{name: Rent, active: true, deleted: true}]
 
 - name: http methods - GET on a Category is method not allowed
   issue: "130"
@@ -810,3 +810,69 @@
     rows:
       - sql: SELECT category_display_name AS name, active FROM categories
         rows: [{name: Rent, active: true}]
+
+- name: http methods - GET on a Category's restore path is method not allowed and changes nothing
+  issue: "130"
+  given: &category-deleted
+    - sql: INSERT INTO categories (id, household_id, category_display_name, bucket, deleted_at) VALUES ('0192f0a0-0000-7000-8003-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'Rent', 'commitment', now())
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: GET
+    path: /categories/0192f0a0-0000-7000-8003-000000000001/restore
+  expect:
+    status: 405
+    body_empty: true
+    rows:
+      - sql: SELECT category_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM categories
+        rows: [{name: Rent, active: true, deleted: true}]
+
+- name: http methods - PUT on a Category's restore path is method not allowed and changes nothing
+  issue: "130"
+  given: *category-deleted
+  request:
+    method: PUT
+    path: /categories/0192f0a0-0000-7000-8003-000000000001/restore
+    headers:
+      Content-Type: application/json
+    body: '{}'
+  expect:
+    status: 405
+    body_empty: true
+    rows:
+      - sql: SELECT category_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM categories
+        rows: [{name: Rent, active: true, deleted: true}]
+
+- name: http methods - PATCH on a Category's restore path is method not allowed and changes nothing
+  issue: "130"
+  given: *category-deleted
+  request:
+    method: PATCH
+    path: /categories/0192f0a0-0000-7000-8003-000000000001/restore
+    headers:
+      Content-Type: application/json
+    body: '{"active":false}'
+  expect:
+    status: 405
+    body_empty: true
+    rows:
+      - sql: SELECT category_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM categories
+        rows: [{name: Rent, active: true, deleted: true}]
+
+- name: http methods - DELETE on a Category's restore path is method not allowed and changes nothing
+  issue: "130"
+  given: *category-deleted
+  request:
+    method: DELETE
+    path: /categories/0192f0a0-0000-7000-8003-000000000001/restore
+  expect:
+    status: 405
+    body_empty: true
+    rows:
+      - sql: SELECT category_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM categories
+        rows: [{name: Rent, active: true, deleted: true}]

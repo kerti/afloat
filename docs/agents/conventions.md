@@ -46,8 +46,11 @@ whole scaffold sheet. If the two ever disagree, `BOOTSTRAP.md` wins and this fil
   entity); both idempotent on the caller's own row in one `household_id`-scoped statement, a repeat
   changes no column, and a delete keeps the first `deleted_at`. A restore into a held name is
   `409 NAME_TAKEN` (the unique index decides it, never a lookup). An entity that history references
-  cannot be deleted while referenced (`409 <ENTITY>_IN_USE`, built with the referencing table, inside
-  the delete statement). Deactivating is not deleting.
+  cannot be deleted while referenced (`409 <ENTITY>_IN_USE`, built with the referencing table: lock the row
+  `FOR UPDATE`, run the `EXISTS` check as a **separate later statement**, then delete, all in one
+  transaction, with every referencing write taking `FOR SHARE` on the row. Never a `NOT EXISTS` in
+  the `UPDATE`'s `WHERE`: under `READ COMMITTED` it does not see what committed during the lock wait;
+  BOOTSTRAP §4). A restore is "as if it was never deleted": it redoes, in its own transaction, what a carry-forward skipped (a Category's allocation, through the carry-forward's own SQL, `ON CONFLICT DO NOTHING`; BOOTSTRAP §4). Deactivating is not deleting.
 - **Constraints:** `CHECK (amount <> 0)` on expenses. Negative amounts are valid (refunds with no
   recorded original); zero is not.
 - **Error envelope:** one shape, identical to Balances ADR-0027:

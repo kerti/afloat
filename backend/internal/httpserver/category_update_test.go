@@ -213,16 +213,21 @@ func TestUpdateCategoryCrossSiteIsBlockedAndChangesNothing(t *testing.T) {
 	}
 }
 
-// The {id} path serves PATCH only for now (DELETE and restore are the next
-// slice's). HEAD has no GET to answer it.
-func TestCategoryPathServesOnlyPatch(t *testing.T) {
+// The {id} path serves PATCH and DELETE, and /restore serves POST. Nothing else,
+// and HEAD has no GET to answer it.
+func TestCategoryPathsServeOnlyTheirMethods(t *testing.T) {
 	f := newBudgetFixture(t)
 	f.createRent(t)
 	before := f.categoryRow(t, catV7)
-	for _, method := range []string{http.MethodGet, http.MethodHead, http.MethodPost, http.MethodPut, http.MethodDelete} {
-		rec := f.doAt(method, "/api/categories/"+catV7, `{"active":false}`)
-		if rec.Code != http.StatusMethodNotAllowed {
-			t.Errorf("%s /categories/{id} = %d, want 405", method, rec.Code)
+	for target, methods := range map[string][]string{
+		"/api/categories/" + catV7:              {http.MethodGet, http.MethodHead, http.MethodPost, http.MethodPut},
+		"/api/categories/" + catV7 + "/restore": {http.MethodGet, http.MethodHead, http.MethodPut, http.MethodPatch, http.MethodDelete},
+	} {
+		for _, method := range methods {
+			rec := f.doAt(method, target, `{"active":false}`)
+			if rec.Code != http.StatusMethodNotAllowed {
+				t.Errorf("%s %s = %d, want 405", method, target, rec.Code)
+			}
 		}
 	}
 	if after := f.categoryRow(t, catV7); after != before {

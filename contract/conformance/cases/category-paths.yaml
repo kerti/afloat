@@ -1,5 +1,6 @@
-# The path-parameter table of #106 item 1, run against PATCH /categories/{id}, as
-# pocket-paths.yaml does against the Pocket's: how every shape of a path parameter
+# The path-parameter table of #106 item 1, run against PATCH, DELETE and
+# POST .../restore of /categories/{id}, as pocket-paths.yaml and
+# pocket-paths-delete.yaml do against the Pocket's: how every shape of a path parameter
 # is answered, through the real router and the generated binder. A parameter is
 # percent-decoded exactly once (#65); for a uuid the binder refuses everything that
 # is not one, with 400 VALIDATION {field: id, rule: invalid}, after the session
@@ -9,6 +10,11 @@
 # (refusing them would take a `pattern` on the path parameter, which the validator
 # would check on the ENCODED form and so refuse the encoded spelling of a valid
 # id). Every row asserts the Category row: a mis-decoded id is a hazard to a write.
+# The DELETE rows (#130, PR 4) are the verb a mis-decoded id would hurt most: every
+# refusal leaves the Category live, every accepted spelling deletes it. The restore
+# rows run the shapes that differ there; as for a Pocket's restore, an empty
+# parameter (/categories//restore) is not a path that does not exist: {id} matches
+# the empty segment and the binder refuses it, 400 invalid.
 #
 # The Category every case starts with: 0192f0a0-0000-7000-8003-000000000001, Rent,
 # a Commitment of Household 1, active, allocated 3.000.000.
@@ -333,3 +339,444 @@
     rows:
       - sql: SELECT category_display_name AS name, active FROM categories
         rows: [{"name": "Rent", "active": false}]
+
+
+# ---- DELETE /categories/{id} (#130, PR 4) -------------------------------------
+
+- name: "category paths delete - %2541 binds %41, which is not a uuid is a malformed id"
+  issue: "106"
+  given: *seeded-one
+  request:
+    method: DELETE
+    path: /categories/%2541
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "id", "rule": "invalid"}}
+    cookies: {}
+    rows:
+      - sql: SELECT category_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM categories
+        rows: [{"name": "Rent", "active": true, "deleted": false}]
+
+
+- name: "category paths delete - %25 binds a bare percent sign is a malformed id"
+  issue: "106"
+  given: *seeded-one
+  request:
+    method: DELETE
+    path: /categories/%25
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "id", "rule": "invalid"}}
+    cookies: {}
+    rows:
+      - sql: SELECT category_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM categories
+        rows: [{"name": "Rent", "active": true, "deleted": false}]
+
+
+- name: "category paths delete - 100%25 binds 100% is a malformed id"
+  issue: "106"
+  given: *seeded-one
+  request:
+    method: DELETE
+    path: /categories/100%25
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "id", "rule": "invalid"}}
+    cookies: {}
+    rows:
+      - sql: SELECT category_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM categories
+        rows: [{"name": "Rent", "active": true, "deleted": false}]
+
+
+- name: "category paths delete - %2F inside the id is a malformed id"
+  issue: "106"
+  given: *seeded-one
+  request:
+    method: DELETE
+    path: /categories/0192f0a0-0000-7000-8003-000000000001%2F
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "id", "rule": "invalid"}}
+    cookies: {}
+    rows:
+      - sql: SELECT category_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM categories
+        rows: [{"name": "Rent", "active": true, "deleted": false}]
+
+
+- name: "category paths delete - %2f in lower case is a malformed id"
+  issue: "106"
+  given: *seeded-one
+  request:
+    method: DELETE
+    path: /categories/a%2fb
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "id", "rule": "invalid"}}
+    cookies: {}
+    rows:
+      - sql: SELECT category_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM categories
+        rows: [{"name": "Rent", "active": true, "deleted": false}]
+
+
+- name: "category paths delete - a semicolon is a malformed id"
+  issue: "106"
+  given: *seeded-one
+  request:
+    method: DELETE
+    path: /categories/a;b
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "id", "rule": "invalid"}}
+    cookies: {}
+    rows:
+      - sql: SELECT category_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM categories
+        rows: [{"name": "Rent", "active": true, "deleted": false}]
+
+
+- name: "category paths delete - %3B is a malformed id"
+  issue: "106"
+  given: *seeded-one
+  request:
+    method: DELETE
+    path: /categories/a%3Bb
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "id", "rule": "invalid"}}
+    cookies: {}
+    rows:
+      - sql: SELECT category_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM categories
+        rows: [{"name": "Rent", "active": true, "deleted": false}]
+
+
+- name: "category paths delete - %2e%2e is a malformed id"
+  issue: "106"
+  given: *seeded-one
+  request:
+    method: DELETE
+    path: /categories/%2e%2e
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "id", "rule": "invalid"}}
+    cookies: {}
+    rows:
+      - sql: SELECT category_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM categories
+        rows: [{"name": "Rent", "active": true, "deleted": false}]
+
+
+- name: "category paths delete - %5C is a malformed id"
+  issue: "106"
+  given: *seeded-one
+  request:
+    method: DELETE
+    path: /categories/a%5Cb
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "id", "rule": "invalid"}}
+    cookies: {}
+    rows:
+      - sql: SELECT category_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM categories
+        rows: [{"name": "Rent", "active": true, "deleted": false}]
+
+
+- name: "category paths delete - %00 is a malformed id"
+  issue: "106"
+  given: *seeded-one
+  request:
+    method: DELETE
+    path: /categories/a%00b
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "id", "rule": "invalid"}}
+    cookies: {}
+    rows:
+      - sql: SELECT category_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM categories
+        rows: [{"name": "Rent", "active": true, "deleted": false}]
+
+
+- name: "category paths delete - not-a-uuid is a malformed id"
+  issue: "106"
+  given: *seeded-one
+  request:
+    method: DELETE
+    path: /categories/not-a-uuid
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "id", "rule": "invalid"}}
+    cookies: {}
+    rows:
+      - sql: SELECT category_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM categories
+        rows: [{"name": "Rent", "active": true, "deleted": false}]
+
+
+- name: "category paths delete - a uuid one digit short is a malformed id"
+  issue: "106"
+  given: *seeded-one
+  request:
+    method: DELETE
+    path: /categories/0192f0a0-0000-7000-8003-00000000000
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "id", "rule": "invalid"}}
+    cookies: {}
+    rows:
+      - sql: SELECT category_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM categories
+        rows: [{"name": "Rent", "active": true, "deleted": false}]
+
+
+- name: "category paths delete - a trailing slash matches no route"
+  issue: "106"
+  given: *seeded-one
+  request:
+    method: DELETE
+    path: /categories/0192f0a0-0000-7000-8003-000000000001/
+  expect:
+    status: 404
+    same_as:
+      method: GET
+      path: /no-such-route
+    cookies: {}
+    rows:
+      - sql: SELECT category_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM categories
+        rows: [{"name": "Rent", "active": true, "deleted": false}]
+
+
+- name: "category paths delete - an empty parameter matches no route"
+  issue: "106"
+  given: *seeded-one
+  request:
+    method: DELETE
+    path: /categories/
+  expect:
+    status: 404
+    same_as:
+      method: GET
+      path: /no-such-route
+    cookies: {}
+    rows:
+      - sql: SELECT category_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM categories
+        rows: [{"name": "Rent", "active": true, "deleted": false}]
+
+
+- name: "category paths delete - upper case names the same Category"
+  issue: "106"
+  given: *seeded-one
+  request:
+    method: DELETE
+    path: /categories/0192F0A0-0000-7000-8003-000000000001
+  expect:
+    status: 204
+    body_empty: true
+    cookies: {}
+    rows:
+      - sql: SELECT category_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM categories
+        rows: [{"name": "Rent", "active": true, "deleted": true}]
+
+
+- name: "category paths delete - a percent-encoded first digit names the same Category"
+  issue: "106"
+  given: *seeded-one
+  request:
+    method: DELETE
+    path: /categories/%30192f0a0-0000-7000-8003-000000000001
+  expect:
+    status: 204
+    body_empty: true
+    cookies: {}
+    rows:
+      - sql: SELECT category_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM categories
+        rows: [{"name": "Rent", "active": true, "deleted": true}]
+
+
+- name: "category paths delete - urn:uuid: names the same Category"
+  issue: "106"
+  given: *seeded-one
+  request:
+    method: DELETE
+    path: /categories/urn:uuid:0192f0a0-0000-7000-8003-000000000001
+  expect:
+    status: 204
+    body_empty: true
+    cookies: {}
+    rows:
+      - sql: SELECT category_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM categories
+        rows: [{"name": "Rent", "active": true, "deleted": true}]
+
+
+- name: "category paths delete - a braced id names the same Category"
+  issue: "106"
+  given: *seeded-one
+  request:
+    method: DELETE
+    path: /categories/%7B0192f0a0-0000-7000-8003-000000000001%7D
+  expect:
+    status: 204
+    body_empty: true
+    cookies: {}
+    rows:
+      - sql: SELECT category_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM categories
+        rows: [{"name": "Rent", "active": true, "deleted": true}]
+
+
+- name: "category paths delete - 32 hex digits name the same Category"
+  issue: "106"
+  given: *seeded-one
+  request:
+    method: DELETE
+    path: /categories/0192f0a0000070008003000000000001
+  expect:
+    status: 204
+    body_empty: true
+    cookies: {}
+    rows:
+      - sql: SELECT category_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM categories
+        rows: [{"name": "Rent", "active": true, "deleted": true}]
+
+
+# ---- POST /categories/{id}/restore (#130, PR 4) --------------------------------
+
+- name: "category paths restore - %2541 binds %41, which is not a uuid is a malformed id"
+  issue: "106"
+  given: &seeded-deleted
+    - sql: |
+        INSERT INTO categories (id, household_id, category_display_name, bucket, deleted_at) VALUES ('0192f0a0-0000-7000-8003-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'Rent', 'commitment', now());
+        INSERT INTO budgets (household_id, year_month) VALUES ('0192f0a0-0000-7000-8000-000000000001', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'));
+        INSERT INTO allocations (household_id, year_month, effective_on, category_id, allocation) VALUES ('0192f0a0-0000-7000-8000-000000000001', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'), ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date, '0192f0a0-0000-7000-8003-000000000001', 3000000)
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: POST
+    path: /categories/%2541/restore
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "id", "rule": "invalid"}}
+    cookies: {}
+    rows:
+      - sql: SELECT category_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM categories
+        rows: [{"name": "Rent", "active": true, "deleted": true}]
+
+
+- name: "category paths restore - an encoded slash is a malformed id"
+  issue: "106"
+  given: *seeded-deleted
+  request:
+    method: POST
+    path: /categories/a%2fb/restore
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "id", "rule": "invalid"}}
+    cookies: {}
+    rows:
+      - sql: SELECT category_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM categories
+        rows: [{"name": "Rent", "active": true, "deleted": true}]
+
+
+- name: "category paths restore - a semicolon is a malformed id"
+  issue: "106"
+  given: *seeded-deleted
+  request:
+    method: POST
+    path: /categories/a;b/restore
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "id", "rule": "invalid"}}
+    cookies: {}
+    rows:
+      - sql: SELECT category_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM categories
+        rows: [{"name": "Rent", "active": true, "deleted": true}]
+
+
+- name: "category paths restore - not a uuid at all is a malformed id"
+  issue: "106"
+  given: *seeded-deleted
+  request:
+    method: POST
+    path: /categories/not-a-uuid/restore
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "id", "rule": "invalid"}}
+    cookies: {}
+    rows:
+      - sql: SELECT category_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM categories
+        rows: [{"name": "Rent", "active": true, "deleted": true}]
+
+
+- name: "category paths restore - an empty parameter is a malformed id, not a missing path"
+  issue: "106"
+  given: *seeded-deleted
+  request:
+    method: POST
+    path: /categories//restore
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "id", "rule": "invalid"}}
+    cookies: {}
+    rows:
+      - sql: SELECT category_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM categories
+        rows: [{"name": "Rent", "active": true, "deleted": true}]
+
+
+- name: "category paths restore - a trailing slash matches no route"
+  issue: "106"
+  given: *seeded-deleted
+  request:
+    method: POST
+    path: /categories/0192f0a0-0000-7000-8003-000000000001/restore/
+  expect:
+    status: 404
+    same_as:
+      method: GET
+      path: /no-such-route
+    cookies: {}
+    rows:
+      - sql: SELECT category_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM categories
+        rows: [{"name": "Rent", "active": true, "deleted": true}]
+
+
+- name: "category paths restore - upper case names the same Category"
+  issue: "106"
+  given: *seeded-deleted
+  request:
+    method: POST
+    path: /categories/0192F0A0-0000-7000-8003-000000000001/restore
+  expect:
+    status: 200
+    body_json: {"id": "0192f0a0-0000-7000-8003-000000000001", "category_display_name": "Rent", "bucket": "commitment", "active": true}
+    cookies: {}
+    rows:
+      - sql: SELECT category_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM categories
+        rows: [{"name": "Rent", "active": true, "deleted": false}]
+
+
+- name: "category paths restore - urn:uuid: names the same Category"
+  issue: "106"
+  given: *seeded-deleted
+  request:
+    method: POST
+    path: /categories/urn:uuid:0192f0a0-0000-7000-8003-000000000001/restore
+  expect:
+    status: 200
+    body_json: {"id": "0192f0a0-0000-7000-8003-000000000001", "category_display_name": "Rent", "bucket": "commitment", "active": true}
+    cookies: {}
+    rows:
+      - sql: SELECT category_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM categories
+        rows: [{"name": "Rent", "active": true, "deleted": false}]
+
+
+- name: "category paths restore - a method the restore path does not serve is not allowed"
+  issue: "106"
+  given: *seeded-deleted
+  request:
+    method: DELETE
+    path: /categories/0192f0a0-0000-7000-8003-000000000001/restore
+  expect:
+    status: 405
+    body_empty: true
+    cookies: {}
+    rows:
+      - sql: SELECT category_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM categories
+        rows: [{"name": "Rent", "active": true, "deleted": true}]

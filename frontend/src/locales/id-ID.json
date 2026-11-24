@@ -68,6 +68,7 @@
     "INTERNAL": "Afloat tidak dapat menyelesaikannya. Coba beberapa saat lagi.",
     "ID_TAKEN": "Afloat tidak dapat menyimpannya. Coba beberapa saat lagi.",
     "NAME_TAKEN": "Nama itu sudah dipakai.",
+    "CATEGORY_IN_USE": "Kategori ini punya alokasi di periode anggaran lain, jadi tidak dapat dihapus.",
     "NETWORK": "Tidak dapat menghubungi Afloat. Periksa koneksi Anda lalu coba lagi.",
     "UNKNOWN": "Terjadi kesalahan. Coba beberapa saat lagi.",
     "EMAIL_TAKEN": "Sudah ada akun dengan email itu. Silakan masuk.",
@@ -214,6 +215,7 @@
     "deactivate": "Nonaktifkan",
     "reactivate": "Aktifkan kembali",
     "showInactive": "Tampilkan kategori nonaktif ({{count}})",
-    "allocationDailyEditHint": "Opsional. Kosongkan jika kategori ini tidak punya alokasi pada periode anggaran ini."
+    "allocationDailyEditHint": "Opsional. Kosongkan jika kategori ini tidak punya alokasi pada periode anggaran ini.",
+    "delete": "Hapus"
   }
 }

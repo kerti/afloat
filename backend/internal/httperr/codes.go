@@ -49,6 +49,11 @@ const (
 	// entity (Pockets now, Categories later) shares it.
 	CodeNameTaken Code = "NAME_TAKEN"
 
+	// CodeCategoryInUse is a delete of a Category that holds an allocation, a
+	// non-null amount, in a Budget Period other than the current one (#130 C8).
+	// The Expenses slice extends it to any Expense that references the Category.
+	CodeCategoryInUse Code = "CATEGORY_IN_USE"
+
 	// CodeNotFound is an {id} that names no live row of the caller's own
 	// Household. Unknown, another Household's and deleted all answer it, with
 	// the same bytes, so one cannot be told from another. A path that matches no

@@ -401,6 +401,39 @@ func Materialise(ctx context.Context, q *db.Queries, householdID pgtype.UUID, p 
 	return nil
 }
 
+// CarryCategoryForward gives one Category the allocation a Period's carry-forward
+// would have given it had it never been deleted (#130 C8, the maintainer's
+// ruling on a restore): the latest state of the nearest earlier Period that holds
+// an allocation for it, dated the Period's first day, when that state is an
+// amount. Nothing when the Category already has any row in the Period (deleted
+// and restored within it, or the copy took it), when no other Period holds one
+// for it (a Daily Category that never had an allocation) or when its latest state
+// is "none".
+//
+// It is Materialise's own rule, not a second one: the same two statements,
+// CopySource and CopyAllocationsForward, with the Category named. The caller
+// has materialised the Period in the same transaction (the allocations' foreign
+// key needs the marker) and holds the Category's row lock.
+func CarryCategoryForward(ctx context.Context, q *db.Queries, householdID pgtype.UUID, p period.Period, categoryID pgtype.UUID) error {
+	source, err := q.CopySource(ctx, db.CopySourceParams{HouseholdID: householdID, YearMonth: p.YearMonth, CategoryID: categoryID})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("choose the copy source: %w", err)
+	}
+	if _, err := q.CopyAllocationsForward(ctx, db.CopyAllocationsForwardParams{
+		HouseholdID: householdID,
+		YearMonth:   p.YearMonth,
+		EffectiveOn: pgDate(p.StartsOn),
+		Source:      source,
+		CategoryID:  categoryID,
+	}); err != nil {
+		return fmt.Errorf("carry the category forward: %w", err)
+	}
+	return nil
+}
+
 // SetAllocation records a Category's allocation as a version dated the writer's
 // Today in the Period they are in, which the caller has materialised in the same
 // transaction: ChangeAllocation for an amount.

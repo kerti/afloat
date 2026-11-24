@@ -59,6 +59,7 @@ export function CategoryEditDialog({
   currency,
   close,
   onToggle,
+  onDelete,
 }: {
   category: Category;
   // The Category's allocation in the current Period, a wire amount, or undefined
@@ -67,6 +68,9 @@ export function CategoryEditDialog({
   currency: string;
   close: () => void;
   onToggle: (c: Category) => void;
+  // Delete waits for the answer: it resolves once the Category is deleted (the
+  // page closes the dialog and raises the Undo toast) and rejects with the ApiError.
+  onDelete: (c: Category) => Promise<void>;
 }) {
   const { t } = useTranslation();
   const updateCategory = useUpdateCategory();
@@ -84,6 +88,7 @@ export function CategoryEditDialog({
   const [submitted, setSubmitted] = useState(false);
   const [pending, setPending] = useState(false);
   const [err, setErr] = useState<ApiError | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   const nameChanged = name.trim() !== category.category_display_name;
   const allocationChanged = canonicalMoney(allocation) !== canonicalMoney(shownStored);
@@ -150,8 +155,32 @@ export function CategoryEditDialog({
     }
   }
 
+  // Unlike Deactivate, Delete can be refused (CATEGORY_IN_USE): the dialog stays
+  // open with the error above the footer and Deactivate beside it. A Category
+  // that is already gone is a toast and a close, as for a failed Save.
+  async function onDeleteClick() {
+    if (pending) return;
+    setPending(true);
+    setDeleting(true);
+    setErr(null);
+    try {
+      await onDelete(category);
+    } catch (e) {
+      const failure = e as ApiError;
+      if (failure.code === "NOT_FOUND") {
+        toastError(errorMessage(t, failure));
+        close();
+      } else {
+        setErr(failure);
+      }
+    } finally {
+      setPending(false);
+      setDeleting(false);
+    }
+  }
+
   return (
-    <Dialog open onOpenChange={(o) => !o && close()}>
+    <Dialog open onOpenChange={(o) => !o && !deleting && close()}>
       <DialogContent closeLabel={t("dialog.close")}>
         <Form onSubmit={(e) => void onSubmit(e)}>
           <DialogHeader>
@@ -218,6 +247,13 @@ export function CategoryEditDialog({
                 label: t(category.active ? "categories.deactivate" : "categories.reactivate"),
                 disabled: pending,
                 onClick: () => onToggle(category),
+              },
+              {
+                key: "delete",
+                label: t("categories.delete"),
+                tone: "destructive",
+                disabled: pending,
+                onClick: () => void onDeleteClick(),
               },
             ]}
           />

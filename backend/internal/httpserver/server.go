@@ -134,6 +134,14 @@ func (s *Server) UpdateCategory(ctx context.Context, r api.UpdateCategoryRequest
 	return s.category.UpdateCategory(ctx, r)
 }
 
+func (s *Server) DeleteCategory(ctx context.Context, r api.DeleteCategoryRequestObject) (api.DeleteCategoryResponseObject, error) {
+	return s.category.DeleteCategory(ctx, r)
+}
+
+func (s *Server) RestoreCategory(ctx context.Context, r api.RestoreCategoryRequestObject) (api.RestoreCategoryResponseObject, error) {
+	return s.category.RestoreCategory(ctx, r)
+}
+
 func (s *Server) GetBudget(ctx context.Context, r api.GetBudgetRequestObject) (api.GetBudgetResponseObject, error) {
 	return s.budget.GetBudget(ctx, r)
 }

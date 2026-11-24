@@ -74,6 +74,7 @@ func (e Bucket) Valid() bool {
 
 // Defines values for ErrorCode.
 const (
+	CATEGORYINUSE           ErrorCode = "CATEGORY_IN_USE"
 	CROSSSITEREQUESTBLOCKED ErrorCode = "CROSS_SITE_REQUEST_BLOCKED"
 	EMAILTAKEN              ErrorCode = "EMAIL_TAKEN"
 	FOUNDINGDISABLED        ErrorCode = "FOUNDING_DISABLED"
@@ -93,6 +94,8 @@ const (
 // Valid indicates whether the value is a known member of the ErrorCode enum.
 func (e ErrorCode) Valid() bool {
 	switch e {
+	case CATEGORYINUSE:
+		return true
 	case CROSSSITEREQUESTBLOCKED:
 		return true
 	case EMAILTAKEN:
@@ -416,7 +419,9 @@ type Error struct {
 	// caller's own Household: unknown, another Household's and deleted all
 	// answer it, with no `args`, so one cannot be told from another (delete
 	// and restore, which may act on a deleted row, answer it for unknown and
-	// foreign ids only). A path
+	// foreign ids only). `CATEGORY_IN_USE` is a delete of a Category that
+	// holds an allocation, a non-null amount, in a Budget Period other than
+	// the current one; it carries no `args`, and nothing is changed. A path
 	// that matches no route at all is not this: it answers a bare `404`.
 	Code ErrorCode `json:"code"`
 }
@@ -446,7 +451,9 @@ type Error struct {
 // caller's own Household: unknown, another Household's and deleted all
 // answer it, with no `args`, so one cannot be told from another (delete
 // and restore, which may act on a deleted row, answer it for unknown and
-// foreign ids only). A path
+// foreign ids only). `CATEGORY_IN_USE` is a delete of a Category that
+// holds an allocation, a non-null amount, in a Budget Period other than
+// the current one; it carries no `args`, and nothing is changed. A path
 // that matches no route at all is not this: it answers a bare `404`.
 type ErrorCode string
 
@@ -833,9 +840,15 @@ type ServerInterface interface {
 	// CreateCategory Create a Category.
 	// (POST /categories)
 	CreateCategory(w http.ResponseWriter, r *http.Request)
+	// DeleteCategory Delete a Category.
+	// (DELETE /categories/{id})
+	DeleteCategory(w http.ResponseWriter, r *http.Request, id CategoryId)
 	// UpdateCategory Rename, deactivate or reactivate a Category.
 	// (PATCH /categories/{id})
 	UpdateCategory(w http.ResponseWriter, r *http.Request, id CategoryId)
+	// RestoreCategory Restore a deleted Category.
+	// (POST /categories/{id}/restore)
+	RestoreCategory(w http.ResponseWriter, r *http.Request, id CategoryId)
 	// GetHealth Liveness and readiness of this instance.
 	// (GET /health)
 	GetHealth(w http.ResponseWriter, r *http.Request)
@@ -935,9 +948,21 @@ func (_ Unimplemented) CreateCategory(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
+// DeleteCategory Delete a Category.
+// (DELETE /categories/{id})
+func (_ Unimplemented) DeleteCategory(w http.ResponseWriter, r *http.Request, id CategoryId) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
 // UpdateCategory Rename, deactivate or reactivate a Category.
 // (PATCH /categories/{id})
 func (_ Unimplemented) UpdateCategory(w http.ResponseWriter, r *http.Request, id CategoryId) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// RestoreCategory Restore a deleted Category.
+// (POST /categories/{id}/restore)
+func (_ Unimplemented) RestoreCategory(w http.ResponseWriter, r *http.Request, id CategoryId) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
@@ -1156,6 +1181,32 @@ func (siw *ServerInterfaceWrapper) CreateCategory(w http.ResponseWriter, r *http
 	handler.ServeHTTP(w, r)
 }
 
+// DeleteCategory operation middleware
+func (siw *ServerInterfaceWrapper) DeleteCategory(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id CategoryId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", chi.URLParam(r, "id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: r.URL.RawPath == ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.DeleteCategory(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // UpdateCategory operation middleware
 func (siw *ServerInterfaceWrapper) UpdateCategory(w http.ResponseWriter, r *http.Request) {
 
@@ -1173,6 +1224,32 @@ func (siw *ServerInterfaceWrapper) UpdateCategory(w http.ResponseWriter, r *http
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.UpdateCategory(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// RestoreCategory operation middleware
+func (siw *ServerInterfaceWrapper) RestoreCategory(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id CategoryId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", chi.URLParam(r, "id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: r.URL.RawPath == ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.RestoreCategory(w, r, id)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -1537,7 +1614,13 @@ func HandlerWithOptions(si ServerInterface, options ChiServerOptions) http.Handl
 		r.Post(options.BaseURL+"/categories", wrapper.CreateCategory)
 	})
 	r.Group(func(r chi.Router) {
+		r.Delete(options.BaseURL+"/categories/{id}", wrapper.DeleteCategory)
+	})
+	r.Group(func(r chi.Router) {
 		r.Patch(options.BaseURL+"/categories/{id}", wrapper.UpdateCategory)
+	})
+	r.Group(func(r chi.Router) {
+		r.Post(options.BaseURL+"/categories/{id}/restore", wrapper.RestoreCategory)
 	})
 	r.Group(func(r chi.Router) {
 		r.Get(options.BaseURL+"/budget", wrapper.GetBudget)
@@ -2269,6 +2352,92 @@ func (response CreateCategory500JSONResponse) VisitCreateCategoryResponse(w http
 	return err
 }
 
+type DeleteCategoryRequestObject struct {
+	Id CategoryId `json:"id"`
+}
+
+type DeleteCategoryResponseObject interface {
+	VisitDeleteCategoryResponse(w http.ResponseWriter) error
+}
+
+type DeleteCategory204Response struct {
+}
+
+func (response DeleteCategory204Response) VisitDeleteCategoryResponse(w http.ResponseWriter) error {
+	w.WriteHeader(204)
+	return nil
+}
+
+type DeleteCategory400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response DeleteCategory400JSONResponse) VisitDeleteCategoryResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteCategory401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response DeleteCategory401JSONResponse) VisitDeleteCategoryResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteCategory404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response DeleteCategory404JSONResponse) VisitDeleteCategoryResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteCategory409JSONResponse struct{ ConflictJSONResponse }
+
+func (response DeleteCategory409JSONResponse) VisitDeleteCategoryResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteCategory500JSONResponse struct{ InternalErrorJSONResponse }
+
+func (response DeleteCategory500JSONResponse) VisitDeleteCategoryResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type UpdateCategoryRequestObject struct {
 	Id   CategoryId `json:"id"`
 	Body *UpdateCategoryJSONRequestBody
@@ -2351,6 +2520,98 @@ func (response UpdateCategory409JSONResponse) VisitUpdateCategoryResponse(w http
 type UpdateCategory500JSONResponse struct{ InternalErrorJSONResponse }
 
 func (response UpdateCategory500JSONResponse) VisitUpdateCategoryResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RestoreCategoryRequestObject struct {
+	Id CategoryId `json:"id"`
+}
+
+type RestoreCategoryResponseObject interface {
+	VisitRestoreCategoryResponse(w http.ResponseWriter) error
+}
+
+type RestoreCategory200JSONResponse Category
+
+func (response RestoreCategory200JSONResponse) VisitRestoreCategoryResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RestoreCategory400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response RestoreCategory400JSONResponse) VisitRestoreCategoryResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RestoreCategory401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response RestoreCategory401JSONResponse) VisitRestoreCategoryResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RestoreCategory404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response RestoreCategory404JSONResponse) VisitRestoreCategoryResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RestoreCategory409JSONResponse struct{ ConflictJSONResponse }
+
+func (response RestoreCategory409JSONResponse) VisitRestoreCategoryResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RestoreCategory500JSONResponse struct{ InternalErrorJSONResponse }
+
+func (response RestoreCategory500JSONResponse) VisitRestoreCategoryResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response); err != nil {
@@ -3157,9 +3418,15 @@ type StrictServerInterface interface {
 	// CreateCategory Create a Category.
 	// (POST /categories)
 	CreateCategory(ctx context.Context, request CreateCategoryRequestObject) (CreateCategoryResponseObject, error)
+	// DeleteCategory Delete a Category.
+	// (DELETE /categories/{id})
+	DeleteCategory(ctx context.Context, request DeleteCategoryRequestObject) (DeleteCategoryResponseObject, error)
 	// UpdateCategory Rename, deactivate or reactivate a Category.
 	// (PATCH /categories/{id})
 	UpdateCategory(ctx context.Context, request UpdateCategoryRequestObject) (UpdateCategoryResponseObject, error)
+	// RestoreCategory Restore a deleted Category.
+	// (POST /categories/{id}/restore)
+	RestoreCategory(ctx context.Context, request RestoreCategoryRequestObject) (RestoreCategoryResponseObject, error)
 	// GetHealth Liveness and readiness of this instance.
 	// (GET /health)
 	GetHealth(ctx context.Context, request GetHealthRequestObject) (GetHealthResponseObject, error)
@@ -3516,6 +3783,32 @@ func (sh *strictHandler) CreateCategory(w http.ResponseWriter, r *http.Request) 
 	}
 }
 
+// DeleteCategory operation middleware
+func (sh *strictHandler) DeleteCategory(w http.ResponseWriter, r *http.Request, id CategoryId) {
+	var request DeleteCategoryRequestObject
+
+	request.Id = id
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.DeleteCategory(ctx, request.(DeleteCategoryRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "DeleteCategory")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(DeleteCategoryResponseObject); ok {
+		if err := validResponse.VisitDeleteCategoryResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
 // UpdateCategory operation middleware
 func (sh *strictHandler) UpdateCategory(w http.ResponseWriter, r *http.Request, id CategoryId) {
 	var request UpdateCategoryRequestObject
@@ -3542,6 +3835,32 @@ func (sh *strictHandler) UpdateCategory(w http.ResponseWriter, r *http.Request, 
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(UpdateCategoryResponseObject); ok {
 		if err := validResponse.VisitUpdateCategoryResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// RestoreCategory operation middleware
+func (sh *strictHandler) RestoreCategory(w http.ResponseWriter, r *http.Request, id CategoryId) {
+	var request RestoreCategoryRequestObject
+
+	request.Id = id
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.RestoreCategory(ctx, request.(RestoreCategoryRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "RestoreCategory")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(RestoreCategoryResponseObject); ok {
+		if err := validResponse.VisitRestoreCategoryResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

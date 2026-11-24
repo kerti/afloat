@@ -500,7 +500,51 @@ export interface paths {
         get?: never;
         put?: never;
         post?: never;
-        delete?: never;
+        /**
+         * Delete a Category.
+         * @description A **soft** delete: the verb is `DELETE` and the effect is not. The row
+         *     stays, with `deleted_at` set; nothing is ever removed from the database
+         *     by this API. A deleted Category is gone from `GET /categories`, gives up
+         *     its name (a new Category may take it at once) and answers `404` to
+         *     `PATCH`. Only this operation and `POST /categories/{id}/restore` can
+         *     still see it.
+         *
+         *     A delete takes the Category out of **every figure of the current Budget
+         *     Period at once**, the days before today included: `GET /budget` no longer
+         *     lists its allocation, and the Commitments Budget, the Daily Pool and
+         *     Unallocated are worked out without it. Nothing is erased: its allocation
+         *     rows stay, and a restore brings the figures back exactly. A later Budget
+         *     Period does not carry a deleted Category forward. A Household that means
+         *     "from now on" sets the allocation to `0` and deactivates instead.
+         *
+         *     Idempotent on the caller's own Category: deleting one that is already
+         *     deleted is `204` again and keeps the **first** deletion instant (and is
+         *     never refused). An inactive Category can be deleted too. No body, no
+         *     confirmation: the act is immediate and `POST /categories/{id}/restore`
+         *     is its Undo.
+         *
+         *     `409 CATEGORY_IN_USE`: the Category holds an allocation, a non-null
+         *     amount, in a Budget Period **other than the current one** (the caller's,
+         *     by their Today). The Budget's history is a record the Household's past
+         *     figures are read from, so it is not deleted: retire the Category with
+         *     `PATCH {active: false}`, which keeps it listed and keeps its allocations.
+         *     The Category's allocation in the current Period alone never refuses a
+         *     delete, so a Category made today and deleted today is a mistake that can
+         *     be undone. A refused delete changes nothing. The check and the delete are
+         *     one transaction that locks the Category's row, and every write of an
+         *     allocation share-locks it, so an allocation that is being written (or
+         *     carried into a following Period) while the delete runs is either seen by
+         *     the check or refused by the delete: no deleted Category is left holding
+         *     an allocation in another Period.
+         *
+         *     An id that is unknown or that belongs to another Household is `404
+         *     NOT_FOUND`, the same answer in both cases, so no request confirms
+         *     another Household's id. (A deleted Category of the caller's own is not
+         *     `404` here: deleting it again is the idempotent `204`.) The Household is
+         *     the caller's own, from the session, never from the request. The id's
+         *     shape is checked before the lookup.
+         */
+        delete: operations["deleteCategory"];
         options?: never;
         head?: never;
         /**
@@ -538,6 +582,59 @@ export interface paths {
          *     id with a bad body answers what an unknown one does.
          */
         patch: operations["updateCategory"];
+        trace?: never;
+    };
+    "/categories/{id}/restore": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Restore a deleted Category.
+         * @description Undoes `DELETE /categories/{id}`: clears `deleted_at` and answers `200`
+         *     with the Category, `active` as it was before the delete (a Category that
+         *     was inactive comes back inactive). No body. Idempotent: restoring a
+         *     Category that is not deleted is `200` with the Category as it stands, and
+         *     changes nothing.
+         *
+         *     Undo means "as if it was never deleted". Within the Budget Period the
+         *     Category was deleted in, its allocation rows were never touched, so the
+         *     figures come back exactly. A Period that was first read while the Category
+         *     was deleted did not carry it forward, so the restore does what that copy
+         *     skipped: it gives the Category the allocation the carry-forward would have
+         *     given it, the latest state of the nearest earlier Period that holds an
+         *     allocation for it, dated the current Period's first day (bringing the
+         *     current Period into being first, as a first read does, if no request
+         *     has). A Commitment therefore always comes back with an allocation. A Daily
+         *     Category whose latest allocation was `none`, or that never had one, comes
+         *     back with none. A Category that already has an allocation in the current
+         *     Period (deleted and restored within it) gets nothing written. A restore
+         *     racing the Period's first read leaves exactly one allocation row, never an
+         *     error. A restore of a Category that is not deleted writes nothing. (After a
+         *     rollover, a Category restored with an allocation carried forward holds an
+         *     allocation in an earlier Period too, so it can be deactivated but not
+         *     deleted again: `CATEGORY_IN_USE`.)
+         *
+         *     A Category whose name another Category of the Household that is not
+         *     deleted (active or inactive, in either bucket) now holds,
+         *     case-insensitively, is `409 NAME_TAKEN` and stays deleted: a delete gave
+         *     up the name, and a new Category may have taken it. Rename the other
+         *     Category, or leave this one deleted.
+         *
+         *     An id that is unknown or that belongs to another Household is `404
+         *     NOT_FOUND`, the same answer in both cases. The Household is the
+         *     caller's own, from the session, never from the request. The id's shape
+         *     is checked before the lookup.
+         */
+        post: operations["restoreCategory"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/budget": {
@@ -1136,11 +1233,13 @@ export interface components {
          *     caller's own Household: unknown, another Household's and deleted all
          *     answer it, with no `args`, so one cannot be told from another (delete
          *     and restore, which may act on a deleted row, answer it for unknown and
-         *     foreign ids only). A path
+         *     foreign ids only). `CATEGORY_IN_USE` is a delete of a Category that
+         *     holds an allocation, a non-null amount, in a Budget Period other than
+         *     the current one; it carries no `args`, and nothing is changed. A path
          *     that matches no route at all is not this: it answers a bare `404`.
          * @enum {string}
          */
-        ErrorCode: "VALIDATION" | "INVALID_JSON_BODY" | "INVALID_CREDENTIALS" | "TOO_MANY_ATTEMPTS" | "UNAUTHORIZED" | "CROSS_SITE_REQUEST_BLOCKED" | "EMAIL_TAKEN" | "WEAK_PASSWORD" | "INVALID_CURRENT_PASSWORD" | "FOUNDING_DISABLED" | "ID_TAKEN" | "NAME_TAKEN" | "NOT_FOUND" | "INTERNAL";
+        ErrorCode: "VALIDATION" | "INVALID_JSON_BODY" | "INVALID_CREDENTIALS" | "TOO_MANY_ATTEMPTS" | "UNAUTHORIZED" | "CROSS_SITE_REQUEST_BLOCKED" | "EMAIL_TAKEN" | "WEAK_PASSWORD" | "INVALID_CURRENT_PASSWORD" | "FOUNDING_DISABLED" | "ID_TAKEN" | "NAME_TAKEN" | "CATEGORY_IN_USE" | "NOT_FOUND" | "INTERNAL";
     };
     responses: {
         /**
@@ -1212,7 +1311,8 @@ export interface components {
          *     id is held by another Household's row, or by the caller's own deleted
          *     one. `NAME_TAKEN`: another row of the Household that is not deleted
          *     already holds the name, case-insensitively, at a create, a rename or a
-         *     restore.
+         *     restore. `CATEGORY_IN_USE`: a delete of a Category that holds an
+         *     allocation in a Budget Period other than the current one.
          */
         Conflict: {
             headers: {
@@ -1755,6 +1855,36 @@ export interface operations {
             500: components["responses"]["InternalError"];
         };
     };
+    deleteCategory: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description A Category's id. Deliberately no `pattern` and no `maxLength`, for the
+                 *     reason `PocketId` gives (#106). A value that is not a UUID is
+                 *     `400 VALIDATION {field: id, rule: invalid}`, from the binder.
+                 */
+                id: components["parameters"]["CategoryId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The Category is deleted, as it already was or as of this request. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            500: components["responses"]["InternalError"];
+        };
+    };
     updateCategory: {
         parameters: {
             query?: never;
@@ -1776,6 +1906,38 @@ export interface operations {
         };
         responses: {
             /** @description The Category as it now stands. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Category"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    restoreCategory: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description A Category's id. Deliberately no `pattern` and no `maxLength`, for the
+                 *     reason `PocketId` gives (#106). A value that is not a UUID is
+                 *     `400 VALIDATION {field: id, rule: invalid}`, from the binder.
+                 */
+                id: components["parameters"]["CategoryId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The Category, live again (or as it already was). */
             200: {
                 headers: {
                     [name: string]: unknown;

@@ -53,6 +53,16 @@ export type State = {
   categoryPosts?: CreateCategoryBody[];
   // Every PATCH /categories/{id}, in order, with the id it named.
   categoryPatches?: { id: string; body: UpdateCategoryBody }[];
+  // Categories the fake server has soft-deleted, and the ids of every DELETE and restore, in order.
+  deletedCategories?: Category[];
+  categoryDeletes?: string[];
+  categoryRestores?: string[];
+  // Ids of Categories that hold an allocation in an earlier Period: DELETE answers 409 CATEGORY_IN_USE.
+  categoriesInUse?: string[];
+  // Allocations set aside while their Category is deleted, so restore returns them exactly.
+  deletedAllocations?: Budget["allocations"];
+  // Where each deleted Category sat in the list, so restore returns it to its place (the list is by created_at).
+  deletedCategoryIndex?: Record<string, number>;
   // A code the next PATCH /budget answers with instead of applying (then cleared).
   budgetPatchFails?: ErrorBody["code"];
   // The fake server's Budget for the current Period (absent: a first read
@@ -89,6 +99,25 @@ export const emptyBudget: Budget = {
   allocations: [],
   commitments_budget: "0.0000",
 };
+
+// The Budget's figures from its allocations, as the server computes them (exact,
+// four decimals, the Daily Pool and Unallocated only once a Monthly Budget is set).
+function withFigures(b: Budget, categories: Category[]): Budget {
+  const sum = (bucket: Category["bucket"]) =>
+    b.allocations
+      .filter((a) => categories.find((c) => c.id === a.category_id)?.bucket === bucket)
+      .reduce((n, a) => n + Number(a.allocation), 0);
+  const fixed = (n: number) => n.toFixed(4);
+  const commitments = sum("commitment");
+  return {
+    ...b,
+    commitments_budget: fixed(commitments),
+    ...(b.monthly_budget !== undefined && {
+      daily_pool: fixed(Number(b.monthly_budget) - commitments),
+      unallocated: fixed(Number(b.monthly_budget) - commitments - sum("daily")),
+    }),
+  };
+}
 
 export const envelope = (code: ErrorBody["code"], args?: ErrorBody["args"]): ErrorBody =>
   args ? { code, args } : { code };
@@ -366,6 +395,73 @@ export function defaultHandlers(state: State = { signedIn: false, me: alice }) {
       if (name !== undefined) held.category_display_name = name;
       if (body.active !== undefined) held.active = body.active;
       return HttpResponse.json(held);
+    }),
+    // Soft delete, as the handler: unknown is 404, one held by an earlier Period
+    // is 409, a repeat is 204. The Category leaves the list and the figures; its
+    // allocations are kept so restore brings them back exactly.
+    http.delete("/api/categories/:id", ({ params }) => {
+      if (!state.signedIn) return HttpResponse.json(envelope("UNAUTHORIZED"), { status: 401 });
+      const list = (state.categories ??= []);
+      const held = list.find((c) => c.id === params.id);
+      if (!held) {
+        if (state.deletedCategories?.some((c) => c.id === params.id)) {
+          return new HttpResponse(null, { status: 204 });
+        }
+        return HttpResponse.json(envelope("NOT_FOUND"), { status: 404 });
+      }
+      if (state.categoriesInUse?.includes(held.id)) {
+        return HttpResponse.json(envelope("CATEGORY_IN_USE"), { status: 409 });
+      }
+      state.categoryDeletes = [...(state.categoryDeletes ?? []), held.id];
+      (state.deletedCategoryIndex ??= {})[held.id] = list.indexOf(held);
+      (state.deletedCategories ??= []).push(held);
+      state.categories = list.filter((c) => c !== held);
+      const cur = state.budget ?? emptyBudget;
+      state.deletedAllocations = [
+        ...(state.deletedAllocations ?? []),
+        ...cur.allocations.filter((a) => a.category_id === held.id),
+      ];
+      state.budget = withFigures(
+        { ...cur, allocations: cur.allocations.filter((a) => a.category_id !== held.id) },
+        state.categories,
+      );
+      return new HttpResponse(null, { status: 204 });
+    }),
+    http.post("/api/categories/:id/restore", ({ params }) => {
+      if (!state.signedIn) return HttpResponse.json(envelope("UNAUTHORIZED"), { status: 401 });
+      const list = (state.categories ??= []);
+      // As the handler: a live Category is answered as it stands, nothing written.
+      const live = list.find((c) => c.id === params.id);
+      if (live) return HttpResponse.json(live);
+      const gone = state.deletedCategories?.find((c) => c.id === params.id);
+      if (!gone) return HttpResponse.json(envelope("NOT_FOUND"), { status: 404 });
+      const taken = list.some(
+        (c) => c.category_display_name.toLowerCase() === gone.category_display_name.toLowerCase(),
+      );
+      if (taken) return HttpResponse.json(envelope("NAME_TAKEN"), { status: 409 });
+      state.categoryRestores = [...(state.categoryRestores ?? []), gone.id];
+      state.deletedCategories = state.deletedCategories!.filter((c) => c !== gone);
+      list.splice(
+        Math.min(state.deletedCategoryIndex?.[gone.id] ?? list.length, list.length),
+        0,
+        gone,
+      );
+      // The real handler restores within the Period as it was, and after a
+      // rollover carries the latest allocation forward into the current Period.
+      // This fake has one Period, so both are the stashed allocation put back.
+      const cur = state.budget ?? emptyBudget;
+      state.budget = withFigures(
+        {
+          ...cur,
+          allocations: [
+            ...cur.allocations,
+            ...(state.deletedAllocations ?? []).filter((a) => a.category_id === gone.id),
+          ],
+        },
+        list,
+      );
+      state.deletedAllocations = state.deletedAllocations?.filter((a) => a.category_id !== gone.id);
+      return HttpResponse.json(gone);
     }),
     http.get("/api/budget", () => {
       if (!state.signedIn) return HttpResponse.json(envelope("UNAUTHORIZED"), { status: 401 });

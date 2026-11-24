@@ -6,6 +6,7 @@ import {
   commitOnboardingChoice,
   createCategory,
   createPocket,
+  deleteCategory,
   deletePocket,
   getAuthMethods,
   getBudget,
@@ -248,6 +249,26 @@ export function useUpdateCategory() {
   return useMutation<Category, ApiError, { id: string; body: UpdateCategoryRequest }>({
     mutationFn: ({ id, body }) => updateCategory(id, body),
     onSuccess: refetch,
+    onError: (err) => {
+      if (err.code === "NOT_FOUND") void refetch();
+    },
+  });
+}
+
+// A deleted Category drops out of every figure at once, so both reads are
+// refetched and the write settles after them. A NOT_FOUND means the lists are stale.
+export function useDeleteCategory() {
+  const qc = useQueryClient();
+  const refetch = () =>
+    Promise.all([
+      qc.invalidateQueries({ queryKey: categoriesKey }),
+      qc.invalidateQueries({ queryKey: budgetKey }),
+    ]);
+  return useMutation<void, ApiError, string>({
+    mutationFn: deleteCategory,
+    // Not awaited: the caller closes the dialog on the 204, before the refetched
+    // list drops the Category and unmounts the dialog under a stale ?edit=.
+    onSuccess: () => void refetch(),
     onError: (err) => {
       if (err.code === "NOT_FOUND") void refetch();
     },

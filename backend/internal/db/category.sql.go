@@ -11,6 +11,34 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const categoryHeldElsewhere = `-- name: CategoryHeldElsewhere :one
+SELECT EXISTS (
+    SELECT 1 FROM allocations
+    WHERE household_id = $1
+      AND category_id = $2
+      AND year_month <> $3
+      AND allocation IS NOT NULL
+)
+`
+
+type CategoryHeldElsewhereParams struct {
+	HouseholdID pgtype.UUID
+	CategoryID  pgtype.UUID
+	YearMonth   string
+}
+
+// The in-use guard (#130 C8, R9): does the Category hold an allocation, a
+// non-null amount, in any Budget Period but the current one? Any row counts, not
+// only the latest of a Period: a Category an earlier Period held an amount for
+// is part of that Period's record, even if a later version cleared it. Run
+// after LockCategory, in the same transaction, and never inside the UPDATE.
+func (q *Queries) CategoryHeldElsewhere(ctx context.Context, arg CategoryHeldElsewhereParams) (bool, error) {
+	row := q.db.QueryRow(ctx, categoryHeldElsewhere, arg.HouseholdID, arg.CategoryID, arg.YearMonth)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
 const createCategory = `-- name: CreateCategory :one
 INSERT INTO categories (id, household_id, category_display_name, bucket)
 VALUES ($1, $2, $3, $4)
@@ -119,6 +147,96 @@ func (q *Queries) ListCategories(ctx context.Context, householdID pgtype.UUID) (
 		return nil, err
 	}
 	return items, nil
+}
+
+const lockCategory = `-- name: LockCategory :one
+SELECT deleted_at FROM categories
+WHERE id = $1 AND household_id = $2
+FOR UPDATE
+`
+
+type LockCategoryParams struct {
+	ID          pgtype.UUID
+	HouseholdID pgtype.UUID
+}
+
+// The first statement of a delete, in the delete's own transaction: it takes the
+// Category's row lock (FOR UPDATE, which conflicts with the FOR SHARE every
+// allocation write holds, and with the key-share an allocation insert takes) and
+// answers whether the row is deleted already. The guard that follows
+// (CategoryHeldElsewhere) must be a SEPARATE, LATER statement: under READ
+// COMMITTED a statement's snapshot is taken when it starts, so a guard folded
+// into the UPDATE's WHERE would have been evaluated before the lock wait ended
+// and would not see the allocation committed during it (BOOTSTRAP.md §4, #130
+// C8). Another Household's or an unknown id is no row. This is the one place
+// that reads a deleted Category on purpose.
+func (q *Queries) LockCategory(ctx context.Context, arg LockCategoryParams) (pgtype.Timestamptz, error) {
+	row := q.db.QueryRow(ctx, lockCategory, arg.ID, arg.HouseholdID)
+	var deleted_at pgtype.Timestamptz
+	err := row.Scan(&deleted_at)
+	return deleted_at, err
+}
+
+const restoreCategory = `-- name: RestoreCategory :one
+UPDATE categories SET
+    deleted_at = NULL,
+    updated_at = CASE WHEN deleted_at IS NOT NULL THEN now() ELSE updated_at END
+WHERE id = $1 AND household_id = $2
+RETURNING id, household_id, category_display_name, bucket, active, created_at, updated_at, deleted_at
+`
+
+type RestoreCategoryParams struct {
+	ID          pgtype.UUID
+	HouseholdID pgtype.UUID
+}
+
+// The Undo of SoftDeleteCategory, as RestorePocket: clears deleted_at and
+// returns the row, active as it was. Idempotent (a live Category is a row and
+// comes back unchanged). Another Household's or an unknown id is no row.
+// Re-entering the partial unique name index is what a held name trips: 23505 on
+// categories_household_name_idx, answered NAME_TAKEN with the row still deleted,
+// decided by the index and never by a lookup. This statement writes no
+// allocation: the handler carries the Category forward after it, in the same
+// transaction (budget.CarryCategoryForward).
+func (q *Queries) RestoreCategory(ctx context.Context, arg RestoreCategoryParams) (Category, error) {
+	row := q.db.QueryRow(ctx, restoreCategory, arg.ID, arg.HouseholdID)
+	var i Category
+	err := row.Scan(
+		&i.ID,
+		&i.HouseholdID,
+		&i.CategoryDisplayName,
+		&i.Bucket,
+		&i.Active,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.DeletedAt,
+	)
+	return i, err
+}
+
+const softDeleteCategory = `-- name: SoftDeleteCategory :execrows
+UPDATE categories SET
+    deleted_at = coalesce(deleted_at, now()),
+    updated_at = CASE WHEN deleted_at IS NULL THEN now() ELSE updated_at END
+WHERE id = $1 AND household_id = $2
+`
+
+type SoftDeleteCategoryParams struct {
+	ID          pgtype.UUID
+	HouseholdID pgtype.UUID
+}
+
+// A soft delete (BOOTSTRAP.md §4), as SoftDeletePocket: the row stays, the first
+// deleted_at is kept, and updated_at moves only for the statement that did the
+// work. Called only after LockCategory and a clear guard. It touches no
+// allocation: a delete drops the Category out of every figure because reads join
+// live Categories, and a restore brings the figures back exactly.
+func (q *Queries) SoftDeleteCategory(ctx context.Context, arg SoftDeleteCategoryParams) (int64, error) {
+	result, err := q.db.Exec(ctx, softDeleteCategory, arg.ID, arg.HouseholdID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const updateCategory = `-- name: UpdateCategory :one

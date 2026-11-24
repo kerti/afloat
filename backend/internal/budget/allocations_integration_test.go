@@ -17,6 +17,7 @@ import (
 	"github.com/kerti/afloat/backend/internal/auth"
 	"github.com/kerti/afloat/backend/internal/budget"
 	"github.com/kerti/afloat/backend/internal/db"
+	"github.com/kerti/afloat/backend/internal/period"
 )
 
 // What the Budget does with allocations (#130 C4, C5, C11): the figures they
@@ -483,6 +484,63 @@ func TestADeletedCategoryLeavesTheFiguresAndRestoringItBringsTheAllocationBack(t
 	got = f.get(ctx, t)
 	if deref(got.DailyPool) != "6000000.0000" || f.allocationsRows(t, householdID) != before {
 		t.Errorf("restored: pool %s, rows changed %v, want exactly as before", deref(got.DailyPool), f.allocationsRows(t, householdID) != before)
+	}
+}
+
+// CarryCategoryForward is the carry-forward's own rule for one Category: the
+// latest state of the nearest earlier Period that holds an allocation FOR IT,
+// dated the target's first day; nothing for a Category that has a row in the
+// target, whose latest state is none, or that no Period holds; and only for the
+// Household's own Category.
+func TestCarryCategoryForwardUsesTheNearestPeriodThatHeldTheCategoryItself(t *testing.T) {
+	f := newFixture(t)
+	householdID, _, _ := f.member(t, "Home", "a@example.com")
+	other := f.tdb.CreateHousehold(t, "Other")
+	rent := f.category(t, householdID, "Rent", "commitment")
+	food := f.category(t, householdID, "Food", "daily")
+	cleared := f.category(t, householdID, "Cleared", "daily")
+	never := f.category(t, householdID, "Never", "daily")
+	theirs := f.tdb.CreateCategory(t, other, "Theirs", "commitment")
+	f.allocate(t, householdID, "2026-09", "2026-09-01", rent, "100")
+	f.allocate(t, householdID, "2026-10", "2026-10-03", rent, "3000000")
+	f.allocate(t, householdID, "2026-10", "2026-10-20", rent, "3100000")
+	f.allocate(t, householdID, "2026-11", "2026-11-01", food, "500") // a nearer Period that never held Rent
+	f.allocate(t, householdID, "2026-10", "2026-10-01", cleared, "7")
+	f.allocate(t, householdID, "2026-10", "2026-10-09", cleared, "")
+	f.allocate(t, other, "2026-10", "2026-10-01", theirs, "9")
+
+	p, err := period.Window("2026-12", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	carry := func(id pgtype.UUID) {
+		t.Helper()
+		tx, err := f.tdb.Pool.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = tx.Rollback(ctx) }()
+		q := db.New(tx)
+		f.exec(t, `INSERT INTO budgets (household_id, year_month) VALUES ($1, '2026-12') ON CONFLICT DO NOTHING`, householdID)
+		if err := budget.CarryCategoryForward(ctx, q, householdID, p, id); err != nil {
+			t.Fatal(err)
+		}
+		if err := tx.Commit(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, id := range []pgtype.UUID{rent, rent, cleared, never, theirs} { // Rent twice: the second writes nothing
+		carry(id)
+	}
+	want := "2026-09 2026-09-01 Rent 100.0000; 2026-10 2026-10-01 Cleared 7.0000; 2026-10 2026-10-03 Rent 3000000.0000; " +
+		"2026-10 2026-10-09 Cleared none; 2026-10 2026-10-20 Rent 3100000.0000; 2026-11 2026-11-01 Food 500.0000; " +
+		"2026-12 2026-12-01 Rent 3100000.0000"
+	if got := f.allocationShape(t, householdID); got != want {
+		t.Errorf("allocations:\n got %s\nwant %s", got, want)
+	}
+	if got := f.allocationShape(t, other); got != "2026-10 2026-10-01 Theirs 9.0000" {
+		t.Errorf("the other Household's allocations = %s: a Category of another Household is never carried", got)
 	}
 }
 

@@ -1,0 +1,1098 @@
+# DELETE /categories/{id} (#130, PR 4 of 5): a soft delete. The row stays with
+# deleted_at set; the Category is gone from the list and from PATCH, gives up its
+# name at once, and drops out of every figure of the current Budget Period (reads
+# join live Categories) without one allocation row being touched. Idempotent on
+# the caller's own Category, keeping the FIRST deleted_at, and never refused once
+# deleted. An id that is unknown or another Household's is one 404 NOT_FOUND, byte
+# for byte; the id's shape is checked before the lookup.
+#
+# 409 CATEGORY_IN_USE (C8, R9): refused while the Category holds an allocation, a
+# non-null amount, in a Budget Period OTHER than the current one (earlier or later).
+# Only the current Period's own allocation never blocks, and a Period that holds
+# only a "none" row does not. Under an outage the session itself cannot be read,
+# which the session middleware answers 500 with the cookie left alone (#27); it
+# never reaches the handler, whose own 500s the backend's suite covers.
+#
+# The Categories a case starts with, in the current Period (dated Today by the
+# database's own clock in Jakarta less four hours, as budget.yaml), the Monthly
+# Budget being 9.000.000. Every row is created 2026-01-NN and updated at one
+# fixed instant, and a deleted one's deleted_at is that instant too, so `untouched`
+# and `stamp_kept` say whether a request moved either:
+#   ...8003-000000000001  Rent           commitment  active    this Period 3.000.000 (only)
+#   ...8003-000000000002  Groceries      daily       active    this Period 2.000.000
+#   ...8003-000000000003  Gym            commitment  inactive  this Period 500.000 AND last Period 400.000
+#   ...8003-000000000004  Typo           daily       deleted   none
+#   ...8003-000000000005  Subscriptions  daily       active    none
+#   ...8003-000000000006  Old            daily       active    last Period 100, cleared to none a day later
+#   ...8003-000000000007  Spare          daily       active    last Period: only a none row
+#   ...8003-000000000008  Dormant        daily       inactive  none
+#   ...8003-000000000009  Theirs         commitment  Household 2, this Period 1.000.000
+#   ...8003-000000000010  Future         commitment  active    NEXT Period 700.000 (a later Period counts as another)
+# The allocations never change in any case: every row asserts all of them.
+
+- name: "category delete - a live Category held only in this Period is soft-deleted: 204, the row stays, deleted_at set"
+  issue: "130"
+  given: &seeded
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO categories (id, household_id, category_display_name, bucket, active, deleted_at, created_at, updated_at) VALUES
+          ('0192f0a0-0000-7000-8003-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'Rent', 'commitment', true, NULL, '2026-01-02T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Groceries', 'daily', true, NULL, '2026-01-03T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Gym', 'commitment', false, NULL, '2026-01-04T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000004', '0192f0a0-0000-7000-8000-000000000001', 'Typo', 'daily', true, '2026-01-05T00:00:00Z', '2026-01-05T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000005', '0192f0a0-0000-7000-8000-000000000001', 'Subscriptions', 'daily', true, NULL, '2026-01-06T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000006', '0192f0a0-0000-7000-8000-000000000001', 'Old', 'daily', true, NULL, '2026-01-07T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000007', '0192f0a0-0000-7000-8000-000000000001', 'Spare', 'daily', true, NULL, '2026-01-08T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000008', '0192f0a0-0000-7000-8000-000000000001', 'Dormant', 'daily', false, NULL, '2026-01-09T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', 'commitment', true, NULL, '2026-01-10T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000010', '0192f0a0-0000-7000-8000-000000000001', 'Future', 'commitment', true, NULL, '2026-01-11T00:00:00Z', '2026-01-05T00:00:00Z');
+        INSERT INTO budgets (household_id, year_month) VALUES ('0192f0a0-0000-7000-8000-000000000001', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM')), ('0192f0a0-0000-7000-8000-000000000001', to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month', 'YYYY-MM')), ('0192f0a0-0000-7000-8000-000000000001', to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') + interval '1 month', 'YYYY-MM')), ('0192f0a0-0000-7000-8000-000000000002', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'));
+        INSERT INTO monthly_budgets (household_id, year_month, effective_on, monthly_budget) VALUES ('0192f0a0-0000-7000-8000-000000000001', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'), ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date, 9000000);
+        INSERT INTO allocations (household_id, year_month, effective_on, category_id, allocation) VALUES
+          ('0192f0a0-0000-7000-8000-000000000001', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'), ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date, '0192f0a0-0000-7000-8003-000000000001', 3000000),
+          ('0192f0a0-0000-7000-8000-000000000001', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'), ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date, '0192f0a0-0000-7000-8003-000000000002', 2000000),
+          ('0192f0a0-0000-7000-8000-000000000001', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'), ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date, '0192f0a0-0000-7000-8003-000000000003', 500000),
+          ('0192f0a0-0000-7000-8000-000000000001', to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month', 'YYYY-MM'), (date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month')::date, '0192f0a0-0000-7000-8003-000000000003', 400000),
+          ('0192f0a0-0000-7000-8000-000000000001', to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month', 'YYYY-MM'), (date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month')::date, '0192f0a0-0000-7000-8003-000000000006', 100),
+          ('0192f0a0-0000-7000-8000-000000000001', to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month', 'YYYY-MM'), (date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month')::date + 1, '0192f0a0-0000-7000-8003-000000000006', NULL),
+          ('0192f0a0-0000-7000-8000-000000000001', to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month', 'YYYY-MM'), (date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month')::date, '0192f0a0-0000-7000-8003-000000000007', NULL),
+          ('0192f0a0-0000-7000-8000-000000000002', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'), ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date, '0192f0a0-0000-7000-8003-000000000009', 1000000),
+          ('0192f0a0-0000-7000-8000-000000000001', to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') + interval '1 month', 'YYYY-MM'), (date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') + interval '1 month')::date, '0192f0a0-0000-7000-8003-000000000010', 700000)
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: DELETE
+    path: /categories/0192f0a0-0000-7000-8003-000000000001
+  expect:
+    status: 204
+    body_empty: true
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, category_display_name AS name, bucket, active, (deleted_at IS NOT NULL) AS deleted, coalesce(deleted_at = '2026-01-05T00:00:00Z', false) AS stamp_kept, (updated_at = '2026-01-05T00:00:00Z') AS untouched FROM categories ORDER BY id
+        rows:
+          - {"id": "0192f0a0-0000-7000-8003-000000000001", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Rent", "bucket": "commitment", "active": true, "deleted": true, "stamp_kept": false, "untouched": false}
+          - {"id": "0192f0a0-0000-7000-8003-000000000002", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Groceries", "bucket": "daily", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000003", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Gym", "bucket": "commitment", "active": false, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000004", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Typo", "bucket": "daily", "active": true, "deleted": true, "stamp_kept": true, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000005", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Subscriptions", "bucket": "daily", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000006", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Old", "bucket": "daily", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000007", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Spare", "bucket": "daily", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000008", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Dormant", "bucket": "daily", "active": false, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000009", "household_id": "0192f0a0-0000-7000-8000-000000000002", "name": "Theirs", "bucket": "commitment", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000010", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Future", "bucket": "commitment", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+      - sql: SELECT category_id::text AS category_id, (year_month = to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM')) AS current_period, (year_month = to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month', 'YYYY-MM')) AS previous_period, (year_month = to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') + interval '1 month', 'YYYY-MM')) AS next_period, coalesce(allocation::text, 'none') AS amount FROM allocations ORDER BY category_id, year_month, effective_on
+        rows:
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000001", "current_period": true, "previous_period": false, "next_period": false, "amount": "3000000.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000002", "current_period": true, "previous_period": false, "next_period": false, "amount": "2000000.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000003", "current_period": false, "previous_period": true, "next_period": false, "amount": "400000.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000003", "current_period": true, "previous_period": false, "next_period": false, "amount": "500000.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000006", "current_period": false, "previous_period": true, "next_period": false, "amount": "100.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000006", "current_period": false, "previous_period": true, "next_period": false, "amount": "none"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000007", "current_period": false, "previous_period": true, "next_period": false, "amount": "none"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000009", "current_period": true, "previous_period": false, "next_period": false, "amount": "1000000.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000010", "current_period": false, "previous_period": false, "next_period": true, "amount": "700000.0000"}
+
+
+- name: "category delete - an inactive Category can be deleted"
+  issue: "130"
+  given: *seeded
+  request:
+    method: DELETE
+    path: /categories/0192f0a0-0000-7000-8003-000000000008
+  expect:
+    status: 204
+    body_empty: true
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, category_display_name AS name, bucket, active, (deleted_at IS NOT NULL) AS deleted, coalesce(deleted_at = '2026-01-05T00:00:00Z', false) AS stamp_kept, (updated_at = '2026-01-05T00:00:00Z') AS untouched FROM categories ORDER BY id
+        rows:
+          - {"id": "0192f0a0-0000-7000-8003-000000000001", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Rent", "bucket": "commitment", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000002", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Groceries", "bucket": "daily", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000003", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Gym", "bucket": "commitment", "active": false, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000004", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Typo", "bucket": "daily", "active": true, "deleted": true, "stamp_kept": true, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000005", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Subscriptions", "bucket": "daily", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000006", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Old", "bucket": "daily", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000007", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Spare", "bucket": "daily", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000008", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Dormant", "bucket": "daily", "active": false, "deleted": true, "stamp_kept": false, "untouched": false}
+          - {"id": "0192f0a0-0000-7000-8003-000000000009", "household_id": "0192f0a0-0000-7000-8000-000000000002", "name": "Theirs", "bucket": "commitment", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000010", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Future", "bucket": "commitment", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+      - sql: SELECT category_id::text AS category_id, (year_month = to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM')) AS current_period, (year_month = to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month', 'YYYY-MM')) AS previous_period, (year_month = to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') + interval '1 month', 'YYYY-MM')) AS next_period, coalesce(allocation::text, 'none') AS amount FROM allocations ORDER BY category_id, year_month, effective_on
+        rows:
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000001", "current_period": true, "previous_period": false, "next_period": false, "amount": "3000000.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000002", "current_period": true, "previous_period": false, "next_period": false, "amount": "2000000.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000003", "current_period": false, "previous_period": true, "next_period": false, "amount": "400000.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000003", "current_period": true, "previous_period": false, "next_period": false, "amount": "500000.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000006", "current_period": false, "previous_period": true, "next_period": false, "amount": "100.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000006", "current_period": false, "previous_period": true, "next_period": false, "amount": "none"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000007", "current_period": false, "previous_period": true, "next_period": false, "amount": "none"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000009", "current_period": true, "previous_period": false, "next_period": false, "amount": "1000000.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000010", "current_period": false, "previous_period": false, "next_period": true, "amount": "700000.0000"}
+
+
+- name: "category delete - a Category with no allocation at all can be deleted"
+  issue: "130"
+  given: *seeded
+  request:
+    method: DELETE
+    path: /categories/0192f0a0-0000-7000-8003-000000000005
+  expect:
+    status: 204
+    body_empty: true
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, category_display_name AS name, bucket, active, (deleted_at IS NOT NULL) AS deleted, coalesce(deleted_at = '2026-01-05T00:00:00Z', false) AS stamp_kept, (updated_at = '2026-01-05T00:00:00Z') AS untouched FROM categories ORDER BY id
+        rows:
+          - {"id": "0192f0a0-0000-7000-8003-000000000001", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Rent", "bucket": "commitment", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000002", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Groceries", "bucket": "daily", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000003", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Gym", "bucket": "commitment", "active": false, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000004", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Typo", "bucket": "daily", "active": true, "deleted": true, "stamp_kept": true, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000005", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Subscriptions", "bucket": "daily", "active": true, "deleted": true, "stamp_kept": false, "untouched": false}
+          - {"id": "0192f0a0-0000-7000-8003-000000000006", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Old", "bucket": "daily", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000007", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Spare", "bucket": "daily", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000008", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Dormant", "bucket": "daily", "active": false, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000009", "household_id": "0192f0a0-0000-7000-8000-000000000002", "name": "Theirs", "bucket": "commitment", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000010", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Future", "bucket": "commitment", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+      - sql: SELECT category_id::text AS category_id, (year_month = to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM')) AS current_period, (year_month = to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month', 'YYYY-MM')) AS previous_period, (year_month = to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') + interval '1 month', 'YYYY-MM')) AS next_period, coalesce(allocation::text, 'none') AS amount FROM allocations ORDER BY category_id, year_month, effective_on
+        rows:
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000001", "current_period": true, "previous_period": false, "next_period": false, "amount": "3000000.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000002", "current_period": true, "previous_period": false, "next_period": false, "amount": "2000000.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000003", "current_period": false, "previous_period": true, "next_period": false, "amount": "400000.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000003", "current_period": true, "previous_period": false, "next_period": false, "amount": "500000.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000006", "current_period": false, "previous_period": true, "next_period": false, "amount": "100.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000006", "current_period": false, "previous_period": true, "next_period": false, "amount": "none"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000007", "current_period": false, "previous_period": true, "next_period": false, "amount": "none"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000009", "current_period": true, "previous_period": false, "next_period": false, "amount": "1000000.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000010", "current_period": false, "previous_period": false, "next_period": true, "amount": "700000.0000"}
+
+
+- name: "category delete - a Category whose only other-Period row is a none row can be deleted"
+  issue: "130"
+  given: *seeded
+  request:
+    method: DELETE
+    path: /categories/0192f0a0-0000-7000-8003-000000000007
+  expect:
+    status: 204
+    body_empty: true
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, category_display_name AS name, bucket, active, (deleted_at IS NOT NULL) AS deleted, coalesce(deleted_at = '2026-01-05T00:00:00Z', false) AS stamp_kept, (updated_at = '2026-01-05T00:00:00Z') AS untouched FROM categories ORDER BY id
+        rows:
+          - {"id": "0192f0a0-0000-7000-8003-000000000001", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Rent", "bucket": "commitment", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000002", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Groceries", "bucket": "daily", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000003", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Gym", "bucket": "commitment", "active": false, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000004", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Typo", "bucket": "daily", "active": true, "deleted": true, "stamp_kept": true, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000005", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Subscriptions", "bucket": "daily", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000006", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Old", "bucket": "daily", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000007", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Spare", "bucket": "daily", "active": true, "deleted": true, "stamp_kept": false, "untouched": false}
+          - {"id": "0192f0a0-0000-7000-8003-000000000008", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Dormant", "bucket": "daily", "active": false, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000009", "household_id": "0192f0a0-0000-7000-8000-000000000002", "name": "Theirs", "bucket": "commitment", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000010", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Future", "bucket": "commitment", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+      - sql: SELECT category_id::text AS category_id, (year_month = to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM')) AS current_period, (year_month = to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month', 'YYYY-MM')) AS previous_period, (year_month = to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') + interval '1 month', 'YYYY-MM')) AS next_period, coalesce(allocation::text, 'none') AS amount FROM allocations ORDER BY category_id, year_month, effective_on
+        rows:
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000001", "current_period": true, "previous_period": false, "next_period": false, "amount": "3000000.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000002", "current_period": true, "previous_period": false, "next_period": false, "amount": "2000000.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000003", "current_period": false, "previous_period": true, "next_period": false, "amount": "400000.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000003", "current_period": true, "previous_period": false, "next_period": false, "amount": "500000.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000006", "current_period": false, "previous_period": true, "next_period": false, "amount": "100.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000006", "current_period": false, "previous_period": true, "next_period": false, "amount": "none"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000007", "current_period": false, "previous_period": true, "next_period": false, "amount": "none"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000009", "current_period": true, "previous_period": false, "next_period": false, "amount": "1000000.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000010", "current_period": false, "previous_period": false, "next_period": true, "amount": "700000.0000"}
+
+
+- name: "category delete - deleting a deleted Category is 204 again and keeps the first deleted_at, changing nothing"
+  issue: "130"
+  given: *seeded
+  request:
+    method: DELETE
+    path: /categories/0192f0a0-0000-7000-8003-000000000004
+  expect:
+    status: 204
+    body_empty: true
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, category_display_name AS name, bucket, active, (deleted_at IS NOT NULL) AS deleted, coalesce(deleted_at = '2026-01-05T00:00:00Z', false) AS stamp_kept, (updated_at = '2026-01-05T00:00:00Z') AS untouched FROM categories ORDER BY id
+        rows:
+          - {"id": "0192f0a0-0000-7000-8003-000000000001", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Rent", "bucket": "commitment", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000002", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Groceries", "bucket": "daily", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000003", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Gym", "bucket": "commitment", "active": false, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000004", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Typo", "bucket": "daily", "active": true, "deleted": true, "stamp_kept": true, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000005", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Subscriptions", "bucket": "daily", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000006", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Old", "bucket": "daily", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000007", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Spare", "bucket": "daily", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000008", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Dormant", "bucket": "daily", "active": false, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000009", "household_id": "0192f0a0-0000-7000-8000-000000000002", "name": "Theirs", "bucket": "commitment", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000010", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Future", "bucket": "commitment", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+      - sql: SELECT category_id::text AS category_id, (year_month = to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM')) AS current_period, (year_month = to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month', 'YYYY-MM')) AS previous_period, (year_month = to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') + interval '1 month', 'YYYY-MM')) AS next_period, coalesce(allocation::text, 'none') AS amount FROM allocations ORDER BY category_id, year_month, effective_on
+        rows:
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000001", "current_period": true, "previous_period": false, "next_period": false, "amount": "3000000.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000002", "current_period": true, "previous_period": false, "next_period": false, "amount": "2000000.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000003", "current_period": false, "previous_period": true, "next_period": false, "amount": "400000.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000003", "current_period": true, "previous_period": false, "next_period": false, "amount": "500000.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000006", "current_period": false, "previous_period": true, "next_period": false, "amount": "100.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000006", "current_period": false, "previous_period": true, "next_period": false, "amount": "none"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000007", "current_period": false, "previous_period": true, "next_period": false, "amount": "none"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000009", "current_period": true, "previous_period": false, "next_period": false, "amount": "1000000.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000010", "current_period": false, "previous_period": false, "next_period": true, "amount": "700000.0000"}
+
+
+- name: "category delete - an allocation in an earlier Period is CATEGORY_IN_USE, with no args, and nothing changes"
+  issue: "130"
+  given: *seeded
+  request:
+    method: DELETE
+    path: /categories/0192f0a0-0000-7000-8003-000000000003
+  expect:
+    status: 409
+    body_json: {"code": "CATEGORY_IN_USE"}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, category_display_name AS name, bucket, active, (deleted_at IS NOT NULL) AS deleted, coalesce(deleted_at = '2026-01-05T00:00:00Z', false) AS stamp_kept, (updated_at = '2026-01-05T00:00:00Z') AS untouched FROM categories ORDER BY id
+        rows:
+          - {"id": "0192f0a0-0000-7000-8003-000000000001", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Rent", "bucket": "commitment", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000002", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Groceries", "bucket": "daily", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000003", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Gym", "bucket": "commitment", "active": false, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000004", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Typo", "bucket": "daily", "active": true, "deleted": true, "stamp_kept": true, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000005", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Subscriptions", "bucket": "daily", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000006", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Old", "bucket": "daily", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000007", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Spare", "bucket": "daily", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000008", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Dormant", "bucket": "daily", "active": false, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000009", "household_id": "0192f0a0-0000-7000-8000-000000000002", "name": "Theirs", "bucket": "commitment", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000010", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Future", "bucket": "commitment", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+      - sql: SELECT category_id::text AS category_id, (year_month = to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM')) AS current_period, (year_month = to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month', 'YYYY-MM')) AS previous_period, (year_month = to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') + interval '1 month', 'YYYY-MM')) AS next_period, coalesce(allocation::text, 'none') AS amount FROM allocations ORDER BY category_id, year_month, effective_on
+        rows:
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000001", "current_period": true, "previous_period": false, "next_period": false, "amount": "3000000.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000002", "current_period": true, "previous_period": false, "next_period": false, "amount": "2000000.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000003", "current_period": false, "previous_period": true, "next_period": false, "amount": "400000.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000003", "current_period": true, "previous_period": false, "next_period": false, "amount": "500000.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000006", "current_period": false, "previous_period": true, "next_period": false, "amount": "100.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000006", "current_period": false, "previous_period": true, "next_period": false, "amount": "none"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000007", "current_period": false, "previous_period": true, "next_period": false, "amount": "none"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000009", "current_period": true, "previous_period": false, "next_period": false, "amount": "1000000.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000010", "current_period": false, "previous_period": false, "next_period": true, "amount": "700000.0000"}
+
+
+- name: "category delete - an amount an earlier Period later cleared still blocks: CATEGORY_IN_USE"
+  issue: "130"
+  given: *seeded
+  request:
+    method: DELETE
+    path: /categories/0192f0a0-0000-7000-8003-000000000006
+  expect:
+    status: 409
+    body_json: {"code": "CATEGORY_IN_USE"}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, category_display_name AS name, bucket, active, (deleted_at IS NOT NULL) AS deleted, coalesce(deleted_at = '2026-01-05T00:00:00Z', false) AS stamp_kept, (updated_at = '2026-01-05T00:00:00Z') AS untouched FROM categories ORDER BY id
+        rows:
+          - {"id": "0192f0a0-0000-7000-8003-000000000001", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Rent", "bucket": "commitment", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000002", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Groceries", "bucket": "daily", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000003", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Gym", "bucket": "commitment", "active": false, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000004", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Typo", "bucket": "daily", "active": true, "deleted": true, "stamp_kept": true, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000005", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Subscriptions", "bucket": "daily", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000006", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Old", "bucket": "daily", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000007", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Spare", "bucket": "daily", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000008", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Dormant", "bucket": "daily", "active": false, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000009", "household_id": "0192f0a0-0000-7000-8000-000000000002", "name": "Theirs", "bucket": "commitment", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000010", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Future", "bucket": "commitment", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+      - sql: SELECT category_id::text AS category_id, (year_month = to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM')) AS current_period, (year_month = to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month', 'YYYY-MM')) AS previous_period, (year_month = to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') + interval '1 month', 'YYYY-MM')) AS next_period, coalesce(allocation::text, 'none') AS amount FROM allocations ORDER BY category_id, year_month, effective_on
+        rows:
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000001", "current_period": true, "previous_period": false, "next_period": false, "amount": "3000000.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000002", "current_period": true, "previous_period": false, "next_period": false, "amount": "2000000.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000003", "current_period": false, "previous_period": true, "next_period": false, "amount": "400000.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000003", "current_period": true, "previous_period": false, "next_period": false, "amount": "500000.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000006", "current_period": false, "previous_period": true, "next_period": false, "amount": "100.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000006", "current_period": false, "previous_period": true, "next_period": false, "amount": "none"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000007", "current_period": false, "previous_period": true, "next_period": false, "amount": "none"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000009", "current_period": true, "previous_period": false, "next_period": false, "amount": "1000000.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000010", "current_period": false, "previous_period": false, "next_period": true, "amount": "700000.0000"}
+
+
+- name: "category delete - an allocation in a later Period also blocks: CATEGORY_IN_USE"
+  issue: "130"
+  given: *seeded
+  request:
+    method: DELETE
+    path: /categories/0192f0a0-0000-7000-8003-000000000010
+  expect:
+    status: 409
+    body_json: {"code": "CATEGORY_IN_USE"}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, category_display_name AS name, bucket, active, (deleted_at IS NOT NULL) AS deleted, coalesce(deleted_at = '2026-01-05T00:00:00Z', false) AS stamp_kept, (updated_at = '2026-01-05T00:00:00Z') AS untouched FROM categories ORDER BY id
+        rows:
+          - {"id": "0192f0a0-0000-7000-8003-000000000001", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Rent", "bucket": "commitment", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000002", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Groceries", "bucket": "daily", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000003", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Gym", "bucket": "commitment", "active": false, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000004", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Typo", "bucket": "daily", "active": true, "deleted": true, "stamp_kept": true, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000005", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Subscriptions", "bucket": "daily", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000006", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Old", "bucket": "daily", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000007", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Spare", "bucket": "daily", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000008", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Dormant", "bucket": "daily", "active": false, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000009", "household_id": "0192f0a0-0000-7000-8000-000000000002", "name": "Theirs", "bucket": "commitment", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000010", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Future", "bucket": "commitment", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+      - sql: SELECT category_id::text AS category_id, (year_month = to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM')) AS current_period, (year_month = to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month', 'YYYY-MM')) AS previous_period, (year_month = to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') + interval '1 month', 'YYYY-MM')) AS next_period, coalesce(allocation::text, 'none') AS amount FROM allocations ORDER BY category_id, year_month, effective_on
+        rows:
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000001", "current_period": true, "previous_period": false, "next_period": false, "amount": "3000000.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000002", "current_period": true, "previous_period": false, "next_period": false, "amount": "2000000.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000003", "current_period": false, "previous_period": true, "next_period": false, "amount": "400000.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000003", "current_period": true, "previous_period": false, "next_period": false, "amount": "500000.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000006", "current_period": false, "previous_period": true, "next_period": false, "amount": "100.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000006", "current_period": false, "previous_period": true, "next_period": false, "amount": "none"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000007", "current_period": false, "previous_period": true, "next_period": false, "amount": "none"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000009", "current_period": true, "previous_period": false, "next_period": false, "amount": "1000000.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000010", "current_period": false, "previous_period": false, "next_period": true, "amount": "700000.0000"}
+
+
+- name: "category delete - another Household's live id is NOT_FOUND exactly as an unknown id is, and their Category is untouched"
+  issue: "130"
+  given: *seeded
+  request:
+    method: DELETE
+    path: /categories/0192f0a0-0000-7000-8003-000000000009
+  expect:
+    status: 404
+    body_json: {"code": "NOT_FOUND"}
+    same_as:
+      method: DELETE
+      path: /categories/0192f0a0-0000-7000-8003-000000000099
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, category_display_name AS name, bucket, active, (deleted_at IS NOT NULL) AS deleted, coalesce(deleted_at = '2026-01-05T00:00:00Z', false) AS stamp_kept, (updated_at = '2026-01-05T00:00:00Z') AS untouched FROM categories ORDER BY id
+        rows:
+          - {"id": "0192f0a0-0000-7000-8003-000000000001", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Rent", "bucket": "commitment", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000002", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Groceries", "bucket": "daily", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000003", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Gym", "bucket": "commitment", "active": false, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000004", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Typo", "bucket": "daily", "active": true, "deleted": true, "stamp_kept": true, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000005", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Subscriptions", "bucket": "daily", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000006", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Old", "bucket": "daily", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000007", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Spare", "bucket": "daily", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000008", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Dormant", "bucket": "daily", "active": false, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000009", "household_id": "0192f0a0-0000-7000-8000-000000000002", "name": "Theirs", "bucket": "commitment", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000010", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Future", "bucket": "commitment", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+      - sql: SELECT category_id::text AS category_id, (year_month = to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM')) AS current_period, (year_month = to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month', 'YYYY-MM')) AS previous_period, (year_month = to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') + interval '1 month', 'YYYY-MM')) AS next_period, coalesce(allocation::text, 'none') AS amount FROM allocations ORDER BY category_id, year_month, effective_on
+        rows:
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000001", "current_period": true, "previous_period": false, "next_period": false, "amount": "3000000.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000002", "current_period": true, "previous_period": false, "next_period": false, "amount": "2000000.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000003", "current_period": false, "previous_period": true, "next_period": false, "amount": "400000.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000003", "current_period": true, "previous_period": false, "next_period": false, "amount": "500000.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000006", "current_period": false, "previous_period": true, "next_period": false, "amount": "100.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000006", "current_period": false, "previous_period": true, "next_period": false, "amount": "none"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000007", "current_period": false, "previous_period": true, "next_period": false, "amount": "none"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000009", "current_period": true, "previous_period": false, "next_period": false, "amount": "1000000.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000010", "current_period": false, "previous_period": false, "next_period": true, "amount": "700000.0000"}
+
+
+- name: "category delete - an unknown id is NOT_FOUND with no args"
+  issue: "130"
+  given: *seeded
+  request:
+    method: DELETE
+    path: /categories/0192f0a0-0000-7000-8003-000000000099
+  expect:
+    status: 404
+    body_json: {"code": "NOT_FOUND"}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, category_display_name AS name, bucket, active, (deleted_at IS NOT NULL) AS deleted, coalesce(deleted_at = '2026-01-05T00:00:00Z', false) AS stamp_kept, (updated_at = '2026-01-05T00:00:00Z') AS untouched FROM categories ORDER BY id
+        rows:
+          - {"id": "0192f0a0-0000-7000-8003-000000000001", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Rent", "bucket": "commitment", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000002", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Groceries", "bucket": "daily", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000003", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Gym", "bucket": "commitment", "active": false, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000004", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Typo", "bucket": "daily", "active": true, "deleted": true, "stamp_kept": true, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000005", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Subscriptions", "bucket": "daily", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000006", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Old", "bucket": "daily", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000007", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Spare", "bucket": "daily", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000008", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Dormant", "bucket": "daily", "active": false, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000009", "household_id": "0192f0a0-0000-7000-8000-000000000002", "name": "Theirs", "bucket": "commitment", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000010", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Future", "bucket": "commitment", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+      - sql: SELECT category_id::text AS category_id, (year_month = to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM')) AS current_period, (year_month = to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month', 'YYYY-MM')) AS previous_period, (year_month = to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') + interval '1 month', 'YYYY-MM')) AS next_period, coalesce(allocation::text, 'none') AS amount FROM allocations ORDER BY category_id, year_month, effective_on
+        rows:
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000001", "current_period": true, "previous_period": false, "next_period": false, "amount": "3000000.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000002", "current_period": true, "previous_period": false, "next_period": false, "amount": "2000000.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000003", "current_period": false, "previous_period": true, "next_period": false, "amount": "400000.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000003", "current_period": true, "previous_period": false, "next_period": false, "amount": "500000.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000006", "current_period": false, "previous_period": true, "next_period": false, "amount": "100.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000006", "current_period": false, "previous_period": true, "next_period": false, "amount": "none"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000007", "current_period": false, "previous_period": true, "next_period": false, "amount": "none"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000009", "current_period": true, "previous_period": false, "next_period": false, "amount": "1000000.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000010", "current_period": false, "previous_period": false, "next_period": true, "amount": "700000.0000"}
+
+
+- name: "category delete - NOT_FOUND is the same answer as PATCH gives for a foreign id"
+  issue: "130"
+  given: *seeded
+  request:
+    method: DELETE
+    path: /categories/0192f0a0-0000-7000-8003-000000000009
+  expect:
+    status: 404
+    body_json: {"code": "NOT_FOUND"}
+    same_as:
+      method: PATCH
+      path: /categories/0192f0a0-0000-7000-8003-000000000009
+      headers:
+        Content-Type: application/json
+      body: '{}'
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, category_display_name AS name, bucket, active, (deleted_at IS NOT NULL) AS deleted, coalesce(deleted_at = '2026-01-05T00:00:00Z', false) AS stamp_kept, (updated_at = '2026-01-05T00:00:00Z') AS untouched FROM categories ORDER BY id
+        rows:
+          - {"id": "0192f0a0-0000-7000-8003-000000000001", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Rent", "bucket": "commitment", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000002", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Groceries", "bucket": "daily", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000003", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Gym", "bucket": "commitment", "active": false, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000004", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Typo", "bucket": "daily", "active": true, "deleted": true, "stamp_kept": true, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000005", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Subscriptions", "bucket": "daily", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000006", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Old", "bucket": "daily", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000007", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Spare", "bucket": "daily", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000008", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Dormant", "bucket": "daily", "active": false, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000009", "household_id": "0192f0a0-0000-7000-8000-000000000002", "name": "Theirs", "bucket": "commitment", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000010", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Future", "bucket": "commitment", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+      - sql: SELECT category_id::text AS category_id, (year_month = to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM')) AS current_period, (year_month = to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month', 'YYYY-MM')) AS previous_period, (year_month = to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') + interval '1 month', 'YYYY-MM')) AS next_period, coalesce(allocation::text, 'none') AS amount FROM allocations ORDER BY category_id, year_month, effective_on
+        rows:
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000001", "current_period": true, "previous_period": false, "next_period": false, "amount": "3000000.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000002", "current_period": true, "previous_period": false, "next_period": false, "amount": "2000000.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000003", "current_period": false, "previous_period": true, "next_period": false, "amount": "400000.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000003", "current_period": true, "previous_period": false, "next_period": false, "amount": "500000.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000006", "current_period": false, "previous_period": true, "next_period": false, "amount": "100.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000006", "current_period": false, "previous_period": true, "next_period": false, "amount": "none"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000007", "current_period": false, "previous_period": true, "next_period": false, "amount": "none"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000009", "current_period": true, "previous_period": false, "next_period": false, "amount": "1000000.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000010", "current_period": false, "previous_period": false, "next_period": true, "amount": "700000.0000"}
+
+
+- name: "category delete - a malformed id is a 400 and changes nothing"
+  issue: "130"
+  given: *seeded
+  request:
+    method: DELETE
+    path: /categories/not-a-uuid
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "id", "rule": "invalid"}}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, category_display_name AS name, bucket, active, (deleted_at IS NOT NULL) AS deleted, coalesce(deleted_at = '2026-01-05T00:00:00Z', false) AS stamp_kept, (updated_at = '2026-01-05T00:00:00Z') AS untouched FROM categories ORDER BY id
+        rows:
+          - {"id": "0192f0a0-0000-7000-8003-000000000001", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Rent", "bucket": "commitment", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000002", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Groceries", "bucket": "daily", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000003", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Gym", "bucket": "commitment", "active": false, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000004", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Typo", "bucket": "daily", "active": true, "deleted": true, "stamp_kept": true, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000005", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Subscriptions", "bucket": "daily", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000006", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Old", "bucket": "daily", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000007", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Spare", "bucket": "daily", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000008", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Dormant", "bucket": "daily", "active": false, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000009", "household_id": "0192f0a0-0000-7000-8000-000000000002", "name": "Theirs", "bucket": "commitment", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000010", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Future", "bucket": "commitment", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+      - sql: SELECT category_id::text AS category_id, (year_month = to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM')) AS current_period, (year_month = to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month', 'YYYY-MM')) AS previous_period, (year_month = to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') + interval '1 month', 'YYYY-MM')) AS next_period, coalesce(allocation::text, 'none') AS amount FROM allocations ORDER BY category_id, year_month, effective_on
+        rows:
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000001", "current_period": true, "previous_period": false, "next_period": false, "amount": "3000000.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000002", "current_period": true, "previous_period": false, "next_period": false, "amount": "2000000.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000003", "current_period": false, "previous_period": true, "next_period": false, "amount": "400000.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000003", "current_period": true, "previous_period": false, "next_period": false, "amount": "500000.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000006", "current_period": false, "previous_period": true, "next_period": false, "amount": "100.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000006", "current_period": false, "previous_period": true, "next_period": false, "amount": "none"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000007", "current_period": false, "previous_period": true, "next_period": false, "amount": "none"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000009", "current_period": true, "previous_period": false, "next_period": false, "amount": "1000000.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000010", "current_period": false, "previous_period": false, "next_period": true, "amount": "700000.0000"}
+
+
+- name: "category delete - a deleted Category is gone from the list"
+  issue: "130"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO categories (id, household_id, category_display_name, bucket, active, deleted_at, created_at, updated_at) VALUES
+          ('0192f0a0-0000-7000-8003-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'Rent', 'commitment', true, NULL, '2026-01-02T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Groceries', 'daily', true, NULL, '2026-01-03T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Gym', 'commitment', false, NULL, '2026-01-04T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000004', '0192f0a0-0000-7000-8000-000000000001', 'Typo', 'daily', true, '2026-01-05T00:00:00Z', '2026-01-05T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000005', '0192f0a0-0000-7000-8000-000000000001', 'Subscriptions', 'daily', true, NULL, '2026-01-06T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000006', '0192f0a0-0000-7000-8000-000000000001', 'Old', 'daily', true, NULL, '2026-01-07T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000007', '0192f0a0-0000-7000-8000-000000000001', 'Spare', 'daily', true, NULL, '2026-01-08T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000008', '0192f0a0-0000-7000-8000-000000000001', 'Dormant', 'daily', false, NULL, '2026-01-09T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', 'commitment', true, NULL, '2026-01-10T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000010', '0192f0a0-0000-7000-8000-000000000001', 'Future', 'commitment', true, NULL, '2026-01-11T00:00:00Z', '2026-01-05T00:00:00Z');
+        INSERT INTO budgets (household_id, year_month) VALUES ('0192f0a0-0000-7000-8000-000000000001', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM')), ('0192f0a0-0000-7000-8000-000000000001', to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month', 'YYYY-MM')), ('0192f0a0-0000-7000-8000-000000000001', to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') + interval '1 month', 'YYYY-MM')), ('0192f0a0-0000-7000-8000-000000000002', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'));
+        INSERT INTO monthly_budgets (household_id, year_month, effective_on, monthly_budget) VALUES ('0192f0a0-0000-7000-8000-000000000001', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'), ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date, 9000000);
+        INSERT INTO allocations (household_id, year_month, effective_on, category_id, allocation) VALUES
+          ('0192f0a0-0000-7000-8000-000000000001', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'), ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date, '0192f0a0-0000-7000-8003-000000000001', 3000000),
+          ('0192f0a0-0000-7000-8000-000000000001', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'), ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date, '0192f0a0-0000-7000-8003-000000000002', 2000000),
+          ('0192f0a0-0000-7000-8000-000000000001', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'), ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date, '0192f0a0-0000-7000-8003-000000000003', 500000),
+          ('0192f0a0-0000-7000-8000-000000000001', to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month', 'YYYY-MM'), (date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month')::date, '0192f0a0-0000-7000-8003-000000000003', 400000),
+          ('0192f0a0-0000-7000-8000-000000000001', to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month', 'YYYY-MM'), (date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month')::date, '0192f0a0-0000-7000-8003-000000000006', 100),
+          ('0192f0a0-0000-7000-8000-000000000001', to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month', 'YYYY-MM'), (date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month')::date + 1, '0192f0a0-0000-7000-8003-000000000006', NULL),
+          ('0192f0a0-0000-7000-8000-000000000001', to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month', 'YYYY-MM'), (date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month')::date, '0192f0a0-0000-7000-8003-000000000007', NULL),
+          ('0192f0a0-0000-7000-8000-000000000002', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'), ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date, '0192f0a0-0000-7000-8003-000000000009', 1000000),
+          ('0192f0a0-0000-7000-8000-000000000001', to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') + interval '1 month', 'YYYY-MM'), (date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') + interval '1 month')::date, '0192f0a0-0000-7000-8003-000000000010', 700000)
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+    - request:
+        method: DELETE
+        path: /categories/0192f0a0-0000-7000-8003-000000000001
+      status: 204
+  request:
+    method: GET
+    path: /categories
+  expect:
+    status: 200
+    body_json: {"items": [{"id": "0192f0a0-0000-7000-8003-000000000002", "category_display_name": "Groceries", "bucket": "daily", "active": true}, {"id": "0192f0a0-0000-7000-8003-000000000003", "category_display_name": "Gym", "bucket": "commitment", "active": false}, {"id": "0192f0a0-0000-7000-8003-000000000005", "category_display_name": "Subscriptions", "bucket": "daily", "active": true}, {"id": "0192f0a0-0000-7000-8003-000000000006", "category_display_name": "Old", "bucket": "daily", "active": true}, {"id": "0192f0a0-0000-7000-8003-000000000007", "category_display_name": "Spare", "bucket": "daily", "active": true}, {"id": "0192f0a0-0000-7000-8003-000000000008", "category_display_name": "Dormant", "bucket": "daily", "active": false}, {"id": "0192f0a0-0000-7000-8003-000000000010", "category_display_name": "Future", "bucket": "commitment", "active": true}]}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, category_display_name AS name, bucket, active, (deleted_at IS NOT NULL) AS deleted, coalesce(deleted_at = '2026-01-05T00:00:00Z', false) AS stamp_kept, (updated_at = '2026-01-05T00:00:00Z') AS untouched FROM categories ORDER BY id
+        rows:
+          - {"id": "0192f0a0-0000-7000-8003-000000000001", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Rent", "bucket": "commitment", "active": true, "deleted": true, "stamp_kept": false, "untouched": false}
+          - {"id": "0192f0a0-0000-7000-8003-000000000002", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Groceries", "bucket": "daily", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000003", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Gym", "bucket": "commitment", "active": false, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000004", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Typo", "bucket": "daily", "active": true, "deleted": true, "stamp_kept": true, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000005", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Subscriptions", "bucket": "daily", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000006", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Old", "bucket": "daily", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000007", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Spare", "bucket": "daily", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000008", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Dormant", "bucket": "daily", "active": false, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000009", "household_id": "0192f0a0-0000-7000-8000-000000000002", "name": "Theirs", "bucket": "commitment", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000010", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Future", "bucket": "commitment", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+      - sql: SELECT category_id::text AS category_id, (year_month = to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM')) AS current_period, (year_month = to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month', 'YYYY-MM')) AS previous_period, (year_month = to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') + interval '1 month', 'YYYY-MM')) AS next_period, coalesce(allocation::text, 'none') AS amount FROM allocations ORDER BY category_id, year_month, effective_on
+        rows:
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000001", "current_period": true, "previous_period": false, "next_period": false, "amount": "3000000.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000002", "current_period": true, "previous_period": false, "next_period": false, "amount": "2000000.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000003", "current_period": false, "previous_period": true, "next_period": false, "amount": "400000.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000003", "current_period": true, "previous_period": false, "next_period": false, "amount": "500000.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000006", "current_period": false, "previous_period": true, "next_period": false, "amount": "100.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000006", "current_period": false, "previous_period": true, "next_period": false, "amount": "none"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000007", "current_period": false, "previous_period": true, "next_period": false, "amount": "none"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000009", "current_period": true, "previous_period": false, "next_period": false, "amount": "1000000.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000010", "current_period": false, "previous_period": false, "next_period": true, "amount": "700000.0000"}
+
+
+- name: "category delete - a deleted Category answers 404 to PATCH"
+  issue: "130"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO categories (id, household_id, category_display_name, bucket, active, deleted_at, created_at, updated_at) VALUES
+          ('0192f0a0-0000-7000-8003-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'Rent', 'commitment', true, NULL, '2026-01-02T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Groceries', 'daily', true, NULL, '2026-01-03T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Gym', 'commitment', false, NULL, '2026-01-04T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000004', '0192f0a0-0000-7000-8000-000000000001', 'Typo', 'daily', true, '2026-01-05T00:00:00Z', '2026-01-05T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000005', '0192f0a0-0000-7000-8000-000000000001', 'Subscriptions', 'daily', true, NULL, '2026-01-06T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000006', '0192f0a0-0000-7000-8000-000000000001', 'Old', 'daily', true, NULL, '2026-01-07T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000007', '0192f0a0-0000-7000-8000-000000000001', 'Spare', 'daily', true, NULL, '2026-01-08T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000008', '0192f0a0-0000-7000-8000-000000000001', 'Dormant', 'daily', false, NULL, '2026-01-09T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', 'commitment', true, NULL, '2026-01-10T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000010', '0192f0a0-0000-7000-8000-000000000001', 'Future', 'commitment', true, NULL, '2026-01-11T00:00:00Z', '2026-01-05T00:00:00Z');
+        INSERT INTO budgets (household_id, year_month) VALUES ('0192f0a0-0000-7000-8000-000000000001', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM')), ('0192f0a0-0000-7000-8000-000000000001', to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month', 'YYYY-MM')), ('0192f0a0-0000-7000-8000-000000000001', to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') + interval '1 month', 'YYYY-MM')), ('0192f0a0-0000-7000-8000-000000000002', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'));
+        INSERT INTO monthly_budgets (household_id, year_month, effective_on, monthly_budget) VALUES ('0192f0a0-0000-7000-8000-000000000001', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'), ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date, 9000000);
+        INSERT INTO allocations (household_id, year_month, effective_on, category_id, allocation) VALUES
+          ('0192f0a0-0000-7000-8000-000000000001', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'), ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date, '0192f0a0-0000-7000-8003-000000000001', 3000000),
+          ('0192f0a0-0000-7000-8000-000000000001', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'), ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date, '0192f0a0-0000-7000-8003-000000000002', 2000000),
+          ('0192f0a0-0000-7000-8000-000000000001', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'), ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date, '0192f0a0-0000-7000-8003-000000000003', 500000),
+          ('0192f0a0-0000-7000-8000-000000000001', to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month', 'YYYY-MM'), (date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month')::date, '0192f0a0-0000-7000-8003-000000000003', 400000),
+          ('0192f0a0-0000-7000-8000-000000000001', to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month', 'YYYY-MM'), (date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month')::date, '0192f0a0-0000-7000-8003-000000000006', 100),
+          ('0192f0a0-0000-7000-8000-000000000001', to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month', 'YYYY-MM'), (date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month')::date + 1, '0192f0a0-0000-7000-8003-000000000006', NULL),
+          ('0192f0a0-0000-7000-8000-000000000001', to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month', 'YYYY-MM'), (date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month')::date, '0192f0a0-0000-7000-8003-000000000007', NULL),
+          ('0192f0a0-0000-7000-8000-000000000002', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'), ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date, '0192f0a0-0000-7000-8003-000000000009', 1000000),
+          ('0192f0a0-0000-7000-8000-000000000001', to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') + interval '1 month', 'YYYY-MM'), (date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') + interval '1 month')::date, '0192f0a0-0000-7000-8003-000000000010', 700000)
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+    - request:
+        method: DELETE
+        path: /categories/0192f0a0-0000-7000-8003-000000000001
+      status: 204
+  request:
+    method: PATCH
+    path: /categories/0192f0a0-0000-7000-8003-000000000001
+    headers:
+      Content-Type: application/json
+    body: '{"active":false}'
+  expect:
+    status: 404
+    body_json: {"code": "NOT_FOUND"}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, category_display_name AS name, bucket, active, (deleted_at IS NOT NULL) AS deleted, coalesce(deleted_at = '2026-01-05T00:00:00Z', false) AS stamp_kept, (updated_at = '2026-01-05T00:00:00Z') AS untouched FROM categories ORDER BY id
+        rows:
+          - {"id": "0192f0a0-0000-7000-8003-000000000001", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Rent", "bucket": "commitment", "active": true, "deleted": true, "stamp_kept": false, "untouched": false}
+          - {"id": "0192f0a0-0000-7000-8003-000000000002", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Groceries", "bucket": "daily", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000003", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Gym", "bucket": "commitment", "active": false, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000004", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Typo", "bucket": "daily", "active": true, "deleted": true, "stamp_kept": true, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000005", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Subscriptions", "bucket": "daily", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000006", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Old", "bucket": "daily", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000007", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Spare", "bucket": "daily", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000008", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Dormant", "bucket": "daily", "active": false, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000009", "household_id": "0192f0a0-0000-7000-8000-000000000002", "name": "Theirs", "bucket": "commitment", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000010", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Future", "bucket": "commitment", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+      - sql: SELECT category_id::text AS category_id, (year_month = to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM')) AS current_period, (year_month = to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month', 'YYYY-MM')) AS previous_period, (year_month = to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') + interval '1 month', 'YYYY-MM')) AS next_period, coalesce(allocation::text, 'none') AS amount FROM allocations ORDER BY category_id, year_month, effective_on
+        rows:
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000001", "current_period": true, "previous_period": false, "next_period": false, "amount": "3000000.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000002", "current_period": true, "previous_period": false, "next_period": false, "amount": "2000000.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000003", "current_period": false, "previous_period": true, "next_period": false, "amount": "400000.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000003", "current_period": true, "previous_period": false, "next_period": false, "amount": "500000.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000006", "current_period": false, "previous_period": true, "next_period": false, "amount": "100.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000006", "current_period": false, "previous_period": true, "next_period": false, "amount": "none"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000007", "current_period": false, "previous_period": true, "next_period": false, "amount": "none"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000009", "current_period": true, "previous_period": false, "next_period": false, "amount": "1000000.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000010", "current_period": false, "previous_period": false, "next_period": true, "amount": "700000.0000"}
+
+
+- name: "category delete - the deleted Category's name is free for a new Category"
+  issue: "130"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO categories (id, household_id, category_display_name, bucket, active, deleted_at, created_at, updated_at) VALUES
+          ('0192f0a0-0000-7000-8003-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'Rent', 'commitment', true, NULL, '2026-01-02T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Groceries', 'daily', true, NULL, '2026-01-03T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Gym', 'commitment', false, NULL, '2026-01-04T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000004', '0192f0a0-0000-7000-8000-000000000001', 'Typo', 'daily', true, '2026-01-05T00:00:00Z', '2026-01-05T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000005', '0192f0a0-0000-7000-8000-000000000001', 'Subscriptions', 'daily', true, NULL, '2026-01-06T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000006', '0192f0a0-0000-7000-8000-000000000001', 'Old', 'daily', true, NULL, '2026-01-07T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000007', '0192f0a0-0000-7000-8000-000000000001', 'Spare', 'daily', true, NULL, '2026-01-08T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000008', '0192f0a0-0000-7000-8000-000000000001', 'Dormant', 'daily', false, NULL, '2026-01-09T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', 'commitment', true, NULL, '2026-01-10T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000010', '0192f0a0-0000-7000-8000-000000000001', 'Future', 'commitment', true, NULL, '2026-01-11T00:00:00Z', '2026-01-05T00:00:00Z');
+        INSERT INTO budgets (household_id, year_month) VALUES ('0192f0a0-0000-7000-8000-000000000001', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM')), ('0192f0a0-0000-7000-8000-000000000001', to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month', 'YYYY-MM')), ('0192f0a0-0000-7000-8000-000000000001', to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') + interval '1 month', 'YYYY-MM')), ('0192f0a0-0000-7000-8000-000000000002', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'));
+        INSERT INTO monthly_budgets (household_id, year_month, effective_on, monthly_budget) VALUES ('0192f0a0-0000-7000-8000-000000000001', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'), ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date, 9000000);
+        INSERT INTO allocations (household_id, year_month, effective_on, category_id, allocation) VALUES
+          ('0192f0a0-0000-7000-8000-000000000001', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'), ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date, '0192f0a0-0000-7000-8003-000000000001', 3000000),
+          ('0192f0a0-0000-7000-8000-000000000001', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'), ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date, '0192f0a0-0000-7000-8003-000000000002', 2000000),
+          ('0192f0a0-0000-7000-8000-000000000001', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'), ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date, '0192f0a0-0000-7000-8003-000000000003', 500000),
+          ('0192f0a0-0000-7000-8000-000000000001', to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month', 'YYYY-MM'), (date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month')::date, '0192f0a0-0000-7000-8003-000000000003', 400000),
+          ('0192f0a0-0000-7000-8000-000000000001', to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month', 'YYYY-MM'), (date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month')::date, '0192f0a0-0000-7000-8003-000000000006', 100),
+          ('0192f0a0-0000-7000-8000-000000000001', to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month', 'YYYY-MM'), (date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month')::date + 1, '0192f0a0-0000-7000-8003-000000000006', NULL),
+          ('0192f0a0-0000-7000-8000-000000000001', to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month', 'YYYY-MM'), (date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month')::date, '0192f0a0-0000-7000-8003-000000000007', NULL),
+          ('0192f0a0-0000-7000-8000-000000000002', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'), ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date, '0192f0a0-0000-7000-8003-000000000009', 1000000),
+          ('0192f0a0-0000-7000-8000-000000000001', to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') + interval '1 month', 'YYYY-MM'), (date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') + interval '1 month')::date, '0192f0a0-0000-7000-8003-000000000010', 700000)
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+    - request:
+        method: DELETE
+        path: /categories/0192f0a0-0000-7000-8003-000000000001
+      status: 204
+  request:
+    method: POST
+    path: /categories
+    headers:
+      Content-Type: application/json
+    body: '{"id":"0192f0a0-0000-7000-8003-000000000050","category_display_name":"rent","bucket":"daily"}'
+  expect:
+    status: 201
+    body_json: {"id": "0192f0a0-0000-7000-8003-000000000050", "category_display_name": "rent", "bucket": "daily", "active": true}
+    cookies: {}
+    rows:
+      - sql: SELECT category_display_name AS name, (deleted_at IS NOT NULL) AS deleted FROM categories WHERE lower(category_display_name) = 'rent' ORDER BY deleted
+        rows: [{"name": "rent", "deleted": false}, {"name": "Rent", "deleted": true}]
+
+
+- name: "category delete - a deleted Category is out of every figure of the Budget, its allocation row kept"
+  issue: "130"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO categories (id, household_id, category_display_name, bucket, active, deleted_at, created_at, updated_at) VALUES
+          ('0192f0a0-0000-7000-8003-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'Rent', 'commitment', true, NULL, '2026-01-02T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Groceries', 'daily', true, NULL, '2026-01-03T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Gym', 'commitment', false, NULL, '2026-01-04T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000004', '0192f0a0-0000-7000-8000-000000000001', 'Typo', 'daily', true, '2026-01-05T00:00:00Z', '2026-01-05T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000005', '0192f0a0-0000-7000-8000-000000000001', 'Subscriptions', 'daily', true, NULL, '2026-01-06T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000006', '0192f0a0-0000-7000-8000-000000000001', 'Old', 'daily', true, NULL, '2026-01-07T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000007', '0192f0a0-0000-7000-8000-000000000001', 'Spare', 'daily', true, NULL, '2026-01-08T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000008', '0192f0a0-0000-7000-8000-000000000001', 'Dormant', 'daily', false, NULL, '2026-01-09T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', 'commitment', true, NULL, '2026-01-10T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000010', '0192f0a0-0000-7000-8000-000000000001', 'Future', 'commitment', true, NULL, '2026-01-11T00:00:00Z', '2026-01-05T00:00:00Z');
+        INSERT INTO budgets (household_id, year_month) VALUES ('0192f0a0-0000-7000-8000-000000000001', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM')), ('0192f0a0-0000-7000-8000-000000000001', to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month', 'YYYY-MM')), ('0192f0a0-0000-7000-8000-000000000001', to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') + interval '1 month', 'YYYY-MM')), ('0192f0a0-0000-7000-8000-000000000002', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'));
+        INSERT INTO monthly_budgets (household_id, year_month, effective_on, monthly_budget) VALUES ('0192f0a0-0000-7000-8000-000000000001', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'), ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date, 9000000);
+        INSERT INTO allocations (household_id, year_month, effective_on, category_id, allocation) VALUES
+          ('0192f0a0-0000-7000-8000-000000000001', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'), ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date, '0192f0a0-0000-7000-8003-000000000001', 3000000),
+          ('0192f0a0-0000-7000-8000-000000000001', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'), ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date, '0192f0a0-0000-7000-8003-000000000002', 2000000),
+          ('0192f0a0-0000-7000-8000-000000000001', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'), ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date, '0192f0a0-0000-7000-8003-000000000003', 500000),
+          ('0192f0a0-0000-7000-8000-000000000001', to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month', 'YYYY-MM'), (date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month')::date, '0192f0a0-0000-7000-8003-000000000003', 400000),
+          ('0192f0a0-0000-7000-8000-000000000001', to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month', 'YYYY-MM'), (date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month')::date, '0192f0a0-0000-7000-8003-000000000006', 100),
+          ('0192f0a0-0000-7000-8000-000000000001', to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month', 'YYYY-MM'), (date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month')::date + 1, '0192f0a0-0000-7000-8003-000000000006', NULL),
+          ('0192f0a0-0000-7000-8000-000000000001', to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month', 'YYYY-MM'), (date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month')::date, '0192f0a0-0000-7000-8003-000000000007', NULL),
+          ('0192f0a0-0000-7000-8000-000000000002', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'), ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date, '0192f0a0-0000-7000-8003-000000000009', 1000000),
+          ('0192f0a0-0000-7000-8000-000000000001', to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') + interval '1 month', 'YYYY-MM'), (date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') + interval '1 month')::date, '0192f0a0-0000-7000-8003-000000000010', 700000)
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+    - request:
+        method: DELETE
+        path: /categories/0192f0a0-0000-7000-8003-000000000001
+      status: 204
+  request:
+    method: GET
+    path: /budget
+  expect:
+    status: 200
+    body_json: {"period": {"year_month": "<re:[0-9]{4}-[0-9]{2}>", "starts_on": "<re:[0-9]{4}-[0-9]{2}-01>", "ends_on": "<re:[0-9]{4}-[0-9]{2}-(28|29|30|31)>"}, "monthly_budget": "9000000.0000", "commitments_budget": "500000.0000", "daily_pool": "8500000.0000", "unallocated": "6500000.0000", "allocations": [{"category_id": "0192f0a0-0000-7000-8003-000000000002", "allocation": "2000000.0000"}, {"category_id": "0192f0a0-0000-7000-8003-000000000003", "allocation": "500000.0000"}]}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, category_display_name AS name, bucket, active, (deleted_at IS NOT NULL) AS deleted, coalesce(deleted_at = '2026-01-05T00:00:00Z', false) AS stamp_kept, (updated_at = '2026-01-05T00:00:00Z') AS untouched FROM categories ORDER BY id
+        rows:
+          - {"id": "0192f0a0-0000-7000-8003-000000000001", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Rent", "bucket": "commitment", "active": true, "deleted": true, "stamp_kept": false, "untouched": false}
+          - {"id": "0192f0a0-0000-7000-8003-000000000002", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Groceries", "bucket": "daily", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000003", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Gym", "bucket": "commitment", "active": false, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000004", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Typo", "bucket": "daily", "active": true, "deleted": true, "stamp_kept": true, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000005", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Subscriptions", "bucket": "daily", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000006", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Old", "bucket": "daily", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000007", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Spare", "bucket": "daily", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000008", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Dormant", "bucket": "daily", "active": false, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000009", "household_id": "0192f0a0-0000-7000-8000-000000000002", "name": "Theirs", "bucket": "commitment", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000010", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Future", "bucket": "commitment", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+      - sql: SELECT category_id::text AS category_id, (year_month = to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM')) AS current_period, (year_month = to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month', 'YYYY-MM')) AS previous_period, (year_month = to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') + interval '1 month', 'YYYY-MM')) AS next_period, coalesce(allocation::text, 'none') AS amount FROM allocations ORDER BY category_id, year_month, effective_on
+        rows:
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000001", "current_period": true, "previous_period": false, "next_period": false, "amount": "3000000.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000002", "current_period": true, "previous_period": false, "next_period": false, "amount": "2000000.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000003", "current_period": false, "previous_period": true, "next_period": false, "amount": "400000.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000003", "current_period": true, "previous_period": false, "next_period": false, "amount": "500000.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000006", "current_period": false, "previous_period": true, "next_period": false, "amount": "100.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000006", "current_period": false, "previous_period": true, "next_period": false, "amount": "none"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000007", "current_period": false, "previous_period": true, "next_period": false, "amount": "none"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000009", "current_period": true, "previous_period": false, "next_period": false, "amount": "1000000.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000010", "current_period": false, "previous_period": false, "next_period": true, "amount": "700000.0000"}
+
+
+- name: "category delete - no session is 401 and deletes nothing"
+  issue: "130"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO categories (id, household_id, category_display_name, bucket, active, deleted_at, created_at, updated_at) VALUES
+          ('0192f0a0-0000-7000-8003-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'Rent', 'commitment', true, NULL, '2026-01-02T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Groceries', 'daily', true, NULL, '2026-01-03T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Gym', 'commitment', false, NULL, '2026-01-04T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000004', '0192f0a0-0000-7000-8000-000000000001', 'Typo', 'daily', true, '2026-01-05T00:00:00Z', '2026-01-05T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000005', '0192f0a0-0000-7000-8000-000000000001', 'Subscriptions', 'daily', true, NULL, '2026-01-06T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000006', '0192f0a0-0000-7000-8000-000000000001', 'Old', 'daily', true, NULL, '2026-01-07T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000007', '0192f0a0-0000-7000-8000-000000000001', 'Spare', 'daily', true, NULL, '2026-01-08T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000008', '0192f0a0-0000-7000-8000-000000000001', 'Dormant', 'daily', false, NULL, '2026-01-09T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', 'commitment', true, NULL, '2026-01-10T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000010', '0192f0a0-0000-7000-8000-000000000001', 'Future', 'commitment', true, NULL, '2026-01-11T00:00:00Z', '2026-01-05T00:00:00Z');
+        INSERT INTO budgets (household_id, year_month) VALUES ('0192f0a0-0000-7000-8000-000000000001', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM')), ('0192f0a0-0000-7000-8000-000000000001', to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month', 'YYYY-MM')), ('0192f0a0-0000-7000-8000-000000000001', to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') + interval '1 month', 'YYYY-MM')), ('0192f0a0-0000-7000-8000-000000000002', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'));
+        INSERT INTO monthly_budgets (household_id, year_month, effective_on, monthly_budget) VALUES ('0192f0a0-0000-7000-8000-000000000001', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'), ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date, 9000000);
+        INSERT INTO allocations (household_id, year_month, effective_on, category_id, allocation) VALUES
+          ('0192f0a0-0000-7000-8000-000000000001', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'), ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date, '0192f0a0-0000-7000-8003-000000000001', 3000000),
+          ('0192f0a0-0000-7000-8000-000000000001', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'), ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date, '0192f0a0-0000-7000-8003-000000000002', 2000000),
+          ('0192f0a0-0000-7000-8000-000000000001', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'), ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date, '0192f0a0-0000-7000-8003-000000000003', 500000),
+          ('0192f0a0-0000-7000-8000-000000000001', to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month', 'YYYY-MM'), (date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month')::date, '0192f0a0-0000-7000-8003-000000000003', 400000),
+          ('0192f0a0-0000-7000-8000-000000000001', to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month', 'YYYY-MM'), (date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month')::date, '0192f0a0-0000-7000-8003-000000000006', 100),
+          ('0192f0a0-0000-7000-8000-000000000001', to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month', 'YYYY-MM'), (date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month')::date + 1, '0192f0a0-0000-7000-8003-000000000006', NULL),
+          ('0192f0a0-0000-7000-8000-000000000001', to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month', 'YYYY-MM'), (date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month')::date, '0192f0a0-0000-7000-8003-000000000007', NULL),
+          ('0192f0a0-0000-7000-8000-000000000002', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'), ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date, '0192f0a0-0000-7000-8003-000000000009', 1000000),
+          ('0192f0a0-0000-7000-8000-000000000001', to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') + interval '1 month', 'YYYY-MM'), (date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') + interval '1 month')::date, '0192f0a0-0000-7000-8003-000000000010', 700000)
+  request:
+    method: DELETE
+    path: /categories/0192f0a0-0000-7000-8003-000000000001
+  expect:
+    status: 401
+    body_json: {"code": "UNAUTHORIZED"}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, category_display_name AS name, bucket, active, (deleted_at IS NOT NULL) AS deleted, coalesce(deleted_at = '2026-01-05T00:00:00Z', false) AS stamp_kept, (updated_at = '2026-01-05T00:00:00Z') AS untouched FROM categories ORDER BY id
+        rows:
+          - {"id": "0192f0a0-0000-7000-8003-000000000001", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Rent", "bucket": "commitment", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000002", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Groceries", "bucket": "daily", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000003", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Gym", "bucket": "commitment", "active": false, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000004", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Typo", "bucket": "daily", "active": true, "deleted": true, "stamp_kept": true, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000005", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Subscriptions", "bucket": "daily", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000006", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Old", "bucket": "daily", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000007", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Spare", "bucket": "daily", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000008", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Dormant", "bucket": "daily", "active": false, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000009", "household_id": "0192f0a0-0000-7000-8000-000000000002", "name": "Theirs", "bucket": "commitment", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000010", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Future", "bucket": "commitment", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+      - sql: SELECT category_id::text AS category_id, (year_month = to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM')) AS current_period, (year_month = to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month', 'YYYY-MM')) AS previous_period, (year_month = to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') + interval '1 month', 'YYYY-MM')) AS next_period, coalesce(allocation::text, 'none') AS amount FROM allocations ORDER BY category_id, year_month, effective_on
+        rows:
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000001", "current_period": true, "previous_period": false, "next_period": false, "amount": "3000000.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000002", "current_period": true, "previous_period": false, "next_period": false, "amount": "2000000.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000003", "current_period": false, "previous_period": true, "next_period": false, "amount": "400000.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000003", "current_period": true, "previous_period": false, "next_period": false, "amount": "500000.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000006", "current_period": false, "previous_period": true, "next_period": false, "amount": "100.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000006", "current_period": false, "previous_period": true, "next_period": false, "amount": "none"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000007", "current_period": false, "previous_period": true, "next_period": false, "amount": "none"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000009", "current_period": true, "previous_period": false, "next_period": false, "amount": "1000000.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000010", "current_period": false, "previous_period": false, "next_period": true, "amount": "700000.0000"}
+
+
+- name: "category delete - no session is 401 first, even for a malformed id"
+  issue: "130"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO categories (id, household_id, category_display_name, bucket, active, deleted_at, created_at, updated_at) VALUES
+          ('0192f0a0-0000-7000-8003-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'Rent', 'commitment', true, NULL, '2026-01-02T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Groceries', 'daily', true, NULL, '2026-01-03T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Gym', 'commitment', false, NULL, '2026-01-04T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000004', '0192f0a0-0000-7000-8000-000000000001', 'Typo', 'daily', true, '2026-01-05T00:00:00Z', '2026-01-05T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000005', '0192f0a0-0000-7000-8000-000000000001', 'Subscriptions', 'daily', true, NULL, '2026-01-06T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000006', '0192f0a0-0000-7000-8000-000000000001', 'Old', 'daily', true, NULL, '2026-01-07T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000007', '0192f0a0-0000-7000-8000-000000000001', 'Spare', 'daily', true, NULL, '2026-01-08T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000008', '0192f0a0-0000-7000-8000-000000000001', 'Dormant', 'daily', false, NULL, '2026-01-09T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', 'commitment', true, NULL, '2026-01-10T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000010', '0192f0a0-0000-7000-8000-000000000001', 'Future', 'commitment', true, NULL, '2026-01-11T00:00:00Z', '2026-01-05T00:00:00Z');
+        INSERT INTO budgets (household_id, year_month) VALUES ('0192f0a0-0000-7000-8000-000000000001', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM')), ('0192f0a0-0000-7000-8000-000000000001', to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month', 'YYYY-MM')), ('0192f0a0-0000-7000-8000-000000000001', to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') + interval '1 month', 'YYYY-MM')), ('0192f0a0-0000-7000-8000-000000000002', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'));
+        INSERT INTO monthly_budgets (household_id, year_month, effective_on, monthly_budget) VALUES ('0192f0a0-0000-7000-8000-000000000001', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'), ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date, 9000000);
+        INSERT INTO allocations (household_id, year_month, effective_on, category_id, allocation) VALUES
+          ('0192f0a0-0000-7000-8000-000000000001', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'), ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date, '0192f0a0-0000-7000-8003-000000000001', 3000000),
+          ('0192f0a0-0000-7000-8000-000000000001', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'), ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date, '0192f0a0-0000-7000-8003-000000000002', 2000000),
+          ('0192f0a0-0000-7000-8000-000000000001', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'), ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date, '0192f0a0-0000-7000-8003-000000000003', 500000),
+          ('0192f0a0-0000-7000-8000-000000000001', to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month', 'YYYY-MM'), (date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month')::date, '0192f0a0-0000-7000-8003-000000000003', 400000),
+          ('0192f0a0-0000-7000-8000-000000000001', to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month', 'YYYY-MM'), (date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month')::date, '0192f0a0-0000-7000-8003-000000000006', 100),
+          ('0192f0a0-0000-7000-8000-000000000001', to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month', 'YYYY-MM'), (date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month')::date + 1, '0192f0a0-0000-7000-8003-000000000006', NULL),
+          ('0192f0a0-0000-7000-8000-000000000001', to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month', 'YYYY-MM'), (date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month')::date, '0192f0a0-0000-7000-8003-000000000007', NULL),
+          ('0192f0a0-0000-7000-8000-000000000002', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'), ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date, '0192f0a0-0000-7000-8003-000000000009', 1000000),
+          ('0192f0a0-0000-7000-8000-000000000001', to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') + interval '1 month', 'YYYY-MM'), (date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') + interval '1 month')::date, '0192f0a0-0000-7000-8003-000000000010', 700000)
+  request:
+    method: DELETE
+    path: /categories/not-a-uuid
+  expect:
+    status: 401
+    body_json: {"code": "UNAUTHORIZED"}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, category_display_name AS name, bucket, active, (deleted_at IS NOT NULL) AS deleted, coalesce(deleted_at = '2026-01-05T00:00:00Z', false) AS stamp_kept, (updated_at = '2026-01-05T00:00:00Z') AS untouched FROM categories ORDER BY id
+        rows:
+          - {"id": "0192f0a0-0000-7000-8003-000000000001", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Rent", "bucket": "commitment", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000002", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Groceries", "bucket": "daily", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000003", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Gym", "bucket": "commitment", "active": false, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000004", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Typo", "bucket": "daily", "active": true, "deleted": true, "stamp_kept": true, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000005", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Subscriptions", "bucket": "daily", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000006", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Old", "bucket": "daily", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000007", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Spare", "bucket": "daily", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000008", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Dormant", "bucket": "daily", "active": false, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000009", "household_id": "0192f0a0-0000-7000-8000-000000000002", "name": "Theirs", "bucket": "commitment", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000010", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Future", "bucket": "commitment", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+      - sql: SELECT category_id::text AS category_id, (year_month = to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM')) AS current_period, (year_month = to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month', 'YYYY-MM')) AS previous_period, (year_month = to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') + interval '1 month', 'YYYY-MM')) AS next_period, coalesce(allocation::text, 'none') AS amount FROM allocations ORDER BY category_id, year_month, effective_on
+        rows:
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000001", "current_period": true, "previous_period": false, "next_period": false, "amount": "3000000.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000002", "current_period": true, "previous_period": false, "next_period": false, "amount": "2000000.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000003", "current_period": false, "previous_period": true, "next_period": false, "amount": "400000.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000003", "current_period": true, "previous_period": false, "next_period": false, "amount": "500000.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000006", "current_period": false, "previous_period": true, "next_period": false, "amount": "100.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000006", "current_period": false, "previous_period": true, "next_period": false, "amount": "none"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000007", "current_period": false, "previous_period": true, "next_period": false, "amount": "none"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000009", "current_period": true, "previous_period": false, "next_period": false, "amount": "1000000.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000010", "current_period": false, "previous_period": false, "next_period": true, "amount": "700000.0000"}
+
+
+- name: "category delete - no session is 401 first, even for an unknown id"
+  issue: "130"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO categories (id, household_id, category_display_name, bucket, active, deleted_at, created_at, updated_at) VALUES
+          ('0192f0a0-0000-7000-8003-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'Rent', 'commitment', true, NULL, '2026-01-02T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Groceries', 'daily', true, NULL, '2026-01-03T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Gym', 'commitment', false, NULL, '2026-01-04T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000004', '0192f0a0-0000-7000-8000-000000000001', 'Typo', 'daily', true, '2026-01-05T00:00:00Z', '2026-01-05T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000005', '0192f0a0-0000-7000-8000-000000000001', 'Subscriptions', 'daily', true, NULL, '2026-01-06T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000006', '0192f0a0-0000-7000-8000-000000000001', 'Old', 'daily', true, NULL, '2026-01-07T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000007', '0192f0a0-0000-7000-8000-000000000001', 'Spare', 'daily', true, NULL, '2026-01-08T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000008', '0192f0a0-0000-7000-8000-000000000001', 'Dormant', 'daily', false, NULL, '2026-01-09T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', 'commitment', true, NULL, '2026-01-10T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000010', '0192f0a0-0000-7000-8000-000000000001', 'Future', 'commitment', true, NULL, '2026-01-11T00:00:00Z', '2026-01-05T00:00:00Z');
+        INSERT INTO budgets (household_id, year_month) VALUES ('0192f0a0-0000-7000-8000-000000000001', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM')), ('0192f0a0-0000-7000-8000-000000000001', to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month', 'YYYY-MM')), ('0192f0a0-0000-7000-8000-000000000001', to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') + interval '1 month', 'YYYY-MM')), ('0192f0a0-0000-7000-8000-000000000002', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'));
+        INSERT INTO monthly_budgets (household_id, year_month, effective_on, monthly_budget) VALUES ('0192f0a0-0000-7000-8000-000000000001', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'), ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date, 9000000);
+        INSERT INTO allocations (household_id, year_month, effective_on, category_id, allocation) VALUES
+          ('0192f0a0-0000-7000-8000-000000000001', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'), ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date, '0192f0a0-0000-7000-8003-000000000001', 3000000),
+          ('0192f0a0-0000-7000-8000-000000000001', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'), ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date, '0192f0a0-0000-7000-8003-000000000002', 2000000),
+          ('0192f0a0-0000-7000-8000-000000000001', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'), ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date, '0192f0a0-0000-7000-8003-000000000003', 500000),
+          ('0192f0a0-0000-7000-8000-000000000001', to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month', 'YYYY-MM'), (date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month')::date, '0192f0a0-0000-7000-8003-000000000003', 400000),
+          ('0192f0a0-0000-7000-8000-000000000001', to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month', 'YYYY-MM'), (date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month')::date, '0192f0a0-0000-7000-8003-000000000006', 100),
+          ('0192f0a0-0000-7000-8000-000000000001', to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month', 'YYYY-MM'), (date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month')::date + 1, '0192f0a0-0000-7000-8003-000000000006', NULL),
+          ('0192f0a0-0000-7000-8000-000000000001', to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month', 'YYYY-MM'), (date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month')::date, '0192f0a0-0000-7000-8003-000000000007', NULL),
+          ('0192f0a0-0000-7000-8000-000000000002', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'), ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date, '0192f0a0-0000-7000-8003-000000000009', 1000000),
+          ('0192f0a0-0000-7000-8000-000000000001', to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') + interval '1 month', 'YYYY-MM'), (date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') + interval '1 month')::date, '0192f0a0-0000-7000-8003-000000000010', 700000)
+  request:
+    method: DELETE
+    path: /categories/0192f0a0-0000-7000-8003-000000000099
+  expect:
+    status: 401
+    body_json: {"code": "UNAUTHORIZED"}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, category_display_name AS name, bucket, active, (deleted_at IS NOT NULL) AS deleted, coalesce(deleted_at = '2026-01-05T00:00:00Z', false) AS stamp_kept, (updated_at = '2026-01-05T00:00:00Z') AS untouched FROM categories ORDER BY id
+        rows:
+          - {"id": "0192f0a0-0000-7000-8003-000000000001", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Rent", "bucket": "commitment", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000002", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Groceries", "bucket": "daily", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000003", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Gym", "bucket": "commitment", "active": false, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000004", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Typo", "bucket": "daily", "active": true, "deleted": true, "stamp_kept": true, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000005", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Subscriptions", "bucket": "daily", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000006", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Old", "bucket": "daily", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000007", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Spare", "bucket": "daily", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000008", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Dormant", "bucket": "daily", "active": false, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000009", "household_id": "0192f0a0-0000-7000-8000-000000000002", "name": "Theirs", "bucket": "commitment", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000010", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Future", "bucket": "commitment", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+      - sql: SELECT category_id::text AS category_id, (year_month = to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM')) AS current_period, (year_month = to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month', 'YYYY-MM')) AS previous_period, (year_month = to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') + interval '1 month', 'YYYY-MM')) AS next_period, coalesce(allocation::text, 'none') AS amount FROM allocations ORDER BY category_id, year_month, effective_on
+        rows:
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000001", "current_period": true, "previous_period": false, "next_period": false, "amount": "3000000.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000002", "current_period": true, "previous_period": false, "next_period": false, "amount": "2000000.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000003", "current_period": false, "previous_period": true, "next_period": false, "amount": "400000.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000003", "current_period": true, "previous_period": false, "next_period": false, "amount": "500000.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000006", "current_period": false, "previous_period": true, "next_period": false, "amount": "100.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000006", "current_period": false, "previous_period": true, "next_period": false, "amount": "none"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000007", "current_period": false, "previous_period": true, "next_period": false, "amount": "none"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000009", "current_period": true, "previous_period": false, "next_period": false, "amount": "1000000.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000010", "current_period": false, "previous_period": false, "next_period": true, "amount": "700000.0000"}
+
+
+- name: "category delete - under an outage is 500 and keeps the cookie, deleting nothing"
+  issue: "27"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO categories (id, household_id, category_display_name, bucket, active, deleted_at, created_at, updated_at) VALUES
+          ('0192f0a0-0000-7000-8003-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'Rent', 'commitment', true, NULL, '2026-01-02T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Groceries', 'daily', true, NULL, '2026-01-03T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Gym', 'commitment', false, NULL, '2026-01-04T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000004', '0192f0a0-0000-7000-8000-000000000001', 'Typo', 'daily', true, '2026-01-05T00:00:00Z', '2026-01-05T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000005', '0192f0a0-0000-7000-8000-000000000001', 'Subscriptions', 'daily', true, NULL, '2026-01-06T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000006', '0192f0a0-0000-7000-8000-000000000001', 'Old', 'daily', true, NULL, '2026-01-07T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000007', '0192f0a0-0000-7000-8000-000000000001', 'Spare', 'daily', true, NULL, '2026-01-08T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000008', '0192f0a0-0000-7000-8000-000000000001', 'Dormant', 'daily', false, NULL, '2026-01-09T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', 'commitment', true, NULL, '2026-01-10T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000010', '0192f0a0-0000-7000-8000-000000000001', 'Future', 'commitment', true, NULL, '2026-01-11T00:00:00Z', '2026-01-05T00:00:00Z');
+        INSERT INTO budgets (household_id, year_month) VALUES ('0192f0a0-0000-7000-8000-000000000001', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM')), ('0192f0a0-0000-7000-8000-000000000001', to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month', 'YYYY-MM')), ('0192f0a0-0000-7000-8000-000000000001', to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') + interval '1 month', 'YYYY-MM')), ('0192f0a0-0000-7000-8000-000000000002', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'));
+        INSERT INTO monthly_budgets (household_id, year_month, effective_on, monthly_budget) VALUES ('0192f0a0-0000-7000-8000-000000000001', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'), ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date, 9000000);
+        INSERT INTO allocations (household_id, year_month, effective_on, category_id, allocation) VALUES
+          ('0192f0a0-0000-7000-8000-000000000001', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'), ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date, '0192f0a0-0000-7000-8003-000000000001', 3000000),
+          ('0192f0a0-0000-7000-8000-000000000001', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'), ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date, '0192f0a0-0000-7000-8003-000000000002', 2000000),
+          ('0192f0a0-0000-7000-8000-000000000001', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'), ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date, '0192f0a0-0000-7000-8003-000000000003', 500000),
+          ('0192f0a0-0000-7000-8000-000000000001', to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month', 'YYYY-MM'), (date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month')::date, '0192f0a0-0000-7000-8003-000000000003', 400000),
+          ('0192f0a0-0000-7000-8000-000000000001', to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month', 'YYYY-MM'), (date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month')::date, '0192f0a0-0000-7000-8003-000000000006', 100),
+          ('0192f0a0-0000-7000-8000-000000000001', to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month', 'YYYY-MM'), (date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month')::date + 1, '0192f0a0-0000-7000-8003-000000000006', NULL),
+          ('0192f0a0-0000-7000-8000-000000000001', to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month', 'YYYY-MM'), (date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month')::date, '0192f0a0-0000-7000-8003-000000000007', NULL),
+          ('0192f0a0-0000-7000-8000-000000000002', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'), ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date, '0192f0a0-0000-7000-8003-000000000009', 1000000),
+          ('0192f0a0-0000-7000-8000-000000000001', to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') + interval '1 month', 'YYYY-MM'), (date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') + interval '1 month')::date, '0192f0a0-0000-7000-8003-000000000010', 700000)
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+    - outage: true
+  request:
+    method: DELETE
+    path: /categories/0192f0a0-0000-7000-8003-000000000001
+  expect:
+    status: 500
+    body_json: {"code": "INTERNAL"}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, category_display_name AS name, bucket, active, (deleted_at IS NOT NULL) AS deleted, coalesce(deleted_at = '2026-01-05T00:00:00Z', false) AS stamp_kept, (updated_at = '2026-01-05T00:00:00Z') AS untouched FROM categories ORDER BY id
+        rows:
+          - {"id": "0192f0a0-0000-7000-8003-000000000001", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Rent", "bucket": "commitment", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000002", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Groceries", "bucket": "daily", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000003", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Gym", "bucket": "commitment", "active": false, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000004", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Typo", "bucket": "daily", "active": true, "deleted": true, "stamp_kept": true, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000005", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Subscriptions", "bucket": "daily", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000006", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Old", "bucket": "daily", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000007", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Spare", "bucket": "daily", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000008", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Dormant", "bucket": "daily", "active": false, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000009", "household_id": "0192f0a0-0000-7000-8000-000000000002", "name": "Theirs", "bucket": "commitment", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000010", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Future", "bucket": "commitment", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+      - sql: SELECT category_id::text AS category_id, (year_month = to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM')) AS current_period, (year_month = to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month', 'YYYY-MM')) AS previous_period, (year_month = to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') + interval '1 month', 'YYYY-MM')) AS next_period, coalesce(allocation::text, 'none') AS amount FROM allocations ORDER BY category_id, year_month, effective_on
+        rows:
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000001", "current_period": true, "previous_period": false, "next_period": false, "amount": "3000000.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000002", "current_period": true, "previous_period": false, "next_period": false, "amount": "2000000.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000003", "current_period": false, "previous_period": true, "next_period": false, "amount": "400000.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000003", "current_period": true, "previous_period": false, "next_period": false, "amount": "500000.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000006", "current_period": false, "previous_period": true, "next_period": false, "amount": "100.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000006", "current_period": false, "previous_period": true, "next_period": false, "amount": "none"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000007", "current_period": false, "previous_period": true, "next_period": false, "amount": "none"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000009", "current_period": true, "previous_period": false, "next_period": false, "amount": "1000000.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000010", "current_period": false, "previous_period": false, "next_period": true, "amount": "700000.0000"}
+
+
+- name: "category delete - under an outage a malformed id is still 500, the session being unreadable"
+  issue: "27"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO categories (id, household_id, category_display_name, bucket, active, deleted_at, created_at, updated_at) VALUES
+          ('0192f0a0-0000-7000-8003-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'Rent', 'commitment', true, NULL, '2026-01-02T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Groceries', 'daily', true, NULL, '2026-01-03T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Gym', 'commitment', false, NULL, '2026-01-04T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000004', '0192f0a0-0000-7000-8000-000000000001', 'Typo', 'daily', true, '2026-01-05T00:00:00Z', '2026-01-05T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000005', '0192f0a0-0000-7000-8000-000000000001', 'Subscriptions', 'daily', true, NULL, '2026-01-06T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000006', '0192f0a0-0000-7000-8000-000000000001', 'Old', 'daily', true, NULL, '2026-01-07T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000007', '0192f0a0-0000-7000-8000-000000000001', 'Spare', 'daily', true, NULL, '2026-01-08T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000008', '0192f0a0-0000-7000-8000-000000000001', 'Dormant', 'daily', false, NULL, '2026-01-09T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', 'commitment', true, NULL, '2026-01-10T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000010', '0192f0a0-0000-7000-8000-000000000001', 'Future', 'commitment', true, NULL, '2026-01-11T00:00:00Z', '2026-01-05T00:00:00Z');
+        INSERT INTO budgets (household_id, year_month) VALUES ('0192f0a0-0000-7000-8000-000000000001', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM')), ('0192f0a0-0000-7000-8000-000000000001', to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month', 'YYYY-MM')), ('0192f0a0-0000-7000-8000-000000000001', to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') + interval '1 month', 'YYYY-MM')), ('0192f0a0-0000-7000-8000-000000000002', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'));
+        INSERT INTO monthly_budgets (household_id, year_month, effective_on, monthly_budget) VALUES ('0192f0a0-0000-7000-8000-000000000001', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'), ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date, 9000000);
+        INSERT INTO allocations (household_id, year_month, effective_on, category_id, allocation) VALUES
+          ('0192f0a0-0000-7000-8000-000000000001', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'), ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date, '0192f0a0-0000-7000-8003-000000000001', 3000000),
+          ('0192f0a0-0000-7000-8000-000000000001', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'), ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date, '0192f0a0-0000-7000-8003-000000000002', 2000000),
+          ('0192f0a0-0000-7000-8000-000000000001', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'), ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date, '0192f0a0-0000-7000-8003-000000000003', 500000),
+          ('0192f0a0-0000-7000-8000-000000000001', to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month', 'YYYY-MM'), (date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month')::date, '0192f0a0-0000-7000-8003-000000000003', 400000),
+          ('0192f0a0-0000-7000-8000-000000000001', to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month', 'YYYY-MM'), (date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month')::date, '0192f0a0-0000-7000-8003-000000000006', 100),
+          ('0192f0a0-0000-7000-8000-000000000001', to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month', 'YYYY-MM'), (date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month')::date + 1, '0192f0a0-0000-7000-8003-000000000006', NULL),
+          ('0192f0a0-0000-7000-8000-000000000001', to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month', 'YYYY-MM'), (date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month')::date, '0192f0a0-0000-7000-8003-000000000007', NULL),
+          ('0192f0a0-0000-7000-8000-000000000002', to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM'), ((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours')::date, '0192f0a0-0000-7000-8003-000000000009', 1000000),
+          ('0192f0a0-0000-7000-8000-000000000001', to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') + interval '1 month', 'YYYY-MM'), (date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') + interval '1 month')::date, '0192f0a0-0000-7000-8003-000000000010', 700000)
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+    - outage: true
+  request:
+    method: DELETE
+    path: /categories/not-a-uuid
+  expect:
+    status: 500
+    body_json: {"code": "INTERNAL"}
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, household_id::text AS household_id, category_display_name AS name, bucket, active, (deleted_at IS NOT NULL) AS deleted, coalesce(deleted_at = '2026-01-05T00:00:00Z', false) AS stamp_kept, (updated_at = '2026-01-05T00:00:00Z') AS untouched FROM categories ORDER BY id
+        rows:
+          - {"id": "0192f0a0-0000-7000-8003-000000000001", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Rent", "bucket": "commitment", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000002", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Groceries", "bucket": "daily", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000003", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Gym", "bucket": "commitment", "active": false, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000004", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Typo", "bucket": "daily", "active": true, "deleted": true, "stamp_kept": true, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000005", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Subscriptions", "bucket": "daily", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000006", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Old", "bucket": "daily", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000007", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Spare", "bucket": "daily", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000008", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Dormant", "bucket": "daily", "active": false, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000009", "household_id": "0192f0a0-0000-7000-8000-000000000002", "name": "Theirs", "bucket": "commitment", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+          - {"id": "0192f0a0-0000-7000-8003-000000000010", "household_id": "0192f0a0-0000-7000-8000-000000000001", "name": "Future", "bucket": "commitment", "active": true, "deleted": false, "stamp_kept": false, "untouched": true}
+      - sql: SELECT category_id::text AS category_id, (year_month = to_char((now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours', 'YYYY-MM')) AS current_period, (year_month = to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') - interval '1 month', 'YYYY-MM')) AS previous_period, (year_month = to_char(date_trunc('month', (now() AT TIME ZONE 'Asia/Jakarta') - interval '4 hours') + interval '1 month', 'YYYY-MM')) AS next_period, coalesce(allocation::text, 'none') AS amount FROM allocations ORDER BY category_id, year_month, effective_on
+        rows:
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000001", "current_period": true, "previous_period": false, "next_period": false, "amount": "3000000.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000002", "current_period": true, "previous_period": false, "next_period": false, "amount": "2000000.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000003", "current_period": false, "previous_period": true, "next_period": false, "amount": "400000.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000003", "current_period": true, "previous_period": false, "next_period": false, "amount": "500000.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000006", "current_period": false, "previous_period": true, "next_period": false, "amount": "100.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000006", "current_period": false, "previous_period": true, "next_period": false, "amount": "none"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000007", "current_period": false, "previous_period": true, "next_period": false, "amount": "none"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000009", "current_period": true, "previous_period": false, "next_period": false, "amount": "1000000.0000"}
+          - {"category_id": "0192f0a0-0000-7000-8003-000000000010", "current_period": false, "previous_period": false, "next_period": true, "amount": "700000.0000"}
+

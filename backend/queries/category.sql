@@ -45,3 +45,58 @@ UPDATE categories SET
     updated_at            = now()
 WHERE id = sqlc.arg(id) AND household_id = sqlc.arg(household_id) AND deleted_at IS NULL
 RETURNING *;
+
+-- The first statement of a delete, in the delete's own transaction: it takes the
+-- Category's row lock (FOR UPDATE, which conflicts with the FOR SHARE every
+-- allocation write holds, and with the key-share an allocation insert takes) and
+-- answers whether the row is deleted already. The guard that follows
+-- (CategoryHeldElsewhere) must be a SEPARATE, LATER statement: under READ
+-- COMMITTED a statement's snapshot is taken when it starts, so a guard folded
+-- into the UPDATE's WHERE would have been evaluated before the lock wait ended
+-- and would not see the allocation committed during it (BOOTSTRAP.md §4, #130
+-- C8). Another Household's or an unknown id is no row. This is the one place
+-- that reads a deleted Category on purpose.
+-- name: LockCategory :one
+SELECT deleted_at FROM categories
+WHERE id = sqlc.arg(id) AND household_id = sqlc.arg(household_id)
+FOR UPDATE;
+
+-- The in-use guard (#130 C8, R9): does the Category hold an allocation, a
+-- non-null amount, in any Budget Period but the current one? Any row counts, not
+-- only the latest of a Period: a Category an earlier Period held an amount for
+-- is part of that Period's record, even if a later version cleared it. Run
+-- after LockCategory, in the same transaction, and never inside the UPDATE.
+-- name: CategoryHeldElsewhere :one
+SELECT EXISTS (
+    SELECT 1 FROM allocations
+    WHERE household_id = sqlc.arg(household_id)
+      AND category_id = sqlc.arg(category_id)
+      AND year_month <> sqlc.arg(year_month)
+      AND allocation IS NOT NULL
+);
+
+-- A soft delete (BOOTSTRAP.md §4), as SoftDeletePocket: the row stays, the first
+-- deleted_at is kept, and updated_at moves only for the statement that did the
+-- work. Called only after LockCategory and a clear guard. It touches no
+-- allocation: a delete drops the Category out of every figure because reads join
+-- live Categories, and a restore brings the figures back exactly.
+-- name: SoftDeleteCategory :execrows
+UPDATE categories SET
+    deleted_at = coalesce(deleted_at, now()),
+    updated_at = CASE WHEN deleted_at IS NULL THEN now() ELSE updated_at END
+WHERE id = sqlc.arg(id) AND household_id = sqlc.arg(household_id);
+
+-- The Undo of SoftDeleteCategory, as RestorePocket: clears deleted_at and
+-- returns the row, active as it was. Idempotent (a live Category is a row and
+-- comes back unchanged). Another Household's or an unknown id is no row.
+-- Re-entering the partial unique name index is what a held name trips: 23505 on
+-- categories_household_name_idx, answered NAME_TAKEN with the row still deleted,
+-- decided by the index and never by a lookup. This statement writes no
+-- allocation: the handler carries the Category forward after it, in the same
+-- transaction (budget.CarryCategoryForward).
+-- name: RestoreCategory :one
+UPDATE categories SET
+    deleted_at = NULL,
+    updated_at = CASE WHEN deleted_at IS NOT NULL THEN now() ELSE updated_at END
+WHERE id = sqlc.arg(id) AND household_id = sqlc.arg(household_id)
+RETURNING *;

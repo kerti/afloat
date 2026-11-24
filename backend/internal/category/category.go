@@ -1,7 +1,7 @@
 // Package category owns the Household's Categories (PRD S8): listing them,
-// creating one with the allocation it starts with, and renaming, deactivating
-// or reactivating one. What a Category is planned at afterwards is the Budget's
-// (budget.UpdateBudget). Handlers live with their
+// creating one with the allocation it starts with, and renaming, deactivating or
+// reactivating one, or deleting one and restoring it. What a Category is planned
+// at afterwards is the Budget's (budget.UpdateBudget). Handlers live with their
 // domain (docs/adr/go/0001).
 //
 // The dependency runs one way: this package imports auth, for the User in the
@@ -257,6 +257,223 @@ func (h *Handlers) UpdateCategory(ctx context.Context, request api.UpdateCategor
 			InternalErrorJSONResponse: api.InternalErrorJSONResponse{Code: api.INTERNAL},
 		}, nil
 	}
+}
+
+// DeleteCategory is a soft delete: the row stays with deleted_at set, and it is
+// idempotent on the caller's own Category, keeping the first deletion instant
+// (so deleting a deleted one is 204 again, and is never refused). An id that is
+// unknown or another Household's is the one NOT_FOUND. The Household is the
+// authenticated User's, taken from the context and never from the request, and
+// every statement filters on it in SQL.
+//
+// CATEGORY_IN_USE (#130 C8, R9) is refused while the Category holds an
+// allocation, a non-null amount, in a Budget Period other than the one the
+// caller is in. Three statements, in this order, in one transaction: lock the
+// row (FOR UPDATE), ask whether another Period holds an allocation, delete. The
+// guard is NOT folded into the UPDATE's WHERE, and that is the point: under
+// READ COMMITTED an UPDATE that waits for a lock does not re-run its subquery
+// against what committed while it waited, so a single `UPDATE ... WHERE NOT
+// EXISTS` would delete a Category whose allocation for the next Period was being
+// written (or carried forward by a first read of it) at that moment. Taking the
+// lock first makes the second statement start after every writer that holds the
+// row has committed or rolled back, and every allocation write share-locks the
+// row (UpsertAllocation, CopyAllocationsForward) so it cannot start after the
+// lock without finding the Category deleted. A writer that lost the race then
+// answers the same "not live" the rest of the Budget does.
+//
+// Nothing here touches an allocation: a delete drops the Category out of every
+// figure of the current Period because reads join live Categories, and a
+// restore within the same Period brings them back exactly (after a rollover
+// the restore carries the allocation forward instead).
+func (h *Handlers) DeleteCategory(ctx context.Context, request api.DeleteCategoryRequestObject) (api.DeleteCategoryResponseObject, error) {
+	user, ok := auth.UserFromContext(ctx)
+	if !ok {
+		// Unreachable through the router: httpserver's sessionRequired answers
+		// 401 for this operation first. Kept so a router change that lost the
+		// check degrades to the contract's 401, not an UPDATE with a zero
+		// household_id.
+		return api.DeleteCategory401JSONResponse{
+			UnauthorizedJSONResponse: api.UnauthorizedJSONResponse{Code: api.UNAUTHORIZED},
+		}, nil
+	}
+
+	id := pgtype.UUID{Bytes: request.Id, Valid: true}
+	err := h.inTx(ctx, func(q *db.Queries) error {
+		deletedAt, err := q.LockCategory(ctx, db.LockCategoryParams{ID: id, HouseholdID: user.HouseholdID})
+		if errors.Is(err, pgx.ErrNoRows) {
+			return errNotFound
+		}
+		if err != nil {
+			return opaque("lock", err)
+		}
+		if deletedAt.Valid {
+			// Already deleted: the idempotent success, and the guard does not
+			// apply to what is no longer there to refuse. Nothing is written, so
+			// the first deleted_at stands.
+			return nil
+		}
+		at, err := budget.Locate(ctx, q, h.now, user)
+		if err != nil {
+			return opaque("resolve the period", err)
+		}
+		held, err := q.CategoryHeldElsewhere(ctx, db.CategoryHeldElsewhereParams{
+			HouseholdID: user.HouseholdID,
+			CategoryID:  id,
+			YearMonth:   at.Period.YearMonth,
+		})
+		if err != nil {
+			return opaque("check the allocations", err)
+		}
+		if held {
+			return errInUse
+		}
+		n, err := q.SoftDeleteCategory(ctx, db.SoftDeleteCategoryParams{ID: id, HouseholdID: user.HouseholdID})
+		if err != nil {
+			return opaque("delete", err)
+		}
+		if n == 0 {
+			// The row was locked a statement ago, so this is not a race: a
+			// statement that disagrees with its own lock is a failure.
+			return errors.New("delete: the locked row was not updated")
+		}
+		return nil
+	})
+	switch {
+	case err == nil:
+		return api.DeleteCategory204Response{}, nil
+	case errors.Is(err, errInUse):
+		return api.DeleteCategory409JSONResponse{
+			ConflictJSONResponse: api.ConflictJSONResponse{Code: api.CATEGORYINUSE},
+		}, nil
+	case errors.Is(err, errNotFound):
+		// An unknown id, or another Household's: LockCategory found no row. The
+		// later statements' errors are opaque, so only that one can mean this.
+		return api.DeleteCategory404JSONResponse{
+			NotFoundJSONResponse: api.NotFoundJSONResponse{Code: api.NOTFOUND},
+		}, nil
+	default:
+		slog.Error("delete category", "err", err)
+		return api.DeleteCategory500JSONResponse{
+			InternalErrorJSONResponse: api.InternalErrorJSONResponse{Code: api.INTERNAL},
+		}, nil
+	}
+}
+
+// RestoreCategory is the Undo of DeleteCategory: it clears deleted_at and
+// answers the Category, active as it was, and Undo means "as if it was never
+// deleted" (#130 C8, the maintainer's ruling on a restore). A Category that is not
+// deleted is 200, unchanged, and nothing else happens. An id that is unknown or
+// another Household's is the one NOT_FOUND. A name that another live Category of
+// the Household now holds is a 23505 on the name index, which is NAME_TAKEN with
+// the Category still deleted and nothing written: the index decides it, so two
+// concurrent restores into one name answer one 200 and one 409, never a 500.
+//
+// One transaction. It locks the row (FOR UPDATE, as the delete does, so a restore
+// and a delete of one Category are ordered), clears deleted_at, and then does what
+// the Period's carry-forward skipped while the Category was deleted: it brings the
+// current Period into being if no request has yet (then the ordinary copy takes the
+// Category, now live), and carries it forward with budget.CarryCategoryForward, the
+// copy's own rule for one Category. A Period it was deleted and restored within
+// already holds its allocation and gets none written. It never invents an amount:
+// a Daily Category whose latest state is "none", or that never had one, gets none,
+// and so does one that no other Period holds an allocation for.
+//
+// The order is the deadlock-free one. A request materialising the Period copies
+// only Categories that are live, and the one being restored is still deleted to
+// every snapshot but this transaction's, so the materialiser never waits on a row
+// this one holds, while this one may wait on the materialiser's marker. Whichever
+// of the two commits first, the Category ends with exactly one row for the
+// Period: ON CONFLICT DO NOTHING on the natural key and the copy's NOT EXISTS
+// see to it.
+func (h *Handlers) RestoreCategory(ctx context.Context, request api.RestoreCategoryRequestObject) (api.RestoreCategoryResponseObject, error) {
+	user, ok := auth.UserFromContext(ctx)
+	if !ok {
+		return api.RestoreCategory401JSONResponse{
+			UnauthorizedJSONResponse: api.UnauthorizedJSONResponse{Code: api.UNAUTHORIZED},
+		}, nil
+	}
+
+	id := pgtype.UUID{Bytes: request.Id, Valid: true}
+	var row db.Category
+	err := h.inTx(ctx, func(q *db.Queries) error {
+		deletedAt, err := q.LockCategory(ctx, db.LockCategoryParams{ID: id, HouseholdID: user.HouseholdID})
+		if errors.Is(err, pgx.ErrNoRows) {
+			return errNotFound
+		}
+		if err != nil {
+			return opaque("lock", err)
+		}
+		row, err = q.RestoreCategory(ctx, db.RestoreCategoryParams{ID: id, HouseholdID: user.HouseholdID})
+		switch {
+		case errors.Is(err, pgx.ErrNoRows):
+			return errNotFound
+		case isNameTaken(err):
+			return errNameTaken
+		case err != nil:
+			return opaque("restore", err)
+		}
+		if !deletedAt.Valid {
+			return nil
+		}
+		at, err := budget.Locate(ctx, q, h.now, user)
+		if err != nil {
+			return opaque("resolve the period", err)
+		}
+		if err := budget.Materialise(ctx, q, user.HouseholdID, at.Period); err != nil {
+			return opaque("materialise the period", err)
+		}
+		if err := budget.CarryCategoryForward(ctx, q, user.HouseholdID, at.Period, id); err != nil {
+			return opaque("carry the category forward", err)
+		}
+		return nil
+	})
+	switch {
+	case err == nil:
+		return api.RestoreCategory200JSONResponse(response(row)), nil
+	case errors.Is(err, errNotFound):
+		return api.RestoreCategory404JSONResponse{
+			NotFoundJSONResponse: api.NotFoundJSONResponse{Code: api.NOTFOUND},
+		}, nil
+	case errors.Is(err, errNameTaken):
+		return api.RestoreCategory409JSONResponse{
+			ConflictJSONResponse: api.ConflictJSONResponse{Code: api.NAMETAKEN},
+		}, nil
+	default:
+		// Never the Category's name: it is user content.
+		slog.Error("restore category", "err", err)
+		return api.RestoreCategory500JSONResponse{
+			InternalErrorJSONResponse: api.InternalErrorJSONResponse{Code: api.INTERNAL},
+		}, nil
+	}
+}
+
+// errInUse is the guard's refusal, carried out of the delete's transaction so it
+// rolls back (nothing was written before it, and the lock is released).
+var errInUse = errors.New("the Category holds an allocation in another Budget Period")
+
+// errNotFound is LockCategory finding no row.
+var errNotFound = errors.New("no such Category in the Household")
+
+// errNameTaken is a restore into a name another live Category holds.
+var errNameTaken = errors.New("the name is held by another Category")
+
+// inTx runs fn in a transaction, committed only if fn returns nil. An error
+// comes back as fn returned it.
+func (h *Handlers) inTx(ctx context.Context, fn func(q *db.Queries) error) error {
+	tx, err := h.tx.Begin(ctx)
+	if err != nil {
+		return opaque("begin", err)
+	}
+	// A no-op after Commit. Every other return rolls back. Detached from ctx so
+	// a cancelled request still releases the connection.
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	if err := fn(db.New(tx)); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return opaque("commit", err)
+	}
+	return nil
 }
 
 // createWithAllocation inserts the Category, brings the current Period into

@@ -68,6 +68,7 @@ const errorCodeKnown: Record<ErrorCode, true> = {
   INVALID_CURRENT_PASSWORD: true,
   ID_TAKEN: true,
   NAME_TAKEN: true,
+  CATEGORY_IN_USE: true,
   NOT_FOUND: true,
   INTERNAL: true,
 };
@@ -266,5 +267,20 @@ export async function updateCategory(id: string, body: UpdateCategoryRequest): P
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     })
+  ).json() as Promise<Category>;
+}
+
+// A soft delete, answered with an empty 204; a repeat is a 204 too. 404 NOT_FOUND
+// covers unknown and another Household's; 409 CATEGORY_IN_USE when another
+// Budget Period holds an allocation for it.
+export async function deleteCategory(id: string): Promise<void> {
+  await request(`/categories/${encodeURIComponent(id)}`, { method: "DELETE" });
+}
+
+// The Undo of a delete: 200 with the Category (a Commitment comes back with its
+// allocation), 409 NAME_TAKEN when another Category has taken its name meanwhile.
+export async function restoreCategory(id: string): Promise<Category> {
+  return (
+    await request(`/categories/${encodeURIComponent(id)}/restore`, { method: "POST" })
   ).json() as Promise<Category>;
 }

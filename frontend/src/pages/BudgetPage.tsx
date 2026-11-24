@@ -1,12 +1,19 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useQueryClient } from "@tanstack/react-query";
-import { updateCategory, type ApiError, type Category, type Me } from "@/api/client";
+import {
+  restoreCategory,
+  updateCategory,
+  type ApiError,
+  type Category,
+  type Me,
+} from "@/api/client";
 import {
   budgetKey,
   categoriesKey,
   useBudget,
   useCategories,
+  useDeleteCategory,
   useUpdateBudget,
   useUpdateCategory,
 } from "@/api/queries";
@@ -46,6 +53,7 @@ export function BudgetPage({ me }: { me: Me }) {
   const editParam = useDialogParam("edit");
   const qc = useQueryClient();
   const toggle = useUpdateCategory();
+  const remove = useDeleteCategory();
   // Page state, not stored: unticked again on every visit (R7).
   const [showInactive, setShowInactive] = useState(false);
   // One id per create attempt, kept here so closing and reopening the dialog
@@ -98,6 +106,24 @@ export function BudgetPage({ me }: { me: Me }) {
       .catch((e: ApiError) => {
         toastError(errorMessage(t, e));
       });
+  }
+  // Delete is immediate, with no confirmation, and its Undo restores. Unlike
+  // Deactivate it waits for the answer with the dialog open, because it can be
+  // refused (CATEGORY_IN_USE): the dialog shows that, so errors rethrow to it.
+  // mutateAsync, so the toast outlives the dialog.
+  async function onDelete(c: Category) {
+    const name = c.category_display_name;
+    await remove.mutateAsync(c.id);
+    editParam.close();
+    toastUndoable({
+      message: t("toast.deleted", { name }),
+      undo: () =>
+        restoreCategory(c.id).then((r) =>
+          qc.invalidateQueries({ queryKey: budgetKey }).then(() => r),
+        ),
+      qc,
+      invalidate: categoriesKey,
+    });
   }
   const buckets = [
     { bucket: "commitment", id: "commitments", empty: "categories.commitmentsEmpty" },
@@ -208,6 +234,7 @@ export function BudgetPage({ me }: { me: Me }) {
           currency={currency}
           close={editParam.close}
           onToggle={onToggle}
+          onDelete={onDelete}
         />
       )}
       {newParam.value === "category" && (

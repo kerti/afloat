@@ -133,8 +133,9 @@ func (h *Handlers) CreateCategory(ctx context.Context, request api.CreateCategor
 	}
 
 	var allocation *decimal.Decimal
-	if body.Allocation != nil {
-		d, err := decimal.NewFromString(*body.Allocation)
+	// Absent and null both mean none here (a Commitment refuses either below).
+	if amount, getErr := body.Allocation.Get(); getErr == nil {
+		d, err := decimal.NewFromString(amount)
 		if err != nil {
 			// Unreachable: the contract's pattern admits only what parses.
 			return validation("allocation", "pattern"), nil

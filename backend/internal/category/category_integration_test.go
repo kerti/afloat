@@ -16,6 +16,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/oapi-codegen/nullable"
 
 	"github.com/kerti/afloat/backend/internal/api"
 	"github.com/kerti/afloat/backend/internal/auth"
@@ -115,11 +116,20 @@ func newID(t *testing.T) uuid.UUID {
 
 func ptr[T any](v T) *T { return &v }
 
+// amount is a request's money-or-null property: nil leaves it out, which for an
+// allocation means the same as null.
+func amount(s *string) nullable.Nullable[string] {
+	if s == nil {
+		return nil
+	}
+	return nullable.NewNullableWithValue(*s)
+}
+
 // create sends a create; allocation nil sends none.
 func (f fixture) create(ctx context.Context, t *testing.T, id uuid.UUID, name string, bucket api.Bucket, allocation *string) api.CreateCategoryResponseObject {
 	t.Helper()
 	resp, err := f.handlers.CreateCategory(ctx, api.CreateCategoryRequestObject{
-		Body: &api.CreateCategoryRequest{Id: id, CategoryDisplayName: name, Bucket: bucket, Allocation: allocation},
+		Body: &api.CreateCategoryRequest{Id: id, CategoryDisplayName: name, Bucket: bucket, Allocation: amount(allocation)},
 	})
 	if err != nil {
 		t.Fatalf("CreateCategory returned an error: %v", err)
@@ -1344,7 +1354,7 @@ func TestNewWithoutAClockUsesTheRealOne(t *testing.T) {
 	h := category.New(category.Deps{Querier: f.tdb.Queries, Beginner: f.tdb.Pool})
 	_, ctx := f.member(t, "Home", "a@example.com")
 	resp, err := h.CreateCategory(ctx, api.CreateCategoryRequestObject{
-		Body: &api.CreateCategoryRequest{Id: newID(t), CategoryDisplayName: "Rent", Bucket: api.Commitment, Allocation: ptr("1")},
+		Body: &api.CreateCategoryRequest{Id: newID(t), CategoryDisplayName: "Rent", Bucket: api.Commitment, Allocation: amount(ptr("1"))},
 	})
 	if err != nil {
 		t.Fatal(err)

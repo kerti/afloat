@@ -729,20 +729,479 @@
     cookies: {}
     rows: *unchanged
 
-- name: household - expected_monthly_income is not writable yet and is INVALID_JSON_BODY
-  issue: "113"
+# expected_monthly_income (PRD S7, #130 R17): the first PATCH field that `null`
+# clears, so it has to tell an absent property from a null one. A `MoneyInput`
+# on the way in (the pattern is the whole rule, no sign, exponent or separator),
+# four decimals on the way out, omitted when the Household has none. Nothing is
+# computed from it on the server: whether a Monthly Budget exceeds it (S6) is
+# the client's to say.
+
+- name: household - set the expected monthly income
+  issue: "130"
   given: *signed-in
   request:
     method: PATCH
     path: /household
     headers:
       Content-Type: application/json
-    body: '{"expected_monthly_income":"1000.0000"}'
+    body: '{"expected_monthly_income":"25000000"}'
+  expect:
+    status: 200
+    body_json:
+      id: 0192f0a0-0000-7000-8000-000000000001
+      household_display_name: Conformance Household
+      reporting_currency: IDR
+      period_start_day: 1
+      day_starts_at: "04:00"
+      expected_monthly_income: "25000000.0000"
+      allowance_mode: adaptive
+    cookies: {}
+    rows:
+      - sql: SELECT expected_monthly_income::text AS income FROM households
+        rows: [{income: "25000000.0000"}]
+
+- name: household - change the expected monthly income, with decimals
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+    - request:
+        method: PATCH
+        path: /household
+        headers:
+          Content-Type: application/json
+        body: '{"expected_monthly_income":"25000000"}'
+      status: 200
+  request:
+    method: PATCH
+    path: /household
+    headers:
+      Content-Type: application/json
+    body: '{"expected_monthly_income":"30000000.5"}'
+  expect:
+    status: 200
+    body_json:
+      id: 0192f0a0-0000-7000-8000-000000000001
+      household_display_name: Conformance Household
+      reporting_currency: IDR
+      period_start_day: 1
+      day_starts_at: "04:00"
+      expected_monthly_income: "30000000.5000"
+      allowance_mode: adaptive
+    cookies: {}
+    rows:
+      - sql: SELECT expected_monthly_income::text AS income FROM households
+        rows: [{income: "30000000.5000"}]
+
+- name: household - zero is a real expected monthly income
+  issue: "130"
+  given: *signed-in
+  request:
+    method: PATCH
+    path: /household
+    headers:
+      Content-Type: application/json
+    body: '{"expected_monthly_income":"0"}'
+  expect:
+    status: 200
+    body_json:
+      id: 0192f0a0-0000-7000-8000-000000000001
+      household_display_name: Conformance Household
+      reporting_currency: IDR
+      period_start_day: 1
+      day_starts_at: "04:00"
+      expected_monthly_income: "0.0000"
+      allowance_mode: adaptive
+    cookies: {}
+    rows:
+      - sql: SELECT expected_monthly_income::text AS income FROM households
+        rows: [{income: "0.0000"}]
+
+- name: household - the widest expected monthly income is accepted
+  issue: "130"
+  given: *signed-in
+  request:
+    method: PATCH
+    path: /household
+    headers:
+      Content-Type: application/json
+    body: '{"expected_monthly_income":"9999999999999999.9999"}'
+  expect:
+    status: 200
+    body_json:
+      id: 0192f0a0-0000-7000-8000-000000000001
+      household_display_name: Conformance Household
+      reporting_currency: IDR
+      period_start_day: 1
+      day_starts_at: "04:00"
+      expected_monthly_income: "9999999999999999.9999"
+      allowance_mode: adaptive
+    cookies: {}
+    rows:
+      - sql: SELECT expected_monthly_income::text AS income FROM households
+        rows: [{income: "9999999999999999.9999"}]
+
+# null clears the figure: the column is NULL and the property is gone from the
+# answer, which is not the same as a property left out.
+- name: household - null clears the expected monthly income
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+    - sql: UPDATE households SET expected_monthly_income = 25000000
+  request:
+    method: PATCH
+    path: /household
+    headers:
+      Content-Type: application/json
+    body: '{"expected_monthly_income":null}'
+  expect:
+    status: 200
+    body_json:
+      id: 0192f0a0-0000-7000-8000-000000000001
+      household_display_name: Conformance Household
+      reporting_currency: IDR
+      period_start_day: 1
+      day_starts_at: "04:00"
+      allowance_mode: adaptive
+    cookies: {}
+    rows:
+      - sql: SELECT expected_monthly_income::text AS income FROM households
+        rows: [{income: null}]
+
+- name: household - null with other fields clears the income and applies them
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+    - sql: UPDATE households SET expected_monthly_income = 25000000
+  request:
+    method: PATCH
+    path: /household
+    headers:
+      Content-Type: application/json
+    body: '{"expected_monthly_income":null,"period_start_day":9}'
+  expect:
+    status: 200
+    body_json:
+      id: 0192f0a0-0000-7000-8000-000000000001
+      household_display_name: Conformance Household
+      reporting_currency: IDR
+      period_start_day: 9
+      day_starts_at: "04:00"
+      allowance_mode: adaptive
+    cookies: {}
+    rows:
+      - sql: SELECT expected_monthly_income::text AS income FROM households
+        rows: [{income: null}]
+
+- name: household - null when there is none is a no-op that still answers 200
+  issue: "130"
+  given: *signed-in
+  request:
+    method: PATCH
+    path: /household
+    headers:
+      Content-Type: application/json
+    body: '{"expected_monthly_income":null}'
+  expect:
+    status: 200
+    body_json:
+      id: 0192f0a0-0000-7000-8000-000000000001
+      household_display_name: Conformance Household
+      reporting_currency: IDR
+      period_start_day: 1
+      day_starts_at: "04:00"
+      allowance_mode: adaptive
+    cookies: {}
+    rows:
+      - sql: SELECT expected_monthly_income::text AS income FROM households
+        rows: [{income: null}]
+
+- name: household - another field leaves the expected monthly income alone
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+    - sql: UPDATE households SET expected_monthly_income = 25000000
+  request:
+    method: PATCH
+    path: /household
+    headers:
+      Content-Type: application/json
+    body: '{"household_display_name":"Rumah Kita"}'
+  expect:
+    status: 200
+    body_json:
+      id: 0192f0a0-0000-7000-8000-000000000001
+      household_display_name: Rumah Kita
+      reporting_currency: IDR
+      period_start_day: 1
+      day_starts_at: "04:00"
+      expected_monthly_income: "25000000.0000"
+      allowance_mode: adaptive
+    cookies: {}
+    rows:
+      - sql: SELECT expected_monthly_income::text AS income FROM households
+        rows: [{income: "25000000.0000"}]
+
+- name: household - an empty body leaves the expected monthly income alone
+  issue: "130"
+  given:
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+    - sql: UPDATE households SET expected_monthly_income = 25000000
+  request:
+    method: PATCH
+    path: /household
+    headers:
+      Content-Type: application/json
+    body: '{}'
+  expect:
+    status: 200
+    body_json:
+      id: 0192f0a0-0000-7000-8000-000000000001
+      household_display_name: Conformance Household
+      reporting_currency: IDR
+      period_start_day: 1
+      day_starts_at: "04:00"
+      expected_monthly_income: "25000000.0000"
+      allowance_mode: adaptive
+    cookies: {}
+    rows:
+      - sql: SELECT expected_monthly_income::text AS income FROM households
+        rows: [{income: "25000000.0000"}]
+
+# Refusals. Each writes nothing: the income stays what it was, here unset.
+
+- name: household - a negative expected monthly income is a pattern failure
+  issue: "130"
+  given: *signed-in
+  request:
+    method: PATCH
+    path: /household
+    headers:
+      Content-Type: application/json
+    body: '{"expected_monthly_income":"-1"}'
+  expect:
+    status: 400
+    body_json: {code: VALIDATION, args: {field: expected_monthly_income, rule: pattern}}
+    cookies: {}
+    rows:
+      - sql: SELECT expected_monthly_income::text AS income FROM households
+        rows: [{income: null}]
+
+- name: household - a negative zero expected monthly income is a pattern failure
+  issue: "130"
+  given: *signed-in
+  request:
+    method: PATCH
+    path: /household
+    headers:
+      Content-Type: application/json
+    body: '{"expected_monthly_income":"-0"}'
+  expect:
+    status: 400
+    body_json: {code: VALIDATION, args: {field: expected_monthly_income, rule: pattern}}
+    cookies: {}
+    rows:
+      - sql: SELECT expected_monthly_income::text AS income FROM households
+        rows: [{income: null}]
+
+- name: household - an expected monthly income in exponent notation is a pattern failure
+  issue: "130"
+  given: *signed-in
+  request:
+    method: PATCH
+    path: /household
+    headers:
+      Content-Type: application/json
+    body: '{"expected_monthly_income":"1e3"}'
+  expect:
+    status: 400
+    body_json: {code: VALIDATION, args: {field: expected_monthly_income, rule: pattern}}
+    cookies: {}
+    rows:
+      - sql: SELECT expected_monthly_income::text AS income FROM households
+        rows: [{income: null}]
+
+- name: household - an expected monthly income in upper case exponent notation is a pattern failure
+  issue: "130"
+  given: *signed-in
+  request:
+    method: PATCH
+    path: /household
+    headers:
+      Content-Type: application/json
+    body: '{"expected_monthly_income":"1.5E3"}'
+  expect:
+    status: 400
+    body_json: {code: VALIDATION, args: {field: expected_monthly_income, rule: pattern}}
+    cookies: {}
+    rows:
+      - sql: SELECT expected_monthly_income::text AS income FROM households
+        rows: [{income: null}]
+
+- name: household - an expected monthly income with five decimals is refused, never rounded
+  issue: "130"
+  given: *signed-in
+  request:
+    method: PATCH
+    path: /household
+    headers:
+      Content-Type: application/json
+    body: '{"expected_monthly_income":"1.00001"}'
+  expect:
+    status: 400
+    body_json: {code: VALIDATION, args: {field: expected_monthly_income, rule: pattern}}
+    cookies: {}
+    rows:
+      - sql: SELECT expected_monthly_income::text AS income FROM households
+        rows: [{income: null}]
+
+- name: household - an expected monthly income of 17 integer digits is a pattern failure
+  issue: "130"
+  given: *signed-in
+  request:
+    method: PATCH
+    path: /household
+    headers:
+      Content-Type: application/json
+    body: '{"expected_monthly_income":"12345678901234567"}'
+  expect:
+    status: 400
+    body_json: {code: VALIDATION, args: {field: expected_monthly_income, rule: pattern}}
+    cookies: {}
+    rows:
+      - sql: SELECT expected_monthly_income::text AS income FROM households
+        rows: [{income: null}]
+
+- name: household - an expected monthly income with a separator is a pattern failure
+  issue: "130"
+  given: *signed-in
+  request:
+    method: PATCH
+    path: /household
+    headers:
+      Content-Type: application/json
+    body: '{"expected_monthly_income":"1,000"}'
+  expect:
+    status: 400
+    body_json: {code: VALIDATION, args: {field: expected_monthly_income, rule: pattern}}
+    cookies: {}
+    rows:
+      - sql: SELECT expected_monthly_income::text AS income FROM households
+        rows: [{income: null}]
+
+- name: household - an expected monthly income with padding is a pattern failure
+  issue: "130"
+  given: *signed-in
+  request:
+    method: PATCH
+    path: /household
+    headers:
+      Content-Type: application/json
+    body: '{"expected_monthly_income":" 5"}'
+  expect:
+    status: 400
+    body_json: {code: VALIDATION, args: {field: expected_monthly_income, rule: pattern}}
+    cookies: {}
+    rows:
+      - sql: SELECT expected_monthly_income::text AS income FROM households
+        rows: [{income: null}]
+
+- name: household - an empty expected monthly income is a pattern failure
+  issue: "130"
+  given: *signed-in
+  request:
+    method: PATCH
+    path: /household
+    headers:
+      Content-Type: application/json
+    body: '{"expected_monthly_income":""}'
+  expect:
+    status: 400
+    body_json: {code: VALIDATION, args: {field: expected_monthly_income, rule: pattern}}
+    cookies: {}
+    rows:
+      - sql: SELECT expected_monthly_income::text AS income FROM households
+        rows: [{income: null}]
+
+- name: household - an expected monthly income that is a JSON number is INVALID_JSON_BODY
+  issue: "130"
+  given: *signed-in
+  request:
+    method: PATCH
+    path: /household
+    headers:
+      Content-Type: application/json
+    body: '{"expected_monthly_income":5000}'
   expect:
     status: 400
     body_json: {code: INVALID_JSON_BODY}
     cookies: {}
-    rows: *unchanged
+    rows:
+      - sql: SELECT expected_monthly_income::text AS income FROM households
+        rows: [{income: null}]
+
+- name: household - an expected monthly income that is a JSON decimal is INVALID_JSON_BODY
+  issue: "130"
+  given: *signed-in
+  request:
+    method: PATCH
+    path: /household
+    headers:
+      Content-Type: application/json
+    body: '{"expected_monthly_income":5000.5}'
+  expect:
+    status: 400
+    body_json: {code: INVALID_JSON_BODY}
+    cookies: {}
+    rows:
+      - sql: SELECT expected_monthly_income::text AS income FROM households
+        rows: [{income: null}]
+
+- name: household - an expected monthly income that is a JSON boolean is INVALID_JSON_BODY
+  issue: "130"
+  given: *signed-in
+  request:
+    method: PATCH
+    path: /household
+    headers:
+      Content-Type: application/json
+    body: '{"expected_monthly_income":false}'
+  expect:
+    status: 400
+    body_json: {code: INVALID_JSON_BODY}
+    cookies: {}
+    rows:
+      - sql: SELECT expected_monthly_income::text AS income FROM households
+        rows: [{income: null}]
 
 - name: household - the retired bare display_name is INVALID_JSON_BODY
   issue: "113"
@@ -933,6 +1392,44 @@
           - {household_display_name: Other Household, reporting_currency: USD, period_start_day: 15, day_starts_at: "06:30", allowance_mode: fixed, income: "5000.0000", never_updated: true, live: true}
       - sql: SELECT count(*)::int AS n FROM households
         rows: [{n: 2}]
+
+# A clear is the statement most likely to lose its WHERE: it writes NULL, and
+# a missing filter would NULL every Household's income.
+- name: household - clearing the income leaves another Household's income alone
+  issue: "130"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name, reporting_currency, period_start_day, day_starts_at, allowance_mode, expected_monthly_income)
+        VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household', 'USD', 15, '06:30', 'fixed', 5000);
+        UPDATE households SET expected_monthly_income = 25000000 WHERE id = '0192f0a0-0000-7000-8000-000000000001'
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: PATCH
+    path: /household
+    headers:
+      Content-Type: application/json
+    body: '{"expected_monthly_income":null}'
+  expect:
+    status: 200
+    body_json:
+      id: 0192f0a0-0000-7000-8000-000000000001
+      household_display_name: Conformance Household
+      reporting_currency: IDR
+      period_start_day: 1
+      day_starts_at: "04:00"
+      allowance_mode: adaptive
+    cookies: {}
+    rows:
+      - sql: SELECT id::text AS id, expected_monthly_income::text AS income FROM households ORDER BY id
+        rows:
+          - {id: 0192f0a0-0000-7000-8000-000000000001, income: null}
+          - {id: 0192f0a0-0000-7000-8000-000000000002, income: "5000.0000"}
 
 # Under an outage the session cannot be read, which is not the same as invalid:
 # 500, the cookie kept (#27), nothing written.

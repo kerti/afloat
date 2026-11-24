@@ -11,6 +11,7 @@ import (
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/oapi-codegen/nullable"
 	"github.com/oapi-codegen/runtime"
 	openapi_types "github.com/oapi-codegen/runtime/types"
 )
@@ -187,7 +188,8 @@ type Allocation struct {
 type AllocationChange struct {
 	// Allocation A `MoneyInput`, or `null` where a write may say "none": what a Category
 	// is planned at when it is created or changed (a Commitment's `null` is the
-	// required-allocation rule, a Daily Category's is none). The pattern is
+	// required-allocation rule, a Daily Category's is none), and the
+	// Household's expected monthly income, where `null` clears it. The pattern is
 	// `MoneyInput`'s, written out because OpenAPI 3.0 ignores the siblings of a
 	// `$ref`, and a `nullable` over an `allOf` reports a breach of the pattern
 	// as a body that is not the declared shape instead of as the pattern (a
@@ -196,8 +198,8 @@ type AllocationChange struct {
 	//
 	//
 	// Example: 3000000
-	Allocation *MoneyInputOrNull  `json:"allocation"`
-	CategoryId openapi_types.UUID `json:"category_id"`
+	Allocation nullable.Nullable[MoneyInputOrNull] `json:"allocation"`
+	CategoryId openapi_types.UUID                  `json:"category_id"`
 }
 
 // AllowanceMode How the daily allowance is read. Default `adaptive`.
@@ -353,7 +355,8 @@ type ChangePasswordRequest struct {
 type CreateCategoryRequest struct {
 	// Allocation A `MoneyInput`, or `null` where a write may say "none": what a Category
 	// is planned at when it is created or changed (a Commitment's `null` is the
-	// required-allocation rule, a Daily Category's is none). The pattern is
+	// required-allocation rule, a Daily Category's is none), and the
+	// Household's expected monthly income, where `null` clears it. The pattern is
 	// `MoneyInput`'s, written out because OpenAPI 3.0 ignores the siblings of a
 	// `$ref`, and a `nullable` over an `allOf` reports a breach of the pattern
 	// as a body that is not the declared shape instead of as the pattern (a
@@ -362,7 +365,7 @@ type CreateCategoryRequest struct {
 	//
 	//
 	// Example: 3000000
-	Allocation *MoneyInputOrNull `json:"allocation,omitempty"`
+	Allocation nullable.Nullable[MoneyInputOrNull] `json:"allocation,omitempty"`
 
 	// Bucket Which side of the Monthly Budget a Category is on (CONTEXT.md): a
 	// `commitment` is money committed before the Period starts, a `daily`
@@ -585,7 +588,8 @@ type MoneyInput = string
 
 // MoneyInputOrNull A `MoneyInput`, or `null` where a write may say "none": what a Category
 // is planned at when it is created or changed (a Commitment's `null` is the
-// required-allocation rule, a Daily Category's is none). The pattern is
+// required-allocation rule, a Daily Category's is none), and the
+// Household's expected monthly income, where `null` clears it. The pattern is
 // `MoneyInput`'s, written out because OpenAPI 3.0 ignores the siblings of a
 // `$ref`, and a `nullable` over an `allOf` reports a breach of the pattern
 // as a body that is not the declared shape instead of as the pattern (a
@@ -672,11 +676,26 @@ type UpdateCategoryRequest struct {
 
 // UpdateHouseholdRequest The settings a Household may change today, merge-style: a property left
 // out is unchanged, and none is required. A property naming a setting not
-// listed here is not accepted. `null` is not accepted for any of them.
+// listed here is not accepted. `null` is accepted for
+// `expected_monthly_income` alone, where it clears the figure; for any
+// other property it is `INVALID_JSON_BODY`.
 type UpdateHouseholdRequest struct {
-	HouseholdDisplayName *string `json:"household_display_name,omitempty"`
-	PeriodStartDay       *int    `json:"period_start_day,omitempty"`
-	ReportingCurrency    *string `json:"reporting_currency,omitempty"`
+	// ExpectedMonthlyIncome A `MoneyInput`, or `null` where a write may say "none": what a Category
+	// is planned at when it is created or changed (a Commitment's `null` is the
+	// required-allocation rule, a Daily Category's is none), and the
+	// Household's expected monthly income, where `null` clears it. The pattern is
+	// `MoneyInput`'s, written out because OpenAPI 3.0 ignores the siblings of a
+	// `$ref`, and a `nullable` over an `allOf` reports a breach of the pattern
+	// as a body that is not the declared shape instead of as the pattern (a
+	// test pins that the two stay equal). Everything `MoneyInput` says about
+	// the spelling applies.
+	//
+	//
+	// Example: 3000000
+	ExpectedMonthlyIncome nullable.Nullable[MoneyInputOrNull] `json:"expected_monthly_income,omitempty"`
+	HouseholdDisplayName  *string                             `json:"household_display_name,omitempty"`
+	PeriodStartDay        *int                                `json:"period_start_day,omitempty"`
+	ReportingCurrency     *string                             `json:"reporting_currency,omitempty"`
 }
 
 // UpdateMeRequest The settings a User may change on their own row, merge-style: a property

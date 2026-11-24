@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   canonicalMoney,
+  compareMoney,
   currencyDecimals,
   displayDraft,
   draftFromWire,
@@ -143,5 +144,26 @@ describe("currencySymbol", () => {
   it("is Rp for IDR and the code otherwise", () => {
     expect(currencySymbol("IDR")).toBe("Rp");
     expect(currencySymbol("USD")).toBe("USD");
+  });
+});
+
+describe("compareMoney", () => {
+  it("compares on the digits, padding ignored", () => {
+    expect(compareMoney("9000000.0000", "9000000")).toBe(0);
+    expect(compareMoney("9000000.0001", "9000000")).toBe(1);
+    expect(compareMoney("8999999.9999", "9000000.0000")).toBe(-1);
+    expect(compareMoney("0", "0.0000")).toBe(0);
+    expect(compareMoney("0.0000", "0.0001")).toBe(-1);
+  });
+  it("is exact where a float is not", () => {
+    expect(compareMoney("9999999999999999.0001", "9999999999999999.0000")).toBe(1);
+    expect(compareMoney("9999999999999999.0000", "9999999999999999")).toBe(0);
+    expect(compareMoney("10", "9")).toBe(1);
+  });
+  it("handles signs and refuses what is not a decimal", () => {
+    expect(compareMoney("-1.0000", "0")).toBe(-1);
+    expect(compareMoney("-2", "-1")).toBe(-1);
+    expect(compareMoney("1e3", "1")).toBeNull();
+    expect(compareMoney("", "1")).toBeNull();
   });
 });

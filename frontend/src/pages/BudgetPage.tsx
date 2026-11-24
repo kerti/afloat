@@ -14,6 +14,7 @@ import {
   useBudget,
   useCategories,
   useDeleteCategory,
+  useUpdateHousehold,
   useUpdateBudget,
   useUpdateCategory,
 } from "@/api/queries";
@@ -31,7 +32,7 @@ import { ErrorState, Loading } from "@/components/states";
 import { EmptyState, MutedText, PageTitle } from "@/components/Text";
 import { Button } from "@/components/ui/button";
 import { formatDateRange } from "@/lib/dates";
-import { formatMoney } from "@/lib/money";
+import { compareMoney, formatMoney } from "@/lib/money";
 import { toastError } from "@/lib/plainToast";
 import { routes } from "@/lib/routes";
 import { useDialogParam } from "@/lib/useDialogParam";
@@ -60,6 +61,8 @@ export function BudgetPage({ me }: { me: Me }) {
   // after a failure still resends it.
   const [attemptId, setAttemptId] = useState(uuidv7);
   const update = useUpdateBudget();
+  const updateIncome = useUpdateHousehold();
+  const income = me.household.expected_monthly_income;
   const currency = me.household.reporting_currency;
   const data = budget.data;
   const money = (v: string) => formatMoney(v, currency, i18n.language);
@@ -125,6 +128,16 @@ export function BudgetPage({ me }: { me: Me }) {
       invalidate: categoriesKey,
     });
   }
+  // S6, R17: said once, in the toast of the save that makes it true. Exact
+  // decimal comparison on the wire strings, never a float.
+  const exceeds = (budgetAmount: string | undefined, incomeAmount: string | undefined) =>
+    budgetAmount !== undefined &&
+    incomeAmount !== undefined &&
+    (compareMoney(budgetAmount, incomeAmount) ?? 0) > 0;
+  const crossedMessage = (nextBudget: string | undefined, nextIncome: string | undefined) =>
+    exceeds(nextBudget, nextIncome) && !exceeds(data?.monthly_budget, income)
+      ? t("budget.exceedsIncomeSaved")
+      : undefined;
   const buckets = [
     { bucket: "commitment", id: "commitments", empty: "categories.commitmentsEmpty" },
     { bucket: "daily", id: "daily", empty: "categories.dailyEmpty" },
@@ -152,10 +165,30 @@ export function BudgetPage({ me }: { me: Me }) {
               label={t("fields.monthlyBudget")}
               currency={currency}
               stored={data.monthly_budget}
-              save={(next) => update.mutateAsync({ monthly_budget: next })}
+              save={(next) =>
+                update
+                  .mutateAsync({ monthly_budget: next! })
+                  .then(() => crossedMessage(next!, income))
+              }
               pending={update.isPending}
               error={update.error}
               clearError={update.reset}
+            />
+            <MoneySetting
+              id="expected-monthly-income"
+              label={t("fields.expectedMonthlyIncome")}
+              hint={t("budget.incomeHint")}
+              currency={currency}
+              stored={income}
+              clearable
+              save={(next) =>
+                updateIncome
+                  .mutateAsync({ expected_monthly_income: next })
+                  .then(() => crossedMessage(data.monthly_budget, next ?? undefined))
+              }
+              pending={updateIncome.isPending}
+              error={updateIncome.error}
+              clearError={updateIncome.reset}
             />
           </Section>
           {data.daily_pool === undefined || data.unallocated === undefined ? (

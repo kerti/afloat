@@ -12,6 +12,7 @@ import (
 	"log/slog"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/shopspring/decimal"
 
 	"github.com/kerti/afloat/backend/internal/api"
 	"github.com/kerti/afloat/backend/internal/auth"
@@ -65,6 +66,21 @@ func (h *Handlers) UpdateHousehold(ctx context.Context, request api.UpdateHouseh
 	if body.PeriodStartDay != nil {
 		day := int32(*body.PeriodStartDay)
 		params.PeriodStartDay = &day
+	}
+
+	// expected_monthly_income is the one property null clears, so it carries a
+	// set flag beside its value (queries/household.sql): sent as null is
+	// "set, to nothing", left out is "not set".
+	if body.ExpectedMonthlyIncome.IsSpecified() {
+		params.SetExpectedMonthlyIncome = true
+		if text, err := body.ExpectedMonthlyIncome.Get(); err == nil {
+			income, err := decimal.NewFromString(text)
+			if err != nil {
+				// Unreachable: the contract's pattern admits only what parses.
+				return invalidField(failure{"expected_monthly_income", "pattern"}), nil
+			}
+			params.ExpectedMonthlyIncome = decimal.NullDecimal{Decimal: income, Valid: true}
+		}
 	}
 
 	// The rules the contract cannot state. Every one that fails is collected

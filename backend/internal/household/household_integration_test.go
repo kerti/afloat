@@ -2,6 +2,7 @@ package household_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/oapi-codegen/nullable"
 
 	"github.com/kerti/afloat/backend/internal/api"
 	"github.com/kerti/afloat/backend/internal/auth"
@@ -222,6 +224,145 @@ func TestAPartialBodyLeavesTheRestAlone(t *testing.T) {
 	}
 	if got.ExpectedMonthlyIncome == nil || *got.ExpectedMonthlyIncome != "1234.5600" {
 		t.Errorf("expected_monthly_income = %v, want 1234.5600 (a 4dp string)", got.ExpectedMonthlyIncome)
+	}
+}
+
+// income is a request's expected_monthly_income: a value, or null.
+func income(s string) nullable.Nullable[string] { return nullable.NewNullableWithValue(s) }
+
+func clearIncome() nullable.Nullable[string] { return nullable.NewNullNullable[string]() }
+
+// storedIncome is the column as the database holds it, "" for NULL.
+func (f fixture) storedIncome(t *testing.T, id pgtype.UUID) string {
+	t.Helper()
+	var s *string
+	if err := f.tdb.Pool.QueryRow(context.Background(),
+		`SELECT expected_monthly_income::text FROM households WHERE id = $1`, id).Scan(&s); err != nil {
+		t.Fatal(err)
+	}
+	if s == nil {
+		return ""
+	}
+	return *s
+}
+
+// PRD S7: expected_monthly_income is set, changed and cleared by PATCH, the
+// answer carries it as a 4dp string (omitted when none), and /me agrees.
+func TestExpectedMonthlyIncomeIsSetChangedAndCleared(t *testing.T) {
+	f := newFixture(t)
+	id, ctx := f.member(t, "Home", "a@example.com")
+
+	if got := f.me(ctx, t).Household.ExpectedMonthlyIncome; got != nil {
+		t.Fatalf("a new Household has expected_monthly_income = %q, want none", *got)
+	}
+
+	for _, step := range []struct {
+		name       string
+		body       api.UpdateHouseholdRequest
+		wantWire   string // "" is omitted
+		wantStored string // "" is NULL
+	}{
+		{"set", api.UpdateHouseholdRequest{ExpectedMonthlyIncome: income("25000000")}, "25000000.0000", "25000000.0000"},
+		{"change", api.UpdateHouseholdRequest{ExpectedMonthlyIncome: income("30000000.5")}, "30000000.5000", "30000000.5000"},
+		{"zero is a real answer", api.UpdateHouseholdRequest{ExpectedMonthlyIncome: income("0")}, "0.0000", "0.0000"},
+		{"four decimals kept exactly", api.UpdateHouseholdRequest{ExpectedMonthlyIncome: income("0.0001")}, "0.0001", "0.0001"},
+		{"sixteen integer digits", api.UpdateHouseholdRequest{ExpectedMonthlyIncome: income("9999999999999999.9999")}, "9999999999999999.9999", "9999999999999999.9999"},
+		{"clear", api.UpdateHouseholdRequest{ExpectedMonthlyIncome: clearIncome()}, "", ""},
+		{"clear when already none", api.UpdateHouseholdRequest{ExpectedMonthlyIncome: clearIncome()}, "", ""},
+		{"set again after a clear", api.UpdateHouseholdRequest{ExpectedMonthlyIncome: income("1")}, "1.0000", "1.0000"},
+	} {
+		got := f.ok(ctx, t, step.body)
+		switch {
+		case step.wantWire == "" && got.ExpectedMonthlyIncome != nil:
+			t.Errorf("%s: answer carries %q, want it omitted", step.name, *got.ExpectedMonthlyIncome)
+		case step.wantWire != "" && (got.ExpectedMonthlyIncome == nil || *got.ExpectedMonthlyIncome != step.wantWire):
+			t.Errorf("%s: answer = %v, want %q", step.name, got.ExpectedMonthlyIncome, step.wantWire)
+		}
+		if stored := f.storedIncome(t, id); stored != step.wantStored {
+			t.Errorf("%s: stored = %q, want %q", step.name, stored, step.wantStored)
+		}
+		// Pointers compare by address, so compare what goes on the wire.
+		meJSON, _ := json.Marshal(f.me(ctx, t).Household)
+		gotJSON, _ := json.Marshal(got)
+		if string(meJSON) != string(gotJSON) {
+			t.Errorf("%s: /me household = %s, want %s", step.name, meJSON, gotJSON)
+		}
+	}
+}
+
+// A property left out is unchanged and null is not "left out": the two are the
+// whole reason the field is not a pointer. Every other field, sent alone or
+// together, leaves a set income where it is, and `{}` too.
+func TestExpectedMonthlyIncomeLeftOutIsUnchanged(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		body api.UpdateHouseholdRequest
+	}{
+		{"empty body", api.UpdateHouseholdRequest{}},
+		{"name", api.UpdateHouseholdRequest{HouseholdDisplayName: ptr("Renamed")}},
+		{"currency", api.UpdateHouseholdRequest{ReportingCurrency: ptr("USD")}},
+		{"day", api.UpdateHouseholdRequest{PeriodStartDay: ptr(9)}},
+		{"all three", api.UpdateHouseholdRequest{HouseholdDisplayName: ptr("R"), ReportingCurrency: ptr("EUR"), PeriodStartDay: ptr(3)}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t)
+			id, ctx := f.member(t, "Home", "a@example.com")
+			f.ok(ctx, t, api.UpdateHouseholdRequest{ExpectedMonthlyIncome: income("1234.5")})
+
+			f.ok(ctx, t, tc.body)
+			if stored := f.storedIncome(t, id); stored != "1234.5000" {
+				t.Errorf("stored = %q, want 1234.5000: a PATCH that did not name the income changed it", stored)
+			}
+		})
+	}
+
+	t.Run("none stays none", func(t *testing.T) {
+		f := newFixture(t)
+		id, ctx := f.member(t, "Home", "a@example.com")
+		f.ok(ctx, t, api.UpdateHouseholdRequest{HouseholdDisplayName: ptr("Renamed")})
+		if stored := f.storedIncome(t, id); stored != "" {
+			t.Errorf("stored = %q, want NULL", stored)
+		}
+	})
+}
+
+// null clears the income and only the income: the other fields sent with it
+// are applied, the ones left out are not touched.
+func TestClearingTheIncomeLeavesTheOtherFieldsAlone(t *testing.T) {
+	f := newFixture(t)
+	id, ctx := f.member(t, "Home", "a@example.com")
+	f.ok(ctx, t, api.UpdateHouseholdRequest{ExpectedMonthlyIncome: income("500"), PeriodStartDay: ptr(12), ReportingCurrency: ptr("EUR")})
+
+	got := f.ok(ctx, t, api.UpdateHouseholdRequest{ExpectedMonthlyIncome: clearIncome(), HouseholdDisplayName: ptr("Renamed")})
+	if got.ExpectedMonthlyIncome != nil || got.HouseholdDisplayName != "Renamed" || got.PeriodStartDay != 12 || got.ReportingCurrency != "EUR" {
+		t.Errorf("answer = %+v", got)
+	}
+	if stored := f.storedIncome(t, id); stored != "" {
+		t.Errorf("stored = %q, want NULL", stored)
+	}
+}
+
+// A refused request writes nothing, a valid income beside the bad field included
+// and a clear beside it too.
+func TestAnIncomeBesideARefusedFieldWritesNothing(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		income nullable.Nullable[string]
+	}{
+		{"a value", income("999")},
+		{"a clear", clearIncome()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t)
+			id, ctx := f.member(t, "Home", "a@example.com")
+			f.ok(ctx, t, api.UpdateHouseholdRequest{ExpectedMonthlyIncome: income("1")})
+			before := f.row(t, id)
+
+			assertValidation(t, f.patch(ctx, t, api.UpdateHouseholdRequest{ExpectedMonthlyIncome: tc.income, ReportingCurrency: ptr("ABC")}), "reporting_currency", "iso4217")
+			if after := f.row(t, id); after != before {
+				t.Errorf("a refused PATCH wrote: %s -> %s", before, after)
+			}
+		})
 	}
 }
 
@@ -508,6 +649,8 @@ func TestAPatchNeverTouchesAnotherHousehold(t *testing.T) {
 		{ReportingCurrency: ptr("USD")},
 		{PeriodStartDay: ptr(28)},
 		{HouseholdDisplayName: ptr("All"), ReportingCurrency: ptr("EUR"), PeriodStartDay: ptr(2)},
+		{ExpectedMonthlyIncome: income("1")},
+		{ExpectedMonthlyIncome: clearIncome()},
 		{},
 	} {
 		f.ok(ours, t, body)
@@ -532,8 +675,16 @@ func TestConcurrentPatchesOfDifferentFieldsAllLand(t *testing.T) {
 		// was lost shows as the reset value.
 		day := round%27 + 2
 		if _, err := f.tdb.Pool.Exec(context.Background(),
-			`UPDATE households SET household_display_name = 'reset', reporting_currency = 'IDR', period_start_day = 1 WHERE id = $1`, id); err != nil {
+			`UPDATE households SET household_display_name = 'reset', reporting_currency = 'IDR', period_start_day = 1,
+			   expected_monthly_income = 1 WHERE id = $1`, id); err != nil {
 			t.Fatal(err)
+		}
+
+		// Odd rounds clear the income, so a clear that a neighbouring PATCH undoes
+		// shows as the reset value too.
+		incomeBody, wantIncome := income(fmt.Sprint(round+2)), fmt.Sprintf("%d.0000", round+2)
+		if round%2 == 1 {
+			incomeBody, wantIncome = clearIncome(), ""
 		}
 
 		start := make(chan struct{})
@@ -542,6 +693,7 @@ func TestConcurrentPatchesOfDifferentFieldsAllLand(t *testing.T) {
 			{HouseholdDisplayName: &name},
 			{ReportingCurrency: &currency},
 			{PeriodStartDay: &day},
+			{ExpectedMonthlyIncome: incomeBody},
 		} {
 			wg.Add(1)
 			go func() {
@@ -566,6 +718,9 @@ func TestConcurrentPatchesOfDifferentFieldsAllLand(t *testing.T) {
 		if gotName != name || gotCurrency != currency || gotDay != day {
 			t.Fatalf("round %d: row = %q / %q / %d, want %q / %q / %d: a concurrent PATCH lost a field",
 				round, gotName, gotCurrency, gotDay, name, currency, day)
+		}
+		if got := f.storedIncome(t, id); got != wantIncome {
+			t.Fatalf("round %d: income = %q, want %q: a concurrent PATCH lost the clearable field", round, got, wantIncome)
 		}
 	}
 }

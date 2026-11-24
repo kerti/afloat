@@ -13,6 +13,7 @@
     "pocketDisplayName": "Pocket name",
     "householdDisplayName": "Household name",
     "monthlyBudget": "Monthly Budget",
+    "expectedMonthlyIncome": "Expected monthly income (optional)",
     "categoryDisplayName": "Category name",
     "categoryBucket": "Kind",
     "allocation": "Allocation"
@@ -184,6 +185,8 @@
   },
   "budget": {
     "title": "Budget",
+    "incomeHint": "Afloat only uses this to tell you when your Monthly Budget is higher.",
+    "exceedsIncomeSaved": "Saved. Your Monthly Budget is now more than your expected monthly income.",
     "window": "{{start}} to {{end}}",
     "empty": "Set your Monthly Budget to see what is left to spend.",
     "commitmentsBudget": "Commitments Budget",

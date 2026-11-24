@@ -13,6 +13,7 @@
     "pocketDisplayName": "Nama kantong",
     "householdDisplayName": "Nama rumah tangga",
     "monthlyBudget": "Anggaran bulanan",
+    "expectedMonthlyIncome": "Penghasilan bulanan yang diharapkan (opsional)",
     "categoryDisplayName": "Nama kategori",
     "categoryBucket": "Jenis",
     "allocation": "Alokasi"
@@ -182,6 +183,8 @@
   },
   "budget": {
     "title": "Anggaran",
+    "incomeHint": "Afloat hanya memakai ini untuk memberi tahu Anda saat anggaran bulanan lebih tinggi.",
+    "exceedsIncomeSaved": "Tersimpan. Anggaran bulanan Anda kini melebihi penghasilan bulanan yang diharapkan.",
     "window": "{{start}} sampai {{end}}",
     "empty": "Atur anggaran bulanan Anda untuk melihat sisa yang bisa dibelanjakan.",
     "commitmentsBudget": "Anggaran komitmen",

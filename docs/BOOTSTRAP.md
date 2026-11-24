@@ -420,7 +420,7 @@ worth a permanent session for.
 **Touch the session on a threshold, not on every request — also a departure.** Balances issues an
 `UPDATE` per authenticated request, which makes every `GET` a write on the one table read by every
 request. Only refresh when more than half the TTL has elapsed: same observable behaviour, a fraction
-of the writes, no row bloat. Capture is the hot path (PRD Q-11) and the PWA re-probes on every resume.
+of the writes, no row bloat. Capture is the hot path (PRD E1) and the PWA re-probes on every resume.
 
 **Login must not enumerate accounts.** Unknown email, a User with no credential, and a wrong password
 all return one `INVALID_CREDENTIALS`; the comparison is constant-time; and a request for an

@@ -234,8 +234,9 @@ number from thin air produces confident nonsense downstream. Onboarding must the
 
 The ten-second target (G2) is the constraint every decision here answers to.
 
-- **E1.** Capture is reachable in one tap from a cold app open, and is the app's default action on
-  mobile.
+- **E1.** Capture is reachable in one tap from a cold app open: the raised centre tab of the bottom
+  bar, the app's one verb tab. The app opens on the dashboard (§7), not on capture (Q-11, reversed
+  2026-11-24).
 - **E2.** Required to save: **amount only**. Pocket, Category, date and description all have defaults
   or may be left empty.
 - **E3.** Defaults: `occurred_on` = Today; Pocket = the Household's most-used Pocket, or last used;
@@ -274,8 +275,11 @@ The first screen answers the core question with no navigation.
 - **D8. Remaining Budget and Days Remaining**, as supporting figures.
 - **D9. No gauge chart.**
 
-> **Q-11 resolved (2026-09-13): capture is the launch surface.** Capture, not the dashboard, is the
-> reason to open Afloat, so it is the default route on mobile (E1). Notifications stay out of scope;
+> **Q-11 resolved (2026-09-13), reversed (2026-11-24): the dashboard is the launch surface.** The
+> 2026-09-13 ruling made capture the default route on mobile. The maintainer reversed it on
+> 2026-11-24, following Uruni (ADR-032): the app opens on the dashboard, whose first screen answers
+> the core question with no navigation (§7), and capture is one tap away as the bottom bar's raised
+> centre tab (E1). A capture returns to the dashboard after a save. Notifications stay out of scope;
 > the service worker does app-shell caching only, and web push slots in later without redesign.
 
 ## 8. Non-functional requirements
@@ -388,7 +392,7 @@ Restated here because each was raised and rejected on purpose, and each will be 
 Struck as resolved on 2026-09-13, each recorded in place above and in `BOOTSTRAP.md`: **Q-01** no
 telemetry · **Q-02** local auth, credentials in their own table · **Q-03** start fresh, Import planned
 · **Q-07** negatives allowed, `CHECK (amount <> 0)` · **Q-09** lazy rollover, no scheduler · **Q-11**
-capture is the launch surface · **Q-12** name kept.
+capture is the launch surface (reversed 2026-11-24: the dashboard is) · **Q-12** name kept.
 
 | # | Question | Blocks |
 |---|---|---|
@@ -425,6 +429,7 @@ its due date by hand. Adding it back later is a non-breaking contract change plu
 
 | Date | Change |
 |---|---|
+| 2026-11-24 | Navigation, ruled by the maintainer ahead of the Expenses slice, from Uruni's Shell (ADR-032, ADR-046, ADR-047). **Q-11 reversed:** the app opens on the dashboard, as Uruni's does, and capture is one tap away (E1 reworded); a capture returns to the dashboard after a save. A fixed bottom bar with five tabs, icon and label each: Home `/`, Expenses `/expenses`, Capture `/capture` (raised, centre, on a rounded square rather than Uruni's circle, the one verb tab, a full screen, never a dialog; no floating button), Budget `/budget`, Settings `/settings`. **Settings is one sectioned screen**, Household, Pockets and You, folding in `/settings/household`, `/settings/user` and `/pockets`; this sets aside #119's "no settings hub" (one screen, not a hub of links). Budget and its Categories stay a tab (an operation, not configuration). The Recycle Bin is a sub-screen at `/expenses/recycle-bin` with "← Expenses" and the Expenses tab lit. The top bar keeps the home link and Sign out; a screen that becomes a tab loses its "← Home". The bar ships with the first Expenses PR, never with tabs that lead nowhere. Recorded in `docs/agents/ui-conventions.md` § Layout and navigation. |
 | 2026-11-24 | Expected monthly income (issue #130, PR 5 of 5; #130 itself closed with PR 4, #136). `PATCH /household` writes `expected_monthly_income` (S7): a money string, at least 0, the same rule as `monthly_budget`; `null` clears it and an absent property leaves it alone. It is the first property that `null` clears, so BOOTSTRAP §4 now types a clearable field as `nullable` in the contract, `nullable.Nullable[T]` in Go (oapi-codegen `nullable-type`, which also retypes the two existing nullable `allocation` properties, with the same behaviour), and a set flag beside the value in SQL, still one `UPDATE`. S6 as ruled in R17: the toast of the save that makes the Monthly Budget exceed the income says so, compared exactly on the wire strings, never as floats; nothing persists or is stored. S5's share stays unbuilt (**Q-19**); onboarding is unchanged. The input sits under the Monthly Budget on `/budget`. UI rulings from the maintainer, recorded in `docs/agents/ui-conventions.md`: "(optional)" in the label, a hint under the field, a clearable `MoneySetting` saves a blank as `null`, a save's toast carries the sentence for what it made true, settings stack in one Section with a Save each, amounts compared exactly. `CONTEXT.md` gains the id-ID term (provisional, R16). |
 | 2026-11-24 | Delete and restore a Category (issue #130, PR 4 of 5: `DELETE /categories/{id}` and `POST /categories/{id}/restore`, `409 CATEGORY_IN_USE`). Rulings from the maintainer, as they bear on this PR: **R9** (C8), a Category is soft-deleted as a Pocket is (`204`, idempotent, the first `deleted_at` kept, `NAME_TAKEN` on a restore into a held name, one `404` for an unknown or another Household's id) and `CATEGORY_IN_USE` is **refused while the Category holds an allocation, a non-null amount, in a Budget Period other than the current one**, earlier or later, any row counting (a Category an earlier Period held an amount for is part of that Period's record, even if a later version cleared it) while a Period that holds only a "none" row does not; only the current Period's own allocation never blocks, so a Category made today and deleted today is a mistake that can be undone. Deactivating is the way to retire the rest. A repeat delete of a Category already deleted is `204` and is never refused. A delete **writes no allocation** and takes the Category out of every figure of the current Period at once, the days before today included (reads join live Categories). **Ruled by the maintainer (replacing #130's Edge 2): Undo means "as if it was never deleted".** A restore within the Period it was deleted in brings the figures back exactly and writes nothing; one after a following Period was first read (whose copy skipped the Category) **carries the allocation forward**, in the restore's own transaction: the latest state of the nearest earlier Period that holds an allocation for that Category, dated the current Period's first day, so a Commitment always has one (R10 holds). It brings the current Period into being first if no request has, writes nothing for a Category that already has any row in the Period, and nothing for a Daily Category whose latest state is "none" or that never had one. The selection is the carry-forward's own, in one place (`CopySource` and `CopyAllocationsForward`, which take an optional Category), so a future annual plan (Q-20) hooks in there. A restore racing the Period's first read leaves one row and no error (`ON CONFLICT DO NOTHING` on the natural key). Such a Category holds an allocation in an earlier Period, so it can be deactivated but not deleted again. The deleted Category is not carried forward (PR 2's copy joins live Categories). **Race-free:** the delete is one transaction, a `FOR UPDATE` on the Category row, then the check of other Periods' allocations in a **later statement**, then the soft delete; every write of a non-null allocation (the `PATCH /budget` upsert, the create's first allocation, the materialising copy) takes `FOR SHARE` on the row, so an allocation being written for another Period while the delete runs is either seen by the check or refused as not live. The check is not folded into the `UPDATE`'s `WHERE`: under `READ COMMITTED` an `UPDATE` that waited for a lock does not re-run its subquery against what committed meanwhile, and `BOOTSTRAP.md` §4's earlier wording ("inside the delete statement") is corrected. New code `CATEGORY_IN_USE` (`409`, no `args`). No schema change. |
 | 2026-11-24 | **Q-20 added to §11**: whether D6 and D7 read a Commitment that recurs over N months per Budget Period or over its cycle. Raised by the maintainer about an annual car tax: a twelfth allocated each month already shrinks the Daily Pool in the idle months and the payment touches no daily figure; only the per-Category readings would spike. Recorded so the dashboard slice does not build the per-Period reading by default. |

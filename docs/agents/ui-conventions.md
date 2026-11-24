@@ -168,8 +168,24 @@ role table follows Uruni `docs/Design-System.md` § Typography.)
 - **One Shell.** A **fixed** top bar and, once the app has tabs, a **fixed** bottom tab bar (at most
   five tabs, the active one marked with a top line and `aria-current`, derived from the URL). Fixed,
   not sticky: a sticky header rides iOS's overscroll bounce while a fixed footer stays put. Both bars
-  pad for `env(safe-area-inset-*)`; `main` reserves their height. (Uruni `Shell.tsx`.) The tab list is
-  decided when the dashboard and capture slices land; until then, the Shell has no bottom bar.
+  pad for `env(safe-area-inset-*)`; `main` reserves their height. (Uruni `Shell.tsx`.)
+  - **The tabs** (ruled 24 Nov 2026, from Uruni ADR-032): **Home** `/`, **Expenses** `/expenses`,
+    **Capture** `/capture`, **Budget** `/budget`, **Settings** `/settings`, in that order, each an icon
+    over a label. Home is first and matches only `/`; every other tab stays lit across its own
+    sub-paths. Capture is raised and centred, the one verb tab, on a **rounded square**, not Uruni's
+    circle (the maintainer, 24 Nov 2026); the line, not its colour, marks it active. On Capture
+    the square covers its line and the label alone marks it: accepted, the screen's title says
+    where you are. The bar ships with the first Expenses PR; until then the Shell has no bottom bar.
+  - **The app opens on Home** (PRD Q-11, reversed 24 Nov 2026). **Capture is a full screen**, never
+    a dialog, and returns to Home after a save. It is the only create without its noun's list; every
+    other create lives on its own list. No floating button. (Uruni ADR-032, ADR-046.)
+  - **Settings is one screen in sections**: Household, Pockets, You (Uruni Pengaturan, ADR-047:
+    configuration in Settings, operations where the money is). Budget and its Categories are an
+    operation and keep their own tab. This sets aside #119's "no settings hub": one sectioned
+    screen, not a list of links.
+  - **The Recycle Bin** is a sub-screen of Expenses (`/expenses/recycle-bin`, "← Expenses", Expenses
+    lit). Neither Uruni nor Balances has one; the shape is Afloat's own.
+  - A screen that becomes a tab loses its "← Home"; a sub-screen keeps its back link.
   - The top bar is 3.5rem plus the top safe-area inset, in `header-glass` (Catalogue, `Shell`).
     It holds the "Afloat" link home on the left and Sign out on the right; a failed sign-out is an
     error toast. (Uruni `Shell.tsx`, without its measured `--shell-header` and banner slot.)

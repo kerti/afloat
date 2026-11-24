@@ -85,7 +85,9 @@ describe("deleting a Category", () => {
     await user.click(within(dialog).getByRole("button", { name: c.delete }));
 
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
-    expect(view.param("edit")).toBeNull();
+    // Waited for, not asserted at once: the refetched list can drop Rent, and so
+    // unmount the dialog, a render before close() or the stale-param clear lands.
+    await waitFor(() => expect(view.param("edit")).toBeNull());
     await waitFor(() =>
       expect(screen.queryByRole("button", { name: /^Edit Rent,/ })).not.toBeInTheDocument(),
     );

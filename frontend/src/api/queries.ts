@@ -266,7 +266,9 @@ export function useDeleteCategory() {
     ]);
   return useMutation<void, ApiError, string>({
     mutationFn: deleteCategory,
-    onSuccess: refetch,
+    // Not awaited: the caller closes the dialog on the 204, before the refetched
+    // list drops the Category and unmounts the dialog under a stale ?edit=.
+    onSuccess: () => void refetch(),
     onError: (err) => {
       if (err.code === "NOT_FOUND") void refetch();
     },

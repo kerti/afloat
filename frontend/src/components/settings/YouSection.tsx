@@ -3,9 +3,8 @@ import { useTranslation } from "react-i18next";
 import type { Me } from "@/api/client";
 import { useAuthMethods, useChangeEmail, useChangePassword, useUpdateMe } from "@/api/queries";
 import { errorMessage } from "@/api/errors";
-import { BackLink } from "@/components/BackLink";
 import { Field, Form, Section } from "@/components/Form";
-import { FieldError, PageTitle } from "@/components/Text";
+import { FieldError } from "@/components/Text";
 import { TextSetting } from "@/components/TextSetting";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -19,7 +18,6 @@ import {
 } from "@/components/ui/select";
 import { useAppearance } from "@/lib/useAppearance";
 import { toastPlain } from "@/lib/plainToast";
-import { routes } from "@/lib/routes";
 import { useChoice } from "@/lib/useChoice";
 
 const locales = [
@@ -45,24 +43,22 @@ function timeZoneNames(stored: string): string[] {
 // language and time zone are choices that save on change). Email and password
 // are typed forms with an explicit submit, each with its own error, so a failed
 // password change never reads as a failed profile save (PRD N14).
-export function UserSettingsPage({ me }: { me: Me }) {
+export function YouSection({ me }: { me: Me }) {
   const { t } = useTranslation();
   const methods = useAuthMethods();
   // Shown only on a positive answer, so the sections never flash and vanish.
   const local = methods.data?.local === true;
 
   return (
-    <>
-      <BackLink to={routes.home} label={t("home.title")} />
-      <PageTitle>{t("settings.user.title")}</PageTitle>
-      <ProfileSection me={me} />
+    <Section id="you" title={t("settings.user.title")}>
+      <ProfileSubsection me={me} />
       {local && <EmailForm />}
       {local && <PasswordForm />}
-    </>
+    </Section>
   );
 }
 
-function ProfileSection({ me }: { me: Me }) {
+function ProfileSubsection({ me }: { me: Me }) {
   const { t, i18n } = useTranslation();
   const rename = useUpdateMe();
   const patch = useUpdateMe();
@@ -91,7 +87,7 @@ function ProfileSection({ me }: { me: Me }) {
   const [zone, chooseZone] = useChoice(me.time_zone, (v) => patch.mutateAsync({ time_zone: v }));
 
   return (
-    <Section id="profile" title={t("settings.user.profile.heading")}>
+    <Section subsection id="profile" title={t("settings.user.profile.heading")}>
       <TextSetting
         id="user-name"
         label={t("settings.user.profile.name")}
@@ -169,7 +165,7 @@ function EmailForm() {
   }
 
   return (
-    <Section id="email" title={t("settings.user.email.heading")}>
+    <Section subsection id="email" title={t("settings.user.email.heading")}>
       <Form onSubmit={onSubmit}>
         <Field>
           <Label htmlFor="new-email">{t("settings.user.email.newEmail")}</Label>
@@ -242,6 +238,7 @@ function PasswordForm() {
 
   return (
     <Section
+      subsection
       id="password"
       title={t("settings.user.password.heading")}
       description={t("settings.user.password.hint")}

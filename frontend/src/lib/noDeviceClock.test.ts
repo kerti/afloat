@@ -35,7 +35,7 @@ describe("the device clock and date-only strings", () => {
   it("finds the source files, so the checks below are not vacuously green", () => {
     const paths = Object.keys(sources);
     expect(paths).toContain("/src/lib/uuid.ts");
-    expect(paths).toContain("/src/pages/PocketsPage.tsx");
+    expect(paths).toContain("/src/pages/SettingsPage.tsx");
     expect(paths.length).toBeGreaterThan(30);
   });
 

@@ -26,17 +26,14 @@ describe("the Shell", () => {
     expect(within(bar).getByRole("button", { name: enGB.shell.signOut })).toBeInTheDocument();
     expect(screen.queryByRole("navigation")).not.toBeInTheDocument();
 
-    for (const link of ["Pockets", "Household settings", "Your settings"]) {
-      await user.click(await screen.findByRole("link", { name: link }));
-      expect(screen.getByRole("main").firstElementChild).toHaveClass("max-w-xl");
-      expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
-      await user.click(screen.getByRole("link", { name: enGB.home.title }));
-    }
+    await user.click(await screen.findByRole("link", { name: "Settings" }));
+    expect(screen.getByRole("main").firstElementChild).toHaveClass("max-w-xl");
+    expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
   });
 
   it("gives a sub-screen a BackLink to Home, at least 44px tall, above the title", async () => {
     server.use(...defaultHandlers({ signedIn: true, me: alice }));
-    renderApp("/pockets");
+    renderApp("/settings");
 
     const back = await screen.findByRole("link", { name: enGB.home.title });
     expect(back).toHaveAttribute("href", "/");

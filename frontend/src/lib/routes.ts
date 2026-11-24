@@ -7,8 +7,14 @@ export const routes = {
   login: "/login",
   register: "/register",
   onboarding: "/onboarding",
+  settings: "/settings",
+  budget: "/budget",
+} as const;
+
+// Paths that used to be screens. Each only redirects to /settings, keeping the
+// query string, so an old link (or an old ?edit=pocket:<id>) still lands.
+export const legacyRedirects = {
   householdSettings: "/settings/household",
   userSettings: "/settings/user",
   pockets: "/pockets",
-  budget: "/budget",
 } as const;

@@ -1,5 +1,5 @@
 import type { ComponentProps, ReactNode } from "react";
-import { SectionDescription, SectionTitle } from "@/components/Text";
+import { SectionDescription, SectionTitle, SubsectionLabel } from "@/components/Text";
 import { cn } from "@/lib/utils";
 
 // Form layout, written once so the spacing steps change in one place
@@ -22,17 +22,21 @@ export function Section({
   id,
   title,
   description,
+  subsection,
   children,
 }: {
   id?: string;
   title?: string;
   description?: string;
+  // A stretch inside another section: its title is an h3 SubsectionLabel.
+  subsection?: boolean;
   children: ReactNode;
 }) {
+  const Title = subsection ? SubsectionLabel : SectionTitle;
   const headingId = id && title ? `${id}-heading` : undefined;
   return (
     <section aria-labelledby={headingId} className="flex flex-col gap-4">
-      {title && <SectionTitle id={headingId}>{title}</SectionTitle>}
+      {title && <Title id={headingId}>{title}</Title>}
       {description && <SectionDescription>{description}</SectionDescription>}
       {children}
     </section>

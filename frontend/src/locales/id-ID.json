@@ -48,9 +48,7 @@
     "signedInAs": "Masuk sebagai {{name}}.",
     "household": "Rumah tangga: {{name}}",
     "comingSoon": "Dasbor Anda akan muncul di sini.",
-    "settingsLink": "Pengaturan rumah tangga",
-    "userSettingsLink": "Pengaturan Anda",
-    "pocketsLink": "Kantong",
+    "settingsLink": "Pengaturan",
     "budgetLink": "Anggaran"
   },
   "pwa": {
@@ -101,7 +99,6 @@
     "backToSignIn": "Kembali ke halaman masuk"
   },
   "pockets": {
-    "title": "Kantong",
     "empty": "Kantong Anda akan tampil di sini.",
     "addHeading": "Tambah kantong",
     "namePlaceholder": "Misalnya: Tunai, OVO, debit BCA",
@@ -124,12 +121,16 @@
   "settings": {
     "save": "Simpan",
     "saving": "Menyimpan…",
+    "title": "Pengaturan",
     "household": {
-      "title": "Pengaturan rumah tangga",
+      "title": "Rumah tangga",
       "periodStartDayHint": "Setiap periode anggaran dimulai pada tanggal ini, dari 1 sampai 28. Mengubahnya langsung menggeser tanggal periode anggaran Anda."
     },
+    "pockets": {
+      "title": "Kantong"
+    },
     "user": {
-      "title": "Pengaturan Anda",
+      "title": "Anda",
       "profile": {
         "heading": "Profil",
         "name": "Nama Anda",

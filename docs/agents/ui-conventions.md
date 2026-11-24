@@ -50,6 +50,10 @@ tag each, so it has components only. A missing element is proposed first (see Ho
 
 - `PageTitle`: the screen's one `h1`.
 - `SectionTitle`: the `h2` that opens a section.
+- `SubsectionLabel`: the `h3` that labels a stretch inside a section (Settings' You section: Profile,
+  Email, Password). One step under `SectionTitle`: small, semibold, muted. `Section` renders it for
+  its `subsection` prop. Confirmed on the phone preview, 24 Nov 2026. (Uruni `SubsectionLabel.tsx`;
+  ruled 24 Nov 2026, #140 PR 1.)
 - `SectionDescription`: the sentence under a section title saying what it is for.
 - `FieldHint`: the sentence under a field saying what it takes. Also the small muted note below a
   form's submit ("Already have an account? Sign in").
@@ -79,7 +83,8 @@ tag each, so it has components only. A missing element is proposed first (see Ho
 - `BackLink` (`components/BackLink.tsx`): the sub-screen's way back.
 - `Form`, `Field`, `Section` (`components/Form.tsx`): a `noValidate` form with its fields stacked
   (`gap-4`); one field with its label, control, hint and error stacked (`gap-2`); a screen section
-  with an optional title and description, its content at `gap-4`. Sections stack at the Shell's
+  with an optional title and description, its content at `gap-4`; `subsection` makes its title an h3
+  `SubsectionLabel` for a stretch inside another section. Sections stack at the Shell's
   `gap-6`.
 - `TextSetting` (`components/TextSetting.tsx`): a typed setting with its own Save and inline error.
 - `CheckboxRow` (`components/CheckboxRow.tsx`): a 20px checkbox in a 44px label ("Show inactive …").
@@ -140,20 +145,21 @@ appearance, not the OS. (Confirmed by the maintainer, 23 Nov 2026, for #124.)
 One font, Figtree (`--font-ui`). Sizes and weights come from these roles, never per screen. (The
 role table follows Uruni `docs/Design-System.md` § Typography.)
 
-| Role                     | Size             | Weight              | Colour                    | Used for                                                                  |
-| ------------------------ | ---------------- | ------------------- | ------------------------- | ------------------------------------------------------------------------- |
-| Page title               | 20px (`text-xl`) | semibold            | foreground                | `PageTitle`; every screen, auth included                                  |
-| Section and dialog title | 18px (`text-lg`) | semibold            | foreground                | `SectionTitle`, `DialogTitle`: one look (Uruni H2, 600; ruled 22 Nov)     |
-| Brand                    | 18px (`text-lg`) | semibold            | foreground                | the top bar's "Afloat" link                                               |
-| Body                     | 16px (base)      | regular             | foreground                | `BodyText`, a list row's title, inputs, select values                     |
-| Muted body               | 16px             | regular             | muted-foreground          | `MutedText`, `EmptyState`, `Loading`, `BackLink`, an inactive row's title |
-| Label                    | 14px (`text-sm`) | medium              | foreground                | `Label`, buttons                                                          |
-| Destructive label        | 14px             | medium              | destructive               | the `destructive` Button, DetailActions' Delete (ruled 22 Nov)            |
-| Hint                     | 14px             | regular             | muted-foreground          | `FieldHint`, `SectionDescription`, `CheckboxRow`                          |
-| Error                    | 14px             | regular             | attention                 | `FieldError`                                                              |
-| Load failure             | 16px             | regular             | attention                 | `ErrorState`                                                              |
-| Link                     | 14px             | regular, underlined | foreground                | `TextLink`                                                                |
-| Badge                    | 12px (`text-xs`) | regular             | muted-foreground on muted | `Badge`                                                                   |
+| Role                     | Size             | Weight              | Colour                    | Used for                                                                                                     |
+| ------------------------ | ---------------- | ------------------- | ------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| Page title               | 20px (`text-xl`) | semibold            | foreground                | `PageTitle`; every screen, auth included                                                                     |
+| Section and dialog title | 18px (`text-lg`) | semibold            | foreground                | `SectionTitle`, `DialogTitle`: one look (Uruni H2, 600; ruled 22 Nov)                                        |
+| Subsection label         | 14px (`text-sm`) | semibold            | muted-foreground          | `SubsectionLabel`: Uruni's grey semibold h3, one step under the section title (ruled 24 Nov 2026, #140 PR 1) |
+| Brand                    | 18px (`text-lg`) | semibold            | foreground                | the top bar's "Afloat" link                                                                                  |
+| Body                     | 16px (base)      | regular             | foreground                | `BodyText`, a list row's title, inputs, select values                                                        |
+| Muted body               | 16px             | regular             | muted-foreground          | `MutedText`, `EmptyState`, `Loading`, `BackLink`, an inactive row's title                                    |
+| Label                    | 14px (`text-sm`) | medium              | foreground                | `Label`, buttons                                                                                             |
+| Destructive label        | 14px             | medium              | destructive               | the `destructive` Button, DetailActions' Delete (ruled 22 Nov)                                               |
+| Hint                     | 14px             | regular             | muted-foreground          | `FieldHint`, `SectionDescription`, `CheckboxRow`                                                             |
+| Error                    | 14px             | regular             | attention                 | `FieldError`                                                                                                 |
+| Load failure             | 16px             | regular             | attention                 | `ErrorState`                                                                                                 |
+| Link                     | 14px             | regular, underlined | foreground                | `TextLink`                                                                                                   |
+| Badge                    | 12px (`text-xs`) | regular             | muted-foreground on muted | `Badge`                                                                                                      |
 
 - **Radius:** `rounded-md` for controls, the list card, the badge and the back link (`--radius` is
   0.625rem); `rounded-lg` for the dialog and the update banner; `rounded-sm` for a select item;
@@ -182,7 +188,11 @@ role table follows Uruni `docs/Design-System.md` § Typography.)
   - **Settings is one screen in sections**: Household, Pockets, You (Uruni Pengaturan, ADR-047:
     configuration in Settings, operations where the money is). Budget and its Categories are an
     operation and keep their own tab. This sets aside #119's "no settings hub": one sectioned
-    screen, not a list of links.
+    screen, not a list of links. Household, Pockets and You are `h2`s; You's Profile, Email and
+    Password are `h3` `SubsectionLabel`s (ruled 24 Nov 2026, #140 PR 1). The Pocket dialogs stay
+    URL-driven on `/settings` (`?new=pocket`, `?edit=pocket:<id>`); the old `/settings/household`,
+    `/settings/user` and `/pockets` redirect there, keeping the query string
+    (`legacyRedirects` in `lib/routes.ts`).
   - **The Recycle Bin** is a sub-screen of Expenses (`/expenses/recycle-bin`, "← Expenses", Expenses
     lit). Neither Uruni nor Balances has one; the shape is Afloat's own.
   - A screen that becomes a tab loses its "← Home"; a sub-screen keeps its back link.

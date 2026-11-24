@@ -17,9 +17,7 @@ export function HomePage({ me }: { me: Me }) {
         <BodyText>{t("home.signedInAs", { name: me.user_display_name })}</BodyText>
         <MutedText>{t("home.household", { name: me.household.household_display_name })}</MutedText>
       </div>
-      <TextLink to={routes.householdSettings}>{t("home.settingsLink")}</TextLink>
-      <TextLink to={routes.userSettings}>{t("home.userSettingsLink")}</TextLink>
-      <TextLink to={routes.pockets}>{t("home.pocketsLink")}</TextLink>
+      <TextLink to={routes.settings}>{t("home.settingsLink")}</TextLink>
       <TextLink to={routes.budget}>{t("home.budgetLink")}</TextLink>
       <MutedText>{t("home.comingSoon")}</MutedText>
     </>

@@ -35,7 +35,7 @@ describe("the edit dialog's actions", () => {
   it("puts Deactivate and Delete above a Save-only footer, Delete last", async () => {
     server.use(...defaultHandlers(signedIn({ pockets: [pocket("a", "Cash")] })));
     const user = userEvent.setup();
-    renderApp("/pockets");
+    renderApp("/settings");
 
     const dialog = await openEdit(user, "Cash");
     const footer = dialog.querySelector('[data-slot="dialog-footer"]') as HTMLElement;
@@ -54,7 +54,7 @@ describe("the edit dialog's actions", () => {
 
   it("the create dialog keeps Cancel and Add, with no record actions", async () => {
     server.use(...defaultHandlers(signedIn({ pockets: [] })));
-    renderApp("/pockets?new=pocket");
+    renderApp("/settings?new=pocket");
 
     const dialog = await screen.findByRole("dialog", { name: p.addHeading });
     expect(within(dialog).queryByRole("button", { name: p.delete })).not.toBeInTheDocument();
@@ -68,7 +68,7 @@ describe("deleting a Pocket", () => {
     const state = signedIn({ pockets: [pocket("a", "Cash"), pocket("b", "OVO")] });
     server.use(...defaultHandlers(state));
     const user = userEvent.setup();
-    const view = renderApp("/pockets");
+    const view = renderApp("/settings");
 
     const dialog = await openEdit(user, "OVO");
     await user.click(within(dialog).getByRole("button", { name: p.delete }));
@@ -91,7 +91,7 @@ describe("deleting a Pocket", () => {
     const state = signedIn({ pockets: [pocket("a", "Cash")] });
     server.use(...defaultHandlers(state));
     const user = userEvent.setup();
-    renderApp("/pockets");
+    renderApp("/settings");
 
     const dialog = await openEdit(user, "Cash");
     await user.click(within(dialog).getByRole("button", { name: p.delete }));
@@ -106,7 +106,7 @@ describe("deleting a Pocket", () => {
     const state = signedIn({ pockets: [pocket("a", "Cash", false), pocket("b", "OVO")] });
     server.use(...defaultHandlers(state));
     const user = userEvent.setup();
-    renderApp("/pockets");
+    renderApp("/settings");
 
     await user.click(await screen.findByLabelText("Show inactive Pockets (1)"));
     const dialog = await openEdit(user, "Cash", true);
@@ -128,7 +128,7 @@ describe("deleting a Pocket", () => {
       ...defaultHandlers(signedIn({ pockets: [pocket("a", "Cash")] })),
     );
     const user = userEvent.setup();
-    renderApp("/pockets");
+    renderApp("/settings");
 
     const dialog = await openEdit(user, "Cash");
     await user.click(within(dialog).getByRole("button", { name: p.delete }));
@@ -144,7 +144,7 @@ describe("deleting a Pocket", () => {
     const state = signedIn({ pockets: [pocket("a", "Cash")] });
     server.use(...defaultHandlers(state));
     const user = userEvent.setup();
-    renderApp("/pockets");
+    renderApp("/settings");
 
     const dialog = await openEdit(user, "Cash");
     state.pockets = [];
@@ -160,7 +160,7 @@ describe("deleting a Pocket", () => {
     const state = signedIn({ pockets: [pocket("a", "OVO")] });
     server.use(...defaultHandlers(state));
     const user = userEvent.setup();
-    renderApp("/pockets");
+    renderApp("/settings");
 
     const dialog = await openEdit(user, "OVO");
     await user.click(within(dialog).getByRole("button", { name: p.delete }));

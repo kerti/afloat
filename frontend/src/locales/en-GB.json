@@ -48,9 +48,7 @@
     "signedInAs": "Signed in as {{name}}.",
     "household": "Household: {{name}}",
     "comingSoon": "Your dashboard will appear here.",
-    "settingsLink": "Household settings",
-    "userSettingsLink": "Your settings",
-    "pocketsLink": "Pockets",
+    "settingsLink": "Settings",
     "budgetLink": "Budget"
   },
   "pwa": {
@@ -102,7 +100,6 @@
     "backToSignIn": "Back to sign in"
   },
   "pockets": {
-    "title": "Pockets",
     "empty": "Your Pockets will appear here.",
     "addHeading": "Add a Pocket",
     "namePlaceholder": "For example: Cash, OVO, BCA debit",
@@ -126,12 +123,16 @@
   "settings": {
     "save": "Save",
     "saving": "Saving…",
+    "title": "Settings",
     "household": {
-      "title": "Household settings",
+      "title": "Household",
       "periodStartDayHint": "Each Budget Period starts on this day, from 1 to 28. Changing it re-dates your Budget Periods straight away."
     },
+    "pockets": {
+      "title": "Pockets"
+    },
     "user": {
-      "title": "Your settings",
+      "title": "You",
       "profile": {
         "heading": "Profile",
         "name": "Your name",

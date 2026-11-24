@@ -125,9 +125,11 @@ Both are shown; neither is an error. This exists because Monthly Budget is autho
 allocations are advisory — the two are allowed to disagree, visibly.
 
 **Expense**: The core record. A single outflow of money, at a moment, from a Pocket, classified into
-a Category. Fields: `id` (client-generated UUIDv7), `occurred_on` (the Period Day it counts against),
-`captured_at` (when it was recorded), `amount`, `currency`, `pocket_id`, `category_id` (nullable),
-`description` (free text, optional), `ownership`. _Avoid_: Transaction (implies a two-sided event
+a Category. Fields: `id` (client-generated UUIDv7), `occurred_on` (the Period Day it counts against;
+Today, as the server reckons it, unless the person picks another), `occurred_time` (the time of day
+it happened, optional, no timezone; orders a day's Expenses, falling back to `captured_at`),
+`captured_at` (when it was recorded, stamped by the server), `amount`, `currency`, `pocket_id`, `category_id` (nullable),
+`description` (free text, optional), `ownership` and, for a SoleOwner Expense, `owner_user_id`. _Avoid_: Transaction (implies a two-sided event
 Afloat does not model), Entry, Spend (as a noun).
 
 **Pocket**: A practical container the Household spends *from* — OVO, GoPay, a specific debit card,
@@ -135,15 +137,24 @@ cash in a wallet, a credit card. A Pocket exists so the Household can see where 
 that real-world behavioural barriers ("transport comes out of GoPay") are visible in the data. A
 Pocket **holds no balance, has no transfers, and is never reconciled.** Fields: `id`
 (client-generated UUIDv7), `pocket_display_name` (at most 60 code points, unique among the
-Household's Pockets that are not deleted, case-insensitively), `active`. _Avoid_: Account, Wallet
-(both imply a balance), Source.
+Household's Pockets that are not deleted, case-insensitively), `active`. **Every Expense has exactly
+one Pocket, and a Household always has at least one active Pocket** (from #140 PR 2): founding
+will create the first, and a delete or deactivate that would leave none will be refused, so capture
+is never blocked for want of one. _Avoid_: Account, Wallet (both imply a balance), Source.
 
-**Deactivate / Inactive**: Retiring a Pocket that has history. An **Inactive** Pocket stays in the
-list, keeps its name, keeps labelling its Expenses and keeps its place in breakdowns; it is only not
-offered for new capture, and deactivating is reversible. It is not a delete: a deleted Pocket is a
+**Deactivate / Inactive**: Retiring a Pocket or Category that has history. An **Inactive** one stays
+in the list, keeps its name, keeps labelling its Expenses and keeps its place in breakdowns; it is
+only not offered for new capture: no new Expense names it, and no edit moves an Expense into it. An
+Expense already in it stays, and deactivating is reversible. It is not a delete: a deleted Pocket is a
 soft-deleted row, gone from the UI, that gives up its name and is refused while any Expense
 references it; it can be restored (the Undo of a delete) unless another Pocket has taken the name. Neither act edits, moves or removes an Expense, or changes a figure. _Avoid_: Archive,
 Close, Disable (each leaves it unclear whether history survives).
+
+**Recycle Bin**: Where a deleted Expense goes. Deleting an Expense is a soft delete: it leaves every
+list and figure, and can be restored from the Recycle Bin at any time. The Recycle Bin never empties;
+nothing in it is ever erased. It holds Expenses only. A deleted Expense still counts as using its
+Pocket and Category, so neither can be deleted (only deactivated) once it has labelled one. _Avoid_:
+Trash, Archive.
 
 > **A Pocket is not a Balances Asset.** The same real-world OVO account may be a bank-account Asset in
 > Balances and a Pocket in Afloat. They are unrelated records with unrelated purposes and must never
@@ -225,9 +236,12 @@ of them and reported separately.
 | `D` | Total Period Days |
 | `e` | Days Elapsed (settled days, strictly before Today) |
 | `r` | Days Remaining (inclusive of Today); `r = D − e` |
-| `S_settled` | Daily-bucket spend with `occurred_on` strictly before Today |
+| `S_settled` | Daily-bucket spend with `occurred_on` in the current Period and strictly before Today |
 | `S_today` | Daily-bucket spend with `occurred_on` = Today |
-| `S_future` | Daily-bucket spend with `occurred_on` after Today (future-dated) |
+| `S_future` | Daily-bucket spend with `occurred_on` after Today and on or before the current Period's last day (future-dated) |
+
+Every spend figure is bounded by the current Budget Period: an Expense dated in any other Period, earlier
+or later, counts toward that Period's figures and none of this one's (Q-25, ruled 24 Nov 2026).
 
 ### Core figures
 

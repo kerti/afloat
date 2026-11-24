@@ -6,7 +6,9 @@ import { describe, expect, it } from "vitest";
 // everywhere (docs/agents/ui-conventions.md, Catalogue; Uruni web/src/
 // components/cardClasses.ts, github.com/kerti/uruni).
 
-const sources = import.meta.glob<string>("/src/pages/*.tsx", {
+// Settings' sections are page bodies that live in components/settings/, so
+// they are held to the same rule.
+const sources = import.meta.glob<string>(["/src/pages/*.tsx", "/src/components/settings/*.tsx"], {
   query: "?raw",
   import: "default",
   eager: true,
@@ -109,7 +111,8 @@ function classTokens(source: string): string[] {
 
 describe("pages carry layout classes only", () => {
   it("finds the pages, so the check below is not vacuously green", () => {
-    expect(Object.keys(sources)).toContain("/src/pages/PocketsPage.tsx");
+    expect(Object.keys(sources)).toContain("/src/pages/SettingsPage.tsx");
+    expect(Object.keys(sources)).toContain("/src/components/settings/PocketsSection.tsx");
   });
 
   it("use no type, colour, radius, padding or border utility", () => {

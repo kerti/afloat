@@ -17,6 +17,12 @@ export function SectionTitle({ className, ...props }: ComponentProps<"h2">) {
   return <h2 className={cn("text-lg font-semibold", className)} {...props} />;
 }
 
+/** The h3 that labels a stretch inside a section: one step under SectionTitle.
+ * (Uruni SubsectionLabel; ruled 24 Nov 2026, #140 PR 1.) */
+export function SubsectionLabel({ className, ...props }: ComponentProps<"h3">) {
+  return <h3 className={cn("text-sm font-semibold text-muted-foreground", className)} {...props} />;
+}
+
 /** The sentence under a section title that says what the section is for. */
 export function SectionDescription({ className, ...props }: ComponentProps<"p">) {
   return <p className={cn("text-sm text-muted-foreground", className)} {...props} />;

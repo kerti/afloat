@@ -138,9 +138,9 @@ that real-world behavioural barriers ("transport comes out of GoPay") are visibl
 Pocket **holds no balance, has no transfers, and is never reconciled.** Fields: `id`
 (client-generated UUIDv7), `pocket_display_name` (at most 60 code points, unique among the
 Household's Pockets that are not deleted, case-insensitively), `active`. **Every Expense has exactly
-one Pocket, and a Household always has at least one active Pocket** (from #140 PR 2): founding
-will create the first, and a delete or deactivate that would leave none will be refused, so capture
-is never blocked for want of one. _Avoid_: Account, Wallet (both imply a balance), Source.
+one Pocket, and a Household always has at least one active Pocket**: founding creates the first, and
+a delete or deactivate that would leave none is refused (`LAST_POCKET`), so capture is never blocked
+for want of one. _Avoid_: Account, Wallet (both imply a balance), Source.
 
 **Deactivate / Inactive**: Retiring a Pocket or Category that has history. An **Inactive** one stays
 in the list, keeps its name, keeps labelling its Expenses and keeps its place in breakdowns; it is

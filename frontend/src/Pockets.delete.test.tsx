@@ -120,7 +120,7 @@ describe("deleting a Pocket", () => {
     expect(toastMock.mock.calls[0]![0]).toBe("Deleted Cash.");
   });
 
-  it("a failed delete, with the dialog already closed, is one error toast", async () => {
+  it("a failed delete stays in the dialog as a form error, with no toast", async () => {
     server.use(
       http.delete("/api/pockets/:id", () =>
         HttpResponse.json(envelope("INTERNAL"), { status: 500 }),
@@ -133,11 +133,10 @@ describe("deleting a Pocket", () => {
     const dialog = await openEdit(user, "Cash");
     await user.click(within(dialog).getByRole("button", { name: p.delete }));
 
-    await waitFor(() => expect(toastMock.error).toHaveBeenCalledTimes(1));
-    expect(toastMock.error.mock.calls[0]![0]).toBe(enGB.errors.INTERNAL);
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent(enGB.errors.INTERNAL);
+    expect(toastMock.error).not.toHaveBeenCalled();
     expect(toastMock).not.toHaveBeenCalled();
-    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Edit Cash" })).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: p.editHeading })).toBeInTheDocument();
   });
 
   it("deleting a Pocket already gone is a NOT_FOUND toast and a refetch", async () => {
@@ -172,5 +171,123 @@ describe("deleting a Pocket", () => {
     await waitFor(() => expect(toastMock.error).toHaveBeenCalledTimes(1));
     expect(toastMock.error.mock.calls[0]![0]).toBe(enGB.errors.NAME_TAKEN);
     expect(toastMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("the last active Pocket (LAST_POCKET)", () => {
+  const refuse = (method: "delete" | "patch") =>
+    http[method]("/api/pockets/:id", () =>
+      HttpResponse.json(envelope("LAST_POCKET"), { status: 409 }),
+    );
+
+  it("refuses Delete: the dialog stays open with the error above the actions, and no toast", async () => {
+    const state = signedIn({ pockets: [pocket("a", "Cash")] });
+    server.use(refuse("delete"), ...defaultHandlers(state));
+    const user = userEvent.setup();
+    const view = renderApp("/settings");
+
+    const dialog = await openEdit(user, "Cash");
+    await user.click(within(dialog).getByRole("button", { name: p.delete }));
+
+    const alert = await within(dialog).findByRole("alert");
+    expect(alert).toHaveTextContent(enGB.errors.LAST_POCKET);
+    expect(screen.queryByText(/LAST_POCKET/)).not.toBeInTheDocument();
+    // Above DetailActions, in the form.
+    const actions = within(dialog).getByRole("button", { name: p.delete }).parentElement!;
+    expect(alert.compareDocumentPosition(actions) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.getByRole("dialog", { name: p.editHeading })).toBeInTheDocument();
+    expect(view.param("edit")).toBe("pocket:a");
+    expect(toastMock).not.toHaveBeenCalled();
+    expect(toastMock.error).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: p.delete })).toBeEnabled();
+  });
+
+  it("refuses Deactivate the same way", async () => {
+    server.use(refuse("patch"), ...defaultHandlers(signedIn({ pockets: [pocket("a", "Cash")] })));
+    const user = userEvent.setup();
+    const view = renderApp("/settings");
+
+    const dialog = await openEdit(user, "Cash");
+    await user.click(within(dialog).getByRole("button", { name: p.deactivate }));
+
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent(enGB.errors.LAST_POCKET);
+    expect(screen.getByRole("dialog", { name: p.editHeading })).toBeInTheDocument();
+    expect(view.param("edit")).toBe("pocket:a");
+    expect(toastMock).not.toHaveBeenCalled();
+    expect(toastMock.error).not.toHaveBeenCalled();
+  });
+
+  it("clears the refusal when the name is edited", async () => {
+    server.use(refuse("delete"), ...defaultHandlers(signedIn({ pockets: [pocket("a", "Cash")] })));
+    const user = userEvent.setup();
+    renderApp("/settings");
+
+    const dialog = await openEdit(user, "Cash");
+    await user.click(within(dialog).getByRole("button", { name: p.delete }));
+    await within(dialog).findByRole("alert");
+    await user.type(within(dialog).getByLabelText("Pocket name"), "x");
+    expect(within(dialog).queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("Deactivate with another active Pocket still closes at once and raises Undo", async () => {
+    const state = signedIn({ pockets: [pocket("a", "Cash"), pocket("b", "OVO")] });
+    server.use(...defaultHandlers(state));
+    const user = userEvent.setup();
+    renderApp("/settings");
+
+    const dialog = await openEdit(user, "OVO");
+    await user.click(within(dialog).getByRole("button", { name: p.deactivate }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(state.pocketPatches).toEqual([{ active: false }]);
+    expect(toastMock.mock.calls[0]![0]).toBe("Deactivated OVO.");
+    expect(toastMock.mock.calls[0]![1]?.action).toMatchObject({ label: "Undo" });
+  });
+
+  it("Reactivate is never refused and keeps closing at once", async () => {
+    const state = signedIn({ pockets: [pocket("a", "Cash", false), pocket("b", "OVO")] });
+    server.use(...defaultHandlers(state));
+    const user = userEvent.setup();
+    renderApp("/settings");
+
+    await user.click(await screen.findByLabelText("Show inactive Pockets (1)"));
+    const dialog = await openEdit(user, "Cash", true);
+    await user.click(within(dialog).getByRole("button", { name: p.reactivate }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(toastMock.mock.calls[0]![0]).toBe("Reactivated Cash.");
+  });
+
+  it.each([
+    ["Delete", "delete", "delete"],
+    ["Deactivate", "deactivate", "patch"],
+  ] as const)("cannot be dismissed while %s is pending", async (_n, key, method) => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    server.use(
+      http[method]("/api/pockets/:id", async () => {
+        await gate;
+        return HttpResponse.json(envelope("LAST_POCKET"), { status: 409 });
+      }),
+      ...defaultHandlers(signedIn({ pockets: [pocket("a", "Cash")] })),
+    );
+    const user = userEvent.setup();
+    renderApp("/settings");
+
+    const dialog = await openEdit(user, "Cash");
+    await user.click(within(dialog).getByRole("button", { name: p[key] }));
+    await waitFor(() =>
+      expect(within(dialog).getByRole("button", { name: p.delete })).toBeDisabled(),
+    );
+
+    await user.keyboard("{Escape}");
+    await user.click(within(dialog).getByRole("button", { name: enGB.dialog.close }));
+    expect(screen.getByRole("dialog", { name: p.editHeading })).toBeInTheDocument();
+
+    release();
+    expect(await within(dialog).findByRole("alert")).toBeInTheDocument();
+    // Dismissable again once the answer is in.
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
   });
 });

@@ -184,6 +184,14 @@ export function defaultHandlers(state: State = { signedIn: false, me: alice }) {
         return HttpResponse.json(envelope("FOUNDING_DISABLED"), { status: 403 });
       }
       state.committed = body;
+      // Founding creates the one Pocket, as the server does.
+      state.pockets = [
+        {
+          id: "0192f0a0-0000-7000-8000-0000000000b1",
+          pocket_display_name: body.pocket_display_name.trim(),
+          active: true,
+        },
+      ];
       state.handshake = null;
       state.signedIn = true;
       state.me = {

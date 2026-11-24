@@ -31,7 +31,7 @@ func TestOneNameRuleAcrossFoundingHouseholdEditAndPocketCreate(t *testing.T) {
 	}
 	member := auth.WithUser(context.Background(), user)
 	households := household.New(household.Deps{Querier: h.tdb.Queries})
-	pockets := pocket.New(pocket.Deps{Querier: h.tdb.Queries})
+	pockets := pocket.New(pocket.Deps{Querier: h.tdb.Queries, Beginner: h.tdb.Pool})
 
 	sixty := strings.Repeat("\U0001F6F6", 60)
 	for i, tc := range []struct {
@@ -62,10 +62,11 @@ func TestOneNameRuleAcrossFoundingHouseholdEditAndPocketCreate(t *testing.T) {
 			}
 
 			foundGot, foundRule := found(t, h, i, tc.input)
+			foundPocketGot, foundPocketRule := foundPocket(t, h, i, tc.input)
 			editGot, editRule := edit(member, t, households, tc.input)
 			createGot, createRule := create(member, t, pockets, tc.input)
 
-			for surface, rule := range map[string]string{"founding": foundRule, "household edit": editRule, "pocket create": createRule} {
+			for surface, rule := range map[string]string{"founding": foundRule, "founding's first pocket": foundPocketRule, "household edit": editRule, "pocket create": createRule} {
 				if rule != tc.rule {
 					t.Errorf("%s: rule = %q, want %q", surface, rule, tc.rule)
 				}
@@ -73,7 +74,7 @@ func TestOneNameRuleAcrossFoundingHouseholdEditAndPocketCreate(t *testing.T) {
 			if tc.rule != "" {
 				return
 			}
-			for surface, got := range map[string]string{"founding": foundGot, "household edit": editGot, "pocket create": createGot} {
+			for surface, got := range map[string]string{"founding": foundGot, "founding's first pocket": foundPocketGot, "household edit": editGot, "pocket create": createGot} {
 				if got != tc.stored {
 					t.Errorf("%s: stored %q, want %q", surface, got, tc.stored)
 				}
@@ -99,6 +100,30 @@ func found(t *testing.T, h harness, i int, input string) (stored, rule string) {
 			`SELECT household_display_name FROM households h JOIN users u ON u.household_id = h.id WHERE u.email = $1`,
 			fmt.Sprintf("founder%d@example.com", i)).Scan(&stored); err != nil {
 			t.Fatalf("read founded household: %v", err)
+		}
+		return stored, ""
+	}
+}
+
+// foundPocket founds a Household with a valid name and the input as its first
+// Pocket's, and returns the stored Pocket name or the rule refused.
+func foundPocket(t *testing.T, h harness, i int, input string) (stored, rule string) {
+	t.Helper()
+	email := fmt.Sprintf("pocketfounder%d@example.com", i)
+	ctx, _ := h.atTheGate(t, fmt.Sprintf("198.51.101.%d", 100+i), email)
+	resp := h.commitPocket(ctx, t, true, "Rumah", input)
+	switch r := resp.(type) {
+	case api.CommitOnboardingChoice400JSONResponse:
+		return "", ruleOf(t, "pocket_display_name", r.Args)
+	default:
+		rec := visit(t, resp)
+		if rec.Code != http.StatusNoContent {
+			t.Fatalf("founding: status %d (%s)", rec.Code, rec.Body.String())
+		}
+		if err := h.tdb.Pool.QueryRow(context.Background(),
+			`SELECT p.pocket_display_name FROM pockets p JOIN users u ON u.household_id = p.household_id WHERE u.email = $1`,
+			email).Scan(&stored); err != nil {
+			t.Fatalf("read founded pocket: %v", err)
 		}
 		return stored, ""
 	}

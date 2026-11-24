@@ -124,13 +124,14 @@ func (h *Handlers) GetOnboardingOptions(ctx context.Context, _ api.GetOnboarding
 }
 
 // CommitOnboardingChoice founds the Household the handshake's holder chose to
-// found. Refusals that need no claim (a dead handshake, a body that is not a
-// found choice, founding disabled, a bad name) are answered without spending
-// the handshake, so a typo in the name costs the person nothing.
+// found, with its first Pocket (#140 R2: a Household always has one). Refusals
+// that need no claim (a dead handshake, a body that is not a found choice,
+// founding disabled, a bad name) are answered without spending the handshake,
+// so a typo in a name costs the person nothing.
 //
 // The commit is one transaction: claim the handshake with DELETE ... RETURNING,
-// insert the Household, the User and the credential, commit; only then issue
-// the session. Balances runs these as separate statements with no transaction,
+// insert the Household, the User, the credential and the Pocket, commit; only
+// then issue the session. Balances runs these as separate statements with no transaction,
 // so a double submit there leaves an orphan Household. Here two concurrent
 // commits on one handshake serialise on its row: the second finds it gone and
 // answers 401, and nothing of it was written.
@@ -163,6 +164,11 @@ func (h *Handlers) CommitOnboardingChoice(ctx context.Context, request api.Commi
 		return invalidChoiceField("household_display_name", rule), nil
 	}
 
+	pocketName, rule := CheckPocketDisplayName(body.PocketDisplayName)
+	if rule != "" {
+		return invalidChoiceField("pocket_display_name", rule), nil
+	}
+
 	// A person who commits gets an account even if their client then goes away:
 	// the commit must not be a coin flip between "created" and "rolled back"
 	// that the client never learns the outcome of. Detached from the request's
@@ -171,7 +177,7 @@ func (h *Handlers) CommitOnboardingChoice(ctx context.Context, request api.Commi
 	ctx, cancel := afterPermit(ctx, budget, hasBudget)
 	defer cancel()
 
-	userID, err := h.found(ctx, onboardingTokenFrom(ctx), householdName)
+	userID, err := h.found(ctx, onboardingTokenFrom(ctx), householdName, pocketName)
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
 		// Claimed by a concurrent commit, or expired since the read above.
@@ -200,8 +206,10 @@ func (h *Handlers) CommitOnboardingChoice(ctx context.Context, request api.Commi
 }
 
 // found runs the whole commit in one transaction and returns the new User's id.
-// pgx.ErrNoRows means the handshake was not there to claim.
-func (h *Handlers) found(ctx context.Context, token, householdName string) (pgtype.UUID, error) {
+// pgx.ErrNoRows means the handshake was not there to claim. The Household, the
+// User and the first Pocket all take server-minted ids: the founding exception
+// to client-generated keys (BOOTSTRAP.md §4).
+func (h *Handlers) found(ctx context.Context, token, householdName, pocketName string) (pgtype.UUID, error) {
 	tx, err := h.tx.Begin(ctx)
 	if err != nil {
 		return pgtype.UUID{}, fmt.Errorf("begin: %w", err)
@@ -224,6 +232,10 @@ func (h *Handlers) found(ctx context.Context, token, householdName string) (pgty
 	if err != nil {
 		return pgtype.UUID{}, err
 	}
+	pocketID, err := newUUIDv7()
+	if err != nil {
+		return pgtype.UUID{}, err
+	}
 
 	if _, err := q.CreateHousehold(ctx, db.CreateHouseholdParams{ID: householdID, HouseholdDisplayName: householdName}); err != nil {
 		return pgtype.UUID{}, fmt.Errorf("create household: %w", err)
@@ -242,6 +254,18 @@ func (h *Handlers) found(ctx context.Context, token, householdName string) (pgty
 		if err := q.CreateCredential(ctx, db.CreateCredentialParams{UserID: userID, PasswordHash: *hs.PasswordHash}); err != nil {
 			return pgtype.UUID{}, fmt.Errorf("create credential: %w", err)
 		}
+	}
+
+	// Active, the column's default. A fresh Household holds no other Pocket, so
+	// neither the id nor the name can already be held; ErrNoRows here (ON
+	// CONFLICT DO NOTHING) would be a duplicate UUIDv7 and is a failure. %v, not
+	// %w: found's caller reads pgx.ErrNoRows as "the handshake was not there".
+	if _, err := q.CreatePocket(ctx, db.CreatePocketParams{
+		ID:                pocketID,
+		HouseholdID:       householdID,
+		PocketDisplayName: pocketName,
+	}); err != nil {
+		return pgtype.UUID{}, fmt.Errorf("create pocket: %v", err)
 	}
 
 	if err := tx.Commit(ctx); err != nil {

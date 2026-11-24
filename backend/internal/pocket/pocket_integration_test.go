@@ -45,7 +45,7 @@ func newFixtureWith(t *testing.T, wrap func(db.Querier) db.Querier) fixture {
 	if wrap != nil {
 		q = wrap(q)
 	}
-	return fixture{tdb: tdb, handlers: pocket.New(pocket.Deps{Querier: q})}
+	return fixture{tdb: tdb, handlers: pocket.New(pocket.Deps{Querier: q, Beginner: tdb.Pool})}
 }
 
 // member creates a Household with one User and returns the Household's id and
@@ -54,6 +54,18 @@ func (f fixture) member(t *testing.T, name, email string) (pgtype.UUID, context.
 	t.Helper()
 	householdID := f.tdb.CreateHousehold(t, name)
 	return householdID, f.userIn(t, householdID, email)
+}
+
+// memberWithKeeper is member plus a second, active Pocket named "Keeper", which
+// no test deletes or deactivates, so that removing the Pocket a test is about is
+// never the Household's last active one (#140 R1: a delete or a deactivation of
+// the last is 409 LAST_POCKET, which the tests for that say). The Keeper is
+// listed and counted like any other Pocket.
+func (f fixture) memberWithKeeper(t *testing.T, name, email string) context.Context {
+	t.Helper()
+	householdID, ctx := f.member(t, name, email)
+	f.tdb.CreatePocket(t, householdID, "Keeper")
+	return ctx
 }
 
 func (f fixture) userIn(t *testing.T, householdID pgtype.UUID, email string) context.Context {

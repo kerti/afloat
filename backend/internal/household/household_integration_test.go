@@ -491,7 +491,7 @@ func TestFoundingAndEditingAgreeOnEveryName(t *testing.T) {
 			}
 			ctx := atTheGate(token)
 			resp, err := f.auth.CommitOnboardingChoice(ctx, api.CommitOnboardingChoiceRequestObject{
-				Body: &api.CommitOnboardingChoiceJSONRequestBody{Found: true, HouseholdDisplayName: tc.input},
+				Body: &api.CommitOnboardingChoiceJSONRequestBody{Found: true, HouseholdDisplayName: tc.input, PocketDisplayName: "Cash"},
 			})
 			if err != nil {
 				t.Fatalf("commit: %v", err)

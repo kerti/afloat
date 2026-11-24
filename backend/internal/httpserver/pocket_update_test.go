@@ -56,6 +56,9 @@ func body(rec *httptest.ResponseRecorder) string { return strings.TrimSpace(rec.
 func TestUpdatePocketRenamesAndTogglesActiveThroughTheRouter(t *testing.T) {
 	f := newPocketFixture(t)
 	f.seed(t, pocketV7, "OVO")
+	// Another active Pocket, seeded before the toggles so that deactivating OVO
+	// is not the Household's last (#140 R1); the list below still ends with it.
+	f.seed(t, pocketV7b, "Zeta")
 
 	for _, tc := range []struct{ name, body, want string }{
 		{"a rename", `{"pocket_display_name":"  Gopay "}`, `{"active":true,"id":"` + pocketV7 + `","pocket_display_name":"Gopay"}`},
@@ -78,7 +81,6 @@ func TestUpdatePocketRenamesAndTogglesActiveThroughTheRouter(t *testing.T) {
 	}
 
 	// An inactive Pocket is still listed (the client filters), in place.
-	f.seed(t, pocketV7b, "Zeta")
 	rec := f.do(http.MethodGet, "")
 	want := `{"items":[{"active":false,"id":"` + pocketV7 + `","pocket_display_name":"LinkAja"},{"active":true,"id":"` + pocketV7b + `","pocket_display_name":"Zeta"}]}`
 	if body(rec) != want {
@@ -320,6 +322,7 @@ func TestUpdatePocketPathParameterShapes(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newPocketFixture(t)
 			f.seed(t, pocketV7, "OVO")
+			f.seed(t, pocketV7c, "Keeper") // so deactivating OVO is not the last active Pocket's
 			before := f.row(t, pocketV7)
 
 			rec := f.doAt(tc.method, tc.target, `{"active":false}`)

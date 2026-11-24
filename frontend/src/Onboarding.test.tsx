@@ -1,12 +1,17 @@
 import { describe, expect, it } from "vitest";
-import { screen } from "@testing-library/react";
+import { act, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import { alice, defaultHandlers, envelope, server, type State } from "@/test/server";
 import { renderApp } from "@/test/render";
 import { i18n } from "@/i18n";
+import enGB from "@/locales/en-GB.json";
 
 const fresh = (extra: Partial<State> = {}): State => ({ signedIn: false, me: alice, ...extra });
+
+// The Home notice, found by its dismiss button.
+const noticeCard = () =>
+  screen.getByRole("button", { name: /^(Dismiss|Tutup)$/ }).closest("section")!;
 
 async function register(
   user: ReturnType<typeof userEvent.setup>,
@@ -50,37 +55,55 @@ describe("create account", () => {
     expect(screen.queryByRole("link", { name: "Create account" })).not.toBeInTheDocument();
   });
 
-  it("registers, names the Household at the gate, and lands on the shell", async () => {
+  it("registers, founds silently with both names, and lands on Home with the notice", async () => {
     const state = fresh();
     server.use(...defaultHandlers(state));
+    // The handshake is spent by the first commit, so a second would answer 401.
+    let commits = 0;
+    const countCommits = ({ request }: { request: Request }) => {
+      if (
+        request.method === "POST" &&
+        new URL(request.url).pathname.endsWith("/onboarding/choice")
+      ) {
+        commits++;
+      }
+    };
+    server.events.on("request:start", countCommits);
     const user = userEvent.setup();
     renderApp("/login");
 
     await user.click(await screen.findByRole("link", { name: "Create account" }));
     await register(user, { name: "  Dewi Putri " });
 
-    // The gate: the suggestion comes from the catalogue, in the person's own name.
-    const field = await screen.findByLabelText("Household name");
-    expect(field).toHaveValue("Dewi Putri's Household");
+    // No gate: the person is on Home, signed in as the new User.
+    expect(await screen.findByText("Signed in as Dewi Putri.")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Household name")).not.toBeInTheDocument();
     expect(state.registered).toEqual({
       email: "dewi@example.com",
       password: "kucing oranye di atap",
       user_display_name: "Dewi Putri",
       locale: "en-GB",
     });
-
-    await user.click(screen.getByRole("button", { name: "Create Household" }));
-
-    // /me was invalidated, so the shell answers as the new User.
-    expect(await screen.findByText("Signed in as Dewi Putri.")).toBeInTheDocument();
-    expect(screen.getByText("Household: Dewi Putri's Household")).toBeInTheDocument();
     expect(state.committed).toEqual({
       found: true,
       household_display_name: "Dewi Putri's Household",
+      pocket_display_name: "Cash",
     });
+    expect(noticeCard()).toHaveTextContent(
+      "We named your Household Dewi Putri's Household and your first Pocket Cash, and set your currency to IDR.",
+    );
+    expect(noticeCard()).toHaveTextContent(
+      "Rename either any time. Change the currency before your first Expense, because it can't change after that.",
+    );
+    expect(within(noticeCard()).getByRole("link", { name: "Go to Settings" })).toHaveAttribute(
+      "href",
+      "/settings",
+    );
+    expect(commits).toBe(1);
+    server.events.removeListener("request:start", countCommits);
   });
 
-  it("registers without a name and the gate falls back to what the server derived", async () => {
+  it("names the Household from what the server derived when no name was given", async () => {
     const state = fresh();
     server.use(...defaultHandlers(state));
     const user = userEvent.setup();
@@ -88,12 +111,13 @@ describe("create account", () => {
 
     await register(user);
 
-    expect(await screen.findByLabelText("Household name")).toHaveValue("dewi's Household");
+    expect(await screen.findByText("Household: dewi's Household")).toBeInTheDocument();
+    expect(state.committed?.household_display_name).toBe("dewi's Household");
     // No user_display_name key at all, so the server defaults it.
     expect(state.registered).not.toHaveProperty("user_display_name");
   });
 
-  it("pre-fills the Household name in Indonesian from the catalogue", async () => {
+  it("founds in Indonesian from the catalogue, and the notice reads in Indonesian", async () => {
     const state = fresh();
     server.use(...defaultHandlers(state));
     await i18n.changeLanguage("id-ID");
@@ -105,26 +129,18 @@ describe("create account", () => {
     await user.type(screen.getByLabelText("Nama Anda (opsional)"), "Dewi");
     await user.click(screen.getByRole("button", { name: "Lanjut" }));
 
-    expect(await screen.findByLabelText("Nama rumah tangga")).toHaveValue("Rumah tangga Dewi");
+    expect(await screen.findByRole("button", { name: "Tutup" })).toBeInTheDocument();
+    expect(state.committed).toEqual({
+      found: true,
+      household_display_name: "Rumah tangga Dewi",
+      pocket_display_name: "Tunai",
+    });
     // The locale sent is the language the form was read in.
     expect(state.registered?.locale).toBe("id-ID");
-  });
-
-  it("commits the name the person typed, not the suggestion", async () => {
-    const state = fresh();
-    server.use(...defaultHandlers(state));
-    const user = userEvent.setup();
-    renderApp("/register");
-    await register(user, { name: "Dewi" });
-
-    const field = await screen.findByLabelText("Household name");
-    await user.clear(field);
-    await user.type(field, "  Kos Kuning ");
-    await user.click(screen.getByRole("button", { name: "Create Household" }));
-
-    expect(await screen.findByText("Household: Kos Kuning")).toBeInTheDocument();
-    // Sent as typed: trimming is the server's.
-    expect(state.committed?.household_display_name).toBe("  Kos Kuning ");
+    expect(noticeCard()).toHaveTextContent(
+      "Kami menamai rumah tangga Anda Rumah tangga Dewi dan kantong pertama Anda Tunai, dengan mata uang IDR.",
+    );
+    expect(within(noticeCard()).getByRole("link", { name: "Buka Pengaturan" })).toBeInTheDocument();
   });
 
   it("says an address is taken in words, with the way to sign in", async () => {
@@ -195,27 +211,89 @@ describe("create account", () => {
   });
 });
 
-describe("the onboarding gate", () => {
+describe("the Home notice", () => {
+  async function founded(state: State) {
+    server.use(...defaultHandlers(state));
+    const user = userEvent.setup();
+    const view = renderApp("/register");
+    await register(user, { name: "Dewi" });
+    await screen.findByRole("button", { name: "Dismiss" });
+    return { user, view };
+  }
+
+  it("is gone once dismissed, and a later visit to Home does not bring it back", async () => {
+    const { user, view } = await founded(fresh());
+
+    await user.click(screen.getByRole("button", { name: "Dismiss" }));
+    expect(screen.queryByRole("button", { name: "Dismiss" })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("link", { name: "Settings" }));
+    await screen.findByRole("heading", { name: "Settings" });
+    act(() => view.navigate(-1));
+    expect(await screen.findByText("Signed in as Dewi.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Dismiss" })).not.toBeInTheDocument();
+  });
+
+  it("is gone once the person leaves Home, dismissed or not", async () => {
+    const { user, view } = await founded(fresh());
+
+    await user.click(screen.getByRole("link", { name: "Settings" }));
+    await screen.findByRole("heading", { name: "Settings" });
+    act(() => view.navigate(-1));
+
+    expect(await screen.findByText("Signed in as Dewi.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Dismiss" })).not.toBeInTheDocument();
+  });
+
+  it("is not shown on Home without the founding router state", async () => {
+    server.use(...defaultHandlers({ signedIn: true, me: alice }));
+    renderApp("/");
+    expect(await screen.findByText("Signed in as Alice.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Dismiss" })).not.toBeInTheDocument();
+    expect(screen.queryByText(/We named your Household/)).not.toBeInTheDocument();
+  });
+
+  it("is stored nowhere", async () => {
+    await founded(fresh());
+    // Nothing about the notice, whatever else the app keeps.
+    const keys = [...Object.keys(window.localStorage), ...Object.keys(window.sessionStorage)];
+    expect(keys.filter((k) => /found|notice/i.test(k))).toEqual([]);
+    expect(JSON.stringify({ ...window.localStorage })).not.toMatch(/Cash|named/);
+  });
+});
+
+describe("founding at /onboarding", () => {
+  const handshake = { email: "d@example.com", user_display_name: "D", locale: "en-GB" };
+
   it("sends a visitor with no handshake to sign in", async () => {
     server.use(...defaultHandlers());
     renderApp("/onboarding");
     expect(await screen.findByRole("heading", { name: "Sign in" })).toBeInTheDocument();
   });
 
-  it("sends the person to sign in when the handshake lapses before they commit", async () => {
-    // The gate loaded; the handshake expired (or was spent in another tab) since.
+  it("shows Setting up while the commit is in flight", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    server.use(
+      http.post("/api/onboarding/choice", async () => {
+        await gate;
+        return new HttpResponse(null, { status: 204 });
+      }),
+      ...defaultHandlers(fresh({ handshake })),
+    );
+    renderApp("/onboarding");
+    expect(await screen.findByText("Setting up…")).toBeInTheDocument();
+    release();
+  });
+
+  it("sends the person to sign in when the handshake lapses before the commit", async () => {
     server.use(
       http.post("/api/onboarding/choice", () =>
         HttpResponse.json(envelope("UNAUTHORIZED"), { status: 401 }),
       ),
-      ...defaultHandlers(
-        fresh({ handshake: { email: "d@example.com", user_display_name: "D", locale: "en-GB" } }),
-      ),
+      ...defaultHandlers(fresh({ handshake })),
     );
-    const user = userEvent.setup();
     renderApp("/onboarding");
-
-    await user.click(await screen.findByRole("button", { name: "Create Household" }));
     expect(await screen.findByRole("heading", { name: "Sign in" })).toBeInTheDocument();
   });
 
@@ -225,32 +303,51 @@ describe("the onboarding gate", () => {
       http.post("/api/onboarding/choice", () =>
         HttpResponse.json(envelope("FOUNDING_DISABLED"), { status: 403 }),
       ),
-      ...defaultHandlers(
-        fresh({ handshake: { email: "d@example.com", user_display_name: "D", locale: "en-GB" } }),
+      ...defaultHandlers(fresh({ handshake })),
+    );
+    renderApp("/onboarding");
+
+    expect(await screen.findByText(/isn't accepting new Households/)).toBeInTheDocument();
+    expect(screen.queryByText(/FOUNDING_DISABLED/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Try again" })).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Back to sign in" })).toHaveAttribute("href", "/login");
+  });
+
+  it("explains up front, and commits nothing, when the options say founding is closed", async () => {
+    const state = fresh({ foundingOpen: false, handshake });
+    server.use(...defaultHandlers(state));
+    renderApp("/onboarding");
+    expect(await screen.findByText(/isn't accepting new Households/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Try again" })).not.toBeInTheDocument();
+    expect(state.committed).toBeUndefined();
+  });
+
+  it("shows a failure in words, and Try again resends the same body", async () => {
+    const state = fresh({ handshake });
+    const sent: unknown[] = [];
+    server.use(
+      http.post(
+        "/api/onboarding/choice",
+        async ({ request }) => {
+          sent.push(await request.json());
+          return HttpResponse.json(envelope("INTERNAL"), { status: 500 });
+        },
+        { once: true },
       ),
+      ...defaultHandlers(state),
     );
     const user = userEvent.setup();
     renderApp("/onboarding");
 
-    await user.click(await screen.findByRole("button", { name: "Create Household" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(enGB.errors.INTERNAL);
+    expect(screen.queryByText(/INTERNAL/)).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Try again" }));
 
-    expect(await screen.findByText(/isn't accepting new Households/)).toBeInTheDocument();
-    expect(screen.queryByText(/FOUNDING_DISABLED/)).not.toBeInTheDocument();
-    expect(screen.queryByLabelText("Household name")).not.toBeInTheDocument();
-  });
-
-  it("shows the explanation up front when the options say founding is closed", async () => {
-    server.use(
-      ...defaultHandlers(
-        fresh({
-          foundingOpen: false,
-          handshake: { email: "d@example.com", user_display_name: "D", locale: "en-GB" },
-        }),
-      ),
-    );
-    renderApp("/onboarding");
-    expect(await screen.findByText(/isn't accepting new Households/)).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Create Household" })).not.toBeInTheDocument();
+    expect(await screen.findByText("Signed in as D.")).toBeInTheDocument();
+    expect(sent).toEqual([
+      { found: true, household_display_name: "D's Household", pocket_display_name: "Cash" },
+    ]);
+    expect(state.committed).toEqual(sent[0]);
   });
 
   it("says the address was taken at the commit, and offers sign-in", async () => {
@@ -258,47 +355,21 @@ describe("the onboarding gate", () => {
       http.post("/api/onboarding/choice", () =>
         HttpResponse.json(envelope("EMAIL_TAKEN"), { status: 409 }),
       ),
-      ...defaultHandlers(
-        fresh({ handshake: { email: "d@example.com", user_display_name: "D", locale: "en-GB" } }),
-      ),
+      ...defaultHandlers(fresh({ handshake })),
     );
-    const user = userEvent.setup();
     renderApp("/onboarding");
-
-    await user.click(await screen.findByRole("button", { name: "Create Household" }));
 
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent("An account with that email already exists.");
-    expect(screen.getByRole("link", { name: "Sign in" })).toHaveAttribute("href", "/login");
+    expect(within(alert).getByRole("link", { name: "Sign in" })).toHaveAttribute("href", "/login");
   });
 
-  it("shows a blank-name VALIDATION in words, and the form stays", async () => {
-    server.use(
-      http.post("/api/onboarding/choice", () =>
-        HttpResponse.json(
-          envelope("VALIDATION", { field: "household_display_name", rule: "required" }),
-          {
-            status: 400,
-          },
-        ),
-      ),
-      ...defaultHandlers(
-        fresh({ handshake: { email: "d@example.com", user_display_name: "D", locale: "en-GB" } }),
-      ),
-    );
-    const user = userEvent.setup();
-    renderApp("/onboarding");
-
-    await user.clear(await screen.findByLabelText("Household name"));
-    await user.click(screen.getByRole("button", { name: "Create Household" }));
-
-    expect(await screen.findByRole("alert")).toHaveTextContent("Check the Household name field.");
-    expect(screen.getByLabelText("Household name")).toBeInTheDocument();
-  });
-
-  it("leaves the gate for the shell when already signed in", async () => {
-    server.use(...defaultHandlers({ signedIn: true, me: alice }));
+  it("leaves for the shell when already signed in, without founding", async () => {
+    const state: State = { signedIn: true, me: alice };
+    server.use(...defaultHandlers(state));
     renderApp("/onboarding");
     expect(await screen.findByText("Signed in as Alice.")).toBeInTheDocument();
+    expect(state.committed).toBeUndefined();
+    expect(screen.queryByRole("button", { name: "Dismiss" })).not.toBeInTheDocument();
   });
 });

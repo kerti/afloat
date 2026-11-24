@@ -1,0 +1,531 @@
+# 409 LAST_POCKET (#140 R1): a Household always keeps at least one active, live
+# Pocket, so a DELETE /pockets/{id} or a PATCH {"active": false} that would leave
+# none is refused, with nothing changed (a rename sent beside the deactivation is
+# refused with it). Deleting an inactive Pocket, deactivating one that is already
+# inactive, renaming or reactivating, and a repeat delete of an already-deleted
+# Pocket are never refused for this. NOT_FOUND is decided first: an unknown or
+# another Household's id is the same 404 whether or not the caller has a last
+# Pocket, and validation comes before both. The race (two removals of the last two
+# Pockets cannot both pass) needs concurrent callers and is proven in the
+# backend's own suite, which holds each transaction open at the interleaving.
+#
+# Seed A, a Household with one active Pocket (every case's `rows:` read every row):
+#   0192f0a0-0000-7000-8001-000000000001  OVO     Household 1, live, active   (the last active one)
+#   0192f0a0-0000-7000-8001-000000000002  Dana    Household 1, live, inactive
+#   0192f0a0-0000-7000-8001-000000000003  Gopay   Household 1, deleted (while active)
+#   0192f0a0-0000-7000-8001-000000000009  Theirs  Household 2, live, active   (its own last one)
+# Seed B, two active Pockets: OVO (...01) and Keeper (...0a), both Household 1.
+# `untouched` says whether updated_at still holds the seeded instant.
+
+- name: "pocket last - deleting the last active Pocket is LAST_POCKET and changes nothing"
+  issue: "140"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO pockets (id, household_id, pocket_display_name, active, deleted_at, created_at, updated_at) VALUES
+          ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO',   true,  NULL,                   '2026-01-01T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Dana',  false, NULL,                   '2026-01-02T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Gopay', true,  '2026-01-05T00:00:00Z', '2026-01-03T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', true, NULL,                   '2026-01-09T00:00:00Z', '2026-01-05T00:00:00Z')
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: DELETE
+    path: /pockets/0192f0a0-0000-7000-8001-000000000001
+  expect:
+    status: 409
+    body_json: {code: LAST_POCKET}
+    cookies: {}
+    rows:
+      - sql: SELECT pocket_display_name AS name, household_id::text AS household_id, active, (deleted_at IS NOT NULL) AS deleted, (updated_at = '2026-01-05T00:00:00Z') AS untouched FROM pockets ORDER BY id
+        rows:
+          - {name: OVO, household_id: 0192f0a0-0000-7000-8000-000000000001, active: true, deleted: false, untouched: true}
+          - {name: Dana, household_id: 0192f0a0-0000-7000-8000-000000000001, active: false, deleted: false, untouched: true}
+          - {name: Gopay, household_id: 0192f0a0-0000-7000-8000-000000000001, active: true, deleted: true, untouched: true}
+          - {name: Theirs, household_id: 0192f0a0-0000-7000-8000-000000000002, active: true, deleted: false, untouched: true}
+
+- name: "pocket last - deactivating the last active Pocket is LAST_POCKET and changes nothing"
+  issue: "140"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO pockets (id, household_id, pocket_display_name, active, deleted_at, created_at, updated_at) VALUES
+          ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO',   true,  NULL,                   '2026-01-01T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Dana',  false, NULL,                   '2026-01-02T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Gopay', true,  '2026-01-05T00:00:00Z', '2026-01-03T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', true, NULL,                   '2026-01-09T00:00:00Z', '2026-01-05T00:00:00Z')
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: PATCH
+    path: /pockets/0192f0a0-0000-7000-8001-000000000001
+    headers:
+      Content-Type: application/json
+    body: '{"active":false}'
+  expect:
+    status: 409
+    body_json: {code: LAST_POCKET}
+    cookies: {}
+    rows:
+      - sql: SELECT pocket_display_name AS name, household_id::text AS household_id, active, (deleted_at IS NOT NULL) AS deleted, (updated_at = '2026-01-05T00:00:00Z') AS untouched FROM pockets ORDER BY id
+        rows:
+          - {name: OVO, household_id: 0192f0a0-0000-7000-8000-000000000001, active: true, deleted: false, untouched: true}
+          - {name: Dana, household_id: 0192f0a0-0000-7000-8000-000000000001, active: false, deleted: false, untouched: true}
+          - {name: Gopay, household_id: 0192f0a0-0000-7000-8000-000000000001, active: true, deleted: true, untouched: true}
+          - {name: Theirs, household_id: 0192f0a0-0000-7000-8000-000000000002, active: true, deleted: false, untouched: true}
+
+- name: "pocket last - a rename beside the deactivation is refused with it"
+  issue: "140"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO pockets (id, household_id, pocket_display_name, active, deleted_at, created_at, updated_at) VALUES
+          ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO',   true,  NULL,                   '2026-01-01T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Dana',  false, NULL,                   '2026-01-02T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Gopay', true,  '2026-01-05T00:00:00Z', '2026-01-03T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', true, NULL,                   '2026-01-09T00:00:00Z', '2026-01-05T00:00:00Z')
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: PATCH
+    path: /pockets/0192f0a0-0000-7000-8001-000000000001
+    headers:
+      Content-Type: application/json
+    body: '{"pocket_display_name":"Renamed","active":false}'
+  expect:
+    status: 409
+    body_json: {code: LAST_POCKET}
+    cookies: {}
+    rows:
+      - sql: SELECT pocket_display_name AS name, household_id::text AS household_id, active, (deleted_at IS NOT NULL) AS deleted, (updated_at = '2026-01-05T00:00:00Z') AS untouched FROM pockets ORDER BY id
+        rows:
+          - {name: OVO, household_id: 0192f0a0-0000-7000-8000-000000000001, active: true, deleted: false, untouched: true}
+          - {name: Dana, household_id: 0192f0a0-0000-7000-8000-000000000001, active: false, deleted: false, untouched: true}
+          - {name: Gopay, household_id: 0192f0a0-0000-7000-8000-000000000001, active: true, deleted: true, untouched: true}
+          - {name: Theirs, household_id: 0192f0a0-0000-7000-8000-000000000002, active: true, deleted: false, untouched: true}
+
+- name: "pocket last - an inactive Pocket can be deleted, whatever is left"
+  issue: "140"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO pockets (id, household_id, pocket_display_name, active, deleted_at, created_at, updated_at) VALUES
+          ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO',   true,  NULL,                   '2026-01-01T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Dana',  false, NULL,                   '2026-01-02T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Gopay', true,  '2026-01-05T00:00:00Z', '2026-01-03T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', true, NULL,                   '2026-01-09T00:00:00Z', '2026-01-05T00:00:00Z')
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: DELETE
+    path: /pockets/0192f0a0-0000-7000-8001-000000000002
+  expect:
+    status: 204
+    body_empty: true
+    cookies: {}
+    rows:
+      - sql: SELECT pocket_display_name AS name, household_id::text AS household_id, active, (deleted_at IS NOT NULL) AS deleted, (updated_at = '2026-01-05T00:00:00Z') AS untouched FROM pockets ORDER BY id
+        rows:
+          - {name: OVO, household_id: 0192f0a0-0000-7000-8000-000000000001, active: true, deleted: false, untouched: true}
+          - {name: Dana, household_id: 0192f0a0-0000-7000-8000-000000000001, active: false, deleted: true, untouched: false}
+          - {name: Gopay, household_id: 0192f0a0-0000-7000-8000-000000000001, active: true, deleted: true, untouched: true}
+          - {name: Theirs, household_id: 0192f0a0-0000-7000-8000-000000000002, active: true, deleted: false, untouched: true}
+
+- name: "pocket last - a repeat delete of a deleted Pocket is 204 and changes nothing, even one that was active"
+  issue: "140"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO pockets (id, household_id, pocket_display_name, active, deleted_at, created_at, updated_at) VALUES
+          ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO',   true,  NULL,                   '2026-01-01T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Dana',  false, NULL,                   '2026-01-02T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Gopay', true,  '2026-01-05T00:00:00Z', '2026-01-03T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', true, NULL,                   '2026-01-09T00:00:00Z', '2026-01-05T00:00:00Z')
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: DELETE
+    path: /pockets/0192f0a0-0000-7000-8001-000000000003
+  expect:
+    status: 204
+    body_empty: true
+    cookies: {}
+    rows:
+      - sql: SELECT pocket_display_name AS name, household_id::text AS household_id, active, (deleted_at IS NOT NULL) AS deleted, (updated_at = '2026-01-05T00:00:00Z') AS untouched FROM pockets ORDER BY id
+        rows:
+          - {name: OVO, household_id: 0192f0a0-0000-7000-8000-000000000001, active: true, deleted: false, untouched: true}
+          - {name: Dana, household_id: 0192f0a0-0000-7000-8000-000000000001, active: false, deleted: false, untouched: true}
+          - {name: Gopay, household_id: 0192f0a0-0000-7000-8000-000000000001, active: true, deleted: true, untouched: true}
+          - {name: Theirs, household_id: 0192f0a0-0000-7000-8000-000000000002, active: true, deleted: false, untouched: true}
+
+- name: "pocket last - deactivating an inactive Pocket is a 200 no-op"
+  issue: "140"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO pockets (id, household_id, pocket_display_name, active, deleted_at, created_at, updated_at) VALUES
+          ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO',   true,  NULL,                   '2026-01-01T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Dana',  false, NULL,                   '2026-01-02T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Gopay', true,  '2026-01-05T00:00:00Z', '2026-01-03T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', true, NULL,                   '2026-01-09T00:00:00Z', '2026-01-05T00:00:00Z')
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: PATCH
+    path: /pockets/0192f0a0-0000-7000-8001-000000000002
+    headers:
+      Content-Type: application/json
+    body: '{"active":false}'
+  expect:
+    status: 200
+    body_json: {id: 0192f0a0-0000-7000-8001-000000000002, pocket_display_name: Dana, active: false}
+    cookies: {}
+    rows:
+      - sql: SELECT pocket_display_name AS name, household_id::text AS household_id, active, (deleted_at IS NOT NULL) AS deleted, (updated_at = '2026-01-05T00:00:00Z') AS untouched FROM pockets ORDER BY id
+        rows:
+          - {name: OVO, household_id: 0192f0a0-0000-7000-8000-000000000001, active: true, deleted: false, untouched: true}
+          - {name: Dana, household_id: 0192f0a0-0000-7000-8000-000000000001, active: false, deleted: false, untouched: false}
+          - {name: Gopay, household_id: 0192f0a0-0000-7000-8000-000000000001, active: true, deleted: true, untouched: true}
+          - {name: Theirs, household_id: 0192f0a0-0000-7000-8000-000000000002, active: true, deleted: false, untouched: true}
+
+- name: "pocket last - renaming and reactivating the last active Pocket are not refused"
+  issue: "140"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO pockets (id, household_id, pocket_display_name, active, deleted_at, created_at, updated_at) VALUES
+          ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO',   true,  NULL,                   '2026-01-01T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Dana',  false, NULL,                   '2026-01-02T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Gopay', true,  '2026-01-05T00:00:00Z', '2026-01-03T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', true, NULL,                   '2026-01-09T00:00:00Z', '2026-01-05T00:00:00Z')
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: PATCH
+    path: /pockets/0192f0a0-0000-7000-8001-000000000001
+    headers:
+      Content-Type: application/json
+    body: '{"pocket_display_name":"Wallet","active":true}'
+  expect:
+    status: 200
+    body_json: {id: 0192f0a0-0000-7000-8001-000000000001, pocket_display_name: Wallet, active: true}
+    cookies: {}
+    rows:
+      - sql: SELECT pocket_display_name AS name, household_id::text AS household_id, active, (deleted_at IS NOT NULL) AS deleted, (updated_at = '2026-01-05T00:00:00Z') AS untouched FROM pockets ORDER BY id
+        rows:
+          - {name: Wallet, household_id: 0192f0a0-0000-7000-8000-000000000001, active: true, deleted: false, untouched: false}
+          - {name: Dana, household_id: 0192f0a0-0000-7000-8000-000000000001, active: false, deleted: false, untouched: true}
+          - {name: Gopay, household_id: 0192f0a0-0000-7000-8000-000000000001, active: true, deleted: true, untouched: true}
+          - {name: Theirs, household_id: 0192f0a0-0000-7000-8000-000000000002, active: true, deleted: false, untouched: true}
+
+- name: "pocket last - validation comes before the guard"
+  issue: "140"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO pockets (id, household_id, pocket_display_name, active, deleted_at, created_at, updated_at) VALUES
+          ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO',   true,  NULL,                   '2026-01-01T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Dana',  false, NULL,                   '2026-01-02T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Gopay', true,  '2026-01-05T00:00:00Z', '2026-01-03T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', true, NULL,                   '2026-01-09T00:00:00Z', '2026-01-05T00:00:00Z')
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: PATCH
+    path: /pockets/0192f0a0-0000-7000-8001-000000000001
+    headers:
+      Content-Type: application/json
+    body: '{"pocket_display_name":"   ","active":false}'
+  expect:
+    status: 400
+    body_json: {code: VALIDATION, args: {field: pocket_display_name, rule: required}}
+    cookies: {}
+    rows:
+      - sql: SELECT pocket_display_name AS name, household_id::text AS household_id, active, (deleted_at IS NOT NULL) AS deleted, (updated_at = '2026-01-05T00:00:00Z') AS untouched FROM pockets ORDER BY id
+        rows:
+          - {name: OVO, household_id: 0192f0a0-0000-7000-8000-000000000001, active: true, deleted: false, untouched: true}
+          - {name: Dana, household_id: 0192f0a0-0000-7000-8000-000000000001, active: false, deleted: false, untouched: true}
+          - {name: Gopay, household_id: 0192f0a0-0000-7000-8000-000000000001, active: true, deleted: true, untouched: true}
+          - {name: Theirs, household_id: 0192f0a0-0000-7000-8000-000000000002, active: true, deleted: false, untouched: true}
+
+- name: "pocket last - a deleted Pocket answers 404 to a deactivation, not LAST_POCKET"
+  issue: "140"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO pockets (id, household_id, pocket_display_name, active, deleted_at, created_at, updated_at) VALUES
+          ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO',   true,  NULL,                   '2026-01-01T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Dana',  false, NULL,                   '2026-01-02T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Gopay', true,  '2026-01-05T00:00:00Z', '2026-01-03T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', true, NULL,                   '2026-01-09T00:00:00Z', '2026-01-05T00:00:00Z')
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: PATCH
+    path: /pockets/0192f0a0-0000-7000-8001-000000000003
+    headers:
+      Content-Type: application/json
+    body: '{"active":false}'
+  expect:
+    status: 404
+    body_json: {code: NOT_FOUND}
+    cookies: {}
+    rows:
+      - sql: SELECT pocket_display_name AS name, household_id::text AS household_id, active, (deleted_at IS NOT NULL) AS deleted, (updated_at = '2026-01-05T00:00:00Z') AS untouched FROM pockets ORDER BY id
+        rows:
+          - {name: OVO, household_id: 0192f0a0-0000-7000-8000-000000000001, active: true, deleted: false, untouched: true}
+          - {name: Dana, household_id: 0192f0a0-0000-7000-8000-000000000001, active: false, deleted: false, untouched: true}
+          - {name: Gopay, household_id: 0192f0a0-0000-7000-8000-000000000001, active: true, deleted: true, untouched: true}
+          - {name: Theirs, household_id: 0192f0a0-0000-7000-8000-000000000002, active: true, deleted: false, untouched: true}
+
+- name: "pocket last - another Household's only Pocket is NOT_FOUND to a delete, as an unknown id is"
+  issue: "140"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO pockets (id, household_id, pocket_display_name, active, deleted_at, created_at, updated_at) VALUES
+          ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO',   true,  NULL,                   '2026-01-01T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Dana',  false, NULL,                   '2026-01-02T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Gopay', true,  '2026-01-05T00:00:00Z', '2026-01-03T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', true, NULL,                   '2026-01-09T00:00:00Z', '2026-01-05T00:00:00Z')
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: DELETE
+    path: /pockets/0192f0a0-0000-7000-8001-000000000009
+  expect:
+    status: 404
+    body_json: {code: NOT_FOUND}
+    same_as:
+      method: DELETE
+      path: /pockets/0192f0a0-0000-7000-8001-0000000000ff
+    cookies: {}
+    rows:
+      - sql: SELECT pocket_display_name AS name, household_id::text AS household_id, active, (deleted_at IS NOT NULL) AS deleted, (updated_at = '2026-01-05T00:00:00Z') AS untouched FROM pockets ORDER BY id
+        rows:
+          - {name: OVO, household_id: 0192f0a0-0000-7000-8000-000000000001, active: true, deleted: false, untouched: true}
+          - {name: Dana, household_id: 0192f0a0-0000-7000-8000-000000000001, active: false, deleted: false, untouched: true}
+          - {name: Gopay, household_id: 0192f0a0-0000-7000-8000-000000000001, active: true, deleted: true, untouched: true}
+          - {name: Theirs, household_id: 0192f0a0-0000-7000-8000-000000000002, active: true, deleted: false, untouched: true}
+
+- name: "pocket last - another Household's only Pocket is NOT_FOUND to a deactivation, as an unknown id is"
+  issue: "140"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO pockets (id, household_id, pocket_display_name, active, deleted_at, created_at, updated_at) VALUES
+          ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO',   true,  NULL,                   '2026-01-01T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Dana',  false, NULL,                   '2026-01-02T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Gopay', true,  '2026-01-05T00:00:00Z', '2026-01-03T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', true, NULL,                   '2026-01-09T00:00:00Z', '2026-01-05T00:00:00Z')
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: PATCH
+    path: /pockets/0192f0a0-0000-7000-8001-000000000009
+    headers:
+      Content-Type: application/json
+    body: '{"active":false}'
+  expect:
+    status: 404
+    body_json: {code: NOT_FOUND}
+    same_as:
+      method: PATCH
+      path: /pockets/0192f0a0-0000-7000-8001-0000000000ff
+      headers:
+        Content-Type: application/json
+      body: '{"active":false}'
+    cookies: {}
+    rows:
+      - sql: SELECT pocket_display_name AS name, household_id::text AS household_id, active, (deleted_at IS NOT NULL) AS deleted, (updated_at = '2026-01-05T00:00:00Z') AS untouched FROM pockets ORDER BY id
+        rows:
+          - {name: OVO, household_id: 0192f0a0-0000-7000-8000-000000000001, active: true, deleted: false, untouched: true}
+          - {name: Dana, household_id: 0192f0a0-0000-7000-8000-000000000001, active: false, deleted: false, untouched: true}
+          - {name: Gopay, household_id: 0192f0a0-0000-7000-8000-000000000001, active: true, deleted: true, untouched: true}
+          - {name: Theirs, household_id: 0192f0a0-0000-7000-8000-000000000002, active: true, deleted: false, untouched: true}
+
+- name: "pocket last - the second of two active Pockets is the last once the first is deleted"
+  issue: "140"
+  given:
+    - sql: |
+        INSERT INTO pockets (id, household_id, pocket_display_name, active, deleted_at, created_at, updated_at) VALUES
+          ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO',    true, NULL, '2026-01-01T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-00000000000a', '0192f0a0-0000-7000-8000-000000000001', 'Keeper', true, NULL, '2026-01-02T00:00:00Z', '2026-01-05T00:00:00Z')
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+    - request:
+        method: DELETE
+        path: /pockets/0192f0a0-0000-7000-8001-00000000000a
+      status: 204
+  request:
+    method: DELETE
+    path: /pockets/0192f0a0-0000-7000-8001-000000000001
+  expect:
+    status: 409
+    body_json: {code: LAST_POCKET}
+    cookies: {}
+    rows:
+      - sql: SELECT pocket_display_name AS name, household_id::text AS household_id, active, (deleted_at IS NOT NULL) AS deleted, (updated_at = '2026-01-05T00:00:00Z') AS untouched FROM pockets ORDER BY id
+        rows:
+          - {name: OVO, household_id: 0192f0a0-0000-7000-8000-000000000001, active: true, deleted: false, untouched: true}
+          - {name: Keeper, household_id: 0192f0a0-0000-7000-8000-000000000001, active: true, deleted: true, untouched: false}
+
+- name: "pocket last - the second of two active Pockets is the last once the first is deactivated"
+  issue: "140"
+  given:
+    - sql: |
+        INSERT INTO pockets (id, household_id, pocket_display_name, active, deleted_at, created_at, updated_at) VALUES
+          ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO',    true, NULL, '2026-01-01T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-00000000000a', '0192f0a0-0000-7000-8000-000000000001', 'Keeper', true, NULL, '2026-01-02T00:00:00Z', '2026-01-05T00:00:00Z')
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+    - request:
+        method: PATCH
+        path: /pockets/0192f0a0-0000-7000-8001-00000000000a
+        headers:
+          Content-Type: application/json
+        body: '{"active":false}'
+      status: 200
+  request:
+    method: PATCH
+    path: /pockets/0192f0a0-0000-7000-8001-000000000001
+    headers:
+      Content-Type: application/json
+    body: '{"active":false}'
+  expect:
+    status: 409
+    body_json: {code: LAST_POCKET}
+    cookies: {}
+    rows:
+      - sql: SELECT pocket_display_name AS name, household_id::text AS household_id, active, (deleted_at IS NOT NULL) AS deleted, (updated_at = '2026-01-05T00:00:00Z') AS untouched FROM pockets ORDER BY id
+        rows:
+          - {name: OVO, household_id: 0192f0a0-0000-7000-8000-000000000001, active: true, deleted: false, untouched: true}
+          - {name: Keeper, household_id: 0192f0a0-0000-7000-8000-000000000001, active: false, deleted: false, untouched: false}
+
+- name: "pocket last - two active Pockets: one may be deleted"
+  issue: "140"
+  given:
+    - sql: |
+        INSERT INTO pockets (id, household_id, pocket_display_name, active, deleted_at, created_at, updated_at) VALUES
+          ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO',    true, NULL, '2026-01-01T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-00000000000a', '0192f0a0-0000-7000-8000-000000000001', 'Keeper', true, NULL, '2026-01-02T00:00:00Z', '2026-01-05T00:00:00Z')
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+  request:
+    method: DELETE
+    path: /pockets/0192f0a0-0000-7000-8001-000000000001
+  expect:
+    status: 204
+    body_empty: true
+    cookies: {}
+    rows:
+      - sql: SELECT pocket_display_name AS name, household_id::text AS household_id, active, (deleted_at IS NOT NULL) AS deleted, (updated_at = '2026-01-05T00:00:00Z') AS untouched FROM pockets ORDER BY id
+        rows:
+          - {name: OVO, household_id: 0192f0a0-0000-7000-8000-000000000001, active: true, deleted: true, untouched: false}
+          - {name: Keeper, household_id: 0192f0a0-0000-7000-8000-000000000001, active: true, deleted: false, untouched: true}
+
+- name: "pocket last - restoring an active Pocket lets the other be deleted"
+  issue: "140"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO pockets (id, household_id, pocket_display_name, active, deleted_at, created_at, updated_at) VALUES
+          ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO',   true,  NULL,                   '2026-01-01T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Dana',  false, NULL,                   '2026-01-02T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Gopay', true,  '2026-01-05T00:00:00Z', '2026-01-03T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', true, NULL,                   '2026-01-09T00:00:00Z', '2026-01-05T00:00:00Z')
+    - request:
+        method: POST
+        path: /auth/local/login
+        headers:
+          Content-Type: application/json
+        body: '{"email":"alice@example.com","password":"conformance-correct-horse"}'
+      status: 204
+    - request:
+        method: POST
+        path: /pockets/0192f0a0-0000-7000-8001-000000000003/restore
+      status: 200
+  request:
+    method: DELETE
+    path: /pockets/0192f0a0-0000-7000-8001-000000000001
+  expect:
+    status: 204
+    body_empty: true
+    cookies: {}
+    rows:
+      - sql: SELECT pocket_display_name AS name, household_id::text AS household_id, active, (deleted_at IS NOT NULL) AS deleted, (updated_at = '2026-01-05T00:00:00Z') AS untouched FROM pockets ORDER BY id
+        rows:
+          - {name: OVO, household_id: 0192f0a0-0000-7000-8000-000000000001, active: true, deleted: true, untouched: false}
+          - {name: Dana, household_id: 0192f0a0-0000-7000-8000-000000000001, active: false, deleted: false, untouched: true}
+          - {name: Gopay, household_id: 0192f0a0-0000-7000-8000-000000000001, active: true, deleted: false, untouched: false}
+          - {name: Theirs, household_id: 0192f0a0-0000-7000-8000-000000000002, active: true, deleted: false, untouched: true}

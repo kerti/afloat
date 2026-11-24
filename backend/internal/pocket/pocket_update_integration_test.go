@@ -99,7 +99,7 @@ func (f fixture) columns(t *testing.T, id uuid.UUID) (name string, active bool, 
 
 func TestEachFieldUpdatesAndAPartialBodyLeavesTheOtherAndCreatedAtAlone(t *testing.T) {
 	f := newFixture(t)
-	_, ctx := f.member(t, "Home", "a@example.com")
+	ctx := f.memberWithKeeper(t, "Home", "a@example.com")
 	id := newID(t)
 	assertCreated(t, f.create(ctx, t, id, "OVO"))
 	_, _, updated0, created0 := f.columns(t, id)
@@ -137,7 +137,7 @@ func TestEachFieldUpdatesAndAPartialBodyLeavesTheOtherAndCreatedAtAlone(t *testi
 // is a *bool pointing at false, and it must land.
 func TestADeactivationLandsAndIsNotMistakenForAbsent(t *testing.T) {
 	f := newFixture(t)
-	_, ctx := f.member(t, "Home", "a@example.com")
+	ctx := f.memberWithKeeper(t, "Home", "a@example.com")
 	id := newID(t)
 	assertCreated(t, f.create(ctx, t, id, "OVO"))
 
@@ -331,12 +331,13 @@ func TestAForeignIdNeverReachesTheNameIndex(t *testing.T) {
 func TestTwoUsersInOneHouseholdEditTheSamePocket(t *testing.T) {
 	f := newFixture(t)
 	householdID, first := f.member(t, "Home", "a@example.com")
+	f.tdb.CreatePocket(t, householdID, "Keeper")
 	second := f.userIn(t, householdID, "b@example.com")
 	id := newID(t)
 	assertCreated(t, f.create(first, t, id, "OVO"))
 
 	assertUpdated(t, f.update(second, t, id, ptr("Dana"), ptr(false)))
-	if got := f.list(first, t); len(got) != 1 || got[0].PocketDisplayName != "Dana" || got[0].Active {
+	if got := f.list(first, t); len(got) != 2 || got[1].PocketDisplayName != "Dana" || got[1].Active {
 		t.Errorf("first User sees %+v, want the second's edit", got)
 	}
 }
@@ -372,7 +373,7 @@ func TestAnUpdateWithoutABodyIs400(t *testing.T) {
 // read-modify-write implementation, which loses one of the two (see the PR).
 func TestConcurrentPatchesOfDifferentFieldsBothLand(t *testing.T) {
 	f := newFixture(t)
-	_, ctx := f.member(t, "Home", "a@example.com")
+	ctx := f.memberWithKeeper(t, "Home", "a@example.com")
 
 	for round := range 20 {
 		id := newID(t)
@@ -458,7 +459,9 @@ func TestAnUpdateErrorThatIsNotNoRowsOrTheNameIndexIsA500(t *testing.T) {
 }
 
 // What reaches the statement is the User's Household and the request's id,
-// trimmed name and active, and nothing else.
+// trimmed name and active, and nothing else. A request that leaves the Pocket
+// active is the one statement; `active: false` runs in a transaction and is
+// checked in pocket_last_integration_test.go.
 func TestTheStatementCarriesTheSessionsHouseholdAndTheTrimmedName(t *testing.T) {
 	var got db.UpdatePocketParams
 	f := newFixtureWith(t, func(q db.Querier) db.Querier {
@@ -469,7 +472,7 @@ func TestTheStatementCarriesTheSessionsHouseholdAndTheTrimmedName(t *testing.T) 
 	})
 	householdID, ctx := f.member(t, "Home", "a@example.com")
 	id := newID(t)
-	f.update(ctx, t, id, ptr("  OVO "), ptr(false))
+	f.update(ctx, t, id, ptr("  OVO "), ptr(true))
 
 	if got.HouseholdID != householdID {
 		t.Errorf("household_id = %v, want the caller's %v", got.HouseholdID, householdID)
@@ -480,8 +483,8 @@ func TestTheStatementCarriesTheSessionsHouseholdAndTheTrimmedName(t *testing.T) 
 	if got.PocketDisplayName == nil || *got.PocketDisplayName != "OVO" {
 		t.Errorf("name = %v, want the trimmed OVO", got.PocketDisplayName)
 	}
-	if got.Active == nil || *got.Active {
-		t.Errorf("active = %v, want a pointer to false", got.Active)
+	if got.Active == nil || !*got.Active {
+		t.Errorf("active = %v, want a pointer to true", got.Active)
 	}
 }
 

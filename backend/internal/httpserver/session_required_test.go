@@ -228,7 +228,7 @@ func TestOnboardingOperationsStayWithTheirHandlers(t *testing.T) {
 
 	for _, tc := range []struct{ method, path, body string }{
 		{http.MethodGet, "/api/onboarding/options", ""},
-		{http.MethodPost, "/api/onboarding/choice", `{"found":true,"household_display_name":"Home"}`},
+		{http.MethodPost, "/api/onboarding/choice", `{"found":true,"household_display_name":"Home","pocket_display_name":"Cash"}`},
 	} {
 		t.Run(tc.method+" "+tc.path, func(t *testing.T) {
 			req := httptest.NewRequest(tc.method, tc.path, strings.NewReader(tc.body))

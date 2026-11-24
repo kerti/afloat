@@ -49,7 +49,13 @@
     "household": "Rumah tangga: {{name}}",
     "comingSoon": "Dasbor Anda akan muncul di sini.",
     "settingsLink": "Pengaturan",
-    "budgetLink": "Anggaran"
+    "budgetLink": "Anggaran",
+    "founded": {
+      "dismiss": "Tutup",
+      "named": "Kami menamai rumah tangga Anda <strong>{{household}}</strong> dan kantong pertama Anda <strong>{{pocket}}</strong>, dengan mata uang <strong>{{currency}}</strong>.",
+      "hint": "Ganti namanya kapan saja. Ubah mata uang sebelum pengeluaran pertama, karena setelah itu tidak bisa diubah.",
+      "settings": "Buka Pengaturan"
+    }
   },
   "pwa": {
     "updateReady": "Versi baru Afloat sudah siap.",
@@ -68,6 +74,7 @@
     "ID_TAKEN": "Afloat tidak dapat menyimpannya. Coba beberapa saat lagi.",
     "NAME_TAKEN": "Nama itu sudah dipakai.",
     "CATEGORY_IN_USE": "Kategori ini punya alokasi di periode anggaran lain, jadi tidak dapat dihapus.",
+    "LAST_POCKET": "Rumah tangga Anda perlu setidaknya satu kantong yang aktif, jadi kantong ini tidak dapat dihapus atau dinonaktifkan.",
     "NETWORK": "Tidak dapat menghubungi Afloat. Periksa koneksi Anda lalu coba lagi.",
     "UNKNOWN": "Terjadi kesalahan. Coba beberapa saat lagi.",
     "EMAIL_TAKEN": "Sudah ada akun dengan email itu. Silakan masuk.",
@@ -91,12 +98,12 @@
   },
   "onboarding": {
     "title": "Siapkan rumah tangga Anda",
-    "intro": "Anda mendaftar sebagai {{email}}. Satu langkah terakhir: beri nama rumah tangga Anda, atau pakai saran di bawah.",
     "householdNameDefault": "Rumah tangga {{name}}",
-    "submit": "Buat rumah tangga",
-    "submitting": "Membuat…",
     "closed": "Instans ini sedang tidak menerima rumah tangga baru. Minta pengelolanya untuk membukanya, atau masuk ke akun yang sudah ada.",
-    "backToSignIn": "Kembali ke halaman masuk"
+    "backToSignIn": "Kembali ke halaman masuk",
+    "pocketDefault": "Tunai",
+    "pending": "Menyiapkan…",
+    "retry": "Coba lagi"
   },
   "pockets": {
     "empty": "Kantong Anda akan tampil di sini.",

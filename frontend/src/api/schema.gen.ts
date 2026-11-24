@@ -374,6 +374,15 @@ export interface paths {
          *     labelling. A Pocket that any Expense references will be refused here
          *     (`409 POCKET_IN_USE`) once Expenses exist; no Expense can reference a
          *     Pocket yet, so that code is not in this contract.
+         *
+         *     A Household always keeps at least one active Pocket (PRD S10), so
+         *     deleting its **last active** Pocket is `409 LAST_POCKET` and changes
+         *     nothing. Deleting an inactive Pocket is never refused for this, and a
+         *     repeat delete of an already-deleted one is `204`, never `409`. An
+         *     unknown or foreign id is `404` first: `LAST_POCKET` is only ever said
+         *     about a Pocket of the caller's own Household. The count and the delete
+         *     are made under a lock on the Household, so two concurrent removals of
+         *     its last two active Pockets cannot both succeed: one is `409`.
          */
         delete: operations["deletePocket"];
         options?: never;
@@ -397,6 +406,14 @@ export interface paths {
          *     `active: true` reactivates. Deactivating is not deleting. An inactive
          *     Pocket can be renamed like any other, and is still listed by
          *     `GET /pockets` (the client filters).
+         *
+         *     A Household always keeps at least one active Pocket (PRD S10), so
+         *     `active: false` on its **last active** Pocket is `409 LAST_POCKET`, and
+         *     nothing in the request is applied (a rename sent with it included).
+         *     Deactivating a Pocket that is already inactive is not refused. The
+         *     count and the write are made under a lock on the Household, so two
+         *     concurrent removals of its last two active Pockets cannot both succeed.
+         *     An unknown, foreign or deleted id is `404` first.
          *
          *     An id that is unknown, that belongs to another Household, or that is
          *     deleted is `404 NOT_FOUND`, the same answer in every case, and it is
@@ -768,16 +785,18 @@ export interface paths {
         put?: never;
         /**
          * Commit the gate's choice, creating the account.
-         * @description One transaction claims the handshake, creates the Household, the User
-         *     and the credential, and commits; only then is the session issued. Two
-         *     concurrent commits on one handshake cannot both found: the loser
-         *     answers `401`.
+         * @description One transaction claims the handshake, creates the Household, the User,
+         *     the credential and the Household's first Pocket, and commits; only then
+         *     is the session issued. Two concurrent commits on one handshake cannot
+         *     both found: the loser answers `401`. A Household always has a Pocket
+         *     (PRD S10), so founding is what gives it its first one: active, named
+         *     by `pocket_display_name`.
          *
          *     Founding disabled (`FOUNDING_DISABLED`) answers `403`; the address
          *     having been taken since registration answers `409 EMAIL_TAKEN` and
-         *     creates nothing. The server mints the Household's and the User's ids,
-         *     UUIDv7 (BOOTSTRAP.md §5.1): founding is an online flow, not an
-         *     offline-capable write.
+         *     creates nothing. The server mints the Household's, the User's and the
+         *     Pocket's ids, UUIDv7 (BOOTSTRAP.md §4): founding is an online flow, not
+         *     an offline-capable write.
          */
         post: operations["commitOnboardingChoice"];
         delete?: never;
@@ -862,6 +881,17 @@ export interface components {
              *     (`PATCH /household`).
              */
             household_display_name: string;
+            /**
+             * @description The name of the Household's first Pocket, created with it, active
+             *     (PRD S10). Pre-filled by the client from its own catalogue. The same
+             *     rules as a Pocket's name anywhere else (`POST /pockets`): stored
+             *     trimmed; blank after the trim is `VALIDATION` (`required`), and more
+             *     than 60 code points is `VALIDATION` (`max`). Checked after
+             *     `household_display_name`, so a body with both wrong reports the
+             *     Household's.
+             * @example Cash
+             */
+            pocket_display_name: string;
         };
         /**
          * @description The User's own fields (PRD S4) and, nested, their Household's settings
@@ -1248,11 +1278,14 @@ export interface components {
          *     and restore, which may act on a deleted row, answer it for unknown and
          *     foreign ids only). `CATEGORY_IN_USE` is a delete of a Category that
          *     holds an allocation, a non-null amount, in a Budget Period other than
-         *     the current one; it carries no `args`, and nothing is changed. A path
-         *     that matches no route at all is not this: it answers a bare `404`.
+         *     the current one; it carries no `args`, and nothing is changed.
+         *     `LAST_POCKET` is a delete, or a deactivation, of the Household's last
+         *     active Pocket (a Household always keeps one); it carries no `args`, and
+         *     nothing is changed. A path that matches no route at all is not this: it
+         *     answers a bare `404`.
          * @enum {string}
          */
-        ErrorCode: "VALIDATION" | "INVALID_JSON_BODY" | "INVALID_CREDENTIALS" | "TOO_MANY_ATTEMPTS" | "UNAUTHORIZED" | "CROSS_SITE_REQUEST_BLOCKED" | "EMAIL_TAKEN" | "WEAK_PASSWORD" | "INVALID_CURRENT_PASSWORD" | "FOUNDING_DISABLED" | "ID_TAKEN" | "NAME_TAKEN" | "CATEGORY_IN_USE" | "NOT_FOUND" | "INTERNAL";
+        ErrorCode: "VALIDATION" | "INVALID_JSON_BODY" | "INVALID_CREDENTIALS" | "TOO_MANY_ATTEMPTS" | "UNAUTHORIZED" | "CROSS_SITE_REQUEST_BLOCKED" | "EMAIL_TAKEN" | "WEAK_PASSWORD" | "INVALID_CURRENT_PASSWORD" | "FOUNDING_DISABLED" | "ID_TAKEN" | "NAME_TAKEN" | "CATEGORY_IN_USE" | "LAST_POCKET" | "NOT_FOUND" | "INTERNAL";
     };
     responses: {
         /**
@@ -1326,6 +1359,8 @@ export interface components {
          *     already holds the name, case-insensitively, at a create, a rename or a
          *     restore. `CATEGORY_IN_USE`: a delete of a Category that holds an
          *     allocation in a Budget Period other than the current one.
+         *     `LAST_POCKET`: a delete, or a deactivation, of the Household's last
+         *     active Pocket.
          */
         Conflict: {
             headers: {
@@ -1734,6 +1769,7 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
             500: components["responses"]["InternalError"];
         };
     };

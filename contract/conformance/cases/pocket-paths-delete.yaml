@@ -24,12 +24,14 @@
 # the empty segment and the binder refuses it, 400 invalid.
 #
 # The Pocket every case starts with: 0192f0a0-0000-7000-8001-000000000001, OVO,
-# Household 1, active.
+# Household 1, active. Beside it, so that deleting OVO is not the Household's last
+# active Pocket (#140 R1), an active Keeper (...00000a) no case touches. Every row
+# assertion reads the whole table, so a request that touched the Keeper fails too.
 
 - name: "pocket paths delete - %2541 binds %41, which is not a uuid is a malformed id"
   issue: "106"
   given: &seeded
-    - sql: INSERT INTO pockets (id, household_id, pocket_display_name, created_at, updated_at) VALUES ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')
+    - sql: INSERT INTO pockets (id, household_id, pocket_display_name, created_at, updated_at) VALUES ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'), ('0192f0a0-0000-7000-8001-00000000000a', '0192f0a0-0000-7000-8000-000000000001', 'Keeper', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')
     - request:
         method: POST
         path: /auth/local/login
@@ -45,8 +47,8 @@
     body_json: {code: VALIDATION, args: {field: id, rule: invalid}}
     cookies: {}
     rows:
-      - sql: SELECT pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted, (updated_at = created_at) AS untouched FROM pockets
-        rows: [{name: OVO, active: true, deleted: false, untouched: true}]
+      - sql: SELECT pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted, (updated_at = created_at) AS untouched FROM pockets ORDER BY pocket_display_name
+        rows: [{name: Keeper, active: true, deleted: false, untouched: true}, {name: OVO, active: true, deleted: false, untouched: true}]
 
 
 - name: "pocket paths delete - %25 binds a bare percent sign is a malformed id"
@@ -60,8 +62,8 @@
     body_json: {code: VALIDATION, args: {field: id, rule: invalid}}
     cookies: {}
     rows:
-      - sql: SELECT pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted, (updated_at = created_at) AS untouched FROM pockets
-        rows: [{name: OVO, active: true, deleted: false, untouched: true}]
+      - sql: SELECT pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted, (updated_at = created_at) AS untouched FROM pockets ORDER BY pocket_display_name
+        rows: [{name: Keeper, active: true, deleted: false, untouched: true}, {name: OVO, active: true, deleted: false, untouched: true}]
 
 
 - name: "pocket paths delete - 100%25 binds 100% is a malformed id"
@@ -75,8 +77,8 @@
     body_json: {code: VALIDATION, args: {field: id, rule: invalid}}
     cookies: {}
     rows:
-      - sql: SELECT pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted, (updated_at = created_at) AS untouched FROM pockets
-        rows: [{name: OVO, active: true, deleted: false, untouched: true}]
+      - sql: SELECT pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted, (updated_at = created_at) AS untouched FROM pockets ORDER BY pocket_display_name
+        rows: [{name: Keeper, active: true, deleted: false, untouched: true}, {name: OVO, active: true, deleted: false, untouched: true}]
 
 
 - name: "pocket paths delete - an encoded slash inside the id is part of the value is a malformed id"
@@ -90,8 +92,8 @@
     body_json: {code: VALIDATION, args: {field: id, rule: invalid}}
     cookies: {}
     rows:
-      - sql: SELECT pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted, (updated_at = created_at) AS untouched FROM pockets
-        rows: [{name: OVO, active: true, deleted: false, untouched: true}]
+      - sql: SELECT pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted, (updated_at = created_at) AS untouched FROM pockets ORDER BY pocket_display_name
+        rows: [{name: Keeper, active: true, deleted: false, untouched: true}, {name: OVO, active: true, deleted: false, untouched: true}]
 
 
 - name: "pocket paths delete - a lower-case encoded slash is a malformed id"
@@ -105,8 +107,8 @@
     body_json: {code: VALIDATION, args: {field: id, rule: invalid}}
     cookies: {}
     rows:
-      - sql: SELECT pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted, (updated_at = created_at) AS untouched FROM pockets
-        rows: [{name: OVO, active: true, deleted: false, untouched: true}]
+      - sql: SELECT pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted, (updated_at = created_at) AS untouched FROM pockets ORDER BY pocket_display_name
+        rows: [{name: Keeper, active: true, deleted: false, untouched: true}, {name: OVO, active: true, deleted: false, untouched: true}]
 
 
 - name: "pocket paths delete - a semicolon is a malformed id"
@@ -120,8 +122,8 @@
     body_json: {code: VALIDATION, args: {field: id, rule: invalid}}
     cookies: {}
     rows:
-      - sql: SELECT pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted, (updated_at = created_at) AS untouched FROM pockets
-        rows: [{name: OVO, active: true, deleted: false, untouched: true}]
+      - sql: SELECT pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted, (updated_at = created_at) AS untouched FROM pockets ORDER BY pocket_display_name
+        rows: [{name: Keeper, active: true, deleted: false, untouched: true}, {name: OVO, active: true, deleted: false, untouched: true}]
 
 
 - name: "pocket paths delete - an encoded semicolon is a malformed id"
@@ -135,8 +137,8 @@
     body_json: {code: VALIDATION, args: {field: id, rule: invalid}}
     cookies: {}
     rows:
-      - sql: SELECT pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted, (updated_at = created_at) AS untouched FROM pockets
-        rows: [{name: OVO, active: true, deleted: false, untouched: true}]
+      - sql: SELECT pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted, (updated_at = created_at) AS untouched FROM pockets ORDER BY pocket_display_name
+        rows: [{name: Keeper, active: true, deleted: false, untouched: true}, {name: OVO, active: true, deleted: false, untouched: true}]
 
 
 - name: "pocket paths delete - an encoded dot-dot is a malformed id"
@@ -150,8 +152,8 @@
     body_json: {code: VALIDATION, args: {field: id, rule: invalid}}
     cookies: {}
     rows:
-      - sql: SELECT pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted, (updated_at = created_at) AS untouched FROM pockets
-        rows: [{name: OVO, active: true, deleted: false, untouched: true}]
+      - sql: SELECT pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted, (updated_at = created_at) AS untouched FROM pockets ORDER BY pocket_display_name
+        rows: [{name: Keeper, active: true, deleted: false, untouched: true}, {name: OVO, active: true, deleted: false, untouched: true}]
 
 
 - name: "pocket paths delete - an encoded backslash is a malformed id"
@@ -165,8 +167,8 @@
     body_json: {code: VALIDATION, args: {field: id, rule: invalid}}
     cookies: {}
     rows:
-      - sql: SELECT pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted, (updated_at = created_at) AS untouched FROM pockets
-        rows: [{name: OVO, active: true, deleted: false, untouched: true}]
+      - sql: SELECT pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted, (updated_at = created_at) AS untouched FROM pockets ORDER BY pocket_display_name
+        rows: [{name: Keeper, active: true, deleted: false, untouched: true}, {name: OVO, active: true, deleted: false, untouched: true}]
 
 
 - name: "pocket paths delete - an encoded NUL is a malformed id"
@@ -180,8 +182,8 @@
     body_json: {code: VALIDATION, args: {field: id, rule: invalid}}
     cookies: {}
     rows:
-      - sql: SELECT pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted, (updated_at = created_at) AS untouched FROM pockets
-        rows: [{name: OVO, active: true, deleted: false, untouched: true}]
+      - sql: SELECT pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted, (updated_at = created_at) AS untouched FROM pockets ORDER BY pocket_display_name
+        rows: [{name: Keeper, active: true, deleted: false, untouched: true}, {name: OVO, active: true, deleted: false, untouched: true}]
 
 
 - name: "pocket paths delete - not a uuid at all is a malformed id"
@@ -195,8 +197,8 @@
     body_json: {code: VALIDATION, args: {field: id, rule: invalid}}
     cookies: {}
     rows:
-      - sql: SELECT pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted, (updated_at = created_at) AS untouched FROM pockets
-        rows: [{name: OVO, active: true, deleted: false, untouched: true}]
+      - sql: SELECT pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted, (updated_at = created_at) AS untouched FROM pockets ORDER BY pocket_display_name
+        rows: [{name: Keeper, active: true, deleted: false, untouched: true}, {name: OVO, active: true, deleted: false, untouched: true}]
 
 
 - name: "pocket paths delete - a uuid one digit short is a malformed id"
@@ -210,8 +212,8 @@
     body_json: {code: VALIDATION, args: {field: id, rule: invalid}}
     cookies: {}
     rows:
-      - sql: SELECT pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted, (updated_at = created_at) AS untouched FROM pockets
-        rows: [{name: OVO, active: true, deleted: false, untouched: true}]
+      - sql: SELECT pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted, (updated_at = created_at) AS untouched FROM pockets ORDER BY pocket_display_name
+        rows: [{name: Keeper, active: true, deleted: false, untouched: true}, {name: OVO, active: true, deleted: false, untouched: true}]
 
 
 - name: "pocket paths delete - a literal backslash is a malformed id"
@@ -225,8 +227,8 @@
     body_json: {code: VALIDATION, args: {field: id, rule: invalid}}
     cookies: {}
     rows:
-      - sql: SELECT pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted, (updated_at = created_at) AS untouched FROM pockets
-        rows: [{name: OVO, active: true, deleted: false, untouched: true}]
+      - sql: SELECT pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted, (updated_at = created_at) AS untouched FROM pockets ORDER BY pocket_display_name
+        rows: [{name: Keeper, active: true, deleted: false, untouched: true}, {name: OVO, active: true, deleted: false, untouched: true}]
 
 
 - name: "pocket paths delete - a trailing slash is a path that does not exist"
@@ -242,8 +244,8 @@
       path: /no-such-route
     cookies: {}
     rows:
-      - sql: SELECT pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted, (updated_at = created_at) AS untouched FROM pockets
-        rows: [{name: OVO, active: true, deleted: false, untouched: true}]
+      - sql: SELECT pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted, (updated_at = created_at) AS untouched FROM pockets ORDER BY pocket_display_name
+        rows: [{name: Keeper, active: true, deleted: false, untouched: true}, {name: OVO, active: true, deleted: false, untouched: true}]
 
 
 - name: "pocket paths delete - an empty parameter is a path that does not exist"
@@ -259,8 +261,8 @@
       path: /no-such-route
     cookies: {}
     rows:
-      - sql: SELECT pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted, (updated_at = created_at) AS untouched FROM pockets
-        rows: [{name: OVO, active: true, deleted: false, untouched: true}]
+      - sql: SELECT pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted, (updated_at = created_at) AS untouched FROM pockets ORDER BY pocket_display_name
+        rows: [{name: Keeper, active: true, deleted: false, untouched: true}, {name: OVO, active: true, deleted: false, untouched: true}]
 
 
 - name: "pocket paths delete - an upper-case id names the same Pocket"
@@ -274,8 +276,8 @@
     body_empty: true
     cookies: {}
     rows:
-      - sql: SELECT pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets
-        rows: [{name: OVO, active: true, deleted: true}]
+      - sql: SELECT pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets ORDER BY pocket_display_name
+        rows: [{name: Keeper, active: true, deleted: false}, {name: OVO, active: true, deleted: true}]
 
 
 - name: "pocket paths delete - a percent-encoded first digit names the same Pocket"
@@ -289,8 +291,8 @@
     body_empty: true
     cookies: {}
     rows:
-      - sql: SELECT pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets
-        rows: [{name: OVO, active: true, deleted: true}]
+      - sql: SELECT pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets ORDER BY pocket_display_name
+        rows: [{name: Keeper, active: true, deleted: false}, {name: OVO, active: true, deleted: true}]
 
 
 - name: "pocket paths delete - a urn:uuid: prefixed id names the same Pocket"
@@ -304,8 +306,8 @@
     body_empty: true
     cookies: {}
     rows:
-      - sql: SELECT pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets
-        rows: [{name: OVO, active: true, deleted: true}]
+      - sql: SELECT pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets ORDER BY pocket_display_name
+        rows: [{name: Keeper, active: true, deleted: false}, {name: OVO, active: true, deleted: true}]
 
 
 - name: "pocket paths delete - a braced id names the same Pocket"
@@ -319,8 +321,8 @@
     body_empty: true
     cookies: {}
     rows:
-      - sql: SELECT pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets
-        rows: [{name: OVO, active: true, deleted: true}]
+      - sql: SELECT pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets ORDER BY pocket_display_name
+        rows: [{name: Keeper, active: true, deleted: false}, {name: OVO, active: true, deleted: true}]
 
 
 - name: "pocket paths delete - 32 hex digits without dashes names the same Pocket"
@@ -334,8 +336,8 @@
     body_empty: true
     cookies: {}
     rows:
-      - sql: SELECT pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets
-        rows: [{name: OVO, active: true, deleted: true}]
+      - sql: SELECT pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets ORDER BY pocket_display_name
+        rows: [{name: Keeper, active: true, deleted: false}, {name: OVO, active: true, deleted: true}]
 
 
 - name: "pocket paths restore - %2541 binds %41, which is not a uuid is a malformed id"
@@ -357,7 +359,7 @@
     body_json: {code: VALIDATION, args: {field: id, rule: invalid}}
     cookies: {}
     rows:
-      - sql: SELECT pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted, (updated_at = '2026-01-01T00:00:00Z') AS untouched FROM pockets
+      - sql: SELECT pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted, (updated_at = '2026-01-01T00:00:00Z') AS untouched FROM pockets ORDER BY pocket_display_name
         rows: [{name: OVO, active: true, deleted: true, untouched: true}]
 
 
@@ -372,7 +374,7 @@
     body_json: {code: VALIDATION, args: {field: id, rule: invalid}}
     cookies: {}
     rows:
-      - sql: SELECT pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted, (updated_at = '2026-01-01T00:00:00Z') AS untouched FROM pockets
+      - sql: SELECT pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted, (updated_at = '2026-01-01T00:00:00Z') AS untouched FROM pockets ORDER BY pocket_display_name
         rows: [{name: OVO, active: true, deleted: true, untouched: true}]
 
 
@@ -387,7 +389,7 @@
     body_json: {code: VALIDATION, args: {field: id, rule: invalid}}
     cookies: {}
     rows:
-      - sql: SELECT pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted, (updated_at = '2026-01-01T00:00:00Z') AS untouched FROM pockets
+      - sql: SELECT pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted, (updated_at = '2026-01-01T00:00:00Z') AS untouched FROM pockets ORDER BY pocket_display_name
         rows: [{name: OVO, active: true, deleted: true, untouched: true}]
 
 
@@ -402,7 +404,7 @@
     body_json: {code: VALIDATION, args: {field: id, rule: invalid}}
     cookies: {}
     rows:
-      - sql: SELECT pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted, (updated_at = '2026-01-01T00:00:00Z') AS untouched FROM pockets
+      - sql: SELECT pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted, (updated_at = '2026-01-01T00:00:00Z') AS untouched FROM pockets ORDER BY pocket_display_name
         rows: [{name: OVO, active: true, deleted: true, untouched: true}]
 
 
@@ -417,7 +419,7 @@
     body_json: {code: VALIDATION, args: {field: id, rule: invalid}}
     cookies: {}
     rows:
-      - sql: SELECT pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted, (updated_at = '2026-01-01T00:00:00Z') AS untouched FROM pockets
+      - sql: SELECT pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted, (updated_at = '2026-01-01T00:00:00Z') AS untouched FROM pockets ORDER BY pocket_display_name
         rows: [{name: OVO, active: true, deleted: true, untouched: true}]
 
 
@@ -434,7 +436,7 @@
       path: /no-such-route
     cookies: {}
     rows:
-      - sql: SELECT pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted, (updated_at = '2026-01-01T00:00:00Z') AS untouched FROM pockets
+      - sql: SELECT pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted, (updated_at = '2026-01-01T00:00:00Z') AS untouched FROM pockets ORDER BY pocket_display_name
         rows: [{name: OVO, active: true, deleted: true, untouched: true}]
 
 
@@ -449,5 +451,5 @@
     body_json: {id: 0192f0a0-0000-7000-8001-000000000001, pocket_display_name: OVO, active: true}
     cookies: {}
     rows:
-      - sql: SELECT pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets
+      - sql: SELECT pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM pockets ORDER BY pocket_display_name
         rows: [{name: OVO, active: true, deleted: false}]

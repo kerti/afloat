@@ -43,8 +43,12 @@ type PocketFormProps = {
   attemptId?: string;
   newAttemptId?: () => void;
   close: () => void;
-  onToggle?: (p: Pocket) => void;
-  onDelete?: (p: Pocket) => void;
+  // Edit only. Both wait for the answer and reject with the ApiError: a
+  // deactivate or a delete of the last active Pocket is refused (LAST_POCKET),
+  // so the dialog stays open to say so. `acting` is true while one is in flight.
+  onToggle?: (p: Pocket) => Promise<void>;
+  onDelete?: (p: Pocket) => Promise<void>;
+  acting?: boolean;
 };
 
 function PocketForm({
@@ -55,6 +59,7 @@ function PocketForm({
   close,
   onToggle,
   onDelete,
+  acting = false,
 }: PocketFormProps) {
   const { t } = useTranslation();
   const create = useCreatePocket();
@@ -69,7 +74,10 @@ function PocketForm({
   const [touched, setTouched] = useState(false);
   const [submitted, setSubmitted] = useState(false);
 
-  const pending = write.isPending;
+  // A refusal of Deactivate or Delete, shown above DetailActions.
+  const [actionErr, setActionErr] = useState<ApiError | null>(null);
+
+  const pending = write.isPending || acting;
   const unchanged = mode === "edit" && name.trim() === pocket?.pocket_display_name;
   const blank = name.trim() === "";
   const err = write.error;
@@ -83,7 +91,24 @@ function PocketForm({
     : (touched || submitted) && blank
       ? t("pockets.nameRequired")
       : null;
-  const formMessage = err && !fieldErr ? errorMessage(t, err) : null;
+  const formMessage =
+    err && !fieldErr ? errorMessage(t, err) : actionErr ? errorMessage(t, actionErr) : null;
+
+  // A Pocket that is already gone leaves no form to hold the message: a toast
+  // and a close, as for a Category. Anything else, a refusal included, stays
+  // in the dialog.
+  function act(run: (p: Pocket) => Promise<void> | undefined) {
+    if (pending) return;
+    setActionErr(null);
+    run(pocket!)?.catch((e: ApiError) => {
+      if (e.code === "NOT_FOUND") {
+        toastError(errorMessage(t, e));
+        close();
+      } else {
+        setActionErr(e);
+      }
+    });
+  }
 
   function onSubmit(e: FormEvent) {
     e.preventDefault();
@@ -137,6 +162,7 @@ function PocketForm({
             setName(clampName(e.target.value));
             setEdited(true);
             if (err) write.reset();
+            setActionErr(null);
           }}
           onBlur={() => edited && setTouched(true)}
           aria-invalid={fieldMessage ? true : undefined}
@@ -152,14 +178,14 @@ function PocketForm({
               key: "toggle",
               label: t(pocket!.active ? "pockets.deactivate" : "pockets.reactivate"),
               disabled: pending,
-              onClick: () => onToggle?.(pocket!),
+              onClick: () => act((p) => onToggle?.(p)),
             },
             {
               key: "delete",
               label: t("pockets.delete"),
               tone: "destructive",
               disabled: pending,
-              onClick: () => onDelete?.(pocket!),
+              onClick: () => act((p) => onDelete?.(p)),
             },
           ]}
         />
@@ -194,50 +220,54 @@ export function PocketsSection() {
   // after a failure still resends it.
   const [attemptId, setAttemptId] = useState(uuidv7);
 
-  // Deactivating is immediate, with no confirmation: the dialog closes at once
-  // and the Undo toast is the way back (R3). Reactivating is the same, mirrored:
-  // every reversible act's toast carries Undo.
+  // Reactivating is immediate, with no confirmation: the dialog closes at once
+  // and the Undo toast is the way back (R3), as every reversible act's toast
+  // carries Undo. Deactivating can be refused (LAST_POCKET, R1), so it waits
+  // for the answer with the dialog open, like Delete: on success it closes and
+  // raises the toast; a refusal rejects to the dialog, which shows it.
   // Toasts come from mutateAsync().then, never mutate's per-call onSuccess:
-  // TanStack drops per-call callbacks once the page unmounts. With the dialog
-  // already closed, a failure is a toast too.
-  function onToggle(p: Pocket) {
+  // TanStack drops per-call callbacks once the page unmounts.
+  async function onToggle(p: Pocket) {
     if (toggle.isPending) return;
     const name = p.pocket_display_name;
+    const undoable = () =>
+      toastUndoable({
+        message: t(p.active ? "toast.deactivated" : "toast.reactivated", { name }),
+        undo: () => updatePocket(p.id, { active: p.active }),
+        qc,
+        invalidate: pocketsKey,
+      });
+    if (p.active) {
+      await toggle.mutateAsync({ id: p.id, body: { active: false } });
+      editParam.close();
+      undoable();
+      return;
+    }
     editParam.close();
     toggle
-      .mutateAsync({ id: p.id, body: { active: !p.active } })
-      .then(() => {
-        toastUndoable({
-          message: t(p.active ? "toast.deactivated" : "toast.reactivated", { name }),
-          undo: () => updatePocket(p.id, { active: p.active }),
-          qc,
-          invalidate: pocketsKey,
-        });
-      })
+      .mutateAsync({ id: p.id, body: { active: true } })
+      .then(undoable)
       .catch((e: ApiError) => {
         toastError(errorMessage(t, e));
       });
   }
 
   // Delete is immediate, with no confirmation, and its Undo restores (R3, P6).
-  function onDelete(p: Pocket) {
+  // It can be refused (LAST_POCKET), so it waits for the answer with the dialog
+  // open, as a Category's does.
+  async function onDelete(p: Pocket) {
     if (remove.isPending) return;
     const name = p.pocket_display_name;
+    await remove.mutateAsync(p.id);
     editParam.close();
-    remove
-      .mutateAsync(p.id)
-      .then(() => {
-        toastUndoable({
-          message: t("toast.deleted", { name }),
-          undo: () => restorePocket(p.id),
-          qc,
-          invalidate: pocketsKey,
-        });
-      })
-      .catch((e: ApiError) => {
-        toastError(errorMessage(t, e));
-      });
+    toastUndoable({
+      message: t("toast.deleted", { name }),
+      undo: () => restorePocket(p.id),
+      qc,
+      invalidate: pocketsKey,
+    });
   }
+  const acting = toggle.isPending || remove.isPending;
 
   const all = pockets.data?.items;
   const inactiveCount = all?.filter((p) => !p.active).length ?? 0;
@@ -310,7 +340,7 @@ export function PocketsSection() {
         </Dialog>
       )}
       {editing && (
-        <Dialog open onOpenChange={(o) => !o && editParam.close()}>
+        <Dialog open onOpenChange={(o) => !o && !acting && editParam.close()}>
           <DialogContent closeLabel={t("dialog.close")}>
             <PocketForm
               key={editing.id}
@@ -319,6 +349,7 @@ export function PocketsSection() {
               close={editParam.close}
               onToggle={onToggle}
               onDelete={onDelete}
+              acting={acting}
             />
           </DialogContent>
         </Dialog>

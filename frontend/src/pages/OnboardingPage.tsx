@@ -1,42 +1,65 @@
-import { useState, type FormEvent } from "react";
+import { useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
-import { Navigate } from "react-router";
+import { Navigate, useNavigate } from "react-router";
 import { useCommitChoice, useMe, useOnboardingOptions } from "@/api/queries";
+import type { OnboardingChoiceRequest } from "@/api/client";
 import { errorMessage } from "@/api/errors";
 import { AuthCard } from "@/components/AuthCard";
-import { Field, Form } from "@/components/Form";
 import { FieldError, MutedText, PageTitle } from "@/components/Text";
 import { TextLink } from "@/components/TextLink";
 import { routes } from "@/lib/routes";
-import { ErrorState, Loading } from "@/components/states";
+import { ErrorState } from "@/components/states";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { clampName } from "@/lib/codePoints";
+import type { FoundedState } from "@/pages/HomePage";
 
-// The gate between a registered credential and an account. Today it offers one
-// choice, founding a Household; invitations add theirs here later. The
-// handshake cookie is the credential, so the page holds nothing of its own: a
-// 401 from either call means it is gone, and the person starts again at sign-in.
+// Founding is silent (#140 R2): register lands here and this page commits the
+// choice itself, with the names the catalogue suggests, then goes to Home. It
+// survives as three states only: pending, a failure with Try again (the same
+// body is resent), and founding closed. The handshake cookie is the credential,
+// so the page holds nothing of its own: a 401 from either call means it is gone
+// and the person starts again at sign-in. When a real choice returns (a pending
+// invitation) the gate returns with it.
 export function OnboardingPage() {
   const { t } = useTranslation();
+  const navigate = useNavigate();
   const me = useMe();
   const options = useOnboardingOptions();
   const commit = useCommitChoice();
-  // null until the person types: the suggestion is then derived from the
-  // current language rather than frozen at first render.
-  const [edited, setEdited] = useState<string | null>(null);
+  // Composed once, when the options arrive, so Try again resends the same body.
+  const body = useRef<OnboardingChoiceRequest | null>(null);
 
-  // A commit that succeeded makes /me answer; the shell is next.
-  if (me.data) return <Navigate to={routes.home} replace />;
+  const gate = options.data;
+  const open = gate?.founding_open === true;
 
-  if (options.isPending) {
-    return (
-      <AuthCard>
-        <Loading />
-      </AuthCard>
-    );
+  function send() {
+    const sent = body.current!;
+    commit
+      .mutateAsync(sent)
+      .then(() => {
+        const founded: FoundedState = { founded: true, pocket: sent.pocket_display_name };
+        void navigate(routes.home, { replace: true, state: founded });
+      })
+      .catch(() => {});
   }
+
+  // Once: the second commit of a spent handshake would answer 401.
+  useEffect(() => {
+    if (!gate || !open || body.current) return;
+    body.current = {
+      found: true,
+      household_display_name: t("onboarding.householdNameDefault", {
+        name: gate.user_display_name,
+      }),
+      pocket_display_name: t("onboarding.pocketDefault"),
+    };
+    send();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [gate, open]);
+
+  // Already signed in: nothing to found. Not once a commit has started, whose
+  // own 204 makes /me answer a render before the navigation below.
+  if (me.data && commit.isIdle) return <Navigate to={routes.home} replace />;
+
   // Not while a commit is settling: its own 204 spends the handshake, and a
   // refetch of the options would then answer 401 for the person who just won.
   if ((options.error?.status === 401 || commit.error?.status === 401) && !commit.isSuccess) {
@@ -50,15 +73,7 @@ export function OnboardingPage() {
     );
   }
 
-  const gate = options.data;
-  const suggestion = t("onboarding.householdNameDefault", { name: gate.user_display_name });
-  const householdName = edited ?? suggestion;
-  const closed = !gate.founding_open || commit.error?.code === "FOUNDING_DISABLED";
-
-  function onSubmit(e: FormEvent) {
-    e.preventDefault();
-    commit.mutate({ found: true, household_display_name: householdName });
-  }
+  const closed = (gate && !open) || commit.error?.code === "FOUNDING_DISABLED";
 
   return (
     <AuthCard>
@@ -68,34 +83,21 @@ export function OnboardingPage() {
           <MutedText role="status">{t("onboarding.closed")}</MutedText>
           <TextLink to={routes.login}>{t("onboarding.backToSignIn")}</TextLink>
         </>
+      ) : commit.error ? (
+        <>
+          <FieldError>
+            {errorMessage(t, commit.error)}
+            {commit.error.code === "EMAIL_TAKEN" && (
+              <>
+                {" "}
+                <TextLink to={routes.login}>{t("register.signIn")}</TextLink>
+              </>
+            )}
+          </FieldError>
+          <Button onClick={send}>{t("onboarding.retry")}</Button>
+        </>
       ) : (
-        <Form onSubmit={onSubmit}>
-          <MutedText>{t("onboarding.intro", { email: gate.email })}</MutedText>
-          <Field>
-            <Label htmlFor="household-name">{t("fields.householdDisplayName")}</Label>
-            <Input
-              id="household-name"
-              required
-              value={householdName}
-              onChange={(e) => setEdited(clampName(e.target.value))}
-              aria-invalid={commit.error?.code === "VALIDATION" || undefined}
-            />
-          </Field>
-          {commit.error && (
-            <FieldError>
-              {errorMessage(t, commit.error)}
-              {commit.error.code === "EMAIL_TAKEN" && (
-                <>
-                  {" "}
-                  <TextLink to={routes.login}>{t("register.signIn")}</TextLink>
-                </>
-              )}
-            </FieldError>
-          )}
-          <Button type="submit" disabled={commit.isPending}>
-            {commit.isPending ? t("onboarding.submitting") : t("onboarding.submit")}
-          </Button>
-        </Form>
+        <MutedText role="status">{t("onboarding.pending")}</MutedText>
       )}
     </AuthCard>
   );

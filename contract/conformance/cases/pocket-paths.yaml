@@ -23,12 +23,14 @@
 # Every row asserts the Pocket row: a mis-decoded id is a hazard to a write.
 #
 # The Pocket every case starts with: 0192f0a0-0000-7000-8001-000000000001, OVO,
-# Household 1, active.
+# Household 1, active. Beside it, so that deactivating OVO is not the Household's
+# last active Pocket (#140 R1), an active Keeper (...00000a) no case touches. Every row
+# assertion reads the whole table, so a request that touched the Keeper fails too.
 
 - name: "pocket paths - %2541 binds %41, which is not a uuid is a malformed id"
   issue: "106"
   given: &seeded
-    - sql: INSERT INTO pockets (id, household_id, pocket_display_name) VALUES ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO')
+    - sql: INSERT INTO pockets (id, household_id, pocket_display_name) VALUES ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO'), ('0192f0a0-0000-7000-8001-00000000000a', '0192f0a0-0000-7000-8000-000000000001', 'Keeper')
     - request:
         method: POST
         path: /auth/local/login
@@ -47,8 +49,8 @@
     body_json: {code: VALIDATION, args: {field: id, rule: invalid}}
     cookies: {}
     rows:
-      - sql: SELECT pocket_display_name AS name, active FROM pockets
-        rows: [{name: OVO, active: true}]
+      - sql: SELECT pocket_display_name AS name, active FROM pockets ORDER BY pocket_display_name
+        rows: [{name: Keeper, active: true}, {name: OVO, active: true}]
 
 
 - name: "pocket paths - %25 binds a bare percent sign is a malformed id"
@@ -65,8 +67,8 @@
     body_json: {code: VALIDATION, args: {field: id, rule: invalid}}
     cookies: {}
     rows:
-      - sql: SELECT pocket_display_name AS name, active FROM pockets
-        rows: [{name: OVO, active: true}]
+      - sql: SELECT pocket_display_name AS name, active FROM pockets ORDER BY pocket_display_name
+        rows: [{name: Keeper, active: true}, {name: OVO, active: true}]
 
 
 - name: "pocket paths - 100%25 binds 100% is a malformed id"
@@ -83,8 +85,8 @@
     body_json: {code: VALIDATION, args: {field: id, rule: invalid}}
     cookies: {}
     rows:
-      - sql: SELECT pocket_display_name AS name, active FROM pockets
-        rows: [{name: OVO, active: true}]
+      - sql: SELECT pocket_display_name AS name, active FROM pockets ORDER BY pocket_display_name
+        rows: [{name: Keeper, active: true}, {name: OVO, active: true}]
 
 
 - name: "pocket paths - an encoded slash inside the id is part of the value is a malformed id"
@@ -101,8 +103,8 @@
     body_json: {code: VALIDATION, args: {field: id, rule: invalid}}
     cookies: {}
     rows:
-      - sql: SELECT pocket_display_name AS name, active FROM pockets
-        rows: [{name: OVO, active: true}]
+      - sql: SELECT pocket_display_name AS name, active FROM pockets ORDER BY pocket_display_name
+        rows: [{name: Keeper, active: true}, {name: OVO, active: true}]
 
 
 - name: "pocket paths - a lower-case encoded slash is a malformed id"
@@ -119,8 +121,8 @@
     body_json: {code: VALIDATION, args: {field: id, rule: invalid}}
     cookies: {}
     rows:
-      - sql: SELECT pocket_display_name AS name, active FROM pockets
-        rows: [{name: OVO, active: true}]
+      - sql: SELECT pocket_display_name AS name, active FROM pockets ORDER BY pocket_display_name
+        rows: [{name: Keeper, active: true}, {name: OVO, active: true}]
 
 
 - name: "pocket paths - a semicolon is a malformed id"
@@ -137,8 +139,8 @@
     body_json: {code: VALIDATION, args: {field: id, rule: invalid}}
     cookies: {}
     rows:
-      - sql: SELECT pocket_display_name AS name, active FROM pockets
-        rows: [{name: OVO, active: true}]
+      - sql: SELECT pocket_display_name AS name, active FROM pockets ORDER BY pocket_display_name
+        rows: [{name: Keeper, active: true}, {name: OVO, active: true}]
 
 
 - name: "pocket paths - an encoded semicolon is a malformed id"
@@ -155,8 +157,8 @@
     body_json: {code: VALIDATION, args: {field: id, rule: invalid}}
     cookies: {}
     rows:
-      - sql: SELECT pocket_display_name AS name, active FROM pockets
-        rows: [{name: OVO, active: true}]
+      - sql: SELECT pocket_display_name AS name, active FROM pockets ORDER BY pocket_display_name
+        rows: [{name: Keeper, active: true}, {name: OVO, active: true}]
 
 
 - name: "pocket paths - an encoded dot-dot is a malformed id"
@@ -173,8 +175,8 @@
     body_json: {code: VALIDATION, args: {field: id, rule: invalid}}
     cookies: {}
     rows:
-      - sql: SELECT pocket_display_name AS name, active FROM pockets
-        rows: [{name: OVO, active: true}]
+      - sql: SELECT pocket_display_name AS name, active FROM pockets ORDER BY pocket_display_name
+        rows: [{name: Keeper, active: true}, {name: OVO, active: true}]
 
 
 - name: "pocket paths - an encoded backslash is a malformed id"
@@ -191,8 +193,8 @@
     body_json: {code: VALIDATION, args: {field: id, rule: invalid}}
     cookies: {}
     rows:
-      - sql: SELECT pocket_display_name AS name, active FROM pockets
-        rows: [{name: OVO, active: true}]
+      - sql: SELECT pocket_display_name AS name, active FROM pockets ORDER BY pocket_display_name
+        rows: [{name: Keeper, active: true}, {name: OVO, active: true}]
 
 
 - name: "pocket paths - an encoded NUL is a malformed id"
@@ -209,8 +211,8 @@
     body_json: {code: VALIDATION, args: {field: id, rule: invalid}}
     cookies: {}
     rows:
-      - sql: SELECT pocket_display_name AS name, active FROM pockets
-        rows: [{name: OVO, active: true}]
+      - sql: SELECT pocket_display_name AS name, active FROM pockets ORDER BY pocket_display_name
+        rows: [{name: Keeper, active: true}, {name: OVO, active: true}]
 
 
 - name: "pocket paths - not a uuid at all is a malformed id"
@@ -227,8 +229,8 @@
     body_json: {code: VALIDATION, args: {field: id, rule: invalid}}
     cookies: {}
     rows:
-      - sql: SELECT pocket_display_name AS name, active FROM pockets
-        rows: [{name: OVO, active: true}]
+      - sql: SELECT pocket_display_name AS name, active FROM pockets ORDER BY pocket_display_name
+        rows: [{name: Keeper, active: true}, {name: OVO, active: true}]
 
 
 - name: "pocket paths - a uuid one digit short is a malformed id"
@@ -245,8 +247,8 @@
     body_json: {code: VALIDATION, args: {field: id, rule: invalid}}
     cookies: {}
     rows:
-      - sql: SELECT pocket_display_name AS name, active FROM pockets
-        rows: [{name: OVO, active: true}]
+      - sql: SELECT pocket_display_name AS name, active FROM pockets ORDER BY pocket_display_name
+        rows: [{name: Keeper, active: true}, {name: OVO, active: true}]
 
 
 - name: "pocket paths - a literal backslash is a malformed id"
@@ -263,8 +265,8 @@
     body_json: {code: VALIDATION, args: {field: id, rule: invalid}}
     cookies: {}
     rows:
-      - sql: SELECT pocket_display_name AS name, active FROM pockets
-        rows: [{name: OVO, active: true}]
+      - sql: SELECT pocket_display_name AS name, active FROM pockets ORDER BY pocket_display_name
+        rows: [{name: Keeper, active: true}, {name: OVO, active: true}]
 
 
 - name: "pocket paths - a trailing slash is a path that does not exist"
@@ -283,8 +285,8 @@
       path: /no-such-route
     cookies: {}
     rows:
-      - sql: SELECT pocket_display_name AS name, active FROM pockets
-        rows: [{name: OVO, active: true}]
+      - sql: SELECT pocket_display_name AS name, active FROM pockets ORDER BY pocket_display_name
+        rows: [{name: Keeper, active: true}, {name: OVO, active: true}]
 
 
 - name: "pocket paths - an empty parameter is a path that does not exist"
@@ -303,8 +305,8 @@
       path: /no-such-route
     cookies: {}
     rows:
-      - sql: SELECT pocket_display_name AS name, active FROM pockets
-        rows: [{name: OVO, active: true}]
+      - sql: SELECT pocket_display_name AS name, active FROM pockets ORDER BY pocket_display_name
+        rows: [{name: Keeper, active: true}, {name: OVO, active: true}]
 
 
 - name: "pocket paths - HEAD has no GET to answer it"
@@ -318,8 +320,8 @@
     body_empty: true
     cookies: {}
     rows:
-      - sql: SELECT pocket_display_name AS name, active FROM pockets
-        rows: [{name: OVO, active: true}]
+      - sql: SELECT pocket_display_name AS name, active FROM pockets ORDER BY pocket_display_name
+        rows: [{name: Keeper, active: true}, {name: OVO, active: true}]
 
 
 - name: "pocket paths - an upper-case id names the same Pocket"
@@ -336,8 +338,8 @@
     body_json: {id: 0192f0a0-0000-7000-8001-000000000001, pocket_display_name: OVO, active: false}
     cookies: {}
     rows:
-      - sql: SELECT pocket_display_name AS name, active FROM pockets
-        rows: [{name: OVO, active: false}]
+      - sql: SELECT pocket_display_name AS name, active FROM pockets ORDER BY pocket_display_name
+        rows: [{name: Keeper, active: true}, {name: OVO, active: false}]
 
 
 - name: "pocket paths - a percent-encoded first digit names the same Pocket"
@@ -354,8 +356,8 @@
     body_json: {id: 0192f0a0-0000-7000-8001-000000000001, pocket_display_name: OVO, active: false}
     cookies: {}
     rows:
-      - sql: SELECT pocket_display_name AS name, active FROM pockets
-        rows: [{name: OVO, active: false}]
+      - sql: SELECT pocket_display_name AS name, active FROM pockets ORDER BY pocket_display_name
+        rows: [{name: Keeper, active: true}, {name: OVO, active: false}]
 
 
 - name: "pocket paths - a urn:uuid: prefixed id names the same Pocket"
@@ -372,8 +374,8 @@
     body_json: {id: 0192f0a0-0000-7000-8001-000000000001, pocket_display_name: OVO, active: false}
     cookies: {}
     rows:
-      - sql: SELECT pocket_display_name AS name, active FROM pockets
-        rows: [{name: OVO, active: false}]
+      - sql: SELECT pocket_display_name AS name, active FROM pockets ORDER BY pocket_display_name
+        rows: [{name: Keeper, active: true}, {name: OVO, active: false}]
 
 
 - name: "pocket paths - a braced id names the same Pocket"
@@ -390,8 +392,8 @@
     body_json: {id: 0192f0a0-0000-7000-8001-000000000001, pocket_display_name: OVO, active: false}
     cookies: {}
     rows:
-      - sql: SELECT pocket_display_name AS name, active FROM pockets
-        rows: [{name: OVO, active: false}]
+      - sql: SELECT pocket_display_name AS name, active FROM pockets ORDER BY pocket_display_name
+        rows: [{name: Keeper, active: true}, {name: OVO, active: false}]
 
 
 - name: "pocket paths - 32 hex digits without dashes names the same Pocket"
@@ -408,5 +410,5 @@
     body_json: {id: 0192f0a0-0000-7000-8001-000000000001, pocket_display_name: OVO, active: false}
     cookies: {}
     rows:
-      - sql: SELECT pocket_display_name AS name, active FROM pockets
-        rows: [{name: OVO, active: false}]
+      - sql: SELECT pocket_display_name AS name, active FROM pockets ORDER BY pocket_display_name
+        rows: [{name: Keeper, active: true}, {name: OVO, active: false}]

@@ -27,17 +27,17 @@ async function deactivateCash(user: ReturnType<typeof userEvent.setup>) {
 }
 
 describe("the Undo toast, for real", () => {
-  it("survives navigating away from /pockets, and its Undo still works there", async () => {
+  it("survives navigating away from /settings, and its Undo still works there", async () => {
     const s = state();
     server.use(...defaultHandlers(s));
     const user = userEvent.setup();
-    renderApp("/pockets");
+    renderApp("/settings");
 
     await deactivateCash(user);
     expect(await screen.findByText("Deactivated Cash.")).toBeInTheDocument();
 
     await user.click(screen.getByRole("link", { name: "Home" }));
-    expect(await screen.findByRole("link", { name: "Pockets" })).toBeInTheDocument();
+    expect(await screen.findByRole("link", { name: "Settings" })).toBeInTheDocument();
     expect(screen.getByText("Deactivated Cash.")).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Undo" }));
@@ -48,7 +48,7 @@ describe("the Undo toast, for real", () => {
     server.use(...defaultHandlers(state()));
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
-    renderApp("/pockets");
+    renderApp("/settings");
 
     await deactivateCash(user);
     expect(await screen.findByText("Deactivated Cash.")).toBeInTheDocument();

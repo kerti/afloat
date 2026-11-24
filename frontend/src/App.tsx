@@ -3,15 +3,14 @@ import { AppearanceProvider } from "@/lib/appearance";
 import { RequireSession } from "@/components/RequireSession";
 import { Toaster } from "@/components/ui/sonner";
 import { UpdatePrompt } from "@/components/UpdatePrompt";
-import { routes } from "@/lib/routes";
+import { LegacyRedirect } from "@/components/LegacyRedirect";
+import { legacyRedirects, routes } from "@/lib/routes";
 import { BudgetPage } from "@/pages/BudgetPage";
 import { HomePage } from "@/pages/HomePage";
-import { HouseholdSettingsPage } from "@/pages/HouseholdSettingsPage";
 import { LoginPage } from "@/pages/LoginPage";
 import { OnboardingPage } from "@/pages/OnboardingPage";
-import { PocketsPage } from "@/pages/PocketsPage";
 import { RegisterPage } from "@/pages/RegisterPage";
-import { UserSettingsPage } from "@/pages/UserSettingsPage";
+import { SettingsPage } from "@/pages/SettingsPage";
 
 export function App() {
   return (
@@ -25,17 +24,12 @@ export function App() {
           element={<RequireSession>{(me) => <HomePage me={me} />}</RequireSession>}
         />
         <Route
-          path={routes.householdSettings}
-          element={<RequireSession>{(me) => <HouseholdSettingsPage me={me} />}</RequireSession>}
+          path={routes.settings}
+          element={<RequireSession>{(me) => <SettingsPage me={me} />}</RequireSession>}
         />
-        <Route
-          path={routes.userSettings}
-          element={<RequireSession>{(me) => <UserSettingsPage me={me} />}</RequireSession>}
-        />
-        <Route
-          path={routes.pockets}
-          element={<RequireSession>{() => <PocketsPage />}</RequireSession>}
-        />
+        {Object.values(legacyRedirects).map((path) => (
+          <Route key={path} path={path} element={<LegacyRedirect to={routes.settings} />} />
+        ))}
         <Route
           path={routes.budget}
           element={<RequireSession>{(me) => <BudgetPage me={me} />}</RequireSession>}

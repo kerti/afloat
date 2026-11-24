@@ -39,7 +39,7 @@ describe("the edit dialog", () => {
       ...defaultHandlers(signedIn({ pockets: [pocket("a", "Cash"), pocket("b", "OVO")] })),
     );
     const user = userEvent.setup();
-    const view = renderApp("/pockets");
+    const view = renderApp("/settings");
 
     const dialog = await openEdit(user, "OVO");
 
@@ -50,11 +50,11 @@ describe("the edit dialog", () => {
 
   it("opens from a link, and a link to a Pocket that is not there drops the param", async () => {
     server.use(...defaultHandlers(signedIn({ pockets: [pocket("a", "Cash")] })));
-    const view = renderApp("/pockets?edit=pocket:a");
+    const view = renderApp("/settings?edit=pocket:a");
     expect(await screen.findByRole("dialog", { name: p.editHeading })).toBeInTheDocument();
     view.unmount();
 
-    const stale = renderApp("/pockets?edit=pocket:zzz");
+    const stale = renderApp("/settings?edit=pocket:zzz");
     await screen.findByRole("button", { name: "Edit Cash" });
     await waitFor(() => expect(stale.param("edit")).toBeNull());
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
@@ -63,7 +63,7 @@ describe("the edit dialog", () => {
   it("closes by a backdrop tap, back, Esc and the X, clearing the param", async () => {
     server.use(...defaultHandlers(signedIn({ pockets: [pocket("a", "Cash")] })));
     const user = userEvent.setup({ pointerEventsCheck: 0 });
-    const view = renderApp("/pockets");
+    const view = renderApp("/settings");
 
     await openEdit(user, "Cash");
     await user.click(document.querySelector('[data-slot="dialog-overlay"]')!);
@@ -93,7 +93,7 @@ describe("renaming a Pocket", () => {
     const state = signedIn({ pockets: [pocket("a", "Cash"), pocket("b", "OVO")] });
     server.use(...defaultHandlers(state));
     const user = userEvent.setup();
-    renderApp("/pockets");
+    renderApp("/settings");
 
     const dialog = await openEdit(user, "Cash");
     const save = within(dialog).getByRole("button", { name: p.save });
@@ -117,7 +117,7 @@ describe("renaming a Pocket", () => {
     const state = signedIn({ pockets: [pocket("a", "Cash")] });
     server.use(...defaultHandlers(state));
     const user = userEvent.setup();
-    renderApp("/pockets");
+    renderApp("/settings");
 
     const dialog = await openEdit(user, "Cash");
     const save = within(dialog).getByRole("button", { name: p.save });
@@ -132,7 +132,7 @@ describe("renaming a Pocket", () => {
     const state = signedIn({ pockets: [pocket("a", "Cash")] });
     server.use(...defaultHandlers(state));
     const user = userEvent.setup();
-    renderApp("/pockets");
+    renderApp("/settings");
 
     const dialog = await openEdit(user, "Cash");
     await user.clear(nameField(dialog));
@@ -149,7 +149,7 @@ describe("renaming a Pocket", () => {
     const state = signedIn({ pockets: [pocket("a", "Cash"), pocket("b", "OVO")] });
     server.use(...defaultHandlers(state));
     const user = userEvent.setup();
-    renderApp("/pockets");
+    renderApp("/settings");
 
     const dialog = await openEdit(user, "Cash");
     const field = nameField(dialog);
@@ -171,7 +171,7 @@ describe("renaming a Pocket", () => {
       ...defaultHandlers(signedIn({ pockets: [pocket("a", "Cash")] })),
     );
     const user = userEvent.setup();
-    renderApp("/pockets");
+    renderApp("/settings");
 
     const dialog = await openEdit(user, "Cash");
     await user.type(nameField(dialog), "x");
@@ -193,7 +193,7 @@ describe("renaming a Pocket", () => {
       ...defaultHandlers(signedIn({ pockets: [pocket("a", "Cash")] })),
     );
     const user = userEvent.setup();
-    renderApp("/pockets");
+    renderApp("/settings");
 
     const dialog = await openEdit(user, "Cash");
     await user.type(nameField(dialog), "x");
@@ -209,7 +209,7 @@ describe("renaming a Pocket", () => {
     const state = signedIn({ pockets: [pocket("a", "Cash")] });
     server.use(...defaultHandlers(state));
     const user = userEvent.setup();
-    const view = renderApp("/pockets");
+    const view = renderApp("/settings");
 
     const dialog = await openEdit(user, "Cash");
     await user.type(nameField(dialog), "x");
@@ -228,7 +228,7 @@ describe("deactivating and reactivating, from the dialog", () => {
     const state = signedIn({ pockets: [pocket("a", "Cash"), pocket("b", "OVO")] });
     server.use(...defaultHandlers(state));
     const user = userEvent.setup();
-    const view = renderApp("/pockets");
+    const view = renderApp("/settings");
 
     const dialog = await openEdit(user, "Cash");
     await user.click(within(dialog).getByRole("button", { name: p.deactivate }));
@@ -251,7 +251,7 @@ describe("deactivating and reactivating, from the dialog", () => {
     const state = signedIn({ pockets: [pocket("a", "Cash")] });
     server.use(...defaultHandlers(state));
     const user = userEvent.setup();
-    renderApp("/pockets");
+    renderApp("/settings");
 
     const dialog = await openEdit(user, "Cash");
     await user.click(within(dialog).getByRole("button", { name: p.deactivate }));
@@ -266,7 +266,7 @@ describe("deactivating and reactivating, from the dialog", () => {
     const state = signedIn({ pockets: [pocket("a", "Cash")] });
     server.use(...defaultHandlers(state));
     const user = userEvent.setup();
-    renderApp("/pockets");
+    renderApp("/settings");
 
     const dialog = await openEdit(user, "Cash");
     await user.click(within(dialog).getByRole("button", { name: p.deactivate }));
@@ -291,7 +291,7 @@ describe("deactivating and reactivating, from the dialog", () => {
       ...defaultHandlers(signedIn({ pockets: [pocket("a", "Cash")] })),
     );
     const user = userEvent.setup();
-    renderApp("/pockets");
+    renderApp("/settings");
 
     const dialog = await openEdit(user, "Cash");
     await user.click(within(dialog).getByRole("button", { name: p.deactivate }));
@@ -307,7 +307,7 @@ describe("deactivating and reactivating, from the dialog", () => {
     const state = signedIn({ pockets: [pocket("a", "Cash")] });
     server.use(...defaultHandlers(state));
     const user = userEvent.setup();
-    renderApp("/pockets");
+    renderApp("/settings");
 
     const dialog = await openEdit(user, "Cash");
     state.pockets = [];
@@ -323,7 +323,7 @@ describe("deactivating and reactivating, from the dialog", () => {
     const state = signedIn({ pockets: [pocket("a", "Cash", false), pocket("b", "OVO")] });
     server.use(...defaultHandlers(state));
     const user = userEvent.setup();
-    renderApp("/pockets");
+    renderApp("/settings");
 
     await user.click(await screen.findByLabelText("Show inactive Pockets (1)"));
     // The row's accessible name carries the Inactive badge too.
@@ -351,7 +351,7 @@ describe("deactivating and reactivating, from the dialog", () => {
     const state = signedIn({ pockets: [pocket("a", "Cash", false), pocket("b", "OVO")] });
     server.use(...defaultHandlers(state));
     const user = userEvent.setup();
-    renderApp("/pockets");
+    renderApp("/settings");
 
     await user.click(await screen.findByLabelText("Show inactive Pockets (1)"));
     const dialog = await openEdit(user, "Cash", true);
@@ -371,7 +371,7 @@ describe("deactivating and reactivating, from the dialog", () => {
     const state = signedIn({ pockets: [pocket("a", "Cash"), pocket("b", "OVO", false)] });
     server.use(...defaultHandlers(state));
     const user = userEvent.setup();
-    renderApp("/pockets");
+    renderApp("/settings");
 
     await user.click(await screen.findByLabelText("Show inactive Pockets (1)"));
     const dialog = await openEdit(user, "Cash");
@@ -386,7 +386,7 @@ describe("deactivating and reactivating, from the dialog", () => {
 describe("Show inactive Pockets", () => {
   it("is absent when nothing is inactive", async () => {
     server.use(...defaultHandlers(signedIn({ pockets: [pocket("a", "Cash")] })));
-    renderApp("/pockets");
+    renderApp("/settings");
     await screen.findByText("Cash");
     expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
   });
@@ -400,7 +400,7 @@ describe("Show inactive Pockets", () => {
       ),
     );
     const user = userEvent.setup();
-    renderApp("/pockets");
+    renderApp("/settings");
 
     const box = await screen.findByRole("checkbox", { name: "Show inactive Pockets (2)" });
     expect(box).not.toBeChecked();
@@ -418,12 +418,12 @@ describe("Show inactive Pockets", () => {
   it("is unticked again after a remount", async () => {
     server.use(...defaultHandlers(signedIn({ pockets: [pocket("b", "Old", false)] })));
     const user = userEvent.setup();
-    const view = renderApp("/pockets");
+    const view = renderApp("/settings");
 
     await user.click(await screen.findByRole("checkbox"));
     expect(screen.getByText("Old")).toBeInTheDocument();
     view.unmount();
-    renderApp("/pockets");
+    renderApp("/settings");
 
     expect(await screen.findByRole("checkbox")).not.toBeChecked();
     expect(screen.queryByText("Old")).not.toBeInTheDocument();
@@ -433,7 +433,7 @@ describe("Show inactive Pockets", () => {
     server.use(
       ...defaultHandlers(signedIn({ pockets: [pocket("a", "A", false), pocket("b", "B", false)] })),
     );
-    renderApp("/pockets");
+    renderApp("/settings");
     expect(
       await screen.findByText(/No active Pockets\. 2 inactive Pockets hidden\./),
     ).toBeInTheDocument();

@@ -36,7 +36,7 @@ describe("pockets list", () => {
     const user = userEvent.setup();
     renderApp("/");
 
-    await user.click(await screen.findByRole("link", { name: "Pockets" }));
+    await user.click(await screen.findByRole("link", { name: "Settings" }));
 
     const rows = await screen.findAllByRole("listitem");
     expect(rows.map((r) => r.textContent)).toEqual(["Cash", "BCA debit", "OVO"]);
@@ -55,7 +55,7 @@ describe("pockets list", () => {
       }),
       ...defaultHandlers(signedIn()),
     );
-    renderApp("/pockets");
+    renderApp("/settings");
     expect(await screen.findByRole("status")).toHaveTextContent(enGB.app.loading);
     expect(await screen.findByText(p.empty)).toBeInTheDocument();
   });
@@ -63,7 +63,7 @@ describe("pockets list", () => {
   it("shows the empty state with the create action when there are none", async () => {
     server.use(...defaultHandlers(signedIn()));
     const user = userEvent.setup();
-    const view = renderApp("/pockets");
+    const view = renderApp("/settings");
     expect(await screen.findByText(p.empty)).toBeInTheDocument();
     expect(screen.queryByRole("list")).not.toBeInTheDocument();
 
@@ -81,7 +81,7 @@ describe("pockets list", () => {
       ...defaultHandlers(signedIn({ pockets: [pocket("a", "Cash")] })),
     );
     const user = userEvent.setup();
-    renderApp("/pockets");
+    renderApp("/settings");
 
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent(enGB.errors.INTERNAL);
@@ -100,7 +100,7 @@ describe("creating a Pocket", () => {
     const state = signedIn();
     server.use(...defaultHandlers(state));
     const user = userEvent.setup();
-    const view = renderApp("/pockets");
+    const view = renderApp("/settings");
 
     const dialog = await openCreate(user);
     expect(view.param("new")).toBe("pocket");
@@ -129,7 +129,7 @@ describe("creating a Pocket", () => {
     const state = signedIn();
     server.use(...defaultHandlers(state));
     const user = userEvent.setup();
-    renderApp("/pockets");
+    renderApp("/settings");
 
     for (const name of ["Cash", "OVO"]) {
       const dialog = await openCreate(user);
@@ -157,7 +157,7 @@ describe("creating a Pocket", () => {
       ...defaultHandlers(state),
     );
     const user = userEvent.setup();
-    renderApp("/pockets");
+    renderApp("/settings");
 
     const dialog = await openCreate(user);
     await user.type(within(dialog).getByLabelText(enGB.fields.pocketDisplayName), "Cash");
@@ -196,7 +196,7 @@ describe("creating a Pocket", () => {
       ...defaultHandlers(state),
     );
     const user = userEvent.setup();
-    renderApp("/pockets");
+    renderApp("/settings");
 
     const dialog = await openCreate(user);
     await user.type(within(dialog).getByLabelText(enGB.fields.pocketDisplayName), "Cash");
@@ -222,7 +222,7 @@ describe("creating a Pocket", () => {
       ...defaultHandlers(state),
     );
     const user = userEvent.setup();
-    renderApp("/pockets");
+    renderApp("/settings");
 
     const dialog = await openCreate(user);
     await user.type(within(dialog).getByLabelText(enGB.fields.pocketDisplayName), "Cash");
@@ -243,7 +243,7 @@ describe("creating a Pocket", () => {
       ...defaultHandlers(signedIn()),
     );
     const user = userEvent.setup();
-    renderApp("/pockets");
+    renderApp("/settings");
 
     const dialog = await openCreate(user);
     await user.type(within(dialog).getByLabelText(enGB.fields.pocketDisplayName), "Cash");
@@ -256,7 +256,7 @@ describe("creating a Pocket", () => {
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
   });
 
-  it("stays on /pockets when the dialog is dismissed while the write is in flight", async () => {
+  it("stays on /settings when the dialog is dismissed while the write is in flight", async () => {
     let release!: () => void;
     const gate = new Promise<void>((r) => (release = r));
     server.use(
@@ -267,10 +267,10 @@ describe("creating a Pocket", () => {
       ...defaultHandlers(signedIn()),
     );
     const user = userEvent.setup();
-    // Arrive from Home, so there is an entry behind /pockets for a stray
+    // Arrive from Home, so there is an entry behind /settings for a stray
     // second back to land on.
     renderApp("/");
-    await user.click(await screen.findByRole("link", { name: "Pockets" }));
+    await user.click(await screen.findByRole("link", { name: "Settings" }));
 
     const dialog = await openCreate(user);
     await user.type(within(dialog).getByLabelText(enGB.fields.pocketDisplayName), "Cash");
@@ -282,13 +282,13 @@ describe("creating a Pocket", () => {
     release();
     await waitFor(() => expect(toastMock).toHaveBeenCalledTimes(1));
     // The success must not close the dialog a second time and go back past /pockets.
-    expect(screen.getByTestId("location")).toHaveTextContent(/^\/pockets$/);
+    expect(screen.getByTestId("location")).toHaveTextContent(/^\/settings$/);
   });
 
   it("keeps NAME_TAKEN under the field, the dialog open, and raises no toast", async () => {
     server.use(...defaultHandlers(signedIn({ pockets: [pocket("a", "Cash")] })));
     const user = userEvent.setup();
-    renderApp("/pockets");
+    renderApp("/settings");
 
     const dialog = await openCreate(user);
     const field = within(dialog).getByLabelText(enGB.fields.pocketDisplayName);
@@ -313,7 +313,7 @@ describe("creating a Pocket", () => {
       ...defaultHandlers(signedIn()),
     );
     const user = userEvent.setup();
-    renderApp("/pockets");
+    renderApp("/settings");
 
     const dialog = await openCreate(user);
     const field = within(dialog).getByLabelText(enGB.fields.pocketDisplayName);
@@ -330,7 +330,7 @@ describe("creating a Pocket", () => {
     const state = signedIn();
     server.use(...defaultHandlers(state));
     const user = userEvent.setup();
-    renderApp("/pockets");
+    renderApp("/settings");
 
     const dialog = await openCreate(user);
     expect(submit()).toBeEnabled();
@@ -349,7 +349,7 @@ describe("creating a Pocket", () => {
   it("shows the blank error on blur once the name was edited, before any submit", async () => {
     server.use(...defaultHandlers(signedIn()));
     const user = userEvent.setup();
-    renderApp("/pockets");
+    renderApp("/settings");
 
     const dialog = await openCreate(user);
     const field = within(dialog).getByLabelText(enGB.fields.pocketDisplayName);
@@ -374,7 +374,7 @@ describe("creating a Pocket", () => {
         ...defaultHandlers(signedIn()),
       );
       const user = userEvent.setup();
-      renderApp("/pockets");
+      renderApp("/settings");
 
       const dialog = await openCreate(user);
       await user.type(within(dialog).getByLabelText(enGB.fields.pocketDisplayName), "Cash");
@@ -395,7 +395,7 @@ describe("creating a Pocket", () => {
       ...defaultHandlers(signedIn()),
     );
     const user = userEvent.setup();
-    const { client } = renderApp("/pockets");
+    const { client } = renderApp("/settings");
 
     const dialog = await openCreate(user);
     await user.type(within(dialog).getByLabelText(enGB.fields.pocketDisplayName), "Cash");
@@ -410,7 +410,7 @@ describe("closing a writing dialog", () => {
   it("closes by Cancel, the labelled X, Esc and back, and clears the param", async () => {
     server.use(...defaultHandlers(signedIn()));
     const user = userEvent.setup();
-    const view = renderApp("/pockets");
+    const view = renderApp("/settings");
 
     let dialog = await openCreate(user);
     await user.click(within(dialog).getByRole("button", { name: p.cancel }));
@@ -437,7 +437,7 @@ describe("closing a writing dialog", () => {
   it("closes on a tap on the backdrop: it records no money (Uruni ADR-046)", async () => {
     server.use(...defaultHandlers(signedIn()));
     const user = userEvent.setup({ pointerEventsCheck: 0 });
-    const view = renderApp("/pockets");
+    const view = renderApp("/settings");
 
     await openCreate(user);
     await user.click(document.querySelector('[data-slot="dialog-overlay"]')!);
@@ -448,7 +448,7 @@ describe("closing a writing dialog", () => {
 
   it("opens from a link to ?new=pocket", async () => {
     server.use(...defaultHandlers(signedIn()));
-    renderApp("/pockets?new=pocket");
+    renderApp("/settings?new=pocket");
     expect(await screen.findByRole("dialog", { name: p.addHeading })).toBeInTheDocument();
   });
 });
@@ -460,7 +460,7 @@ describe("session and locale", () => {
     const user = userEvent.setup();
     const { client } = renderApp("/");
 
-    await user.click(await screen.findByRole("link", { name: "Pockets" }));
+    await user.click(await screen.findByRole("link", { name: "Settings" }));
     expect(await screen.findByText("Cash")).toBeInTheDocument();
     await user.click(screen.getByRole("link", { name: "Home" }));
     await user.click(await screen.findByRole("button", { name: "Sign out" }));
@@ -473,7 +473,7 @@ describe("session and locale", () => {
     await user.type(screen.getByLabelText("Email"), "bob@example.com");
     await user.type(screen.getByLabelText("Password"), "correct-horse");
     await user.click(screen.getByRole("button", { name: "Sign in" }));
-    await user.click(await screen.findByRole("link", { name: "Pockets" }));
+    await user.click(await screen.findByRole("link", { name: "Settings" }));
 
     expect(await screen.findByText(p.empty)).toBeInTheDocument();
     expect(screen.queryByText("Cash")).not.toBeInTheDocument();
@@ -486,7 +486,7 @@ describe("session and locale", () => {
       ),
     );
     const user = userEvent.setup();
-    renderApp("/pockets");
+    renderApp("/settings");
     const ip = idID.pockets;
 
     expect(await screen.findByRole("heading", { name: "Kantong" })).toBeInTheDocument();
@@ -502,7 +502,7 @@ describe("session and locale", () => {
 
   it("sends a signed-out visitor to sign in", async () => {
     server.use(...defaultHandlers());
-    renderApp("/pockets");
+    renderApp("/settings");
     expect(await screen.findByRole("heading", { name: "Sign in" })).toBeInTheDocument();
   });
 });

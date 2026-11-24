@@ -35,7 +35,7 @@ describe("user settings", () => {
     const user = userEvent.setup();
     renderApp("/");
 
-    await user.click(await screen.findByRole("link", { name: "Your settings" }));
+    await user.click(await screen.findByRole("link", { name: "Settings" }));
     await open();
 
     expect(profile().getByLabelText("Your name")).toHaveValue("Alice");
@@ -48,7 +48,7 @@ describe("user settings", () => {
   it("offers the browser's zones plus the stored one when the browser lacks it", async () => {
     const odd = { ...alice, time_zone: "Mars/Base" };
     server.use(...defaultHandlers(signedIn({ me: odd })));
-    renderApp("/settings/user");
+    renderApp("/settings");
     await open();
 
     const select = profile().getByLabelText("Time zone");
@@ -64,7 +64,7 @@ describe("user settings", () => {
     const state = signedIn();
     server.use(...defaultHandlers(state));
     const user = userEvent.setup();
-    renderApp("/settings/user");
+    renderApp("/settings");
     await open();
 
     const field = profile().getByLabelText("Your name");
@@ -84,7 +84,7 @@ describe("user settings", () => {
     const state = signedIn();
     server.use(...defaultHandlers(state));
     const user = userEvent.setup();
-    renderApp("/settings/user");
+    renderApp("/settings");
     await open();
 
     await user.selectOptions(profile().getByLabelText("Time zone"), "Asia/Makassar");
@@ -99,12 +99,14 @@ describe("user settings", () => {
     const state = signedIn();
     server.use(...defaultHandlers(state));
     const user = userEvent.setup();
-    renderApp("/settings/user");
+    renderApp("/settings");
     await open();
 
     await chooseLanguage(user, "Bahasa Indonesia");
 
-    expect(await screen.findByRole("heading", { name: "Pengaturan Anda" })).toBeInTheDocument();
+    expect(
+      await screen.findByRole("heading", { level: 1, name: "Pengaturan" }),
+    ).toBeInTheDocument();
     expect(state.mePatches).toEqual([{ locale: "id-ID" }]);
     expect(screen.getByRole("region", { name: "Profil" })).toBeInTheDocument();
     await waitFor(() =>
@@ -128,7 +130,7 @@ describe("user settings", () => {
       ...defaultHandlers(signedIn()),
     );
     const user = userEvent.setup();
-    renderApp("/settings/user");
+    renderApp("/settings");
     await open();
 
     await user.type(profile().getByLabelText("Your name"), "x");
@@ -142,7 +144,7 @@ describe("user settings", () => {
   it("reverts the name on Esc", async () => {
     server.use(...defaultHandlers(signedIn()));
     const user = userEvent.setup();
-    renderApp("/settings/user");
+    renderApp("/settings");
     await open();
 
     await user.type(profile().getByLabelText("Your name"), "x");
@@ -162,7 +164,7 @@ describe("user settings", () => {
       ...defaultHandlers(signedIn()),
     );
     const user = userEvent.setup();
-    renderApp("/settings/user");
+    renderApp("/settings");
     await open();
 
     if (field === "time_zone") {
@@ -190,13 +192,14 @@ describe("user settings", () => {
       ...defaultHandlers(signedIn({ me: { ...alice, locale } })),
     );
     const user = userEvent.setup();
-    renderApp("/settings/user");
-    const [nameLabel, saveLabel] =
-      locale === "id-ID" ? ["Nama Anda", "Simpan"] : ["Your name", "Save"];
+    renderApp("/settings");
+    const [nameLabel, saveLabel, region] =
+      locale === "id-ID" ? ["Nama Anda", "Simpan", "Profil"] : ["Your name", "Save", "Profile"];
     await screen.findByLabelText(nameLabel);
+    const own = within(screen.getByRole("region", { name: region }));
 
-    await user.type(screen.getByLabelText(nameLabel), "x");
-    await user.click(screen.getAllByRole("button", { name: saveLabel })[0]!);
+    await user.type(own.getByLabelText(nameLabel), "x");
+    await user.click(own.getByRole("button", { name: saveLabel }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent(text);
   });
@@ -205,7 +208,7 @@ describe("user settings", () => {
     const state = signedIn();
     server.use(...defaultHandlers(state));
     const user = userEvent.setup();
-    const { client } = renderApp("/settings/user");
+    const { client } = renderApp("/settings");
     await open();
 
     await user.type(email().getByLabelText("New email"), "alice@new.example");
@@ -233,7 +236,7 @@ describe("user settings", () => {
   it("keeps a wrong current password on the email form and does not end the session", async () => {
     server.use(...defaultHandlers(signedIn()));
     const user = userEvent.setup();
-    const { client } = renderApp("/settings/user");
+    const { client } = renderApp("/settings");
     await open();
 
     await user.type(email().getByLabelText("New email"), "alice@new.example");
@@ -257,7 +260,7 @@ describe("user settings", () => {
       ...defaultHandlers(signedIn()),
     );
     const user = userEvent.setup();
-    const { client } = renderApp("/settings/user");
+    const { client } = renderApp("/settings");
     await open();
 
     await user.type(email().getByLabelText("New email"), "bob@example.com");
@@ -282,7 +285,7 @@ describe("user settings", () => {
       ...defaultHandlers(signedIn()),
     );
     const user = userEvent.setup();
-    renderApp("/settings/user");
+    renderApp("/settings");
     await open();
 
     await user.type(email().getByLabelText("New email"), "bob@example.com");
@@ -298,7 +301,7 @@ describe("user settings", () => {
     const state = signedIn();
     server.use(...defaultHandlers(state));
     const user = userEvent.setup();
-    renderApp("/settings/user");
+    renderApp("/settings");
     await open();
 
     await user.type(password().getByLabelText("Current password"), "correct-horse");
@@ -322,7 +325,7 @@ describe("user settings", () => {
     const state = signedIn();
     server.use(...defaultHandlers(state));
     const user = userEvent.setup();
-    renderApp("/settings/user");
+    renderApp("/settings");
     await open();
 
     await user.type(password().getByLabelText("Current password"), "correct-horse");
@@ -343,7 +346,7 @@ describe("user settings", () => {
   it("keeps a wrong current password on the password form and does not end the session", async () => {
     server.use(...defaultHandlers(signedIn()));
     const user = userEvent.setup();
-    const { client } = renderApp("/settings/user");
+    const { client } = renderApp("/settings");
     await open();
 
     await user.type(password().getByLabelText("Current password"), "wrong");
@@ -369,7 +372,7 @@ describe("user settings", () => {
       ...defaultHandlers(signedIn()),
     );
     const user = userEvent.setup();
-    renderApp("/settings/user");
+    renderApp("/settings");
     await open();
 
     await user.type(password().getByLabelText("Current password"), "correct-horse");
@@ -397,7 +400,7 @@ describe("user settings", () => {
       ...defaultHandlers(state),
     );
     const user = userEvent.setup();
-    const { client } = renderApp("/settings/user");
+    const { client } = renderApp("/settings");
     await open();
 
     void client.invalidateQueries({ queryKey: ["me"] });
@@ -419,14 +422,14 @@ describe("user settings", () => {
 
     expect(screen.queryByRole("heading", { name: "Sign in" })).not.toBeInTheDocument();
     expect(client.getQueryData(["me"])).toEqual(state.me);
-    expect(screen.getByRole("heading", { name: "Your settings" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 1, name: "Settings" })).toBeInTheDocument();
   });
 
   it("sends a person whose session ended elsewhere to sign in", async () => {
     const state = signedIn();
     server.use(...defaultHandlers(state));
     const user = userEvent.setup();
-    const { client } = renderApp("/settings/user");
+    const { client } = renderApp("/settings");
     await open();
 
     // Another device changed the password: this cookie is dead, so the next
@@ -447,7 +450,7 @@ describe("user settings", () => {
       ...defaultHandlers(signedIn()),
     );
     const user = userEvent.setup();
-    renderApp("/settings/user");
+    renderApp("/settings");
     await open();
 
     await user.type(password().getByLabelText("Current password"), "correct-horse");
@@ -464,7 +467,7 @@ describe("user settings", () => {
       ...defaultHandlers(signedIn()),
     );
     const user = userEvent.setup();
-    renderApp("/settings/user");
+    renderApp("/settings");
     await open();
 
     await user.type(profile().getByLabelText("Your name"), "x");
@@ -480,7 +483,7 @@ describe("user settings", () => {
       ),
       ...defaultHandlers(signedIn()),
     );
-    renderApp("/settings/user");
+    renderApp("/settings");
 
     await screen.findByRole("region", { name: "Profile" });
     await new Promise((r) => setTimeout(r, 50));
@@ -490,7 +493,7 @@ describe("user settings", () => {
 
   it("sends a signed-out visitor to sign in", async () => {
     server.use(...defaultHandlers());
-    renderApp("/settings/user");
+    renderApp("/settings");
     expect(await screen.findByRole("heading", { name: "Sign in" })).toBeInTheDocument();
   });
 });

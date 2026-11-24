@@ -32,7 +32,7 @@ async function choose(user: ReturnType<typeof userEvent.setup>, name: string) {
 describe("appearance picker", () => {
   it("shows the stored value, with Match this device for system", async () => {
     server.use(...defaultHandlers(signedIn()));
-    renderApp("/settings/user");
+    renderApp("/settings");
     expect(await screen.findByRole("combobox", { name: "Appearance" })).toHaveTextContent(
       "Match this device",
     );
@@ -42,7 +42,7 @@ describe("appearance picker", () => {
     const state = signedIn();
     server.use(...defaultHandlers(state));
     const user = userEvent.setup();
-    renderApp("/settings/user");
+    renderApp("/settings");
 
     await choose(user, "Dark");
 
@@ -66,7 +66,7 @@ describe("appearance picker", () => {
       ...defaultHandlers(signedIn()),
     );
     const user = userEvent.setup();
-    renderApp("/settings/user");
+    renderApp("/settings");
 
     await choose(user, "Light");
     expect(html()).toHaveAttribute("data-appearance", "light");
@@ -87,7 +87,7 @@ describe("appearance picker", () => {
       ...defaultHandlers(signedIn({ me: { ...alice, appearance: "light" } })),
     );
     const user = userEvent.setup();
-    renderApp("/settings/user");
+    renderApp("/settings");
     await screen.findByRole("combobox", { name: "Appearance" });
     await waitFor(() => expect(cache()).toBe("light"));
 
@@ -107,7 +107,7 @@ describe("appearance picker", () => {
   it("removes the attribute for system", async () => {
     server.use(...defaultHandlers(signedIn({ me: { ...alice, appearance: "dark" } })));
     const user = userEvent.setup();
-    renderApp("/settings/user");
+    renderApp("/settings");
     await waitFor(() => expect(html()).toHaveAttribute("data-appearance", "dark"));
 
     await choose(user, "Match this device");
@@ -120,7 +120,7 @@ describe("appearance picker", () => {
     const state = signedIn({ me: { ...alice, locale: "id-ID" } });
     server.use(...defaultHandlers(state));
     const user = userEvent.setup();
-    renderApp("/settings/user");
+    renderApp("/settings");
 
     expect(await screen.findByRole("combobox", { name: "Tampilan" })).toHaveTextContent(
       "Ikuti perangkat ini",
@@ -160,7 +160,7 @@ describe("appearance writes in flight", () => {
     const state = signedIn({ me: { ...alice, appearance: "system" } });
     const release = twoWrites(state, ["fail", "ok"]);
     const user = userEvent.setup();
-    renderApp("/settings/user");
+    renderApp("/settings");
     await screen.findByRole("combobox", { name: "Appearance" });
 
     await choose(user, "Dark");
@@ -183,7 +183,7 @@ describe("appearance writes in flight", () => {
     const state = signedIn();
     const release = twoWrites(state, ["ok", "ok"]);
     const user = userEvent.setup();
-    renderApp("/settings/user");
+    renderApp("/settings");
     await screen.findByRole("combobox", { name: "Appearance" });
 
     await choose(user, "Dark");
@@ -205,7 +205,7 @@ describe("appearance writes in flight", () => {
     const state = signedIn({ me: { ...alice, appearance: "dark" } });
     const release = twoWrites(state, ["ok", "fail"]);
     const user = userEvent.setup();
-    renderApp("/settings/user");
+    renderApp("/settings");
     await waitFor(() => expect(html()).toHaveAttribute("data-appearance", "dark"));
 
     await choose(user, "Light");
@@ -277,7 +277,7 @@ describe("appearance engine missing", () => {
     try {
       vi.resetModules();
       const { renderApp: render } = await import("@/test/render");
-      render("/settings/user");
+      render("/settings");
       expect(await screen.findByRole("combobox", { name: "Appearance" })).toBeInTheDocument();
       const ours = spy.mock.calls.filter(([m]) => String(m).includes("appearance-init.js"));
       expect(ours).toHaveLength(1);

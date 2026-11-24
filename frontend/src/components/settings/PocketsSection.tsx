@@ -10,14 +10,13 @@ import {
   useUpdatePocket,
 } from "@/api/queries";
 import { errorMessage } from "@/api/errors";
-import { BackLink } from "@/components/BackLink";
 import { Badge } from "@/components/Badge";
 import { CheckboxRow } from "@/components/CheckboxRow";
 import { DetailActions } from "@/components/DetailActions";
-import { Field, Form } from "@/components/Form";
+import { Field, Form, Section } from "@/components/Form";
 import { ListCard, ListRow } from "@/components/List";
 import { ErrorState, Loading } from "@/components/states";
-import { EmptyState, FieldError, PageTitle } from "@/components/Text";
+import { EmptyState, FieldError } from "@/components/Text";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -30,7 +29,6 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { clampName } from "@/lib/codePoints";
 import { toastError, toastPlain, toastSaved } from "@/lib/plainToast";
-import { routes } from "@/lib/routes";
 import { toastUndoable } from "@/lib/undoToast";
 import { useDialogParam } from "@/lib/useDialogParam";
 import { uuidv7 } from "@/lib/uuid";
@@ -182,7 +180,7 @@ function PocketForm({
   );
 }
 
-export function PocketsPage() {
+export function PocketsSection() {
   const { t } = useTranslation();
   const qc = useQueryClient();
   const pockets = usePockets();
@@ -258,9 +256,7 @@ export function PocketsPage() {
   }, [staleEdit, clearEdit]);
 
   return (
-    <>
-      <BackLink to={routes.home} label={t("home.title")} />
-      <PageTitle>{t("pockets.title")}</PageTitle>
+    <Section id="pockets" title={t("settings.pockets.title")}>
       {pockets.error ? (
         <ErrorState error={pockets.error} onRetry={() => void pockets.refetch()} />
       ) : !items ? (
@@ -327,6 +323,6 @@ export function PocketsPage() {
           </DialogContent>
         </Dialog>
       )}
-    </>
+    </Section>
   );
 }

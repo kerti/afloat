@@ -24,6 +24,8 @@ async function deactivateCash(user: ReturnType<typeof userEvent.setup>) {
   await user.click(await screen.findByRole("button", { name: "Edit Cash" }));
   const dialog = await screen.findByRole("dialog", { name: enGB.pockets.editHeading });
   await user.click(within(dialog).getByRole("button", { name: enGB.pockets.deactivate }));
+  // The toast can land before the modal unmounts, and an open modal hides the rest of the page.
+  await waitFor(() => expect(dialog).not.toBeInTheDocument());
 }
 
 describe("the Undo toast, for real", () => {

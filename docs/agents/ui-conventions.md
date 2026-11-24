@@ -90,7 +90,10 @@ tag each, so it has components only. A missing element is proposed first (see Ho
 - `MoneySetting` (`components/MoneySetting.tsx`): `TextSetting` for an amount, a `MoneyInput` with its
   own Save. Save is disabled while blank when the amount cannot be cleared. A stored amount loads
   rounded half-up to the currency's decimals, as `lib/money.ts` shows it. (Confirmed by the
-  maintainer, 23 Nov 2026, for #130.)
+  maintainer, 23 Nov 2026, for #130.) A `clearable` amount saves a blank as `null` (the field is
+  cleared, not zeroed); a `hint` is a `FieldHint` under it; its `save` may resolve to a sentence that
+  replaces the bare "Saved." toast. Several settings may stack in one `Section`, each with its own
+  Save. (Confirmed by the maintainer, 24 Nov 2026, for #130 PR 5.)
 
 **Lists**
 
@@ -291,6 +294,13 @@ role table follows Uruni `docs/Design-System.md` § Typography.)
     server's `VALIDATION` already shows inline.
   - **Email and password changes** are typed forms with an explicit submit. Each success is a toast
     in its own words ("Saved. Sign in with {{email}} from now on."), not a bare "Saved.".
+  - **An optional setting** says so in its label ("Your name (optional)", "Expected monthly income
+    (optional)"); its hint does not repeat it. (Confirmed by the maintainer, 24 Nov 2026, for #130
+    PR 5.)
+- **A save that makes something newly true says so in its own toast**, plainly, and proceeds:
+  "Saved. Your Monthly Budget is now more than your expected monthly income." Only on the save that
+  crosses; a save while it is already true gets "Saved.". No persistent line, nothing stored (PRD S6,
+  #130 R17; confirmed by the maintainer, 24 Nov 2026).
 
 ## Feedback
 
@@ -374,6 +384,10 @@ role table follows Uruni `docs/Design-System.md` § Typography.)
 - Money is formatted at the display edge only, by one formatter (`lib/money.ts`), hand-built rather
   than `Intl` currency style (browsers disagree). A bad input renders as given, never `NaN`. (Uruni,
   Balances.)
+- **Amounts are compared on their wire strings, exactly** (`compareMoney` in `lib/money.ts`, BigInt
+  over the digits), never as floats and never after display rounding: a Monthly Budget a fraction of
+  a rupiah above the income counts as above it. (Confirmed by the maintainer, 24 Nov 2026, for #130
+  PR 5.)
 - Digit separators follow the **app locale**, not the currency (en-GB `1,234.50`, id-ID `1.234,50`).
   IDR is `Rp` with no space and no decimals (`Rp9.000.000`); any other currency is its ISO code, a
   no-break space and its own decimals (2, or 3 for BHD/KWD and the like, 0 for JPY and the like).

@@ -15,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/oapi-codegen/nullable"
 	"github.com/shopspring/decimal"
 
 	"github.com/kerti/afloat/backend/internal/api"
@@ -323,9 +324,9 @@ func TestTheCurrentPeriodsOwnAllocationNeverBlocksADelete(t *testing.T) {
 	rent := newID(t)
 	assertCreated(t, f.create(ctx, t, rent, "Rent", api.Commitment, ptr("3000000")))
 	// Several versions in the Period, all the current one's.
-	f.setBudget(ctx, t, api.AllocationChange{CategoryId: rent, Allocation: ptr("3100000")})
+	f.setBudget(ctx, t, api.AllocationChange{CategoryId: rent, Allocation: amount(ptr("3100000"))})
 	f.setClock(t, "2026-11-20T10:00:00+07:00")
-	f.setBudget(ctx, t, api.AllocationChange{CategoryId: rent, Allocation: ptr("3200000")})
+	f.setBudget(ctx, t, api.AllocationChange{CategoryId: rent, Allocation: amount(ptr("3200000"))})
 
 	assertDeleted(t, f.del(ctx, t, rent))
 }
@@ -356,9 +357,9 @@ func TestOnlyANonNullAmountInAnotherPeriodBlocks(t *testing.T) {
 	onlyNone, clearedLater := newID(t), newID(t)
 	assertCreated(t, f.create(ctx, t, onlyNone, "OnlyNone", api.Daily, nil))
 	assertCreated(t, f.create(ctx, t, clearedLater, "ClearedLater", api.Daily, ptr("500")))
-	f.setBudget(ctx, t, api.AllocationChange{CategoryId: onlyNone, Allocation: nil})
+	f.setBudget(ctx, t, api.AllocationChange{CategoryId: onlyNone, Allocation: nullable.NewNullNullable[string]()})
 	f.setClock(t, "2026-10-12T10:00:00+07:00")
-	f.setBudget(ctx, t, api.AllocationChange{CategoryId: clearedLater, Allocation: nil})
+	f.setBudget(ctx, t, api.AllocationChange{CategoryId: clearedLater, Allocation: nullable.NewNullNullable[string]()})
 	if got := f.scalar(t, `SELECT count(*)::text FROM allocations WHERE category_id = $1 AND allocation IS NULL`, onlyNone); got != "1" {
 		t.Fatalf("setup: the None row is missing (%s)", got)
 	}
@@ -451,7 +452,7 @@ func TestARestoreAfterTheNextPeriodWasReadCarriesTheAllocationForward(t *testing
 	assertCreated(t, f.create(ctx, t, rent, "Rent", api.Commitment, ptr("3000000")))
 	assertCreated(t, f.create(ctx, t, food, "Food", api.Daily, ptr("1000")))
 	f.setClock(t, "2026-11-20T10:00:00+07:00")
-	f.setBudget(ctx, t, api.AllocationChange{CategoryId: rent, Allocation: ptr("3100000")})
+	f.setBudget(ctx, t, api.AllocationChange{CategoryId: rent, Allocation: amount(ptr("3100000"))})
 	if _, err := f.budget.UpdateBudget(ctx, api.UpdateBudgetRequestObject{Body: &api.UpdateBudgetJSONRequestBody{MonthlyBudget: ptr("9000000")}}); err != nil {
 		t.Fatal(err)
 	}
@@ -550,7 +551,7 @@ func TestARestoreWithinThePeriodItWasDeletedInWritesNothing(t *testing.T) {
 	rent := newID(t)
 	assertCreated(t, f.create(ctx, t, rent, "Rent", api.Commitment, ptr("3000000")))
 	f.setClock(t, "2026-11-20T10:00:00+07:00")
-	f.setBudget(ctx, t, api.AllocationChange{CategoryId: rent, Allocation: ptr("3200000")}) // a second version, dated the 20th
+	f.setBudget(ctx, t, api.AllocationChange{CategoryId: rent, Allocation: amount(ptr("3200000"))}) // a second version, dated the 20th
 	assertDeleted(t, f.del(ctx, t, rent))
 	rows := f.allocationRows(t)
 
@@ -572,7 +573,7 @@ func TestARestoredDailyCategoryIsCarriedOnlyIfItsLatestAllocationWasAnAmount(t *
 	assertCreated(t, f.create(ctx, t, never, "Never", api.Daily, nil))
 	assertCreated(t, f.create(ctx, t, anchor, "Anchor", api.Daily, ptr("1")))
 	f.setClock(t, "2026-10-12T10:00:00+07:00")
-	f.setBudget(ctx, t, api.AllocationChange{CategoryId: cleared, Allocation: nil})
+	f.setBudget(ctx, t, api.AllocationChange{CategoryId: cleared, Allocation: nullable.NewNullNullable[string]()})
 	for _, id := range []uuid.UUID{amount, cleared, never} {
 		assertDeleted(t, f.del(ctx, t, id))
 	}
@@ -1470,7 +1471,7 @@ func TestAnAllocationWriteRacingADeleteIsRefusedOrNotCopied(t *testing.T) {
 		done := make(chan api.UpdateBudgetResponseObject, 1)
 		go func() {
 			resp, err := f.budget.UpdateBudget(ctx, api.UpdateBudgetRequestObject{Body: &api.UpdateBudgetJSONRequestBody{
-				Allocations: &[]api.AllocationChange{{CategoryId: rent, Allocation: ptr("1")}},
+				Allocations: &[]api.AllocationChange{{CategoryId: rent, Allocation: amount(ptr("1"))}},
 			}})
 			if err != nil {
 				t.Errorf("UpdateBudget: %v", err)

@@ -9,6 +9,7 @@ import (
 	"context"
 
 	"github.com/jackc/pgx/v5/pgtype"
+	decimal "github.com/shopspring/decimal"
 )
 
 const updateHousehold = `-- name: UpdateHousehold :one
@@ -17,16 +18,21 @@ UPDATE households SET
     household_display_name = coalesce($1, household_display_name),
     reporting_currency     = coalesce($2, reporting_currency),
     period_start_day       = coalesce($3, period_start_day),
+    expected_monthly_income = CASE WHEN $4::boolean
+                                   THEN $5::numeric(20,4)
+                                   ELSE expected_monthly_income END,
     updated_at             = now()
-WHERE id = $4 AND deleted_at IS NULL
+WHERE id = $6 AND deleted_at IS NULL
 RETURNING id, household_display_name, reporting_currency, period_start_day, day_starts_at, expected_monthly_income, allowance_mode, created_at, updated_at, deleted_at
 `
 
 type UpdateHouseholdParams struct {
-	HouseholdDisplayName *string
-	ReportingCurrency    *string
-	PeriodStartDay       *int32
-	HouseholdID          pgtype.UUID
+	HouseholdDisplayName     *string
+	ReportingCurrency        *string
+	PeriodStartDay           *int32
+	SetExpectedMonthlyIncome bool
+	ExpectedMonthlyIncome    decimal.NullDecimal
+	HouseholdID              pgtype.UUID
 }
 
 // Household settings (PRD S3). Tenant-scoped in SQL: the id is the
@@ -35,7 +41,13 @@ type UpdateHouseholdParams struct {
 // Merge semantics (BOOTSTRAP.md §4): a NULL argument leaves its column alone,
 // in one statement, so two writers of different fields both land. A
 // read-modify-write would let the second overwrite the first's field. None of
-// the three columns is nullable, so coalesce cannot be mistaken for "clear".
+// the first three columns is nullable, so coalesce cannot be mistaken for "clear".
+//
+// A column that null must clear (expected_monthly_income, PRD S7) cannot use
+// coalesce, which reads a NULL argument as "leave alone". It takes an explicit
+// set flag beside its value: the handler sets the flag when the property was
+// sent, and the value is then NULL for a clear. Same one statement, same
+// last-write-wins per field; the pattern for every later clearable column.
 //
 // updated_at is set here because the baseline has no trigger, and from the
 // database's own clock (BOOTSTRAP.md §5.1).
@@ -44,6 +56,8 @@ func (q *Queries) UpdateHousehold(ctx context.Context, arg UpdateHouseholdParams
 		arg.HouseholdDisplayName,
 		arg.ReportingCurrency,
 		arg.PeriodStartDay,
+		arg.SetExpectedMonthlyIncome,
+		arg.ExpectedMonthlyIncome,
 		arg.HouseholdID,
 	)
 	var i Household

@@ -283,17 +283,26 @@ with zoneinfo answers from it, so a case-insensitive filesystem (a Mac) also acc
   (`additionalProperties: false`), and `{}` is a valid no-op. The answer is `200` with the whole
   resource. `null` clears a nullable field and is `INVALID_JSON_BODY` for any other, so a field that
   can be cleared needs a request type that tells absent from `null`, which oapi-codegen's default
-  pointers cannot. **Last write wins, per field:** no `If-Match`, no version column and no conflict
-  code. Disjoint fields from two writers both land, because the update is one `UPDATE` with
-  `coalesce(sqlc.narg(...), column)`, never a read-modify-write. A precondition header can be added
-  later without breaking a client. The idempotent-create rule above concerns `POST` and a
-  client-supplied id and does not apply; a `PATCH` of absolute values is idempotent on its own, so a
-  retry is safe. A domain update is tenant-scoped in SQL (`WHERE id = <household_id from the session>`,
-  never from the request), sets `updated_at` itself from the database's `now()` (no trigger does), and
-  is rejected before it runs by the contract's own rules, then by the handler's. **A boolean that a
-  `false` must be able to set is `sqlc.narg` and a Go `*bool`** (`PATCH /pockets/{id}`'s `active`): a
-  plain `bool` zero value would read as "absent" and silently drop every deactivation. A row that the
-  `WHERE` does not match is no row, and the answer is `404 NOT_FOUND` (next bullet).
+  pointers cannot. **A clearable field** (#130, PR 5: `PATCH /household`'s
+  `expected_monthly_income`, the first) is `nullable: true` in the contract (`$ref` the shared
+  `MoneyInputOrNull` for money), which `nullable-type: true` in `oapi-codegen.yaml` generates as
+  `nullable.Nullable[T]` (absent, `null` and a value are three states: `IsSpecified`, `IsNull`,
+  `Get`); every nullable request property gets it, so none can be written as a pointer by mistake.
+  In SQL it is an explicit flag beside the value, `col = CASE WHEN sqlc.arg(set_col)::boolean THEN
+  sqlc.narg(col)::<type> ELSE col END`, the handler setting the flag when `IsSpecified()` and the
+  value only when it is not `null`; `coalesce` stays the rule for a column `null` cannot clear.
+  **Last write wins, per field:** no `If-Match`, no version column and no conflict code. Disjoint
+  fields from two writers both land, because the update is one `UPDATE` with
+  `coalesce(sqlc.narg(...), column)` (or the flagged `CASE` above), never a read-modify-write. A
+  precondition header can be added later without breaking a client. The idempotent-create rule above
+  concerns `POST` and a client-supplied id and does not apply; a `PATCH` of absolute values is
+  idempotent on its own, so a retry is safe. A domain update is tenant-scoped in SQL (`WHERE id =
+  <household_id from the session>`, never from the request), sets `updated_at` itself from the
+  database's `now()` (no trigger does), and is rejected before it runs by the contract's own rules,
+  then by the handler's. **A boolean that a `false` must be able to set is `sqlc.narg` and a Go
+  `*bool`** (`PATCH /pockets/{id}`'s `active`): a plain `bool` zero value would read as "absent" and
+  silently drop every deactivation. A row that the `WHERE` does not match is no row, and the answer
+  is `404 NOT_FOUND` (next bullet).
 - **A list of changes inside a `PATCH`** (#130, PR 3: `PATCH /budget`'s `allocations`) is an array of
   `{key, value}` items, not a map (OpenAPI 3.0.3 has no `patternProperties`). A value that may be cleared
   is **required and nullable** on the item (`allocation: null` is "none", an absent key is a contract

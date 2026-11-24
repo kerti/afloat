@@ -202,7 +202,11 @@ export function defaultHandlers(state: State = { signedIn: false, me: alice }) {
       if (!state.signedIn) return HttpResponse.json(envelope("UNAUTHORIZED"), { status: 401 });
       const body = (await request.json()) as UpdateHouseholdBody;
       (state.patches ??= []).push(body);
-      state.me = { ...state.me, household: { ...state.me.household, ...body } };
+      const { expected_monthly_income: income, ...rest } = body;
+      const household = { ...state.me.household, ...rest };
+      if (income === null) delete household.expected_monthly_income;
+      else if (income !== undefined) household.expected_monthly_income = income;
+      state.me = { ...state.me, household };
       return HttpResponse.json(state.me.household);
     }),
     http.patch("/api/me", async ({ request }) => {

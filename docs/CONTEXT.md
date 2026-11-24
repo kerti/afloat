@@ -207,6 +207,7 @@ JSON. Blank means not yet in the UI.
 | Commitments Budget | anggaran komitmen | Budget (#130 PR 1), provisional (R16) |
 | Daily Pool | dana harian | Budget (#130 PR 1), provisional (R16) |
 | Unallocated | belum dialokasikan | Budget (#130 PR 1), provisional (R16) |
+| `expected_monthly_income` (as a user reads it: **Expected monthly income**) | penghasilan bulanan yang diharapkan | Budget (#130 PR 5), provisional (R16) |
 | State names, *ahead of pace*, Buffer Days | | **[OPEN Q-10]** |
 
 ---

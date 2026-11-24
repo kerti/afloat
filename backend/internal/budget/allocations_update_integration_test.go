@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/oapi-codegen/nullable"
 
 	"github.com/kerti/afloat/backend/internal/api"
 	"github.com/kerti/afloat/backend/internal/budget"
@@ -26,8 +27,9 @@ import (
 // alloc is one item of a request: amount "" is the JSON `null` (none).
 func alloc(categoryID pgtype.UUID, amount string) api.AllocationChange {
 	c := api.AllocationChange{CategoryId: categoryID.Bytes}
+	c.Allocation = nullable.NewNullNullable[string]()
 	if amount != "" {
-		c.Allocation = &amount
+		c.Allocation = nullable.NewNullableWithValue(amount)
 	}
 	return c
 }

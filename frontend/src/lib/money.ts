@@ -247,3 +247,20 @@ export function typeInto(
   }
   return { draft, significant };
 }
+
+/** Exact comparison of two wire amounts, on their digits and never as floats:
+ * negative when a < b, 0 when equal ("9000000.0000" equals "9000000"), positive
+ * when a > b. Null when either is not a plain decimal. */
+export function compareMoney(a: string, b: string): number | null {
+  const ma = SIGNED.exec(a);
+  const mb = SIGNED.exec(b);
+  if (!ma || !mb) return null;
+  const scale = Math.max((ma[3] ?? "").length, (mb[3] ?? "").length);
+  const scaled = (m: RegExpExecArray) => {
+    const n = BigInt(m[2]! + (m[3] ?? "").padEnd(scale, "0"));
+    return m[1] === "-" ? -n : n;
+  };
+  const x = scaled(ma);
+  const y = scaled(mb);
+  return x < y ? -1 : x > y ? 1 : 0;
+}

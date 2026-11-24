@@ -163,10 +163,38 @@ func TestPatchHouseholdRefusals(t *testing.T) {
 		{"null day", `{"period_start_day":null}`, "INVALID_JSON_BODY", nil},
 		{"name as a number", `{"household_display_name":5}`, "INVALID_JSON_BODY", nil},
 		{"unknown property", `{"nickname":"x"}`, "INVALID_JSON_BODY", nil},
+		// expected_monthly_income is a MoneyInput: its pattern is the whole rule
+		// (no sign, exponent, separator or whitespace; 16 integer digits, 4
+		// decimals; more decimals is refused, never rounded).
+		{"income negative", `{"expected_monthly_income":"-1"}`, "VALIDATION", map[string]any{"field": "expected_monthly_income", "rule": "pattern"}},
+		{"income negative zero", `{"expected_monthly_income":"-0"}`, "VALIDATION", map[string]any{"field": "expected_monthly_income", "rule": "pattern"}},
+		{"income with a plus", `{"expected_monthly_income":"+5"}`, "VALIDATION", map[string]any{"field": "expected_monthly_income", "rule": "pattern"}},
+		{"income in scientific notation", `{"expected_monthly_income":"1e3"}`, "VALIDATION", map[string]any{"field": "expected_monthly_income", "rule": "pattern"}},
+		{"income in upper-case scientific notation", `{"expected_monthly_income":"1.5E3"}`, "VALIDATION", map[string]any{"field": "expected_monthly_income", "rule": "pattern"}},
+		{"income with five decimals", `{"expected_monthly_income":"1.00001"}`, "VALIDATION", map[string]any{"field": "expected_monthly_income", "rule": "pattern"}},
+		{"income with 17 integer digits", `{"expected_monthly_income":"12345678901234567"}`, "VALIDATION", map[string]any{"field": "expected_monthly_income", "rule": "pattern"}},
+		{"income with a thousands separator", `{"expected_monthly_income":"1,000"}`, "VALIDATION", map[string]any{"field": "expected_monthly_income", "rule": "pattern"}},
+		{"income with a decimal comma", `{"expected_monthly_income":"1,5"}`, "VALIDATION", map[string]any{"field": "expected_monthly_income", "rule": "pattern"}},
+		{"income with a trailing point", `{"expected_monthly_income":"5."}`, "VALIDATION", map[string]any{"field": "expected_monthly_income", "rule": "pattern"}},
+		{"income with a leading point", `{"expected_monthly_income":".5"}`, "VALIDATION", map[string]any{"field": "expected_monthly_income", "rule": "pattern"}},
+		{"income with padding", `{"expected_monthly_income":" 5"}`, "VALIDATION", map[string]any{"field": "expected_monthly_income", "rule": "pattern"}},
+		{"income with a trailing newline", `{"expected_monthly_income":"5\n"}`, "VALIDATION", map[string]any{"field": "expected_monthly_income", "rule": "pattern"}},
+		{"income empty", `{"expected_monthly_income":""}`, "VALIDATION", map[string]any{"field": "expected_monthly_income", "rule": "pattern"}},
+		{"income not a number", `{"expected_monthly_income":"lots"}`, "VALIDATION", map[string]any{"field": "expected_monthly_income", "rule": "pattern"}},
+		{"income NaN", `{"expected_monthly_income":"NaN"}`, "VALIDATION", map[string]any{"field": "expected_monthly_income", "rule": "pattern"}},
+		{"income with Arabic-Indic digits", `{"expected_monthly_income":"\u0665"}`, "VALIDATION", map[string]any{"field": "expected_monthly_income", "rule": "pattern"}},
+		{"income as a JSON integer", `{"expected_monthly_income":5000}`, "INVALID_JSON_BODY", nil},
+		{"income as a JSON decimal", `{"expected_monthly_income":5000.5}`, "INVALID_JSON_BODY", nil},
+		{"income as a JSON exponent", `{"expected_monthly_income":5e3}`, "INVALID_JSON_BODY", nil},
+		{"income as a boolean", `{"expected_monthly_income":false}`, "INVALID_JSON_BODY", nil},
+		{"income as an object", `{"expected_monthly_income":{}}`, "INVALID_JSON_BODY", nil},
+		{"income as an array", `{"expected_monthly_income":["5"]}`, "INVALID_JSON_BODY", nil},
+		{"valid income beside a bad currency writes neither", `{"expected_monthly_income":"5","reporting_currency":"ABC"}`, "VALIDATION", map[string]any{"field": "reporting_currency", "rule": "iso4217"}},
+		{"clearing the income beside a bad name writes neither", `{"expected_monthly_income":null,"household_display_name":""}`, "VALIDATION", map[string]any{"field": "household_display_name", "rule": "required"}},
+		{"spec failure on the income beats a handler failure", `{"expected_monthly_income":"-1","household_display_name":""}`, "VALIDATION", map[string]any{"field": "expected_monthly_income", "rule": "pattern"}},
 		// Settings a later slice writes (D4): not accepted yet.
 		{"day_starts_at", `{"day_starts_at":"05:00"}`, "INVALID_JSON_BODY", nil},
 		{"allowance_mode", `{"allowance_mode":"fixed"}`, "INVALID_JSON_BODY", nil},
-		{"expected_monthly_income", `{"expected_monthly_income":"1.0000"}`, "INVALID_JSON_BODY", nil},
 		{"id", `{"id":"0192f0a0-0000-7000-8000-000000000001"}`, "INVALID_JSON_BODY", nil},
 		{"the old name for the Household's name", `{"display_name":"x"}`, "INVALID_JSON_BODY", nil},
 		{"malformed JSON", `{"period_start_day":`, "INVALID_JSON_BODY", nil},
@@ -368,5 +396,84 @@ func TestPatchHouseholdAcceptsTheUsualJSONSpellings(t *testing.T) {
 				t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
 			}
 		})
+	}
+}
+
+// income reads the answer's expected_monthly_income: the string and whether it
+// was on the wire at all.
+func income(t *testing.T, rec *httptest.ResponseRecorder) (string, bool) {
+	t.Helper()
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+	var got map[string]json.RawMessage
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("body: %v", err)
+	}
+	raw, present := got["expected_monthly_income"]
+	if !present {
+		return "", false
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err != nil {
+		t.Fatalf("expected_monthly_income = %s, want a JSON string: money is never a number on the wire", raw)
+	}
+	return s, true
+}
+
+// PRD S7 end to end: set, change, left out, cleared with null, `{}`.
+func TestPatchHouseholdExpectedMonthlyIncome(t *testing.T) {
+	f := newHouseholdFixture(t)
+
+	for _, step := range []struct {
+		name, body, want string // want "" is omitted from the answer
+	}{
+		{"set", `{"expected_monthly_income":"25000000"}`, "25000000.0000"},
+		{"another field leaves it alone", `{"household_display_name":"Renamed"}`, "25000000.0000"},
+		{"an empty body leaves it alone", `{}`, "25000000.0000"},
+		{"change", `{"expected_monthly_income":"30000000.25"}`, "30000000.2500"},
+		{"zero", `{"expected_monthly_income":"0"}`, "0.0000"},
+		{"four decimals", `{"expected_monthly_income":"0.0001"}`, "0.0001"},
+		{"widest", `{"expected_monthly_income":"9999999999999999.9999"}`, "9999999999999999.9999"},
+		{"clear", `{"expected_monthly_income":null}`, ""},
+		{"another field leaves the clear alone", `{"period_start_day":9}`, ""},
+		{"clear again", `{"expected_monthly_income":null}`, ""},
+		{"set beside others", `{"expected_monthly_income":"7","reporting_currency":"USD"}`, "7.0000"},
+		{"clear beside others", `{"expected_monthly_income":null,"reporting_currency":"IDR"}`, ""},
+	} {
+		got, present := income(t, f.patch(step.body))
+		if present != (step.want != "") || got != step.want {
+			t.Errorf("%s: expected_monthly_income = %q (on the wire: %v), want %q", step.name, got, present, step.want)
+		}
+	}
+}
+
+// The income is on /me beside the other settings, set by this PATCH.
+func TestPatchHouseholdIncomeIsOnTheWireAsAStringNeverANumber(t *testing.T) {
+	f := newHouseholdFixture(t)
+	rec := f.patch(`{"expected_monthly_income":"12.5"}`)
+	if body := rec.Body.String(); !strings.Contains(body, `"expected_monthly_income":"12.5000"`) {
+		t.Errorf("body = %s, want expected_monthly_income as the string \"12.5000\"", body)
+	}
+}
+
+// A refused income does not clear or change the one stored.
+func TestPatchHouseholdRefusedIncomeKeepsTheStoredOne(t *testing.T) {
+	f := newHouseholdFixture(t)
+	if rec := f.patch(`{"expected_monthly_income":"100"}`); rec.Code != http.StatusOK {
+		t.Fatalf("setup status = %d", rec.Code)
+	}
+	before := f.snapshot(t)
+	for _, body := range []string{
+		`{"expected_monthly_income":"-100"}`,
+		`{"expected_monthly_income":1e2}`,
+		`{"expected_monthly_income":"1e2"}`,
+	} {
+		if rec := f.patch(body); rec.Code != http.StatusBadRequest {
+			t.Errorf("%s: status = %d, want 400", body, rec.Code)
+		}
+		if after := f.snapshot(t); after != before {
+			t.Errorf("%s changed the row:\nbefore %s\nafter  %s", body, before, after)
+		}
 	}
 }

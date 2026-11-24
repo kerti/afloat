@@ -42,7 +42,7 @@ describe("budget", () => {
     expect(screen.getByText("Commitments Budget").nextSibling).toHaveTextContent("Rp0");
     expect(screen.getByText("Daily Pool").nextSibling).toHaveTextContent("Rp9,000,000");
     expect(screen.getByText("Unallocated").nextSibling).toHaveTextContent("Rp9,000,000");
-    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+    expect(screen.getAllByRole("button", { name: "Save" })[0]!).toBeDisabled();
   });
 
   it("asks for a Monthly Budget on an empty first Period, and shows no figures", async () => {
@@ -51,7 +51,7 @@ describe("budget", () => {
     expect(await screen.findByText(enGB.budget.empty)).toBeInTheDocument();
     expect(screen.getByLabelText("Monthly Budget")).toHaveValue("");
     expect(screen.queryByText("Daily Pool")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+    expect(screen.getAllByRole("button", { name: "Save" })[0]!).toBeDisabled();
   });
 
   it("sends the Monthly Budget as a canonical string, shows the answer's figures and raises one toast", async () => {
@@ -61,7 +61,7 @@ describe("budget", () => {
     renderApp("/budget");
 
     await user.type(await screen.findByLabelText("Monthly Budget"), "9000000");
-    await user.click(screen.getByRole("button", { name: "Save" }));
+    await user.click(screen.getAllByRole("button", { name: "Save" })[0]!);
 
     await waitFor(() => expect(toastMock).toHaveBeenCalledTimes(1));
     expect(toastMock).toHaveBeenCalledWith("Saved.", expect.objectContaining({ duration: 4000 }));
@@ -70,7 +70,7 @@ describe("budget", () => {
     expect(await screen.findByText("Daily Pool")).toBeInTheDocument();
     expect(screen.getByText("Daily Pool").nextSibling).toHaveTextContent("Rp9,000,000");
     expect(screen.queryByText(enGB.budget.empty)).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+    expect(screen.getAllByRole("button", { name: "Save" })[0]!).toBeDisabled();
   });
 
   it("computes no figure itself: it shows whatever the server sent", async () => {
@@ -95,7 +95,7 @@ describe("budget", () => {
     expect(field).toHaveValue("1.001");
     await user.type(field, "0");
     expect(field).toHaveValue("10.010");
-    await user.click(screen.getByRole("button", { name: idID.settings.save }));
+    await user.click(screen.getAllByRole("button", { name: idID.settings.save })[0]!);
     await waitFor(() => expect(state.budgetPatches).toEqual([{ monthly_budget: "10010" }]));
   });
 
@@ -121,7 +121,7 @@ describe("budget", () => {
     const field = await screen.findByLabelText("Monthly Budget");
     expect(field).toHaveValue("9,000,000");
     expect(field).toHaveAccessibleDescription("Rp");
-    expect(screen.getByText("Rp")).toHaveAttribute("aria-hidden", "true");
+    expect(screen.getAllByText("Rp")[0]).toHaveAttribute("aria-hidden", "true");
   });
 
   it("saves on Enter and reverts on Esc", async () => {
@@ -152,7 +152,7 @@ describe("budget", () => {
 
     const field = await screen.findByLabelText("Monthly Budget");
     await user.type(field, "5");
-    await user.click(screen.getByRole("button", { name: "Save" }));
+    await user.click(screen.getAllByRole("button", { name: "Save" })[0]!);
 
     expect(await screen.findByRole("alert")).toHaveTextContent("Check the Monthly Budget field.");
     expect(toastMock).not.toHaveBeenCalled();
@@ -178,5 +178,146 @@ describe("budget", () => {
     expect(screen.getByLabelText(idID.fields.monthlyBudget)).toHaveValue("9.000.000");
     expect(screen.getByText(idID.budget.dailyPool).nextSibling).toHaveTextContent("Rp9.000.000");
     expect(screen.getByText(idID.budget.commitmentsBudget)).toBeInTheDocument();
+  });
+});
+
+describe("expected monthly income", () => {
+  const withIncome = (income: string | undefined, budget = "9000000.0000") =>
+    signedIn({
+      me: { ...alice, household: { ...alice.household, expected_monthly_income: income } },
+      budget: { ...planned, monthly_budget: budget },
+    });
+  const notice = enGB.budget.exceedsIncomeSaved;
+  const saveButtons = () => screen.getAllByRole("button", { name: "Save" });
+  const income = async () => screen.findByLabelText(enGB.fields.expectedMonthlyIncome);
+
+  it("is a labelled optional field under the Monthly Budget, with its currency", async () => {
+    server.use(...defaultHandlers(signedIn({ budget: planned })));
+    renderApp("/budget");
+    const field = await income();
+    expect(field).toHaveValue("");
+    expect(field).toHaveAccessibleDescription(expect.stringContaining(enGB.budget.incomeHint));
+    expect(field).toHaveAccessibleDescription(expect.stringContaining("Rp"));
+    const budgetField = screen.getByLabelText("Monthly Budget");
+    expect(
+      budgetField.compareDocumentPosition(field) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it("sets the income as a string with the ordinary toast when the Budget stays within it", async () => {
+    const state = signedIn({ budget: planned });
+    server.use(...defaultHandlers(state));
+    const user = userEvent.setup();
+    renderApp("/budget");
+    await user.type(await income(), "12000000");
+    await user.click(saveButtons()[1]!);
+    await waitFor(() => expect(toastMock).toHaveBeenCalledTimes(1));
+    expect(toastMock).toHaveBeenCalledWith("Saved.", expect.anything());
+    expect(state.patches).toEqual([{ expected_monthly_income: "12000000" }]);
+    await waitFor(() =>
+      expect(screen.getByLabelText(enGB.fields.expectedMonthlyIncome)).toHaveValue("12,000,000"),
+    );
+  });
+
+  it("sends null when the field is cleared and saved", async () => {
+    const state = withIncome("12000000.0000");
+    server.use(...defaultHandlers(state));
+    const user = userEvent.setup();
+    renderApp("/budget");
+    const field = await income();
+    expect(field).toHaveValue("12,000,000");
+    await user.clear(field);
+    await user.click(saveButtons()[1]!);
+    await waitFor(() => expect(state.patches).toEqual([{ expected_monthly_income: null }]));
+    await waitFor(() => expect(toastMock).toHaveBeenCalledWith("Saved.", expect.anything()));
+    await waitFor(() =>
+      expect(screen.getByLabelText(enGB.fields.expectedMonthlyIncome)).toHaveValue(""),
+    );
+  });
+
+  it("says so in the save's toast when raising the Budget crosses the income", async () => {
+    const state = withIncome("9000000.0000");
+    server.use(...defaultHandlers(state));
+    const user = userEvent.setup();
+    renderApp("/budget");
+    const field = await screen.findByLabelText("Monthly Budget");
+    await user.type(field, "1");
+    await user.click(saveButtons()[0]!);
+    await waitFor(() => expect(toastMock).toHaveBeenCalledTimes(1));
+    expect(toastMock).toHaveBeenCalledWith(notice, expect.objectContaining({ duration: 4000 }));
+    expect(state.budgetPatches).toEqual([{ monthly_budget: "90000001" }]);
+  });
+
+  it("says so when lowering the income crosses the Budget", async () => {
+    const state = withIncome("12000000.0000");
+    server.use(...defaultHandlers(state));
+    const user = userEvent.setup();
+    renderApp("/budget");
+    const field = await income();
+    await user.clear(field);
+    await user.type(field, "8000000");
+    await user.click(saveButtons()[1]!);
+    await waitFor(() => expect(toastMock).toHaveBeenCalledTimes(1));
+    expect(toastMock).toHaveBeenCalledWith(notice, expect.anything());
+  });
+
+  it("is exact: a Budget equal to the income, however padded, says nothing", async () => {
+    server.use(...defaultHandlers(withIncome("9000000.0000", "8000000.0000")));
+    const user = userEvent.setup();
+    renderApp("/budget");
+    const field = await screen.findByLabelText("Monthly Budget");
+    await user.clear(field);
+    await user.type(field, "9000000");
+    await user.click(saveButtons()[0]!);
+    await waitFor(() => expect(toastMock).toHaveBeenCalledWith("Saved.", expect.anything()));
+  });
+
+  it("does not repeat when it was already true before the save", async () => {
+    server.use(...defaultHandlers(withIncome("5000000.0000")));
+    const user = userEvent.setup();
+    renderApp("/budget");
+    await user.type(await screen.findByLabelText("Monthly Budget"), "0");
+    await user.click(saveButtons()[0]!);
+    await waitFor(() => expect(toastMock).toHaveBeenCalledTimes(1));
+    expect(toastMock).toHaveBeenCalledWith("Saved.", expect.anything());
+  });
+
+  it("is exact below display precision: a Budget a fraction above the income says so", async () => {
+    server.use(...defaultHandlers(withIncome("8999999.9999", "8000000.0000")));
+    const user = userEvent.setup();
+    renderApp("/budget");
+    const field = await screen.findByLabelText("Monthly Budget");
+    await user.clear(field);
+    await user.type(field, "9000000");
+    await user.click(saveButtons()[0]!);
+    await waitFor(() => expect(toastMock).toHaveBeenCalledTimes(1));
+    expect(toastMock).toHaveBeenCalledWith(notice, expect.anything());
+  });
+
+  it("says nothing when no income is set", async () => {
+    server.use(...defaultHandlers(withIncome(undefined)));
+    const user = userEvent.setup();
+    renderApp("/budget");
+    await user.type(await screen.findByLabelText("Monthly Budget"), "0");
+    await user.click(saveButtons()[0]!);
+    await waitFor(() => expect(toastMock).toHaveBeenCalledTimes(1));
+    expect(toastMock).toHaveBeenCalledWith("Saved.", expect.anything());
+  });
+
+  it("has Indonesian copy for the label and the notice", async () => {
+    const me = {
+      ...alice,
+      locale: "id-ID" as const,
+      household: { ...alice.household, expected_monthly_income: "9000000.0000" },
+    };
+    server.use(...defaultHandlers(signedIn({ me, budget: planned })));
+    const user = userEvent.setup();
+    renderApp("/budget");
+    await user.type(await screen.findByLabelText(idID.fields.monthlyBudget), "1");
+    await user.click(screen.getAllByRole("button", { name: idID.settings.save })[0]!);
+    await waitFor(() =>
+      expect(toastMock).toHaveBeenCalledWith(idID.budget.exceedsIncomeSaved, expect.anything()),
+    );
+    expect(screen.getByLabelText(idID.fields.expectedMonthlyIncome)).toBeInTheDocument();
   });
 });

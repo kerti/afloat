@@ -278,12 +278,14 @@ func (h *Handlers) checkAllocations(ctx context.Context, user db.User, items *[]
 			return nil, updateValidation("category_id", "invalid"), nil
 		}
 		change := allocationChange{categoryID: pgtype.UUID{Bytes: item.CategoryId, Valid: true}}
-		if item.Allocation == nil {
+		// The contract requires the key, so Get fails only for a null.
+		amount, getErr := item.Allocation.Get()
+		if getErr != nil {
 			if api.Bucket(bucket) == api.Commitment {
 				return nil, updateValidation("allocation", "required"), nil
 			}
 		} else {
-			d, err := decimal.NewFromString(*item.Allocation)
+			d, err := decimal.NewFromString(amount)
 			if err != nil {
 				// Unreachable: the contract's pattern admits only what parses.
 				return nil, updateValidation("allocation", "pattern"), nil

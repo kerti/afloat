@@ -13,8 +13,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
 // Registering creates no account: it opens a short-lived handshake and the
-// account is born when the person commits at the gate (/onboarding). So the
-// answer to a 204 here is to go there, never to /me.
+// account is born when /onboarding commits the choice (silently, #140 R2). So
+// the answer to a 204 here is to go there, never to /me.
 export function RegisterPage() {
   const { t, i18n } = useTranslation();
   const navigate = useNavigate();

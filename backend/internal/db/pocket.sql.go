@@ -111,6 +111,85 @@ func (q *Queries) ListPockets(ctx context.Context, householdID pgtype.UUID) ([]P
 	return items, nil
 }
 
+const lockHousehold = `-- name: LockHousehold :one
+SELECT id FROM households
+WHERE id = $1 AND deleted_at IS NULL
+FOR NO KEY UPDATE
+`
+
+// The Household's row lock, taken FIRST by every writer that can take a Pocket
+// out of the active set (delete, and PATCH with active = false): "a Household
+// always keeps one active Pocket" (PRD S10, R1 of #140) is a count over several
+// rows, and two removals of the last two would each count the other still there
+// and both write. FOR NO KEY UPDATE serialises them: the second waits here, and
+// its count, a later statement, starts after the first has committed
+// (BOOTSTRAP.md §4). NO KEY UPDATE and not UPDATE, on purpose: an insert that
+// carries an FK to this row takes FOR KEY SHARE on it, which FOR UPDATE would
+// block, and a writer already holding FOR SHARE on a Pocket would deadlock with
+// a removal waiting on that Pocket. NO KEY UPDATE still conflicts with FOR SHARE
+// and with itself, and not with KEY SHARE. No row is a Household that is gone,
+// which a live session cannot have.
+func (q *Queries) LockHousehold(ctx context.Context, householdID pgtype.UUID) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, lockHousehold, householdID)
+	var id pgtype.UUID
+	err := row.Scan(&id)
+	return id, err
+}
+
+const lockPocket = `-- name: LockPocket :one
+SELECT deleted_at, active FROM pockets
+WHERE id = $1 AND household_id = $2
+FOR NO KEY UPDATE
+`
+
+type LockPocketParams struct {
+	ID          pgtype.UUID
+	HouseholdID pgtype.UUID
+}
+
+type LockPocketRow struct {
+	DeletedAt pgtype.Timestamptz
+	Active    bool
+}
+
+// The Pocket's own row lock, after LockHousehold, and what the writer decides
+// on: deleted or live, active or not. FOR NO KEY UPDATE for the reason given on
+// LockHousehold. Another Household's or an unknown id is
+// no row (404). This is the one read of a deleted Pocket on purpose, because
+// deleting a deleted one is the idempotent success and is never refused.
+func (q *Queries) LockPocket(ctx context.Context, arg LockPocketParams) (LockPocketRow, error) {
+	row := q.db.QueryRow(ctx, lockPocket, arg.ID, arg.HouseholdID)
+	var i LockPocketRow
+	err := row.Scan(&i.DeletedAt, &i.Active)
+	return i, err
+}
+
+const otherActivePocketExists = `-- name: OtherActivePocketExists :one
+SELECT EXISTS (
+    SELECT 1 FROM pockets
+    WHERE household_id = $1
+      AND id <> $2
+      AND active
+      AND deleted_at IS NULL
+)
+`
+
+type OtherActivePocketExistsParams struct {
+	HouseholdID pgtype.UUID
+	ID          pgtype.UUID
+}
+
+// Does the Household hold an active, live Pocket other than this one? A SEPARATE
+// statement run after LockHousehold, never part of the write (see the comment
+// on SoftDeletePocket). False means removing this Pocket would leave none:
+// 409 LAST_POCKET.
+func (q *Queries) OtherActivePocketExists(ctx context.Context, arg OtherActivePocketExistsParams) (bool, error) {
+	row := q.db.QueryRow(ctx, otherActivePocketExists, arg.HouseholdID, arg.ID)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
 const restorePocket = `-- name: RestorePocket :one
 UPDATE pockets SET
     deleted_at = NULL,
@@ -167,12 +246,15 @@ type SoftDeletePocketParams struct {
 // a deleted one of the caller's own is a row, which is what makes a repeat a
 // success. No hard-delete statement exists in this directory, on purpose.
 //
-// The in-use guard (PRD R1, #121) is NOT here. When the Expenses slice adds
-// the expenses table, a Pocket that any Expense row references, live or
-// soft-deleted, must answer 409 POCKET_IN_USE from this very statement (a
-// NOT EXISTS in the WHERE, with the Expense write taking FOR SHARE on the
-// Pocket row), because a check-then-delete would race an Expense create under
-// READ COMMITTED. See issue #121, P8 point 3.
+// The guards are NOT here, and none may be folded in as a NOT EXISTS in the
+// WHERE: under READ COMMITTED an UPDATE that waits for a lock proceeds on the
+// row's new version without re-running its subquery, so a row committed during
+// the wait is never seen. The handler calls this last, in a transaction that
+// has locked the Household (LockHousehold), counted the other active Pockets
+// in a SEPARATE later statement (OtherActivePocketExists) and locked the row
+// (LockPocket). The in-use guard (PRD R1, #121: 409 POCKET_IN_USE while any
+// Expense references the Pocket) arrives with the Expenses table and takes
+// the same shape.
 func (q *Queries) SoftDeletePocket(ctx context.Context, arg SoftDeletePocketParams) (int64, error) {
 	result, err := q.db.Exec(ctx, softDeletePocket, arg.ID, arg.HouseholdID)
 	if err != nil {

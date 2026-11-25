@@ -112,7 +112,7 @@ func run() error {
 			FoundingDisabled:   cfg.FoundingDisabled,
 		}),
 		Household: household.New(household.Deps{Querier: queries}),
-		Pocket:    pocket.New(pocket.Deps{Querier: queries}),
+		Pocket:    pocket.New(pocket.Deps{Querier: queries, Beginner: pool}),
 		Budget:    budget.New(budget.Deps{Querier: queries, Beginner: pool, Now: time.Now}),
 		Category:  category.New(category.Deps{Querier: queries, Beginner: pool, Now: time.Now}),
 		System: system.New(system.Deps{

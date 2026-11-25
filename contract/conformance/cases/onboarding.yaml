@@ -74,7 +74,7 @@
     cookies:
       afloat_onboarding: *cleared-handshake
 
-- name: onboarding choice founds the Household, creates the User and issues the session
+- name: onboarding choice founds the Household, creates the User and its first Pocket, and issues the session
   issue: "108"
   given:
     - request: *register-dewi
@@ -85,7 +85,7 @@
     headers:
       Content-Type: application/json
       User-Agent: conformance/1.0
-    body: '{"found":true,"household_display_name":"  Rumah Tangga Dewi  "}'
+    body: '{"found":true,"household_display_name":"  Rumah Tangga Dewi  ","pocket_display_name":"  Tunai  "}'
   expect:
     status: 204
     body_empty: true
@@ -115,6 +115,15 @@
           FROM users WHERE email = 'dewi@example.com'
         rows:
           - {email: dewi@example.com, user_display_name: Dewi Putri, locale: id-ID, time_zone: Asia/Jakarta, id_version: "7", own_household: true}
+      # The first Pocket (#140 R2), created in the same transaction: exactly one,
+      # the new Household's (the seeded Household has none), active and live, its
+      # name stored trimmed, and its id server-minted, UUIDv7, like the other two.
+      - sql: |
+          SELECT pocket_display_name, active, deleted_at IS NULL AS live, substr(id::text, 15, 1) AS id_version,
+                 household_id = (SELECT household_id FROM users WHERE email = 'dewi@example.com') AS in_the_users_household
+          FROM pockets
+        rows:
+          - {pocket_display_name: Tunai, active: true, live: true, id_version: "7", in_the_users_household: true}
       # The credential is the registered one's hash, and the session is the new
       # User's. Nothing is left at the gate.
       - sql: |
@@ -137,7 +146,7 @@
         path: /onboarding/choice
         headers:
           Content-Type: application/json
-        body: '{"found":true,"household_display_name":"Rumah Tangga Dewi"}'
+        body: '{"found":true,"household_display_name":"Rumah Tangga Dewi","pocket_display_name":"Cash"}'
       status: 204
   request:
     method: GET
@@ -156,7 +165,7 @@
         path: /onboarding/choice
         headers:
           Content-Type: application/json
-        body: '{"found":true,"household_display_name":"Rumah Tangga Dewi"}'
+        body: '{"found":true,"household_display_name":"Rumah Tangga Dewi","pocket_display_name":"Cash"}'
       status: 204
     - request:
         method: POST
@@ -188,7 +197,7 @@
     path: /onboarding/choice
     headers:
       Content-Type: application/json
-    body: '{"found":true,"household_display_name":"Rumah"}'
+    body: '{"found":true,"household_display_name":"Rumah","pocket_display_name":"Cash"}'
   expect:
     status: 401
     body_json: {code: UNAUTHORIZED}
@@ -207,7 +216,7 @@
     headers:
       Content-Type: application/json
       Cookie: afloat_onboarding=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
-    body: '{"found":true,"household_display_name":"Rumah"}'
+    body: '{"found":true,"household_display_name":"Rumah","pocket_display_name":"Cash"}'
   expect:
     status: 401
     body_json: {code: UNAUTHORIZED}
@@ -228,7 +237,7 @@
     path: /onboarding/choice
     headers:
       Content-Type: application/json
-    body: '{"found":true,"household_display_name":"Rumah"}'
+    body: '{"found":true,"household_display_name":"Rumah","pocket_display_name":"Cash"}'
   expect:
     status: 401
     body_json: {code: UNAUTHORIZED}
@@ -248,7 +257,7 @@
     path: /onboarding/choice
     headers:
       Content-Type: application/json
-    body: '{"found":false,"household_display_name":"Rumah"}'
+    body: '{"found":false,"household_display_name":"Rumah","pocket_display_name":"Cash"}'
   expect:
     status: 400
     body_json: {code: VALIDATION, args: {field: found, rule: required}}
@@ -268,7 +277,7 @@
     path: /onboarding/choice
     headers:
       Content-Type: application/json
-    body: '{"found":true,"household_display_name":"   "}'
+    body: '{"found":true,"household_display_name":"   ","pocket_display_name":"Cash"}'
   expect:
     status: 400
     body_json: {code: VALIDATION, args: {field: household_display_name, rule: required}}
@@ -302,7 +311,7 @@
     path: /onboarding/choice
     headers:
       Content-Type: application/json
-    body: '{"found":true,"household_display_name":"ééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé"}'
+    body: '{"found":true,"household_display_name":"ééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé","pocket_display_name":"Cash"}'
   expect:
     status: 400
     body_json: {code: VALIDATION, args: {field: household_display_name, rule: max}}
@@ -319,7 +328,7 @@
     path: /onboarding/choice
     headers:
       Content-Type: application/json
-    body: '{"found":true,"household_display_name":"éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé"}'
+    body: '{"found":true,"household_display_name":"éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé","pocket_display_name":"Cash"}'
   expect:
     status: 204
     body_empty: true
@@ -334,6 +343,110 @@
         expires: max-age
       afloat_onboarding: *cleared-handshake
 
+# The first Pocket's name (#140 R2) follows a Pocket's name rules, anywhere: trimmed,
+# not blank, at most 60 code points. A refusal needs no claim, so the handshake is
+# kept and the person tries again.
+- name: onboarding choice with no Pocket name is VALIDATION required
+  issue: "140"
+  given:
+    - request: *register-dewi
+      status: 204
+  request:
+    method: POST
+    path: /onboarding/choice
+    headers:
+      Content-Type: application/json
+    body: '{"found":true,"household_display_name":"Rumah"}'
+  expect:
+    status: 400
+    body_json: {code: VALIDATION, args: {field: pocket_display_name, rule: required}}
+    cookies: {}
+    rows: &handshake-and-no-pocket-kept
+      - sql: |
+          SELECT (SELECT count(*) FROM households)::int AS households, (SELECT count(*) FROM onboarding_handshakes)::int AS handshakes,
+                 (SELECT count(*) FROM pockets)::int AS pockets
+        rows: [{households: 1, handshakes: 1, pockets: 0}]
+
+- name: onboarding choice with a blank Pocket name is VALIDATION required
+  issue: "140"
+  given:
+    - request: *register-dewi
+      status: 204
+  request:
+    method: POST
+    path: /onboarding/choice
+    headers:
+      Content-Type: application/json
+    body: '{"found":true,"household_display_name":"Rumah","pocket_display_name":"   "}'
+  expect:
+    status: 400
+    body_json: {code: VALIDATION, args: {field: pocket_display_name, rule: required}}
+    cookies: {}
+    rows: *handshake-and-no-pocket-kept
+
+- name: onboarding choice with a Pocket name of 61 code points is VALIDATION max
+  issue: "140"
+  given:
+    - request: *register-dewi
+      status: 204
+  request:
+    method: POST
+    path: /onboarding/choice
+    headers:
+      Content-Type: application/json
+    body: '{"found":true,"household_display_name":"Rumah","pocket_display_name":"ééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé"}'
+  expect:
+    status: 400
+    body_json: {code: VALIDATION, args: {field: pocket_display_name, rule: max}}
+    cookies: {}
+    rows: *handshake-and-no-pocket-kept
+
+# Both names wrong: the Household's is reported, as its field is checked first.
+- name: onboarding choice with both names blank reports the Household's
+  issue: "140"
+  given:
+    - request: *register-dewi
+      status: 204
+  request:
+    method: POST
+    path: /onboarding/choice
+    headers:
+      Content-Type: application/json
+    body: '{"found":true,"household_display_name":" ","pocket_display_name":" "}'
+  expect:
+    status: 400
+    body_json: {code: VALIDATION, args: {field: household_display_name, rule: required}}
+    cookies: {}
+    rows: *handshake-and-no-pocket-kept
+
+- name: onboarding choice with a Pocket name of exactly 60 code points founds
+  issue: "140"
+  given:
+    - request: *register-dewi
+      status: 204
+  request:
+    method: POST
+    path: /onboarding/choice
+    headers:
+      Content-Type: application/json
+    body: '{"found":true,"household_display_name":"Rumah","pocket_display_name":"éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé"}'
+  expect:
+    status: 204
+    body_empty: true
+    cookies:
+      afloat_session:
+        value_pattern: '[A-Za-z0-9_-]{43}'
+        path: /
+        max_age: 2592000
+        http_only: true
+        secure: false
+        same_site: Lax
+        expires: max-age
+      afloat_onboarding: *cleared-handshake
+    rows:
+      - sql: SELECT char_length(pocket_display_name)::int AS code_points FROM pockets
+        rows: [{code_points: 60}]
+
 # `found` is a boolean and the body declares nothing else: a later join choice
 # adds properties to the contract, not a different shape.
 - name: onboarding choice with a non-boolean found is INVALID_JSON_BODY
@@ -346,7 +459,7 @@
     path: /onboarding/choice
     headers:
       Content-Type: application/json
-    body: '{"found":"true","household_display_name":"Rumah"}'
+    body: '{"found":"true","household_display_name":"Rumah","pocket_display_name":"Cash"}'
   expect:
     status: 400
     body_json: {code: INVALID_JSON_BODY}
@@ -385,7 +498,7 @@
     path: /onboarding/choice
     headers:
       Content-Type: application/json
-    body: '{"found":true,"household_display_name":"Rumah"}'
+    body: '{"found":true,"household_display_name":"Rumah","pocket_display_name":"Cash"}'
   expect:
     status: 409
     body_json: {code: EMAIL_TAKEN}
@@ -394,8 +507,8 @@
       - sql: |
           SELECT (SELECT count(*) FROM households)::int AS households, (SELECT count(*) FROM users)::int AS users,
                  (SELECT count(*) FROM credentials)::int AS credentials, (SELECT count(*) FROM sessions)::int AS sessions,
-                 (SELECT count(*) FROM onboarding_handshakes)::int AS handshakes
-        rows: [{households: 1, users: 4, credentials: 2, sessions: 0, handshakes: 1}]
+                 (SELECT count(*) FROM onboarding_handshakes)::int AS handshakes, (SELECT count(*) FROM pockets)::int AS pockets
+        rows: [{households: 1, users: 4, credentials: 2, sessions: 0, handshakes: 1, pockets: 0}]
 
 - name: onboarding choice - a cross-site request is blocked
   issue: "108"
@@ -408,7 +521,7 @@
     headers:
       Content-Type: application/json
       Sec-Fetch-Site: cross-site
-    body: '{"found":true,"household_display_name":"Rumah"}'
+    body: '{"found":true,"household_display_name":"Rumah","pocket_display_name":"Cash"}'
   expect:
     status: 403
     body_json: {code: CROSS_SITE_REQUEST_BLOCKED}
@@ -450,7 +563,7 @@
     path: /onboarding/choice
     headers:
       Content-Type: application/json
-    body: '{"found":true,"household_display_name":"Rumah"}'
+    body: '{"found":true,"household_display_name":"Rumah","pocket_display_name":"Cash"}'
   expect:
     status: 403
     body_json: {code: FOUNDING_DISABLED}
@@ -467,7 +580,7 @@
     path: /onboarding/choice
     headers:
       Content-Type: application/json
-    body: '{"found":true,"household_display_name":"Rumah"}'
+    body: '{"found":true,"household_display_name":"Rumah","pocket_display_name":"Cash"}'
   expect:
     status: 401
     body_json: {code: UNAUTHORIZED}

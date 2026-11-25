@@ -31,6 +31,9 @@ type pocketFixture struct {
 const (
 	pocketV7  = "0192f0a0-0000-7000-8000-000000000001"
 	pocketV7b = "0192f0a0-0000-7000-8000-000000000002"
+	// pocketV7c is the "keeper": a second active Pocket a test seeds so that
+	// removing the one under test is not the Household's last (#140 R1).
+	pocketV7c = "0192f0a0-0000-7000-8000-000000000003"
 )
 
 func newPocketFixture(t *testing.T) pocketFixture {
@@ -57,7 +60,7 @@ func newPocketFixture(t *testing.T) pocketFixture {
 			SessionMaxLifetime: 90 * 24 * time.Hour,
 			CookieSecure:       true,
 		}),
-		Pocket:         pocket.New(pocket.Deps{Querier: tdb.Queries}),
+		Pocket:         pocket.New(pocket.Deps{Querier: tdb.Queries, Beginner: tdb.Pool}),
 		HandlerTimeout: testHandlerTimeout,
 	})
 	return pocketFixture{tdb: tdb, srv: srv, householdID: householdID, cookie: auth.SessionCookieName + "=" + token}

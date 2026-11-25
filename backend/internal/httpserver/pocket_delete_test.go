@@ -84,6 +84,7 @@ func TestDeleteAndRestoreAPocketThroughTheRouter(t *testing.T) {
 func TestRestoreIntoATakenNameIs409ThroughTheRouter(t *testing.T) {
 	f := newPocketFixture(t)
 	f.seed(t, pocketV7, "OVO")
+	f.seed(t, pocketV7c, "Keeper") // the Household's other active Pocket, so the delete is not its last
 	if rec := f.del(pocketV7); rec.Code != http.StatusNoContent {
 		t.Fatalf("DELETE = %d", rec.Code)
 	}
@@ -247,6 +248,7 @@ func TestDeletePocketPathParameterShapes(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newPocketFixture(t)
 			f.seed(t, pocketV7, "OVO")
+			f.seed(t, pocketV7c, "Keeper") // so deleting OVO is not the last active Pocket's
 			before := f.row(t, pocketV7)
 
 			rec := f.doAt(tc.method, tc.target, "")
@@ -295,6 +297,7 @@ func TestRestorePocketPathParameterShapes(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newPocketFixture(t)
 			f.seed(t, pocketV7, "OVO")
+			f.seed(t, pocketV7c, "Keeper") // so deleting OVO is not the last active Pocket's
 			if rec := f.del(pocketV7); rec.Code != http.StatusNoContent {
 				t.Fatalf("DELETE = %d", rec.Code)
 			}
@@ -316,5 +319,41 @@ func TestRestorePocketPathParameterShapes(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// LAST_POCKET through the whole stack (#140 R1): the same 409 and the same
+// bytes for a delete and a deactivation of the Household's last active Pocket,
+// the row untouched; an inactive Pocket's delete and a repeat delete are 204.
+func TestTheLastActivePocketCannotBeDeletedOrDeactivatedThroughTheRouter(t *testing.T) {
+	f := newPocketFixture(t)
+	f.seed(t, pocketV7, "OVO")
+	before := f.row(t, pocketV7)
+
+	for name, rec := range map[string]*httptest.ResponseRecorder{
+		"DELETE":                  f.del(pocketV7),
+		"PATCH active:false":      f.patch(pocketV7, `{"active":false}`),
+		"PATCH rename and active": f.patch(pocketV7, `{"pocket_display_name":"Renamed","active":false}`),
+	} {
+		if rec.Code != http.StatusConflict || body(rec) != `{"code":"LAST_POCKET"}` {
+			t.Errorf("%s = %d %s, want 409 {\"code\":\"LAST_POCKET\"}", name, rec.Code, body(rec))
+		}
+		if ct := rec.Header().Get("Content-Type"); ct != "application/json" {
+			t.Errorf("%s Content-Type = %q", name, ct)
+		}
+	}
+	if after := f.row(t, pocketV7); after != before {
+		t.Errorf("a refused request changed the row:\n%s\n%s", before, after)
+	}
+
+	// An inactive Pocket is deleted whatever is left; a repeat is 204 too.
+	f.seed(t, pocketV7b, "Dana")
+	if rec := f.patch(pocketV7b, `{"active":false}`); rec.Code != http.StatusOK {
+		t.Fatalf("deactivate the second = %d %s", rec.Code, body(rec))
+	}
+	for _, label := range []string{"an inactive Pocket", "a repeat delete"} {
+		if rec := f.del(pocketV7b); rec.Code != http.StatusNoContent || rec.Body.Len() != 0 {
+			t.Errorf("DELETE of %s = %d %s, want 204", label, rec.Code, body(rec))
+		}
 	}
 }

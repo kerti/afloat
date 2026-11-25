@@ -397,7 +397,7 @@
 - name: csrf - a same-origin pocket delete passes
   issue: "121"
   given:
-    - sql: INSERT INTO pockets (id, household_id, pocket_display_name, created_at, updated_at) VALUES ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')
+    - sql: INSERT INTO pockets (id, household_id, pocket_display_name, created_at, updated_at) VALUES ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'), ('0192f0a0-0000-7000-8001-00000000000a', '0192f0a0-0000-7000-8000-000000000001', 'Keeper', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')
     - request:
         method: POST
         path: /auth/local/login
@@ -415,8 +415,8 @@
     body_empty: true
     cookies: {}
     rows:
-      - sql: SELECT pocket_display_name AS name, (deleted_at IS NOT NULL) AS deleted FROM pockets
-        rows: [{name: OVO, deleted: true}]
+      - sql: SELECT pocket_display_name AS name, (deleted_at IS NOT NULL) AS deleted FROM pockets ORDER BY pocket_display_name
+        rows: [{name: Keeper, deleted: false}, {name: OVO, deleted: true}]
 
 - name: csrf - a foreign Origin on a pocket delete with a malformed id is blocked before the binder
   issue: "121"

@@ -50,7 +50,7 @@ whole scaffold sheet. If the two ever disagree, `BOOTSTRAP.md` wins and this fil
   `FOR UPDATE`, run the `EXISTS` check as a **separate later statement**, then delete, all in one
   transaction, with every referencing write taking `FOR SHARE` on the row. Never a `NOT EXISTS` in
   the `UPDATE`'s `WHERE`: under `READ COMMITTED` it does not see what committed during the lock wait;
-  BOOTSTRAP §4). A restore is "as if it was never deleted": it redoes, in its own transaction, what a carry-forward skipped (a Category's allocation, through the carry-forward's own SQL, `ON CONFLICT DO NOTHING`; BOOTSTRAP §4). Deactivating is not deleting.
+  BOOTSTRAP §4). **A Household always keeps an active Pocket** (`409 LAST_POCKET`): the same recipe with the **Household's** row as the lock (`FOR UPDATE` it, lock the Pocket, `EXISTS` another active live Pocket as a separate later statement, then write), taken by every writer that can shrink the active set (delete, and `PATCH` with `active: false`), `NOT_FOUND` decided first; BOOTSTRAP §4. A restore is "as if it was never deleted": it redoes, in its own transaction, what a carry-forward skipped (a Category's allocation, through the carry-forward's own SQL, `ON CONFLICT DO NOTHING`; BOOTSTRAP §4). Deactivating is not deleting.
 - **Constraints:** `CHECK (amount <> 0)` on expenses. Negative amounts are valid (refunds with no
   recorded original); zero is not.
 - **Error envelope:** one shape, identical to Balances ADR-0027:

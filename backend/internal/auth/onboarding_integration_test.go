@@ -38,15 +38,30 @@ func (h harness) options(ctx context.Context, t *testing.T) api.GetOnboardingOpt
 	return resp
 }
 
+// commit is a found choice with a valid first Pocket name, "Cash".
 func (h harness) commit(ctx context.Context, t *testing.T, found bool, name string) api.CommitOnboardingChoiceResponseObject {
 	t.Helper()
+	return h.commitPocket(ctx, t, found, name, "Cash")
+}
+
+func (h harness) commitPocket(ctx context.Context, t *testing.T, found bool, name, pocketName string) api.CommitOnboardingChoiceResponseObject {
+	t.Helper()
 	resp, err := h.auth.CommitOnboardingChoice(ctx, api.CommitOnboardingChoiceRequestObject{
-		Body: &api.CommitOnboardingChoiceJSONRequestBody{Found: found, HouseholdDisplayName: name},
+		Body: &api.CommitOnboardingChoiceJSONRequestBody{Found: found, HouseholdDisplayName: name, PocketDisplayName: pocketName},
 	})
 	if err != nil {
 		t.Fatalf("CommitOnboardingChoice returned an error: %v", err)
 	}
 	return resp
+}
+
+func (h harness) pocketCount(t *testing.T) int {
+	t.Helper()
+	var n int
+	if err := h.tdb.Pool.QueryRow(context.Background(), `SELECT count(*) FROM pockets`).Scan(&n); err != nil {
+		t.Fatalf("count pockets: %v", err)
+	}
+	return n
 }
 
 // visit writes a response the way the generated strict handler does and
@@ -243,6 +258,26 @@ func TestCommitFoundsTheHouseholdAndIssuesTheSession(t *testing.T) {
 		}
 	}
 
+	// The first Pocket (#140 R2): one, in the new Household, active, named as
+	// sent but trimmed, with a server-minted UUIDv7 of its own.
+	var (
+		pocketID, pocketHousehold pgtype.UUID
+		pocketName                string
+		pocketActive              bool
+		pocketDeleted             bool
+	)
+	if err := h.tdb.Pool.QueryRow(context.Background(),
+		`SELECT id, household_id, pocket_display_name, active, deleted_at IS NOT NULL FROM pockets`).
+		Scan(&pocketID, &pocketHousehold, &pocketName, &pocketActive, &pocketDeleted); err != nil {
+		t.Fatalf("read the founded Pocket (want exactly one): %v", err)
+	}
+	if pocketHousehold != householdID || pocketName != "Cash" || !pocketActive || pocketDeleted {
+		t.Errorf("pocket = household %x %q active=%v deleted=%v, want the new Household's, \"Cash\", active, live", pocketHousehold.Bytes, pocketName, pocketActive, pocketDeleted)
+	}
+	if v := pocketID.Bytes[6] >> 4; v != 7 || pocketID == householdID || pocketID == userID {
+		t.Errorf("pocket id %x is version %d (or reuses another id), want its own UUIDv7", pocketID.Bytes, v)
+	}
+
 	// The handshake is spent: the same cookie is now a stale one.
 	if _, is := h.options(ctx, t).(api.GetOnboardingOptions401JSONResponse); !is {
 		t.Error("a committed handshake still answers options")
@@ -301,6 +336,9 @@ func TestConcurrentDoubleCommitFoundsExactlyOnce(t *testing.T) {
 		if got := h.foundingTables(t); got != "1/1/1/1/0" {
 			t.Errorf("round %d: households/users/credentials/sessions/handshakes = %s, want 1/1/1/1/0 (an orphan Household is the bug)", round, got)
 		}
+		if n := h.pocketCount(t); n != 1 {
+			t.Errorf("round %d: pockets = %d, want exactly 1", round, n)
+		}
 	}
 }
 
@@ -321,6 +359,45 @@ func TestCommitWithTheAddressTakenSinceRegisteringRollsBackEverything(t *testing
 
 	if got := h.foundingTables(t); got != before || got != "1/1/0/0/1" {
 		t.Errorf("households/users/credentials/sessions/handshakes = %s, was %s; want 1/1/0/0/1 (no orphan Household, no credential, no session)", got, before)
+	}
+	if n := h.pocketCount(t); n != 0 {
+		t.Errorf("pockets = %d, want 0: the Pocket is inserted last in the founding transaction and rolls back with the rest", n)
+	}
+}
+
+// The first Pocket is the last statement of the founding transaction, after the
+// Household, the User and the credential. A failure there must undo all three:
+// no orphan Household that nobody can sign in to, and the handshake not spent,
+// so the person can try again.
+func TestAFailedFirstPocketInsertRollsBackTheWholeFounding(t *testing.T) {
+	h := newHarness(t, time.Now)
+	ctx, _ := h.atTheGate(t, "198.51.100.62", "Pocketless@Example.com")
+	h = h.withBeginner(failingTxBeginner{Beginner: h.tdb.Pool, failOn: "-- name: CreatePocket"})
+	if got := h.foundingTables(t); got != "0/0/0/0/1" {
+		t.Fatalf("before = %s, want 0/0/0/0/1 (the handshake only)", got)
+	}
+
+	rec := assertCommitCode(t, h.commit(ctx, t, true, "Rumah"), http.StatusInternalServerError, api.INTERNAL)
+	if len(rec.Result().Cookies()) != 0 {
+		t.Errorf("a failed founding set cookies: %v", rec.Result().Cookies())
+	}
+
+	// households/users/credentials/sessions/handshakes: the Household, the User
+	// and the credential were inserted ahead of the Pocket and are gone again.
+	if got := h.foundingTables(t); got != "0/0/0/0/1" {
+		t.Errorf("households/users/credentials/sessions/handshakes = %s, want 0/0/0/0/1 (nothing founded, the handshake preserved)", got)
+	}
+	if n := h.pocketCount(t); n != 0 {
+		t.Errorf("pockets = %d, want 0", n)
+	}
+
+	// And the preserved handshake still founds, once the outage is over.
+	h = h.withBeginner(h.tdb.Pool)
+	if rec := visit(t, h.commit(ctx, t, true, "Rumah")); rec.Code != http.StatusNoContent {
+		t.Fatalf("the retry = %d (%s), want 204", rec.Code, rec.Body.String())
+	}
+	if got := h.foundingTables(t); got != "1/1/1/1/0" || h.pocketCount(t) != 1 {
+		t.Errorf("after the retry: %s, pockets %d; want 1/1/1/1/0 and 1", got, h.pocketCount(t))
 	}
 }
 
@@ -467,5 +544,63 @@ func TestTwoHandshakesForOneAddressFoundOnce(t *testing.T) {
 	assertCommitCode(t, h.commit(second, t, true, "Second"), http.StatusConflict, api.EMAILTAKEN)
 	if got := h.foundingTables(t); got != "1/1/1/1/1" {
 		t.Errorf("tables = %s, want 1/1/1/1/1", got)
+	}
+}
+
+// The first Pocket's name is validated with a Pocket's own rule, before the
+// handshake is claimed, so a typo in it costs the person nothing (#140 R2).
+func TestCommitRefusesABadPocketNameWithoutSpendingTheHandshake(t *testing.T) {
+	h := newHarness(t, time.Now)
+	ctx, _ := h.atTheGate(t, "198.51.100.80", "a@example.com")
+
+	for _, tc := range []struct{ name, input, rule string }{
+		{"blank", "", "required"},
+		{"spaces only", "   \t ", "required"},
+		{"zero-width characters only", "\u200b\u200c\u200d", "required"},
+		{"61 code points", strings.Repeat("a", 61), "max"},
+		{"61 code points of 4 bytes", strings.Repeat("\U0001F6F6", 61), "max"},
+		{"NUL", "Ca\x00sh", "pattern"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := assertCommitCode(t, h.commitPocket(ctx, t, true, "Rumah", tc.input), http.StatusBadRequest, api.VALIDATION)
+			if !strings.Contains(rec.Body.String(), `"field":"pocket_display_name"`) || !strings.Contains(rec.Body.String(), `"rule":"`+tc.rule+`"`) {
+				t.Errorf("body = %s, want field pocket_display_name rule %s", rec.Body.String(), tc.rule)
+			}
+			if got := h.foundingTables(t); got != "0/0/0/0/1" || h.pocketCount(t) != 0 {
+				t.Errorf("tables = %s, pockets = %d, want 0/0/0/0/1 and none: a refused choice leaves the handshake to try again", got, h.pocketCount(t))
+			}
+		})
+	}
+}
+
+// Both names wrong: the Household's is the one reported, the order the fields
+// have always been checked in, so a client that fixes what it is told reaches
+// the Pocket's next.
+func TestCommitReportsTheHouseholdNameBeforeThePocketName(t *testing.T) {
+	h := newHarness(t, time.Now)
+	ctx, _ := h.atTheGate(t, "198.51.100.81", "a@example.com")
+
+	rec := assertCommitCode(t, h.commitPocket(ctx, t, true, "  ", "  "), http.StatusBadRequest, api.VALIDATION)
+	if !strings.Contains(rec.Body.String(), `"field":"household_display_name"`) {
+		t.Errorf("body = %s, want the Household's field first", rec.Body.String())
+	}
+}
+
+// The Pocket's name is trimmed and may be 60 code points; a bidi control inside a
+// visible name stays, as for a Household (the rule is one function).
+func TestCommitStoresTheFirstPocketsNameTrimmed(t *testing.T) {
+	h := newHarness(t, time.Now)
+	ctx, _ := h.atTheGate(t, "198.51.100.82", "a@example.com")
+	name := strings.Repeat("\U0001F6F6", 60)
+
+	if rec := visit(t, h.commitPocket(ctx, t, true, "Rumah", "  "+name+"  ")); rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d (%s), want 204", rec.Code, rec.Body.String())
+	}
+	var got string
+	if err := h.tdb.Pool.QueryRow(context.Background(), `SELECT pocket_display_name FROM pockets`).Scan(&got); err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if got != name {
+		t.Errorf("pocket name = %q, want the 60 code points trimmed", got)
 	}
 }

@@ -69,6 +69,7 @@ const errorCodeKnown: Record<ErrorCode, true> = {
   ID_TAKEN: true,
   NAME_TAKEN: true,
   CATEGORY_IN_USE: true,
+  LAST_POCKET: true,
   NOT_FOUND: true,
   INTERNAL: true,
 };

@@ -116,6 +116,17 @@ tag each, so it has components only. A missing element is proposed first (see Ho
   beside the label, and `muted` sets the words that stand where an amount would in the muted colour at
   regular weight. (Confirmed by the maintainer, 23 Nov 2026, for #130.)
 
+**Notices**
+
+- `NoticeCard` (`components/NoticeCard.tsx`): a one-time notice in the page flow. The card surface
+  (`bg-card`, `border`, `rounded-lg`, `px-4 py-3`, `text-sm`, children at `gap-2`) with a 44px ghost
+  dismiss "✕" at its top right (`aria-label` "Dismiss") and the right padding clear of it. Its body
+  is catalogue text (`BodyText`, `MutedText`, `TextLink`); the names a notice reports (the
+  Household, the Pocket, the currency) are a plain `<strong>` inside the sentence, the only bold
+  inside running text. It sits under the `PageTitle`. Dismissing it moves focus nowhere: it is not
+  sent to the title (the maintainer, 24 Nov 2026). (Uruni `cardClasses.ts` card; ruled 24 Nov 2026,
+  #140 R2; confirmed on a phone mock.)
+
 **States** (`components/states.tsx`): `Loading`, `ErrorState`. `UpdatePrompt`
 (`components/UpdatePrompt.tsx`): the update banner.
 
@@ -235,15 +246,16 @@ role table follows Uruni `docs/Design-System.md` § Typography.)
   inactive Pocket is. It wears the "Inactive" `Badge`. (Confirmed by the maintainer, 23 Nov 2026,
   for #130.)
 - **Record-level acts live in `DetailActions`**, not the footer: Deactivate or Reactivate, then
-  Delete, in a two-column grid below a hairline and above the footer. Deactivate always closes the
-  dialog at once and raises the Undo toast. A Delete that cannot be refused does the same, with no
-  confirm (R3, P6). **A Delete the server can refuse waits for the answer with the dialog open**
-  (a Category's, `CATEGORY_IN_USE`): on success it closes and raises the Undo toast; a refusal shows
-  as a form-level `FieldError` (`role="alert"`) above `DetailActions`, and the dialog cannot be
-  dismissed while the Delete is in flight (outside tap, Esc and the X are ignored only while it is
-  pending). Pockets adopt the waiting behaviour when the Expenses slice adds `POCKET_IN_USE`.
+  Delete, in a two-column grid below a hairline and above the footer. A Deactivate or Delete that
+  cannot be refused closes the dialog at once and raises the Undo toast, with no confirm (R3, P6).
+  **A Delete or Deactivate the server can refuse waits for the answer with the dialog open** (a
+  Category's Delete, `CATEGORY_IN_USE`; a Pocket's Delete and Deactivate, `LAST_POCKET`): on success
+  it closes and raises the Undo toast; a refusal shows as a form-level `FieldError` (`role="alert"`)
+  above `DetailActions`, and the dialog cannot be dismissed while the act is in flight (outside tap,
+  Esc and the X are ignored only while it is pending). Reactivate is never refused and closes at
+  once. Pockets will refuse a Delete the same way for `POCKET_IN_USE` when Expenses lands.
   (Uruni #768; ruled 22 Nov. The refusable Delete: confirmed by the maintainer, 24 Nov 2026, for
-  #130 PR 4.)
+  #130 PR 4; extended to Pockets and a refusable Deactivate, 24 Nov 2026, #140 R1.)
 - **Footer:** holds only the dialog's decision. Create: [Cancel | Add]. Edit: [Save] alone, with no
   Cancel; the X, Esc, back and an outside tap close it. So the edit dialog reads: field, hairline,
   [Deactivate or Reactivate | Delete], footer [Save]. The Category edit dialog reads: name, Kind,
@@ -335,6 +347,9 @@ role table follows Uruni `docs/Design-System.md` § Typography.)
   "Deactivated OVO." and "Reactivated OVO." each get the 8 s Undo, even though the reverse is one tap
   away in the dialog. Consistency wins over "it's cheap to redo". Failure with no form open: an error
   toast with the code's copy. (Balances ADR-0058 §4; Uruni "the one way to say saved"; ruled 22 Nov.)
+- **A one-time notice is a `NoticeCard` in the page flow**, carried by router state and never
+  stored: it is gone once dismissed or once the person leaves the page, and a refresh does not bring
+  it back. (Ruled 24 Nov 2026, #140 R2.)
 - **An error toast** is the card surface with attention-coloured text and border, never a solid
   red fill.
 - **A tap on a toast hides it**, as Uruni's do (`web/src/components/toast/`: "the whole toast is the

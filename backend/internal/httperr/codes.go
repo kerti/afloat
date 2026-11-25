@@ -54,6 +54,11 @@ const (
 	// The Expenses slice extends it to any Expense that references the Category.
 	CodeCategoryInUse Code = "CATEGORY_IN_USE"
 
+	// CodeLastPocket is a delete, or a deactivation, of the Household's last
+	// active Pocket: a Household always keeps one, so that capture is never
+	// blocked for want of a Pocket to name (#140, R1).
+	CodeLastPocket Code = "LAST_POCKET"
+
 	// CodeNotFound is an {id} that names no live row of the caller's own
 	// Household. Unknown, another Household's and deleted all answer it, with
 	// the same bytes, so one cannot be told from another. A path that matches no

@@ -49,7 +49,13 @@
     "household": "Household: {{name}}",
     "comingSoon": "Your dashboard will appear here.",
     "settingsLink": "Settings",
-    "budgetLink": "Budget"
+    "budgetLink": "Budget",
+    "founded": {
+      "dismiss": "Dismiss",
+      "named": "We named your Household <strong>{{household}}</strong> and your first Pocket <strong>{{pocket}}</strong>, and set your currency to <strong>{{currency}}</strong>.",
+      "hint": "Rename either any time. Change the currency before your first Expense, because it can't change after that.",
+      "settings": "Go to Settings"
+    }
   },
   "pwa": {
     "updateReady": "A new version of Afloat is ready.",
@@ -69,6 +75,7 @@
     "ID_TAKEN": "Afloat couldn't save that. Try again in a moment.",
     "NAME_TAKEN": "That name is already in use.",
     "CATEGORY_IN_USE": "This Category has an allocation in another Budget Period, so it can't be deleted.",
+    "LAST_POCKET": "Your Household needs at least one active Pocket, so this one can't be deleted or deactivated.",
     "NETWORK": "Can't reach Afloat. Check your connection and try again.",
     "UNKNOWN": "Something went wrong. Try again in a moment.",
     "EMAIL_TAKEN": "An account with that email already exists. Sign in instead.",
@@ -92,12 +99,12 @@
   },
   "onboarding": {
     "title": "Set up your Household",
-    "intro": "You're registering as {{email}}. One last step: name your Household, or keep the suggestion.",
     "householdNameDefault": "{{name}}'s Household",
-    "submit": "Create Household",
-    "submitting": "Creating…",
     "closed": "This instance isn't accepting new Households right now. Ask whoever runs it to open it, or sign in to an existing account.",
-    "backToSignIn": "Back to sign in"
+    "backToSignIn": "Back to sign in",
+    "pocketDefault": "Cash",
+    "pending": "Setting up…",
+    "retry": "Try again"
   },
   "pockets": {
     "empty": "Your Pockets will appear here.",

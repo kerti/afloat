@@ -12,6 +12,7 @@
 #   0192f0a0-0000-7000-8001-000000000002  Dana    Household 1, live, inactive
 #   0192f0a0-0000-7000-8001-000000000003  Gopay   Household 1, deleted
 #   0192f0a0-0000-7000-8001-000000000009  Theirs  Household 2, live, active
+#   0192f0a0-0000-7000-8001-00000000000a  Keeper  Household 1, live, active (so a deactivation of OVO is not the last active Pocket's, #140 R1)
 # `rows:` read every Pocket after the request, so a case also proves what it did
 # NOT touch. Only ASCII case folding is pinned: lower() follows the database's
 # locale.
@@ -29,7 +30,8 @@
           ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO',    true,  NULL,  '2026-01-01T00:00:00Z'),
           ('0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Dana',   false, NULL,  '2026-01-02T00:00:00Z'),
           ('0192f0a0-0000-7000-8001-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Gopay',  true,  now(), '2026-01-03T00:00:00Z'),
-          ('0192f0a0-0000-7000-8001-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', true,  NULL,  '2026-01-04T00:00:00Z')
+          ('0192f0a0-0000-7000-8001-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', true,  NULL,  '2026-01-04T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-00000000000a', '0192f0a0-0000-7000-8000-000000000001', 'Keeper', true,  NULL,  '2026-01-10T00:00:00Z')
     - request:
         method: POST
         path: /auth/local/login
@@ -54,6 +56,7 @@
           - {id: 0192f0a0-0000-7000-8001-000000000002, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Dana, active: false, deleted: false}
           - {id: 0192f0a0-0000-7000-8001-000000000003, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Gopay, active: true, deleted: true}
           - {id: 0192f0a0-0000-7000-8001-000000000009, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Theirs, active: true, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-00000000000a, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Keeper, active: true, deleted: false}
 
 
 - name: "pocket update - the name is stored trimmed"
@@ -76,6 +79,7 @@
           - {id: 0192f0a0-0000-7000-8001-000000000002, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Dana, active: false, deleted: false}
           - {id: 0192f0a0-0000-7000-8001-000000000003, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Gopay, active: true, deleted: true}
           - {id: 0192f0a0-0000-7000-8001-000000000009, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Theirs, active: true, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-00000000000a, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Keeper, active: true, deleted: false}
 
 
 - name: "pocket update - a deactivation keeps the name and the Pocket's place"
@@ -98,6 +102,7 @@
           - {id: 0192f0a0-0000-7000-8001-000000000002, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Dana, active: false, deleted: false}
           - {id: 0192f0a0-0000-7000-8001-000000000003, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Gopay, active: true, deleted: true}
           - {id: 0192f0a0-0000-7000-8001-000000000009, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Theirs, active: true, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-00000000000a, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Keeper, active: true, deleted: false}
 
 
 - name: "pocket update - a reactivation"
@@ -120,6 +125,7 @@
           - {id: 0192f0a0-0000-7000-8001-000000000002, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Dana, active: true, deleted: false}
           - {id: 0192f0a0-0000-7000-8001-000000000003, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Gopay, active: true, deleted: true}
           - {id: 0192f0a0-0000-7000-8001-000000000009, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Theirs, active: true, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-00000000000a, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Keeper, active: true, deleted: false}
 
 
 - name: "pocket update - repeating a deactivation is a no-op"
@@ -142,6 +148,7 @@
           - {id: 0192f0a0-0000-7000-8001-000000000002, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Dana, active: false, deleted: false}
           - {id: 0192f0a0-0000-7000-8001-000000000003, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Gopay, active: true, deleted: true}
           - {id: 0192f0a0-0000-7000-8001-000000000009, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Theirs, active: true, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-00000000000a, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Keeper, active: true, deleted: false}
 
 
 - name: "pocket update - an inactive Pocket can be renamed and stays inactive"
@@ -164,6 +171,7 @@
           - {id: 0192f0a0-0000-7000-8001-000000000002, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Venmo, active: false, deleted: false}
           - {id: 0192f0a0-0000-7000-8001-000000000003, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Gopay, active: true, deleted: true}
           - {id: 0192f0a0-0000-7000-8001-000000000009, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Theirs, active: true, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-00000000000a, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Keeper, active: true, deleted: false}
 
 
 - name: "pocket update - a rename and a deactivation in one body"
@@ -186,6 +194,7 @@
           - {id: 0192f0a0-0000-7000-8001-000000000002, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Dana, active: false, deleted: false}
           - {id: 0192f0a0-0000-7000-8001-000000000003, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Gopay, active: true, deleted: true}
           - {id: 0192f0a0-0000-7000-8001-000000000009, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Theirs, active: true, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-00000000000a, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Keeper, active: true, deleted: false}
 
 
 - name: "pocket update - an empty body is a 200 no-op"
@@ -208,6 +217,7 @@
           - {id: 0192f0a0-0000-7000-8001-000000000002, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Dana, active: false, deleted: false}
           - {id: 0192f0a0-0000-7000-8001-000000000003, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Gopay, active: true, deleted: true}
           - {id: 0192f0a0-0000-7000-8001-000000000009, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Theirs, active: true, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-00000000000a, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Keeper, active: true, deleted: false}
 
 
 - name: "pocket update - a rename to its own name in another case is not a clash"
@@ -230,6 +240,7 @@
           - {id: 0192f0a0-0000-7000-8001-000000000002, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Dana, active: false, deleted: false}
           - {id: 0192f0a0-0000-7000-8001-000000000003, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Gopay, active: true, deleted: true}
           - {id: 0192f0a0-0000-7000-8001-000000000009, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Theirs, active: true, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-00000000000a, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Keeper, active: true, deleted: false}
 
 
 - name: "pocket update - a deleted Pocket's name is free"
@@ -252,6 +263,7 @@
           - {id: 0192f0a0-0000-7000-8001-000000000002, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Dana, active: false, deleted: false}
           - {id: 0192f0a0-0000-7000-8001-000000000003, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Gopay, active: true, deleted: true}
           - {id: 0192f0a0-0000-7000-8001-000000000009, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Theirs, active: true, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-00000000000a, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Keeper, active: true, deleted: false}
 
 
 - name: "pocket update - another Household may hold the same name"
@@ -274,6 +286,7 @@
           - {id: 0192f0a0-0000-7000-8001-000000000002, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Dana, active: false, deleted: false}
           - {id: 0192f0a0-0000-7000-8001-000000000003, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Gopay, active: true, deleted: true}
           - {id: 0192f0a0-0000-7000-8001-000000000009, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Theirs, active: true, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-00000000000a, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Keeper, active: true, deleted: false}
 
 
 # The name index: unique among a Household's Pockets that are not deleted,
@@ -299,6 +312,7 @@
           - {id: 0192f0a0-0000-7000-8001-000000000002, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Dana, active: false, deleted: false}
           - {id: 0192f0a0-0000-7000-8001-000000000003, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Gopay, active: true, deleted: true}
           - {id: 0192f0a0-0000-7000-8001-000000000009, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Theirs, active: true, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-00000000000a, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Keeper, active: true, deleted: false}
 
 
 - name: "pocket update - a name held by a live Pocket is NAME_TAKEN, padded and in any case"
@@ -321,6 +335,7 @@
           - {id: 0192f0a0-0000-7000-8001-000000000002, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Dana, active: false, deleted: false}
           - {id: 0192f0a0-0000-7000-8001-000000000003, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Gopay, active: true, deleted: true}
           - {id: 0192f0a0-0000-7000-8001-000000000009, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Theirs, active: true, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-00000000000a, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Keeper, active: true, deleted: false}
 
 
 - name: "pocket update - a held name beside a reactivation changes neither"
@@ -343,6 +358,7 @@
           - {id: 0192f0a0-0000-7000-8001-000000000002, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Dana, active: false, deleted: false}
           - {id: 0192f0a0-0000-7000-8001-000000000003, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Gopay, active: true, deleted: true}
           - {id: 0192f0a0-0000-7000-8001-000000000009, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Theirs, active: true, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-00000000000a, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Keeper, active: true, deleted: false}
 
 
 # Contract rules before handler rules (BOOTSTRAP.md §5.2); nothing changes.
@@ -367,6 +383,7 @@
           - {id: 0192f0a0-0000-7000-8001-000000000002, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Dana, active: false, deleted: false}
           - {id: 0192f0a0-0000-7000-8001-000000000003, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Gopay, active: true, deleted: true}
           - {id: 0192f0a0-0000-7000-8001-000000000009, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Theirs, active: true, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-00000000000a, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Keeper, active: true, deleted: false}
 
 
 - name: "pocket update - an empty name is required"
@@ -389,6 +406,7 @@
           - {id: 0192f0a0-0000-7000-8001-000000000002, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Dana, active: false, deleted: false}
           - {id: 0192f0a0-0000-7000-8001-000000000003, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Gopay, active: true, deleted: true}
           - {id: 0192f0a0-0000-7000-8001-000000000009, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Theirs, active: true, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-00000000000a, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Keeper, active: true, deleted: false}
 
 
 - name: "pocket update - 61 code points is max"
@@ -411,6 +429,7 @@
           - {id: 0192f0a0-0000-7000-8001-000000000002, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Dana, active: false, deleted: false}
           - {id: 0192f0a0-0000-7000-8001-000000000003, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Gopay, active: true, deleted: true}
           - {id: 0192f0a0-0000-7000-8001-000000000009, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Theirs, active: true, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-00000000000a, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Keeper, active: true, deleted: false}
 
 
 - name: "pocket update - 256 characters is max, the contract's outer bound"
@@ -433,6 +452,7 @@
           - {id: 0192f0a0-0000-7000-8001-000000000002, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Dana, active: false, deleted: false}
           - {id: 0192f0a0-0000-7000-8001-000000000003, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Gopay, active: true, deleted: true}
           - {id: 0192f0a0-0000-7000-8001-000000000009, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Theirs, active: true, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-00000000000a, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Keeper, active: true, deleted: false}
 
 
 - name: "pocket update - a NUL in the name is pattern"
@@ -455,6 +475,7 @@
           - {id: 0192f0a0-0000-7000-8001-000000000002, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Dana, active: false, deleted: false}
           - {id: 0192f0a0-0000-7000-8001-000000000003, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Gopay, active: true, deleted: true}
           - {id: 0192f0a0-0000-7000-8001-000000000009, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Theirs, active: true, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-00000000000a, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Keeper, active: true, deleted: false}
 
 
 - name: "pocket update - a bad name beside a deactivation changes neither"
@@ -477,6 +498,7 @@
           - {id: 0192f0a0-0000-7000-8001-000000000002, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Dana, active: false, deleted: false}
           - {id: 0192f0a0-0000-7000-8001-000000000003, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Gopay, active: true, deleted: true}
           - {id: 0192f0a0-0000-7000-8001-000000000009, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Theirs, active: true, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-00000000000a, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Keeper, active: true, deleted: false}
 
 
 - name: "pocket update - a null name is INVALID_JSON_BODY"
@@ -499,6 +521,7 @@
           - {id: 0192f0a0-0000-7000-8001-000000000002, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Dana, active: false, deleted: false}
           - {id: 0192f0a0-0000-7000-8001-000000000003, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Gopay, active: true, deleted: true}
           - {id: 0192f0a0-0000-7000-8001-000000000009, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Theirs, active: true, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-00000000000a, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Keeper, active: true, deleted: false}
 
 
 - name: "pocket update - a null active is INVALID_JSON_BODY"
@@ -521,6 +544,7 @@
           - {id: 0192f0a0-0000-7000-8001-000000000002, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Dana, active: false, deleted: false}
           - {id: 0192f0a0-0000-7000-8001-000000000003, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Gopay, active: true, deleted: true}
           - {id: 0192f0a0-0000-7000-8001-000000000009, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Theirs, active: true, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-00000000000a, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Keeper, active: true, deleted: false}
 
 
 - name: "pocket update - active as a string is INVALID_JSON_BODY"
@@ -543,6 +567,7 @@
           - {id: 0192f0a0-0000-7000-8001-000000000002, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Dana, active: false, deleted: false}
           - {id: 0192f0a0-0000-7000-8001-000000000003, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Gopay, active: true, deleted: true}
           - {id: 0192f0a0-0000-7000-8001-000000000009, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Theirs, active: true, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-00000000000a, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Keeper, active: true, deleted: false}
 
 
 - name: "pocket update - the id in the body is an unknown property"
@@ -565,6 +590,7 @@
           - {id: 0192f0a0-0000-7000-8001-000000000002, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Dana, active: false, deleted: false}
           - {id: 0192f0a0-0000-7000-8001-000000000003, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Gopay, active: true, deleted: true}
           - {id: 0192f0a0-0000-7000-8001-000000000009, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Theirs, active: true, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-00000000000a, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Keeper, active: true, deleted: false}
 
 
 - name: "pocket update - household_id in the body is an unknown property"
@@ -587,6 +613,7 @@
           - {id: 0192f0a0-0000-7000-8001-000000000002, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Dana, active: false, deleted: false}
           - {id: 0192f0a0-0000-7000-8001-000000000003, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Gopay, active: true, deleted: true}
           - {id: 0192f0a0-0000-7000-8001-000000000009, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Theirs, active: true, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-00000000000a, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Keeper, active: true, deleted: false}
 
 
 - name: "pocket update - deleted_at in the body is an unknown property"
@@ -609,6 +636,7 @@
           - {id: 0192f0a0-0000-7000-8001-000000000002, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Dana, active: false, deleted: false}
           - {id: 0192f0a0-0000-7000-8001-000000000003, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Gopay, active: true, deleted: true}
           - {id: 0192f0a0-0000-7000-8001-000000000009, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Theirs, active: true, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-00000000000a, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Keeper, active: true, deleted: false}
 
 
 - name: "pocket update - the bare name is an unknown property"
@@ -631,6 +659,7 @@
           - {id: 0192f0a0-0000-7000-8001-000000000002, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Dana, active: false, deleted: false}
           - {id: 0192f0a0-0000-7000-8001-000000000003, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Gopay, active: true, deleted: true}
           - {id: 0192f0a0-0000-7000-8001-000000000009, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Theirs, active: true, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-00000000000a, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Keeper, active: true, deleted: false}
 
 
 - name: "pocket update - a bad name beside an unknown property is the unknown property"
@@ -653,6 +682,7 @@
           - {id: 0192f0a0-0000-7000-8001-000000000002, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Dana, active: false, deleted: false}
           - {id: 0192f0a0-0000-7000-8001-000000000003, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Gopay, active: true, deleted: true}
           - {id: 0192f0a0-0000-7000-8001-000000000009, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Theirs, active: true, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-00000000000a, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Keeper, active: true, deleted: false}
 
 
 - name: "pocket update - malformed JSON is INVALID_JSON_BODY"
@@ -675,6 +705,7 @@
           - {id: 0192f0a0-0000-7000-8001-000000000002, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Dana, active: false, deleted: false}
           - {id: 0192f0a0-0000-7000-8001-000000000003, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Gopay, active: true, deleted: true}
           - {id: 0192f0a0-0000-7000-8001-000000000009, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Theirs, active: true, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-00000000000a, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Keeper, active: true, deleted: false}
 
 
 - name: "pocket update - a JSON null body is INVALID_JSON_BODY"
@@ -697,6 +728,7 @@
           - {id: 0192f0a0-0000-7000-8001-000000000002, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Dana, active: false, deleted: false}
           - {id: 0192f0a0-0000-7000-8001-000000000003, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Gopay, active: true, deleted: true}
           - {id: 0192f0a0-0000-7000-8001-000000000009, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Theirs, active: true, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-00000000000a, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Keeper, active: true, deleted: false}
 
 
 - name: "pocket update - an empty body is INVALID_JSON_BODY"
@@ -719,6 +751,7 @@
           - {id: 0192f0a0-0000-7000-8001-000000000002, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Dana, active: false, deleted: false}
           - {id: 0192f0a0-0000-7000-8001-000000000003, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Gopay, active: true, deleted: true}
           - {id: 0192f0a0-0000-7000-8001-000000000009, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Theirs, active: true, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-00000000000a, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Keeper, active: true, deleted: false}
 
 
 # Unknown, foreign and deleted ids: one 404 NOT_FOUND, `same_as` pinning the
@@ -752,6 +785,7 @@
           - {id: 0192f0a0-0000-7000-8001-000000000002, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Dana, active: false, deleted: false}
           - {id: 0192f0a0-0000-7000-8001-000000000003, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Gopay, active: true, deleted: true}
           - {id: 0192f0a0-0000-7000-8001-000000000009, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Theirs, active: true, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-00000000000a, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Keeper, active: true, deleted: false}
 
 
 - name: "pocket update - a deleted id is NOT_FOUND exactly as an unknown id is, for a rename"
@@ -780,6 +814,7 @@
           - {id: 0192f0a0-0000-7000-8001-000000000002, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Dana, active: false, deleted: false}
           - {id: 0192f0a0-0000-7000-8001-000000000003, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Gopay, active: true, deleted: true}
           - {id: 0192f0a0-0000-7000-8001-000000000009, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Theirs, active: true, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-00000000000a, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Keeper, active: true, deleted: false}
 
 
 - name: "pocket update - another Household's id is NOT_FOUND exactly as an unknown id is, for a deactivation"
@@ -808,6 +843,7 @@
           - {id: 0192f0a0-0000-7000-8001-000000000002, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Dana, active: false, deleted: false}
           - {id: 0192f0a0-0000-7000-8001-000000000003, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Gopay, active: true, deleted: true}
           - {id: 0192f0a0-0000-7000-8001-000000000009, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Theirs, active: true, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-00000000000a, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Keeper, active: true, deleted: false}
 
 
 - name: "pocket update - a deleted id is NOT_FOUND exactly as an unknown id is, for a deactivation"
@@ -836,6 +872,7 @@
           - {id: 0192f0a0-0000-7000-8001-000000000002, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Dana, active: false, deleted: false}
           - {id: 0192f0a0-0000-7000-8001-000000000003, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Gopay, active: true, deleted: true}
           - {id: 0192f0a0-0000-7000-8001-000000000009, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Theirs, active: true, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-00000000000a, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Keeper, active: true, deleted: false}
 
 
 - name: "pocket update - another Household's id is NOT_FOUND exactly as an unknown id is, for an empty body"
@@ -864,6 +901,7 @@
           - {id: 0192f0a0-0000-7000-8001-000000000002, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Dana, active: false, deleted: false}
           - {id: 0192f0a0-0000-7000-8001-000000000003, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Gopay, active: true, deleted: true}
           - {id: 0192f0a0-0000-7000-8001-000000000009, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Theirs, active: true, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-00000000000a, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Keeper, active: true, deleted: false}
 
 
 - name: "pocket update - a deleted id is NOT_FOUND exactly as an unknown id is, for an empty body"
@@ -892,6 +930,7 @@
           - {id: 0192f0a0-0000-7000-8001-000000000002, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Dana, active: false, deleted: false}
           - {id: 0192f0a0-0000-7000-8001-000000000003, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Gopay, active: true, deleted: true}
           - {id: 0192f0a0-0000-7000-8001-000000000009, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Theirs, active: true, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-00000000000a, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Keeper, active: true, deleted: false}
 
 
 - name: "pocket update - an unknown id is NOT_FOUND with no args"
@@ -914,6 +953,7 @@
           - {id: 0192f0a0-0000-7000-8001-000000000002, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Dana, active: false, deleted: false}
           - {id: 0192f0a0-0000-7000-8001-000000000003, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Gopay, active: true, deleted: true}
           - {id: 0192f0a0-0000-7000-8001-000000000009, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Theirs, active: true, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-00000000000a, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Keeper, active: true, deleted: false}
 
 
 # A bad body on an id that is not the caller's answers what a bad body on any
@@ -945,6 +985,7 @@
           - {id: 0192f0a0-0000-7000-8001-000000000002, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Dana, active: false, deleted: false}
           - {id: 0192f0a0-0000-7000-8001-000000000003, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Gopay, active: true, deleted: true}
           - {id: 0192f0a0-0000-7000-8001-000000000009, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Theirs, active: true, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-00000000000a, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Keeper, active: true, deleted: false}
 
 
 - name: "pocket update - a bad body on a deleted id is the bad body's 400, as on an unknown id"
@@ -973,6 +1014,7 @@
           - {id: 0192f0a0-0000-7000-8001-000000000002, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Dana, active: false, deleted: false}
           - {id: 0192f0a0-0000-7000-8001-000000000003, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Gopay, active: true, deleted: true}
           - {id: 0192f0a0-0000-7000-8001-000000000009, household_id: 0192f0a0-0000-7000-8000-000000000002, name: Theirs, active: true, deleted: false}
+          - {id: 0192f0a0-0000-7000-8001-00000000000a, household_id: 0192f0a0-0000-7000-8000-000000000001, name: Keeper, active: true, deleted: false}
 
 
 - name: "pocket update - no session is 401 first, whatever the id and body: a valid request"

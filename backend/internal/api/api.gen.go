@@ -84,6 +84,7 @@ const (
 	INVALIDCREDENTIALS      ErrorCode = "INVALID_CREDENTIALS"
 	INVALIDCURRENTPASSWORD  ErrorCode = "INVALID_CURRENT_PASSWORD"
 	INVALIDJSONBODY         ErrorCode = "INVALID_JSON_BODY"
+	LASTPOCKET              ErrorCode = "LAST_POCKET"
 	NAMETAKEN               ErrorCode = "NAME_TAKEN"
 	NOTFOUND                ErrorCode = "NOT_FOUND"
 	TOOMANYATTEMPTS         ErrorCode = "TOO_MANY_ATTEMPTS"
@@ -112,6 +113,8 @@ func (e ErrorCode) Valid() bool {
 	case INVALIDCURRENTPASSWORD:
 		return true
 	case INVALIDJSONBODY:
+		return true
+	case LASTPOCKET:
 		return true
 	case NAMETAKEN:
 		return true
@@ -424,8 +427,11 @@ type Error struct {
 	// and restore, which may act on a deleted row, answer it for unknown and
 	// foreign ids only). `CATEGORY_IN_USE` is a delete of a Category that
 	// holds an allocation, a non-null amount, in a Budget Period other than
-	// the current one; it carries no `args`, and nothing is changed. A path
-	// that matches no route at all is not this: it answers a bare `404`.
+	// the current one; it carries no `args`, and nothing is changed.
+	// `LAST_POCKET` is a delete, or a deactivation, of the Household's last
+	// active Pocket (a Household always keeps one); it carries no `args`, and
+	// nothing is changed. A path that matches no route at all is not this: it
+	// answers a bare `404`.
 	Code ErrorCode `json:"code"`
 }
 
@@ -456,8 +462,11 @@ type Error struct {
 // and restore, which may act on a deleted row, answer it for unknown and
 // foreign ids only). `CATEGORY_IN_USE` is a delete of a Category that
 // holds an allocation, a non-null amount, in a Budget Period other than
-// the current one; it carries no `args`, and nothing is changed. A path
-// that matches no route at all is not this: it answers a bare `404`.
+// the current one; it carries no `args`, and nothing is changed.
+// `LAST_POCKET` is a delete, or a deactivation, of the Household's last
+// active Pocket (a Household always keeps one); it carries no `args`, and
+// nothing is changed. A path that matches no route at all is not this: it
+// answers a bare `404`.
 type ErrorCode string
 
 // Health defines model for Health.
@@ -612,6 +621,18 @@ type OnboardingChoiceRequest struct {
 	// is `VALIDATION` (`max`). The same rules apply when it is edited
 	// (`PATCH /household`).
 	HouseholdDisplayName string `json:"household_display_name"`
+
+	// PocketDisplayName The name of the Household's first Pocket, created with it, active
+	// (PRD S10). Pre-filled by the client from its own catalogue. The same
+	// rules as a Pocket's name anywhere else (`POST /pockets`): stored
+	// trimmed; blank after the trim is `VALIDATION` (`required`), and more
+	// than 60 code points is `VALIDATION` (`max`). Checked after
+	// `household_display_name`, so a body with both wrong reports the
+	// Household's.
+	//
+	//
+	// Example: Cash
+	PocketDisplayName string `json:"pocket_display_name"`
 }
 
 // OnboardingOptions defines model for OnboardingOptions.
@@ -3202,6 +3223,20 @@ func (response DeletePocket404JSONResponse) VisitDeletePocketResponse(w http.Res
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeletePocket409JSONResponse struct{ ConflictJSONResponse }
+
+func (response DeletePocket409JSONResponse) VisitDeletePocketResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
 	_, err := buf.WriteTo(w)
 	return err
 }

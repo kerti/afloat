@@ -20,6 +20,18 @@ func CheckHouseholdDisplayName(raw string) (name, rule string) {
 	return CheckBoundedName(raw, maxHouseholdDisplayNameCodePoints)
 }
 
+// maxPocketDisplayNameCodePoints caps a Pocket's name, in code points, on the
+// trimmed name. The same 60 as a Household's.
+const maxPocketDisplayNameCodePoints = 60
+
+// CheckPocketDisplayName is the one rule for a Pocket's name, called by the
+// Pocket handlers (create, rename) and by founding, which creates the
+// Household's first Pocket (#140 R2), so no Pocket can be stored under a name
+// the other path would refuse. It is CheckBoundedName at the Pocket's cap.
+func CheckPocketDisplayName(raw string) (name, rule string) {
+	return CheckBoundedName(raw, maxPocketDisplayNameCodePoints)
+}
+
 // CheckBoundedName is the rule every bounded display name follows (a
 // Household's, a Pocket's: BOOTSTRAP.md §4's Names bullet), so no two entities
 // can drift into disagreeing about what a name is. Only the cap differs, and

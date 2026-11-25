@@ -47,6 +47,8 @@ func deleteStatus(resp api.DeletePocketResponseObject) string {
 		return "401"
 	case api.DeletePocket404JSONResponse:
 		return "404 " + string(r.Code)
+	case api.DeletePocket409JSONResponse:
+		return "409 " + string(r.Code)
 	case api.DeletePocket500JSONResponse:
 		return "500"
 	}
@@ -173,7 +175,7 @@ func TestDeleteIsSoftAndHidesThePocketFromListAndUpdate(t *testing.T) {
 
 func TestDeleteOfAnInactivePocketWorks(t *testing.T) {
 	f := newFixture(t)
-	_, ctx := f.member(t, "Home", "a@example.com")
+	ctx := f.memberWithKeeper(t, "Home", "a@example.com")
 	id := newID(t)
 	assertCreated(t, f.create(ctx, t, id, "OVO"))
 	assertUpdated(t, f.update(ctx, t, id, nil, ptr(false)))
@@ -188,7 +190,7 @@ func TestDeleteOfAnInactivePocketWorks(t *testing.T) {
 // at all, updated_at included. Proven red against `deleted_at = now()`.
 func TestDeletingADeletedPocketIs204AndKeepsTheFirstInstant(t *testing.T) {
 	f := newFixture(t)
-	_, ctx := f.member(t, "Home", "a@example.com")
+	ctx := f.memberWithKeeper(t, "Home", "a@example.com")
 	id := newID(t)
 	assertCreated(t, f.create(ctx, t, id, "OVO"))
 
@@ -218,7 +220,7 @@ func TestDeletingADeletedPocketIs204AndKeepsTheFirstInstant(t *testing.T) {
 
 func TestConcurrentDeletesOfOnePocketAreAll204(t *testing.T) {
 	f := newFixture(t)
-	_, ctx := f.member(t, "Home", "a@example.com")
+	ctx := f.memberWithKeeper(t, "Home", "a@example.com")
 	for round := range 8 {
 		id := newID(t)
 		assertCreated(t, f.create(ctx, t, id, fmt.Sprintf("OVO %d", round)))
@@ -239,7 +241,7 @@ func TestConcurrentDeletesOfOnePocketAreAll204(t *testing.T) {
 // inactive Pocket comes back inactive.
 func TestRestoreBringsBackTheSamePocketAndKeepsActive(t *testing.T) {
 	f := newFixture(t)
-	_, ctx := f.member(t, "Home", "a@example.com")
+	ctx := f.memberWithKeeper(t, "Home", "a@example.com")
 	active, inactive := newID(t), newID(t)
 	assertCreated(t, f.create(ctx, t, active, "OVO"))
 	assertCreated(t, f.create(ctx, t, inactive, "Dana"))
@@ -249,8 +251,8 @@ func TestRestoreBringsBackTheSamePocketAndKeepsActive(t *testing.T) {
 
 	assertDeleted(t, f.del(ctx, t, active))
 	assertDeleted(t, f.del(ctx, t, inactive))
-	if got := f.list(ctx, t); len(got) != 0 {
-		t.Fatalf("list = %+v, want empty", got)
+	if got := f.list(ctx, t); len(got) != 1 || got[0].PocketDisplayName != "Keeper" {
+		t.Fatalf("list = %+v, want only the Keeper", got)
 	}
 
 	if got := assertRestored(t, f.restore(ctx, t, active)); got != (api.Pocket{Id: active, PocketDisplayName: "OVO", Active: true}) {
@@ -269,8 +271,8 @@ func TestRestoreBringsBackTheSamePocketAndKeepsActive(t *testing.T) {
 		t.Errorf("restore changed a column other than deleted_at and updated_at:\n%s\n%s", beforeInactive, got)
 	}
 	// Back in the list, in its original creation-order place, and editable.
-	if got := f.list(ctx, t); len(got) != 2 || got[0].Id != active || got[1].Id != inactive {
-		t.Errorf("list = %+v, want both, in creation order", got)
+	if got := f.list(ctx, t); len(got) != 3 || got[1].Id != active || got[2].Id != inactive {
+		t.Errorf("list = %+v, want the Keeper and both, in creation order", got)
 	}
 	assertUpdated(t, f.update(ctx, t, active, ptr("Cash"), nil))
 }
@@ -279,7 +281,7 @@ func TestRestoreBringsBackTheSamePocketAndKeepsActive(t *testing.T) {
 // included.
 func TestRestoringALivePocketIs200AndChangesNothing(t *testing.T) {
 	f := newFixture(t)
-	_, ctx := f.member(t, "Home", "a@example.com")
+	ctx := f.memberWithKeeper(t, "Home", "a@example.com")
 	id := newID(t)
 	assertCreated(t, f.create(ctx, t, id, "OVO"))
 	assertUpdated(t, f.update(ctx, t, id, nil, ptr(false)))
@@ -311,7 +313,7 @@ func TestRestoringALivePocketIs200AndChangesNothing(t *testing.T) {
 // hold it.
 func TestRestoreIntoAHeldNameIsNameTakenAndChangesNothing(t *testing.T) {
 	f := newFixture(t)
-	_, ctx := f.member(t, "Home", "a@example.com")
+	ctx := f.memberWithKeeper(t, "Home", "a@example.com")
 	_, foreign := f.member(t, "Other", "b@example.com")
 
 	for _, tc := range []struct {
@@ -378,7 +380,7 @@ func TestRestoreIntoAHeldNameIsNameTakenAndChangesNothing(t *testing.T) {
 // would let both win; proven red against that (see the PR).
 func TestConcurrentRestoresIntoOneNameAnswerOne200AndOne409(t *testing.T) {
 	f := newFixture(t)
-	_, ctx := f.member(t, "Home", "a@example.com")
+	ctx := f.memberWithKeeper(t, "Home", "a@example.com")
 
 	for round := range 12 {
 		name := fmt.Sprintf("Contested %d", round)
@@ -411,7 +413,7 @@ func TestConcurrentRestoresIntoOneNameAnswerOne200AndOne409(t *testing.T) {
 // never raises the name index against itself.
 func TestConcurrentRestoresOfOnePocketAreAll200(t *testing.T) {
 	f := newFixture(t)
-	_, ctx := f.member(t, "Home", "a@example.com")
+	ctx := f.memberWithKeeper(t, "Home", "a@example.com")
 	for round := range 8 {
 		id := newID(t)
 		assertCreated(t, f.create(ctx, t, id, fmt.Sprintf("OVO %d", round)))
@@ -428,7 +430,7 @@ func TestConcurrentRestoresOfOnePocketAreAll200(t *testing.T) {
 // no error and no half-state.
 func TestConcurrentDeleteAndRestoreOfOnePocketNeverFail(t *testing.T) {
 	f := newFixture(t)
-	_, ctx := f.member(t, "Home", "a@example.com")
+	ctx := f.memberWithKeeper(t, "Home", "a@example.com")
 	for round := range 8 {
 		id := newID(t)
 		assertCreated(t, f.create(ctx, t, id, fmt.Sprintf("OVO %d", round)))
@@ -529,7 +531,7 @@ func TestUnknownAndForeignIdsAreOneNotFoundForDeleteAndRestore(t *testing.T) {
 // Alice's deleted "OVO" is not a clash with Bob's live "OVO".
 func TestDeleteAndRestoreAreScopedToTheCallersHousehold(t *testing.T) {
 	f := newFixture(t)
-	_, alice := f.member(t, "Alice", "a@example.com")
+	alice := f.memberWithKeeper(t, "Alice", "a@example.com")
 	_, bob := f.member(t, "Bob", "b@example.com")
 	mine, theirs := newID(t), newID(t)
 	assertCreated(t, f.create(alice, t, mine, "OVO"))
@@ -546,23 +548,24 @@ func TestDeleteAndRestoreAreScopedToTheCallersHousehold(t *testing.T) {
 func TestTwoUsersInOneHouseholdDeleteAndRestoreTheSamePocket(t *testing.T) {
 	f := newFixture(t)
 	householdID, first := f.member(t, "Home", "a@example.com")
+	f.tdb.CreatePocket(t, householdID, "Keeper")
 	second := f.userIn(t, householdID, "b@example.com")
 	id := newID(t)
 	assertCreated(t, f.create(first, t, id, "OVO"))
 
 	assertDeleted(t, f.del(second, t, id))
-	if got := f.list(first, t); len(got) != 0 {
+	if got := f.list(first, t); len(got) != 1 || got[0].PocketDisplayName != "Keeper" {
 		t.Errorf("first User sees %+v, want the second's delete", got)
 	}
 	assertRestored(t, f.restore(first, t, id))
-	if got := f.list(second, t); len(got) != 1 {
+	if got := f.list(second, t); len(got) != 2 {
 		t.Errorf("second User sees %+v, want the first's restore", got)
 	}
 }
 
 func TestDeleteAndRestoreWithoutAUserAre401AndWriteNothing(t *testing.T) {
 	f := newFixture(t)
-	_, ctx := f.member(t, "Home", "a@example.com")
+	ctx := f.memberWithKeeper(t, "Home", "a@example.com")
 	id := newID(t)
 	assertCreated(t, f.create(ctx, t, id, "OVO"))
 	before := f.row(t, id)
@@ -584,40 +587,11 @@ func TestDeleteAndRestoreWithoutAUserAre401AndWriteNothing(t *testing.T) {
 
 type deleteBreakable struct {
 	db.Querier
-	soft    func(context.Context, db.SoftDeletePocketParams) (int64, error)
 	restore func(context.Context, db.RestorePocketParams) (db.Pocket, error)
-}
-
-func (b deleteBreakable) SoftDeletePocket(ctx context.Context, p db.SoftDeletePocketParams) (int64, error) {
-	return b.soft(ctx, p)
 }
 
 func (b deleteBreakable) RestorePocket(ctx context.Context, p db.RestorePocketParams) (db.Pocket, error) {
 	return b.restore(ctx, p)
-}
-
-func TestADeleteErrorIsA500AndNoRowsAffectedIsA404(t *testing.T) {
-	for _, tc := range []struct {
-		name string
-		n    int64
-		err  error
-		want string
-	}{
-		{"an outage", 0, errOutage, "500"},
-		{"an error beside a row count", 1, errOutage, "500"},
-		{"no row", 0, nil, "404 NOT_FOUND"},
-		{"one row", 1, nil, "204"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			f := newFixtureWith(t, func(q db.Querier) db.Querier {
-				return deleteBreakable{Querier: q, soft: func(context.Context, db.SoftDeletePocketParams) (int64, error) { return tc.n, tc.err }}
-			})
-			_, ctx := f.member(t, "Home", "a@example.com")
-			if got := deleteStatus(f.del(ctx, t, newID(t))); got != tc.want {
-				t.Errorf("DeletePocket = %s, want %s", got, tc.want)
-			}
-		})
-	}
 }
 
 func TestARestoreErrorThatIsNotNoRowsOrTheNameIndexIsA500(t *testing.T) {
@@ -647,18 +621,14 @@ func TestARestoreErrorThatIsNotNoRowsOrTheNameIndexIsA500(t *testing.T) {
 	}
 }
 
-// What reaches either statement is the session's Household and the path's id,
-// and nothing else.
-func TestTheStatementsCarryTheSessionsHouseholdAndThePathsId(t *testing.T) {
-	var gotDelete db.SoftDeletePocketParams
+// What reaches the restore statement is the session's Household and the path's
+// id, and nothing else. The delete's statements run in a transaction and are
+// checked in pocket_last_integration_test.go.
+func TestTheRestoreStatementCarriesTheSessionsHouseholdAndThePathsId(t *testing.T) {
 	var gotRestore db.RestorePocketParams
 	f := newFixtureWith(t, func(q db.Querier) db.Querier {
 		return deleteBreakable{
 			Querier: q,
-			soft: func(_ context.Context, p db.SoftDeletePocketParams) (int64, error) {
-				gotDelete = p
-				return 0, nil
-			},
 			restore: func(_ context.Context, p db.RestorePocketParams) (db.Pocket, error) {
 				gotRestore = p
 				return db.Pocket{}, pgx.ErrNoRows
@@ -667,12 +637,8 @@ func TestTheStatementsCarryTheSessionsHouseholdAndThePathsId(t *testing.T) {
 	})
 	householdID, ctx := f.member(t, "Home", "a@example.com")
 	id := newID(t)
-	f.del(ctx, t, id)
 	f.restore(ctx, t, id)
 
-	if gotDelete.HouseholdID != householdID || gotDelete.ID.Bytes != id {
-		t.Errorf("delete params = %+v, want the caller's household and %v", gotDelete, id)
-	}
 	if gotRestore.HouseholdID != householdID || gotRestore.ID.Bytes != id {
 		t.Errorf("restore params = %+v, want the caller's household and %v", gotRestore, id)
 	}
@@ -685,7 +651,7 @@ func TestTheStatementsCarryTheSessionsHouseholdAndThePathsId(t *testing.T) {
 // holds the name afterwards.
 func TestConcurrentRestoreAndCreateOfOneNameAnswerOneWinnerAndNameTaken(t *testing.T) {
 	f := newFixture(t)
-	_, ctx := f.member(t, "Home", "a@example.com")
+	ctx := f.memberWithKeeper(t, "Home", "a@example.com")
 
 	for round := range 20 {
 		name := fmt.Sprintf("Contested %d", round)
@@ -726,7 +692,7 @@ func TestConcurrentRestoreAndCreateOfOneNameAnswerOneWinnerAndNameTaken(t *testi
 // deleted whichever came first.
 func TestConcurrentDeleteAndUpdateOfOnePocketEndDeleted(t *testing.T) {
 	f := newFixture(t)
-	_, ctx := f.member(t, "Home", "a@example.com")
+	ctx := f.memberWithKeeper(t, "Home", "a@example.com")
 
 	for round := range 20 {
 		id := newID(t)

@@ -118,8 +118,8 @@ with zoneinfo answers from it, so a case-insensitive filesystem (a Mac) also acc
 ## 4. Cross-cutting data conventions
 
 - **Primary keys:** UUIDv7, **client-generated**. Column type `uuid`. *One exception: founding.*
-  The Household and the User that `POST /onboarding/choice` creates get **server-generated** UUIDv7s
-  (minted in Go). Founding is an online authentication flow, not an offline-capable write: there is
+  The Household, the User **and the Household's first Pocket** that `POST /onboarding/choice` creates
+  (#140, R2) get **server-generated** UUIDv7s (minted in Go). Founding is an online authentication flow, not an offline-capable write: there is
   no queue to replay, and the handshake's single-use claim is what makes a double submit safe
   (§5.1.1). The rule above stands for every domain `POST`.
   *A clarification, not a second exception (#130, R14):* the rule is about **rows a client creates**.
@@ -248,6 +248,28 @@ with zoneinfo answers from it, so a case-insensitive filesystem (a Mac) also acc
     rows in key order (the sorted allocation writes, above). The test for a guard of this kind runs
     the same scenario against a single `UPDATE ... WHERE NOT EXISTS` and shows it lose
     (`category_delete_integration_test.go`).
+  - **A Household always keeps one active, live Pocket (#140, R1): `409 LAST_POCKET`**, a code with no
+    `args`, refuses a `DELETE /pockets/{id}` or a `PATCH` with `active: false` that would leave none.
+    It is the same recipe with the **Household's** row as the lock, because the invariant is a count over
+    several rows and not a property of one: (1) `SELECT ... FOR NO KEY UPDATE` of the Household's row; (2) the
+    Pocket's own row `FOR NO KEY UPDATE`, which says whether it is the caller's (no row is `404`), deleted already
+    (a delete is then the idempotent `204` and is never refused; a `PATCH` is `404`) and active (an
+    inactive one skips the count, since it leaves the active set as it was); (3) `EXISTS` of **another**
+    active, live Pocket of the Household, a separate later statement, none being `LAST_POCKET`; (4) the
+    write. `NOT_FOUND` is decided before `LAST_POCKET`, so the refusal is only ever said about a Pocket of
+    the caller's own Household. A refusal writes nothing, a rename sent beside `active: false` included.
+    **Every writer that can shrink the active set takes the Household lock first**: those two, and no
+    others. Create, restore and a reactivation only add to the set, so they take none (a count that misses
+    a Pocket not yet committed is the answer the request ordered ahead of it would have got). A `PATCH`
+    that leaves a Pocket active stays the one statement. The lock order is Household, then Pocket,
+    and the **mode** matters as much as the order: removals take `FOR NO KEY UPDATE` on the Household and
+    then on the Pocket; writers that insert a referencing row (Expenses, the next slice) take `FOR SHARE`
+    on the Pocket; and the FK check of any insert takes `FOR KEY SHARE` on its parent rows, which
+    `FOR NO KEY UPDATE` does not block. A plain `FOR UPDATE` on the Household would make a writer that
+    holds `FOR SHARE` on a Pocket wait, at its FK check, behind a removal that is itself waiting on that
+    Pocket: a `40P01` deadlock, answered `500`. The test runs two removals of the last two Pockets with each
+    transaction held after its count, and shows the run lose without the Household lock, and shows an insert
+    carrying an FK to the Household not blocked by it (`pocket_last_integration_test.go`).
   - **A restore is "as if it was never deleted"** (#130, the maintainer's ruling). It clears
     `deleted_at` and, **in the same transaction**, redoes what a carry-forward skipped while the row
     was deleted: it locks the row `FOR UPDATE` (as the delete does), clears `deleted_at`, brings the
@@ -619,8 +641,11 @@ expiring with the handshake. No session is issued until the commit.
 
 **The gate offers "found" only, for now.** `GET /onboarding/options` answers `{email, user_display_name,
 founding_open}`; no invitations field yet, and adding one later is additive. `POST /onboarding/choice`
-takes `{found: true, household_display_name}` and nothing else (`additionalProperties: false`): a later join
-choice adds properties, not a different shape. Anything that is not a found choice is `400 VALIDATION`.
+takes `{found: true, household_display_name, pocket_display_name}` and nothing else
+(`additionalProperties: false`): a later join choice adds properties, not a different shape. The commit creates
+the Household, the User, the credential **and one active Pocket** in the one transaction (#140, R2: a
+Household always has a Pocket), the Pocket's name under a Pocket's own rule (`auth.CheckPocketDisplayName`,
+the function the Pocket handlers call), checked after the Household's and before the handshake is claimed. Anything that is not a found choice is `400 VALIDATION`.
 No live handshake is `401 UNAUTHORIZED`, and a stale cookie is cleared; `FOUNDING_DISABLED` is `403`,
 checked after the handshake. That ordering hides nothing: `GET /auth/methods` is public and reports
 `founding_open`, so anyone can read the instance's posture without a handshake. The commit enforces
@@ -650,8 +675,8 @@ BOM) is `VALIDATION` with `rule: required`, blank to the eye though not to `Trim
 characters are never stripped from an otherwise visible name, and a bidi control inside one is
 accepted (Balances parity).
 
-**Server-generated ids at founding — an exception to §4.** See §4: the Household's and the User's
-UUIDv7s are minted in Go.
+**Server-generated ids at founding — an exception to §4.** See §4: the Household's, the User's and the
+first Pocket's UUIDv7s are minted in Go.
 
 **Password policy: Balances' exactly.** At least 10 code points (counted as runes), not in the embedded
 common-password list (§5.1, compared case-insensitively). A failure is `400 WEAK_PASSWORD` with
@@ -751,7 +776,8 @@ the first failing field only. The vocabulary is the contract's `ErrorCode` enum,
 endpoints land. `ID_TAKEN` (#121) is a create whose client-supplied id is held by something other than a
 live row of the caller's own Household, and `NAME_TAKEN` a name another live row already holds, at a create,
 a rename or a restore; both are
-`409`, carry no `args`, and name no entity. `NOT_FOUND` (#121) is an `{id}` that names no live row of
+`409`, carry no `args`, and name no entity. `LAST_POCKET` (#140) is the delete or deactivation of the
+Household's last active Pocket (`409`, no `args`; the guard is in §4). `NOT_FOUND` (#121) is an `{id}` that names no live row of
 the caller's own Household (`404`, no `args`; see *Tenancy on a path id*, §4). An **empty** `{id}`
 segment on a route that still matches, such as `/pockets//restore`, is a malformed id like any other:
 `400 VALIDATION {field: id, rule: invalid}`, after the session check, as the binder refuses it

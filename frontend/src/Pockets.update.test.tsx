@@ -283,7 +283,7 @@ describe("deactivating and reactivating, from the dialog", () => {
     expect(toastMock).toHaveBeenCalledTimes(1);
   });
 
-  it("a failed deactivation, with the dialog already closed, is one error toast", async () => {
+  it("a failed deactivation stays in the dialog as a form error, with no toast", async () => {
     server.use(
       http.patch("/api/pockets/:id", () =>
         HttpResponse.json(envelope("INTERNAL"), { status: 500 }),
@@ -296,11 +296,9 @@ describe("deactivating and reactivating, from the dialog", () => {
     const dialog = await openEdit(user, "Cash");
     await user.click(within(dialog).getByRole("button", { name: p.deactivate }));
 
-    await waitFor(() => expect(toastMock.error).toHaveBeenCalledTimes(1));
-    expect(toastMock.error.mock.calls[0]![0]).toBe(enGB.errors.INTERNAL);
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent(enGB.errors.INTERNAL);
+    expect(toastMock.error).not.toHaveBeenCalled();
     expect(toastMock).not.toHaveBeenCalled();
-    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Edit Cash" })).toBeInTheDocument();
   });
 
   it("shows NOT_FOUND from a deactivation as a toast and refetches", async () => {
@@ -377,7 +375,8 @@ describe("deactivating and reactivating, from the dialog", () => {
     const dialog = await openEdit(user, "Cash");
     await user.click(within(dialog).getByRole("button", { name: p.deactivate }));
 
-    const row = await screen.findByRole("button", { name: "Edit Cash" });
+    // The dialog waits for the answer, so the refetched row is already muted.
+    const row = await screen.findByRole("button", { name: "Edit Cash, inactive" });
     expect(await within(row).findByText(p.inactive)).toBeInTheDocument();
     expect(screen.getByLabelText("Show inactive Pockets (2)")).toBeChecked();
   });

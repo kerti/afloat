@@ -161,6 +161,10 @@ func (s *Server) CreateExpense(ctx context.Context, r api.CreateExpenseRequestOb
 	return s.expense.CreateExpense(ctx, r)
 }
 
+func (s *Server) GetExpense(ctx context.Context, r api.GetExpenseRequestObject) (api.GetExpenseResponseObject, error) {
+	return s.expense.GetExpense(ctx, r)
+}
+
 func (s *Server) UpdateExpense(ctx context.Context, r api.UpdateExpenseRequestObject) (api.UpdateExpenseResponseObject, error) {
 	return s.expense.UpdateExpense(ctx, r)
 }

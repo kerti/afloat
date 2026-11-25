@@ -1,8 +1,8 @@
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router";
 import { useQueryClient } from "@tanstack/react-query";
-import type { Expense, Me, UpdateExpenseRequest } from "@/api/client";
+import type { Expense, Me } from "@/api/client";
 import {
   categoriesKey,
   pocketsKey,
@@ -11,34 +11,18 @@ import {
   usePockets,
   useUpdateExpense,
 } from "@/api/queries";
-import { errorMessage } from "@/api/errors";
-import { CheckboxRow } from "@/components/CheckboxRow";
-import { DateField } from "@/components/DateField";
-import { Field, Form } from "@/components/Form";
-import { MoneyInput } from "@/components/MoneyInput";
+import { ExpenseForm } from "@/components/ExpenseForm";
+import { NO_CATEGORY, expenseDiff, type ExpenseValues } from "@/lib/expenseValues";
 import { ErrorState, Loading } from "@/components/states";
-import { EmptyState, FieldError, PageTitle } from "@/components/Text";
+import { EmptyState, PageTitle } from "@/components/Text";
 import { TextLink } from "@/components/TextLink";
-import { TimeField } from "@/components/TimeField";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger } from "@/components/ui/select";
-import { clampName } from "@/lib/codePoints";
-import { compareMoney, formatMoney } from "@/lib/money";
-import { toastPlain } from "@/lib/plainToast";
+import { formatMoney } from "@/lib/money";
 import { routes } from "@/lib/routes";
+import { toastWithAction } from "@/lib/undoToast";
 import { uuidv7 } from "@/lib/uuid";
 
-const DESCRIPTION_MAX = 200;
-// Radix Select cannot hold "" as an item's value, so "No Category" is this.
-const NO_CATEGORY = "none";
-
-type FieldKey = "amount" | "pocket" | "category" | "date" | "description";
-
 // Capture: a full screen, never a dialog (ui-conventions, Editing surfaces). The
-// client derives no date: an untouched date sends none and the server dates the
-// Expense (R5, CLAUDE.md rule 5). A refund is the amount with a minus sign (R4).
+// form body is shared with the edit route (components/ExpenseForm.tsx).
 export function CapturePage({ me }: { me: Me }) {
   const { t, i18n } = useTranslation();
   const navigate = useNavigate();
@@ -47,19 +31,7 @@ export function CapturePage({ me }: { me: Me }) {
   const categories = useCategories();
   const create = useCreateExpense();
   const update = useUpdateExpense();
-  const currency = me.household.reporting_currency;
 
-  const [amount, setAmount] = useState("");
-  const [refund, setRefund] = useState(false);
-  const [pocketChoice, setPocketChoice] = useState<string | null>(null);
-  // "" is untouched; NO_CATEGORY is a deliberate "none".
-  const [category, setCategory] = useState("");
-  const [description, setDescription] = useState("");
-  const [date, setDate] = useState("");
-  const [time, setTime] = useState("");
-  const [edited, setEdited] = useState(false);
-  const [amountTouched, setAmountTouched] = useState(false);
-  const [submitted, setSubmitted] = useState(false);
   // One id per attempt, replaced only after a success or an ID_TAKEN, so a retry
   // after a lost response meets the server's 200 replay (#121 R5).
   const [attemptId, setAttemptId] = useState(() => uuidv7());
@@ -91,10 +63,7 @@ export function CapturePage({ me }: { me: Me }) {
     );
   }
 
-  const activePockets = pockets.data.items.filter((p) => p.active);
-  const activeCategories = categories.data.items.filter((c) => c.active);
-
-  if (activePockets.length === 0) {
+  if (!pockets.data.items.some((p) => p.active)) {
     return (
       <>
         <PageTitle>{t("capture.title")}</PageTitle>
@@ -104,97 +73,22 @@ export function CapturePage({ me }: { me: Me }) {
     );
   }
 
-  // R3: the Pocket of the last Expense (the server's `default_pocket_id`), else
-  // the only active Pocket, else blank. A choice that has since gone inactive
-  // reads as blank, not as another Pocket the person never picked.
-  const preselected =
-    pockets.data.default_pocket_id !== undefined &&
-    activePockets.some((p) => p.id === pockets.data.default_pocket_id)
-      ? pockets.data.default_pocket_id
-      : activePockets.length === 1
-        ? activePockets[0]!.id
-        : "";
-  const pocketId =
-    pocketChoice === null
-      ? preselected
-      : activePockets.some((p) => p.id === pocketChoice)
-        ? pocketChoice
-        : "";
-  const categoryId =
-    category === NO_CATEGORY || activeCategories.some((c) => c.id === category) ? category : "";
-
-  const pending = create.isPending || update.isPending;
-  const err = create.error ?? update.error;
-  const local: Record<"amount" | "pocket", string | null> = {
-    amount: amount === "" ? t("capture.amountRequired") : null,
-    pocket: pocketId === "" ? t("capture.pocketRequired") : null,
-  };
-
-  // One code-to-field map. A server code that belongs to a field shows under it.
-  let serverField: FieldKey | null = null;
-  let serverText: string | null = null;
-  if (err?.code === "VALIDATION") {
-    const field = String(err.args.field);
-    const rule = String(err.args.rule);
-    if (field === "amount") {
-      serverField = "amount";
-      serverText = rule === "nonzero" ? t("capture.amountNonzero") : errorMessage(t, err);
-    } else if (field === "pocket_id") {
-      serverField = "pocket";
-      serverText = t("capture.pocketUnusable");
-    } else if (field === "category_id") {
-      serverField = "category";
-      serverText = t("capture.categoryUnusable");
-    } else if (field === "occurred_on") {
-      serverField = "date";
-      serverText = t("capture.dateInvalid");
-    } else if (field === "description") {
-      serverField = "description";
-      serverText = errorMessage(t, err);
-    }
-  }
-  const serverMessage = (k: FieldKey) => (serverField === k ? serverText : null);
-  const amountMessage =
-    serverMessage("amount") ?? (submitted || (edited && amountTouched) ? local.amount : null);
-  const pocketMessage = serverMessage("pocket") ?? (submitted ? local.pocket : null);
-  const categoryMessage = serverMessage("category");
-  const dateMessage = serverMessage("date");
-  const descriptionMessage = serverMessage("description");
-  const formMessage = err && serverField === null ? errorMessage(t, err) : null;
-
-  const clearServer = () => {
-    if (create.error) create.reset();
-    if (update.error) update.reset();
-  };
-
-  // What the stored Expense lacks of the form: the fields to PATCH. A lost reply
-  // makes the server replay the first body, so the form may have moved on since.
-  // The date counts only when the person picked one (CLAUDE.md rule 5).
-  function differences(stored: Expense, wire: string, note: string): UpdateExpenseRequest {
-    const wantCategory = categoryId !== "" && categoryId !== NO_CATEGORY ? categoryId : undefined;
-    const diff: UpdateExpenseRequest = {};
-    if (compareMoney(stored.amount, wire) !== 0) diff.amount = wire;
-    if (stored.pocket_id !== pocketId) diff.pocket_id = pocketId;
-    if (stored.category_id !== wantCategory) diff.category_id = wantCategory ?? null;
-    if (stored.description !== (note || undefined)) diff.description = note || null;
-    if (stored.occurred_time !== (time || undefined)) diff.occurred_time = time || null;
-    if (date !== "" && stored.occurred_on !== date) diff.occurred_on = date;
-    return diff;
-  }
-
-  async function save(wire: string, note: string): Promise<Expense> {
+  async function save(values: ExpenseValues): Promise<Expense> {
+    const { categoryId, pocketId, date, time, description: note } = values;
     const stored =
       created ??
       (await create.mutateAsync({
         id: attemptId,
-        amount: wire,
+        amount: values.amount,
         pocket_id: pocketId,
         ...(categoryId !== "" && categoryId !== NO_CATEGORY && { category_id: categoryId }),
         ...(date !== "" && { occurred_on: date }),
         ...(time !== "" && { occurred_time: time }),
         ...(note !== "" && { description: note }),
       }));
-    const diff = differences(stored, wire, note);
+    // A lost reply makes the server replay the first body, so the form may have
+    // moved on since: PATCH what the stored Expense lacks.
+    const diff = expenseDiff(stored, values);
     if (Object.keys(diff).length === 0) return stored;
     setCreated(stored);
     try {
@@ -210,19 +104,17 @@ export function CapturePage({ me }: { me: Me }) {
     }
   }
 
-  function onSubmit(e: FormEvent) {
-    e.preventDefault();
-    if (pending) return;
-    setSubmitted(true);
-    if (local.amount || local.pocket) return;
-    const wire = refund ? `-${amount}` : amount;
-    const note = description.trim();
-    save(wire, note)
+  function onSubmit(values: ExpenseValues) {
+    save(values)
       .then((stored) => {
         setAttemptId(uuidv7());
         setCreated(null);
-        toastPlain(
+        // The Edit action opens the Expense just saved. The Toaster is at the
+        // root, so it works after this screen has gone.
+        toastWithAction(
           t("toast.added", { name: formatMoney(stored.amount, stored.currency, i18n.language) }),
+          t("toast.edit"),
+          () => void navigate(routes.expense(stored.id)),
         );
         if (mounted.current) void navigate(routes.home);
       })
@@ -241,132 +133,19 @@ export function CapturePage({ me }: { me: Me }) {
   return (
     <>
       <PageTitle>{t("capture.title")}</PageTitle>
-      <Form onSubmit={onSubmit}>
-        <Field>
-          <Label htmlFor="expense-amount">{t("fields.amount")}</Label>
-          <MoneyInput
-            id="expense-amount"
-            // The one field the person is here to fill (R15).
-            autoFocus
-            currency={currency}
-            value={amount}
-            disabled={pending}
-            onChange={(wire) => {
-              setAmount(wire);
-              setEdited(true);
-              clearServer();
-            }}
-            onBlur={() => setAmountTouched(true)}
-            aria-invalid={amountMessage ? true : undefined}
-            aria-describedby={amountMessage ? "expense-amount-error" : undefined}
-          />
-          {amountMessage && <FieldError id="expense-amount-error">{amountMessage}</FieldError>}
-          <CheckboxRow className="justify-start" checked={refund} onChange={setRefund}>
-            {t("capture.refund")}
-          </CheckboxRow>
-        </Field>
-        <Field>
-          <Label htmlFor="expense-pocket">{t("fields.pocket")}</Label>
-          <Select
-            value={pocketId}
-            disabled={pending}
-            onValueChange={(v) => {
-              setPocketChoice(v);
-              clearServer();
-            }}
-          >
-            <SelectTrigger
-              id="expense-pocket"
-              aria-invalid={pocketMessage ? true : undefined}
-              aria-describedby={pocketMessage ? "expense-pocket-error" : undefined}
-            />
-            <SelectContent>
-              {activePockets.map((p) => (
-                <SelectItem key={p.id} value={p.id}>
-                  {p.pocket_display_name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          {pocketMessage && <FieldError id="expense-pocket-error">{pocketMessage}</FieldError>}
-        </Field>
-        <Field>
-          <Label htmlFor="expense-category">{t("fields.category")}</Label>
-          <Select
-            value={categoryId}
-            disabled={pending}
-            onValueChange={(v) => {
-              setCategory(v);
-              clearServer();
-            }}
-          >
-            <SelectTrigger
-              id="expense-category"
-              aria-invalid={categoryMessage ? true : undefined}
-              aria-describedby={categoryMessage ? "expense-category-error" : undefined}
-            />
-            <SelectContent>
-              <SelectItem value={NO_CATEGORY}>{t("capture.noCategory")}</SelectItem>
-              {activeCategories.map((c) => (
-                <SelectItem key={c.id} value={c.id}>
-                  {c.category_display_name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          {categoryMessage && (
-            <FieldError id="expense-category-error">{categoryMessage}</FieldError>
-          )}
-        </Field>
-        <Field>
-          <Label htmlFor="expense-description">{t("fields.description")}</Label>
-          <Input
-            id="expense-description"
-            value={description}
-            disabled={pending}
-            onChange={(e) => {
-              setDescription(clampName(e.target.value, DESCRIPTION_MAX));
-              clearServer();
-            }}
-            aria-invalid={descriptionMessage ? true : undefined}
-            aria-describedby={descriptionMessage ? "expense-description-error" : undefined}
-          />
-          {descriptionMessage && (
-            <FieldError id="expense-description-error">{descriptionMessage}</FieldError>
-          )}
-        </Field>
-        <Field>
-          <Label htmlFor="expense-date">{t("fields.date")}</Label>
-          <div className="flex items-center gap-2">
-            <div className="min-w-0 flex-1">
-              <DateField
-                id="expense-date"
-                value={date}
-                today={me.today}
-                disabled={pending}
-                error={dateMessage ? "expense-date-error" : undefined}
-                onChange={(iso) => {
-                  setDate(iso);
-                  clearServer();
-                }}
-              />
-            </div>
-            <TimeField
-              value={time}
-              disabled={pending}
-              onChange={(hhmm) => {
-                setTime(hhmm);
-                clearServer();
-              }}
-            />
-          </div>
-          {dateMessage && <FieldError id="expense-date-error">{dateMessage}</FieldError>}
-        </Field>
-        {formMessage && <FieldError>{formMessage}</FieldError>}
-        <Button type="submit" className="w-full" disabled={pending}>
-          {pending ? t("capture.adding") : t("capture.add")}
-        </Button>
-      </Form>
+      <ExpenseForm
+        me={me}
+        mode="create"
+        pockets={pockets.data}
+        categories={categories.data}
+        pending={create.isPending || update.isPending}
+        error={create.error ?? update.error}
+        onClearError={() => {
+          if (create.error) create.reset();
+          if (update.error) update.reset();
+        }}
+        onSubmit={onSubmit}
+      />
     </>
   );
 }

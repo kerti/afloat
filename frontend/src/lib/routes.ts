@@ -11,6 +11,10 @@ export const routes = {
   budget: "/budget",
   expenses: "/expenses",
   capture: "/capture",
+  uncategorisedExpenses: "/expenses?uncategorised=true",
+  // The edit route's pattern, for <Route path>; `expense(id)` builds a link.
+  expensePattern: "/expenses/:id",
+  expense: (id: string) => `/expenses/${encodeURIComponent(id)}`,
 } as const;
 
 // Paths that used to be screens. Each only redirects to /settings, keeping the

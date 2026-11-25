@@ -190,6 +190,52 @@ WHERE e.household_id = sqlc.arg(household_id)
 ORDER BY e.occurred_on DESC, k.time_key DESC, e.captured_at DESC, e.id DESC
 LIMIT sqlc.arg(page_size);
 
+-- ---- the uncategorised list and its count -----------------------------------
+--
+-- GET /expenses?uncategorised=true (#140 R8): ListExpenses with one more
+-- predicate, `category_id IS NULL`, and everything else the same (the order, the
+-- effective time and the keyset), so a cursor from either list resumes in the
+-- other. A statement of its own and not a boolean argument on ListExpenses, on
+-- purpose: the predicate has to be a literal in the text for the planner to
+-- choose the partial index (household_id, occurred_on DESC, id DESC) WHERE
+-- deleted_at IS NULL AND category_id IS NULL (expenses_household_uncategorised_idx),
+-- which a prepared statement's generic plan, with the flag as a parameter, cannot
+-- promise. Keep the two bodies in step.
+-- name: ListUncategorisedExpenses :many
+SELECT sqlc.embed(e), k.time_key::time AS time_key
+FROM expenses e
+JOIN households h ON h.id = e.household_id
+CROSS JOIN LATERAL (
+    SELECT CASE
+        WHEN e.occurred_time IS NOT NULL
+            THEN e.occurred_time - (h.day_starts_at - time '00:00')
+        WHEN ((e.captured_at AT TIME ZONE sqlc.arg(time_zone)::text) - (h.day_starts_at - time '00:00'))::date = e.occurred_on
+            THEN (e.captured_at AT TIME ZONE sqlc.arg(time_zone)::text)::time - (h.day_starts_at - time '00:00')
+        ELSE time '00:00'
+    END AS time_key
+) k
+WHERE e.household_id = sqlc.arg(household_id)
+  AND e.deleted_at IS NULL
+  AND e.category_id IS NULL
+  AND e.occurred_on <= coalesce(sqlc.narg(after_occurred_on)::date, 'infinity'::date)
+  AND (
+        sqlc.narg(after_occurred_on)::date IS NULL
+        OR e.occurred_on < sqlc.narg(after_occurred_on)::date
+        OR (k.time_key, e.captured_at, e.id)
+           < (sqlc.narg(after_time_key)::time, sqlc.narg(after_captured_at)::timestamptz, sqlc.narg(after_id)::uuid)
+  )
+ORDER BY e.occurred_on DESC, k.time_key DESC, e.captured_at DESC, e.id DESC
+LIMIT sqlc.arg(page_size);
+
+-- How many live Expenses of the Household have no Category: the figure behind
+-- "Needs a category (N)", independent of the page and the filter. Derived on
+-- every read (N5), never stored. Served by the same partial index.
+-- name: CountUncategorisedExpenses :one
+SELECT count(*) FROM expenses
+WHERE household_id = sqlc.arg(household_id)
+  AND deleted_at IS NULL
+  AND category_id IS NULL;
+
 -- ---- the default Pocket ----------------------------------------------------
 
 -- The Pocket capture offers first (#140 R3): that of the Household's most recent

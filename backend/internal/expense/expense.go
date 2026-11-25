@@ -1,6 +1,6 @@
 // Package expense owns the Household's Expenses (PRD E1 to E10): recording one,
-// listing them and correcting one. Reading one, deleting and restoring are later
-// slices of #140. Handlers live with their domain (docs/adr/go/0001).
+// listing them, reading one and correcting one. Deleting and restoring are a later
+// slice of #140. Handlers live with their domain (docs/adr/go/0001).
 //
 // The dependency runs one way: this package imports auth, for the User in the
 // request context and the shared text rule, and budget, for the one place a

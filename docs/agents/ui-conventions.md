@@ -99,12 +99,15 @@ tag each, so it has components only. A missing element is proposed first (see Ho
 - `DateField` (`components/DateField.tsx`): the date control. A full-width trigger reading the date
   long-style ("20 November 2026"), and "Today" while it is untouched or equals the server's `today`,
   that opens a `react-day-picker` calendar in a popover. Today is `me.today`, never the device's. An
-  untouched field sends no date and the server dates the Expense. (Uruni `web/src/components/
-DateField.tsx`; ruled 25 Nov 2026, #140 PR 3b.)
+  untouched field sends no date and the server dates the Expense. On the edit route the trigger reads
+  the stored date in the list's day-heading words ("Today", "Yesterday", else weekday and date, the
+  year only when it differs), from the server's `today`. (Uruni `web/src/components/DateField.tsx`;
+  ruled 25 Nov 2026, #140 PR 3b; edit, #140 PR 4.)
 - `TimeField` (`components/TimeField.tsx`): an optional time of day. Unset it is a quiet "Add time"
   link-style trigger; set it is a small box with a clock and "19:05" and a ✕ that clears it. A popover
   holds a 24-hour grid (4 by 6), then the minutes in 5-minute steps (4 by 3), in both locales. Never
-  pre-filled. No Uruni or Balances precedent. (Ruled 25 Nov 2026, #140 PR 3b.)
+  pre-filled on create; the edit route shows the stored time. No Uruni or Balances precedent. (Ruled
+  25 Nov 2026, #140 PR 3b; edit, #140 PR 4.)
 - `SearchSelect` (`components/ui/search-select.tsx`): a themed picker with a search box, for a list
   too long to scan: the currency and the time zone. A trigger like the Radix `Select`'s, and a popover
   of `h-11` rows; arrow keys, Enter and Esc work from the search field; it says when nothing matches.
@@ -131,14 +134,20 @@ DateField.tsx`; ruled 25 Nov 2026, #140 PR 3b.)
   the badge sits beside the title and the amount ends the row. Category rows on `/budget` are
   `ListRow`s. (Confirmed by the maintainer, 23 Nov 2026, for #130 PR 3.)
 - `Badge` (`components/Badge.tsx`): the "Inactive" pill. Neutral only.
-- `DayGroup`, `ExpenseRow`, `LoadMore` (`components/ExpenseList.tsx`): the Expenses list. `DayGroup` is
+- `DayGroup`, `ExpenseRow`, `FilterRow`, `LoadMore` (`components/ExpenseList.tsx`): the Expenses list. `DayGroup` is
   a `SubsectionLabel` h3 over a bordered divided list, one per day ("Today", "Yesterday", else the
-  weekday and date, the year only when it differs from today's); `ExpenseRow` is a read-only two-line
-  `li`: a title (the description, else the Category, else a muted "Uncategorised") over a muted detail
-  line (Pocket, Category when not already the title, time; joined " · "), the amount at the right in
-  `tabular-nums` medium, and no chevron until a row opens something; `LoadMore` is a full-width
+  weekday and date, the year only when it differs from today's); `ExpenseRow` is a two-line
+  `li` holding one full-width link, at least 44px with a hover tint and a focus ring: a title (the
+  description, else the Category, else a muted "Uncategorised") over a muted detail line (Pocket,
+  Category when not already the title, time; joined " · "), the amount in `tabular-nums` medium, then
+  a `CaretRight` chevron, since it opens the edit route. Its accessible name is "Edit {title},
+  {amount}" ("Edit Lunch, Rp45,000"). `FilterRow` is the one row above the list that narrows it, a
+  bordered link ending in a chevron: "Needs a category (N)" on `/expenses`, shown only while N is
+  above zero, with no badge, no colour and no prompt (#140 R8). It sets `?uncategorised=true`; that
+  view has a "← All Expenses" `BackLink`, a `MutedText` line ("Expenses with no Category."), the same
+  day-grouped list, an `EmptyState` when nothing is left, and no `FilterRow`. (Confirmed by the maintainer, 25 Nov 2026, for #140 PR 4.) `LoadMore` is a full-width
   outline button that reads "Loading…" while it fetches. Never infinite scroll. (Uruni `web/src/
-screens/Home.tsx` purpose row, `web/src/components/LoadMore.tsx`; ruled 25 Nov 2026, #140 PR 3b.)
+screens/Home.tsx` purpose row, `web/src/components/LoadMore.tsx`; ruled 25 Nov 2026, #140 PR 3b; the link and the chevron, confirmed by the maintainer, 25 Nov 2026, for #140 PR 4.)
 - `FigureRow` (`components/FigureRow.tsx`): a read-only `li` for a `ListCard`, label left, amount
   right in `tabular-nums` medium. A negative figure is neutral, never coloured. A figure that cannot
   be computed yet is hidden, not shown as zero. An optional `badge` (the "Inactive" `Badge`) sits
@@ -160,7 +169,7 @@ screens/Home.tsx` purpose row, `web/src/components/LoadMore.tsx`; ruled 25 Nov 2
 (`components/UpdatePrompt.tsx`): the update banner.
 
 **Toasts**: `lib/plainToast.ts` (`toastPlain`, `toastSaved`, and `toastError` for a failure with
-no form open) and `lib/undoToast.ts` (`toastUndoable`), all tap-to-dismiss (`lib/tapToDismiss.ts`)
+no form open) and `lib/undoToast.ts` (`toastUndoable`, `toastWithAction`), all tap-to-dismiss (`lib/tapToDismiss.ts`)
 and all through the one `Toaster` (`components/ui/sonner.tsx`). Toasts follow the person's chosen
 appearance, not the OS. (Confirmed by the maintainer, 23 Nov 2026, for #124.)
 
@@ -270,7 +279,20 @@ role table follows Uruni `docs/Design-System.md` § Typography.)
   (Uruni.)
 - **A form that builds a big record or types an amount** (Expense capture) is a full route, not a
   dialog. No nested dialogs, no mode-switching dialogs, no unbounded list inside a dialog. (Uruni.)
-- **Tapping a row opens its edit dialog.** The row is one full-width button, at least 44px, with a
+- **An Expense is edited on a route**, `/expenses/:id`: the Capture form in edit mode (one shared form
+  body), "← Expenses" above the title, footer [Save] alone, Expenses lit in the tab bar. Save sends
+  only the fields that differ; a cleared Category, description or time goes as `null`. It ends in one
+  "Saved." toast and **goes back in history** to where the person came from (the list, the
+  uncategorised view, Home via the toast's Edit), or, with no in-app history (a direct link), replaces
+  to `/expenses`. The fields start from the stored Expense: a stored negative shows as positive with
+  the Refund box ticked, the time is pre-filled, and the date row reads in the list's day-heading
+  words. An inactive Pocket or Category the Expense already holds stays in its picker as the
+  selected option, worded "{name} (inactive)", while other inactive ones stay hidden (#140 R10); it is
+  not sent unless changed. A record gone at Save, or already gone when the route opens (NOT_FOUND
+  on its read), follows the gone-record rule below and lands on `/expenses`; any other failed read
+  keeps `ErrorState` with "Try again". (#140 R17; the "(inactive)" wording and gone on opening confirmed by the
+  maintainer, 25 Nov 2026.)
+- **Tapping a row opens its edit dialog** (an Expense's row opens its edit route instead, above). The row is one full-width button, at least 44px, with a
   hover tint and a focus ring; its badges (Inactive) sit inside it; its accessible name names the
   record ("Edit OVO"), and its figure when the row shows one ("Edit Rent, Rp3,000,000", "Edit Transport,
   No allocation"), then ", inactive" when it is. (Confirmed by the maintainer, 23 Nov 2026, for #130 PR 3.) No per-row pencil, trash or ⋮ menu. A row that navigates to another screen ends
@@ -397,10 +419,13 @@ role table follows Uruni `docs/Design-System.md` § Typography.)
   "Deactivated OVO." and "Reactivated OVO." each get the 8 s Undo, even though the reverse is one tap
   away in the dialog. Consistency wins over "it's cheap to redo". Failure with no form open: an error
   toast with the code's copy. (Balances ADR-0058 §4; Uruni "the one way to say saved"; ruled 22 Nov.)
-- **Capture's toast** is one plain 4 s toast naming the object by its amount: "Added Rp25.000." A
-  refund reads with its sign ("Added -Rp450.000."). **No Undo and no Edit action**: the Undo of a
-  create would be a delete into the Recycle Bin, so a slip is mended from the Expense itself. Capture
-  then returns to Home. (#140 R16; ruled 25 Nov 2026, #140 PR 3b.)
+- **Capture's toast** is one 8 s toast naming the object by its amount: "Added Rp25.000." A refund
+  reads with its sign ("Added -Rp450.000."). It carries an **Edit** action that opens the Expense
+  just saved on its edit route, and **no Undo**: the Undo of a create would be a delete into the
+  Recycle Bin, so a slip is mended from the Expense itself. It is the action-toast kind (8 s, pauses
+  on hover, countdown bar), raised by `toastWithAction` in `lib/undoToast.ts`, and its Edit works
+  after Capture has unmounted. Capture then returns to Home. (#140 R16; ruled 25 Nov 2026, #140
+  PR 3b; Edit added, confirmed by the maintainer, 25 Nov 2026, for #140 PR 4.)
 - **Bottom toasts clear the tab bar**: the `Toaster` offsets them above the bar, its raised Capture
   square and `env(safe-area-inset-bottom)`, so a toast never covers a tab. (#140 PR 3b.)
 - **A one-time notice is a `NoticeCard` in the page flow**, carried by router state and never
@@ -413,7 +438,7 @@ role table follows Uruni `docs/Design-System.md` § Typography.)
   pauses it. So every toast carries an id (`lib/tapToDismiss.ts`), and the Toaster dismisses the
   one tapped. A tap on a button inside it (Undo) is the button's. **Toasts are raised only through
   the helpers** `toastPlain`, `toastSaved` and `toastError` (`lib/plainToast.ts`) and
-  `toastUndoable` (`lib/undoToast.ts`), never by importing sonner; a test enforces it
+  `toastUndoable` and `toastWithAction` (`lib/undoToast.ts`), never by importing sonner; a test enforces it
   (`lib/toastsThroughHelpers.test.ts`). Afloat keeps sonner (#121 R9) where Uruni hand-builds its
   provider. (Ruled 22 Nov.)
 - **Durations:** 4 s plain, 8 s with an action; an action toast pauses on hover and shows the

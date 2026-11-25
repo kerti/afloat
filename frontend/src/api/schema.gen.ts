@@ -798,9 +798,27 @@ export interface paths {
         /**
          * The caller's Household's live Expenses, newest first.
          * @description Every Expense of the caller's Household that is not deleted, **all
-         *     Periods together, newest first**, a page at a time. No filter of any
-         *     kind: nothing in the request names a Household, a Period, a Pocket or a
-         *     Category. An empty Household answers `{"items": []}`.
+         *     Periods together, newest first**, a page at a time. The one filter is
+         *     `uncategorised` (below): nothing in the request names a Household, a
+         *     Period, a Pocket or a Category. An empty Household answers
+         *     `{"items": [], "uncategorised_count": 0}`.
+         *
+         *     **`uncategorised=true`** narrows the same list to the live Expenses that
+         *     have no Category: any date, the same order and the same paging, so
+         *     `next` and `after` work inside the filtered list. `false` and an absent
+         *     parameter are the same, the whole list. A value that is not a boolean is
+         *     `VALIDATION {field: uncategorised, rule: invalid}`. A cursor names a position in the
+         *     order, and the filtered list is the whole list less some rows, so one
+         *     issued for either list is accepted by the other and resumes after that
+         *     position: nothing repeats and nothing is skipped on account of the
+         *     switch.
+         *
+         *     **`uncategorised_count`** is on every read of the live list: the number
+         *     of live Expenses in the caller's whole Household that have no Category,
+         *     **whatever the filter and whatever the page**. It is worked out for each
+         *     read and never stored. It is read in its own statement just after the
+         *     page, so a write that lands between the two can leave the count one
+         *     ahead of or behind the rows beside it; the next read agrees.
          *
          *     **Order, declared and never left to the database:** `occurred_on`
          *     descending, then the **effective time** descending, then `captured_at`
@@ -907,7 +925,18 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /**
+         * One Expense.
+         * @description The Expense as it stands, in the shape the list and `PATCH` answer, so
+         *     a route that names one Expense (to edit it, to reload it, to follow a
+         *     link to it) does not need it to be on a loaded page of the list.
+         *
+         *     An id that is unknown, that belongs to another Household, or that is
+         *     deleted is `404 NOT_FOUND`, the same answer in every case, so no request
+         *     confirms another Household's id. A value that is not a UUID is `400
+         *     VALIDATION {field: id, rule: invalid}`, as on every `{id}` route.
+         */
+        get: operations["getExpense"];
         put?: never;
         post?: never;
         delete?: never;
@@ -919,8 +948,8 @@ export interface paths {
          *     unchanged, none is required, and `{}` is a no-op that answers the
          *     Expense as it stands. Two writers of different properties both land,
          *     and the last write to one property wins (no `If-Match`). The answer is
-         *     the whole Expense. `GET`, `DELETE` and the restore of one Expense are
-         *     later slices.
+         *     the whole Expense. `DELETE` and the restore of one Expense are later
+         *     slices.
          *
          *     **Editable:** `amount`, `occurred_on`, `occurred_time`, `pocket_id`,
          *     `category_id`, `description`, and `ownership` with `owner_user_id`.
@@ -1409,8 +1438,8 @@ export interface components {
             owner_user_id?: string;
         };
         /**
-         * @description One page of the Household's live Expenses, newest first. An object so it
-         *     can carry a cursor and, later, counts, without breaking a client.
+         * @description One page of the Household's live Expenses, newest first, with a cursor
+         *     and the count of those still without a Category.
          */
         ExpenseList: {
             items: components["schemas"]["Expense"][];
@@ -1419,6 +1448,12 @@ export interface components {
              *     last page, never `null`.
              */
             next?: string;
+            /**
+             * @description How many live Expenses in the whole Household have no Category,
+             *     independent of the page and of the `uncategorised` filter. Derived on
+             *     each read, never stored.
+             */
+            uncategorised_count: number;
         };
         CreateExpenseRequest: {
             /**
@@ -2455,6 +2490,13 @@ export interface operations {
                  *     {field: after, rule: invalid}`.
                  */
                 after?: string;
+                /**
+                 * @description `true` lists only the live Expenses with no Category. `false` or
+                 *     absent lists them all. Only those two spellings are promised: a value
+                 *     that cannot be read as a boolean at all is `VALIDATION {field:
+                 *     uncategorised, rule: invalid}`.
+                 */
+                uncategorised?: boolean;
             };
             header?: never;
             path?: never;
@@ -2510,6 +2552,37 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             409: components["responses"]["Conflict"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getExpense: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description An Expense's id. Deliberately no `pattern` and no `maxLength`, for the
+                 *     reason `PocketId` gives (#106). A value that is not a UUID is
+                 *     `400 VALIDATION {field: id, rule: invalid}`, from the binder.
+                 */
+                id: components["parameters"]["ExpenseId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The Expense. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Expense"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
             500: components["responses"]["InternalError"];
         };
     };

@@ -42,7 +42,12 @@ func (h *Handlers) GetMe(ctx context.Context, _ api.GetMeRequestObject) (api.Get
 		return internalError[api.GetMeResponseObject]()
 	}
 
-	return api.GetMe200JSONResponse(meResponse(user, household)), nil
+	me, err := h.meResponse(user, household)
+	if err != nil {
+		slog.Error("me: work out today", "err", err)
+		return internalError[api.GetMeResponseObject]()
+	}
+	return api.GetMe200JSONResponse(me), nil
 }
 
 // Logout destroys the session and clears the cookie.

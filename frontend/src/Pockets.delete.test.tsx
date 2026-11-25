@@ -174,6 +174,34 @@ describe("deleting a Pocket", () => {
   });
 });
 
+describe("a Pocket an Expense references (POCKET_IN_USE)", () => {
+  it("refuses Delete: the dialog stays open with the error and Deactivate, and no toast", async () => {
+    const state = signedIn({
+      pockets: [pocket("a", "Cash"), pocket("b", "OVO")],
+      pocketsInUse: ["a"],
+    });
+    server.use(...defaultHandlers(state));
+    const user = userEvent.setup();
+    const view = renderApp("/settings");
+
+    const dialog = await openEdit(user, "Cash");
+    await user.click(within(dialog).getByRole("button", { name: p.delete }));
+
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent(enGB.errors.POCKET_IN_USE);
+    expect(screen.getByRole("dialog", { name: p.editHeading })).toBeInTheDocument();
+    expect(view.param("edit")).toBe("pocket:a");
+    expect(within(dialog).getByRole("button", { name: p.deactivate })).toBeEnabled();
+    expect(within(dialog).getByRole("button", { name: p.delete })).toBeEnabled();
+    expect(toastMock).not.toHaveBeenCalled();
+    expect(toastMock.error).not.toHaveBeenCalled();
+
+    // Deactivate is the way out.
+    await user.click(within(dialog).getByRole("button", { name: p.deactivate }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(state.pocketPatches).toEqual([{ active: false }]);
+  });
+});
+
 describe("the last active Pocket (LAST_POCKET)", () => {
   const refuse = (method: "delete" | "patch") =>
     http[method]("/api/pockets/:id", () =>

@@ -14,6 +14,7 @@ import (
 	"github.com/kerti/afloat/backend/internal/auth"
 	"github.com/kerti/afloat/backend/internal/budget"
 	"github.com/kerti/afloat/backend/internal/category"
+	"github.com/kerti/afloat/backend/internal/expense"
 	"github.com/kerti/afloat/backend/internal/household"
 	"github.com/kerti/afloat/backend/internal/pocket"
 	"github.com/kerti/afloat/backend/internal/system"
@@ -32,6 +33,7 @@ type Server struct {
 	pocket    *pocket.Handlers
 	budget    *budget.Handlers
 	category  *category.Handlers
+	expense   *expense.Handlers
 }
 
 type Deps struct {
@@ -41,6 +43,7 @@ type Deps struct {
 	Pocket    *pocket.Handlers
 	Budget    *budget.Handlers
 	Category  *category.Handlers
+	Expense   *expense.Handlers
 
 	// Web serves the built frontend (web.Handler, BOOTSTRAP.md §8) on every
 	// GET and HEAD outside the API. Nil in a binary built without one: the
@@ -150,13 +153,21 @@ func (s *Server) UpdateBudget(ctx context.Context, r api.UpdateBudgetRequestObje
 	return s.budget.UpdateBudget(ctx, r)
 }
 
+func (s *Server) ListExpenses(ctx context.Context, r api.ListExpensesRequestObject) (api.ListExpensesResponseObject, error) {
+	return s.expense.ListExpenses(ctx, r)
+}
+
+func (s *Server) CreateExpense(ctx context.Context, r api.CreateExpenseRequestObject) (api.CreateExpenseResponseObject, error) {
+	return s.expense.CreateExpense(ctx, r)
+}
+
 // New builds the router: the API under the contract's base path (basePath,
 // /api today), with the middleware every request passes through.
 //
 // Middleware is written as func(http.Handler) http.Handler and stays free of
 // chi types, so the stdlib exit ADR-0001 describes remains cheap.
 func New(d Deps) http.Handler {
-	srv := &Server{system: d.System, auth: d.Auth, household: d.Household, pocket: d.Pocket, budget: d.Budget, category: d.Category}
+	srv := &Server{system: d.System, auth: d.Auth, household: d.Household, pocket: d.Pocket, budget: d.Budget, category: d.Category, expense: d.Expense}
 
 	r := chi.NewRouter()
 	// First, so every response this router produces carries the id and the

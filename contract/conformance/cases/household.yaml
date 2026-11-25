@@ -205,6 +205,7 @@
       locale: en-GB
       time_zone: Asia/Jakarta
       appearance: system
+      today: "<re:[0-9]{4}-[0-9]{2}-[0-9]{2}>"
       household:
         id: 0192f0a0-0000-7000-8000-000000000001
         household_display_name: Rumah Kita
@@ -272,6 +273,7 @@
       locale: en-GB
       time_zone: Asia/Jakarta
       appearance: system
+      today: "<re:[0-9]{4}-[0-9]{2}-[0-9]{2}>"
       household:
         id: 0192f0a0-0000-7000-8000-000000000001
         household_display_name: Conformance Household

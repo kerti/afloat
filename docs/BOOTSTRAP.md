@@ -85,6 +85,7 @@ afloat/
 │       ├── period/                 # Period Day and Budget Period arithmetic, pure — §6 (#130)
 │       ├── budget/                 # the Budget of the current Period, its materialisation and its changes (#130)
 │       ├── category/               # Categories: list, create (with the allocation one starts with), rename, deactivate or reactivate (#130)
+│       ├── expense/                # Expenses: create and the live, keyset-paged list; the rest of an Expense's life follows (#140)
 │       ├── migrations/             # CANONICAL goose migrations, hand-written, //go:embed — §7
 │       └── auth/common_passwords.txt  # the password denylist — §5.1
 ├── frontend/                       # React app
@@ -163,7 +164,18 @@ with zoneinfo answers from it, so a case-insensitive filesystem (a Mac) also acc
     the live row is the `200`, no row is `ID_TAKEN`. Found by the concurrent-create test, as a
     `500`.
   - **No transaction and no detached context:** it is one statement, and retrying with the same id
-    is the recovery.
+    is the recovery. *Except a create whose references can change state* (an Expense: its Pocket is
+    active, its Category live, the Household's currency; #140): `ErrNoRows` from an `INSERT ... SELECT`
+    that checked them would mean two things, "the id is held" and "a reference failed", so it is one
+    transaction (on the request's context, so a client that goes away rolls it back) of statements in
+    this order: (1) read back by id, and the caller's own live row is the `200` with **no reference
+    looked at again**, so a retry after the Pocket was deactivated is still a replay; (2) lock, `FOR
+    SHARE`, the Household (which also says the currency to stamp), then the Pocket, then the Category
+    and the owner the body names, each as its own statement with its liveness predicate (a nullable
+    reference cannot be locked through an outer join), collecting what is refused and reporting the
+    least `(field, rule)`; (3) `INSERT ... ON CONFLICT (id) DO NOTHING RETURNING *`, where `ErrNoRows`
+    **does** mean "the id is held": read back, `200` or `ID_TAKEN`. The body's own rules are judged
+    before any statement, so a foreign `pocket_id` beside a bad body answers the bad body.
 - **Names are `<entity>_display_name`** on the wire, in SQL, in Go and in i18n keys (#113 D5, #121):
   `household_display_name`, `user_display_name`, `pocket_display_name`, `category_display_name`. A
   bare `name` would be one
@@ -185,6 +197,15 @@ with zoneinfo answers from it, so a case-insensitive filesystem (a Mac) also acc
   the database: `ORDER BY created_at, id`, so a rename does not reshuffle a picker and the order does
   not depend on a collation. The list holds every row that is not soft-deleted; whether an inactive
   one appears is the entity's call, and the client filters what it already holds.
+  **The exception is an unbounded one: Expenses (#140, R7), the first paginated list.** It is
+  **keyset-paged, never offset**: `limit` (1 to 100, default 25) and an opaque `after`, the previous
+  page's `next`, which is **omitted on the last page** and never `null`; a malformed `after` is
+  `VALIDATION {after, invalid}`. The order is declared in SQL and ends in `id` so a page boundary is
+  exact over rows equal in every other key, and any key that is **computed** on read (the Expense list's
+  effective time) is in the cursor, or a boundary on it repeats rows. A row another writer edits
+  between two reads may repeat or be skipped; no snapshot is held. **Every query on a table that
+  grows ships its plan in the PR that adds it** (`EXPLAIN ANALYZE` over a seeded throwaway database,
+  in the PR body), not a plan-asserting test.
 - **Money:** `DECIMAL(20,4)`, serialised as **strings** on the wire, at exactly the storage scale —
   4 decimal places, always, never trimmed and never exponent notation. `"25000000"` and `"2.5e7"` are
   both wrong for a `25000000.0000` row; `"25000000.0000"` is the only correct rendering. In Go, use
@@ -194,14 +215,22 @@ with zoneinfo answers from it, so a case-insensitive filesystem (a Mac) also acc
   integer digits and 4 decimals, with no sign, exponent, separator or whitespace, enforced by the
   contract's `pattern` (`VALIDATION {rule: pattern}`). More than 4 decimals is refused, **never
   rounded**. A JSON number is `INVALID_JSON_BODY` (no scalar coercion). Out is a `Money`: the same
-  number at exactly four decimals, and negative only where it is a difference.
+  number at exactly four decimals, and negative only where it is a difference or a refund. **An
+  Expense's amount is a `SignedMoneyInput`** (#140, R4): the same with an optional leading `-`, a
+  negative one being a refund. The pattern cannot say "not zero" (no lookahead), so the handler
+  refuses `"0"`, `"0.0000"` and `"-0"` as `VALIDATION {amount, nonzero}` (§5.2), `CHECK (amount <> 0)`
+  being the net under it.
 - **Currency:** every monetary value carries its `currency` column even though the MVP UI is pinned to
   the Household's reporting currency. **The exception is the Household's plan** (#130, R11, PRD N3):
   `households.expected_monthly_income` and the Budget's amounts (`monthly_budgets.monthly_budget`
   and
   `allocations.allocation`) have no `currency` column and are in the Household's
   `reporting_currency`, because a plan is what reporting-currency spend is compared to. Changing
-  `reporting_currency` relabels them and converts nothing.
+  `reporting_currency` relabels them and converts nothing. **An Expense's `currency` is stamped by the
+  server from `reporting_currency` at the create, read under `FOR SHARE` on the Household's row, and never
+  sent or changed; `reporting_currency` is locked once any Expense exists, a deleted one included
+  (`409 CURRENCY_LOCKED`; the stored currency is a no-op).** It is the same recipe as every guard
+  below, with the Household's row as the lock.
 - **Dates:** `occurred_on` is a `date` (the Period Day). `captured_at` is `timestamptz`. Everything
   else that is an instant is `timestamptz`. A Budget version's `effective_on` is a `date`, the writer's
   Today (#130).
@@ -228,26 +257,43 @@ with zoneinfo answers from it, so a case-insensitive filesystem (a Mac) also acc
     index decides it, mapped by constraint name as a create's is, never a lookup before the
     `UPDATE`: two concurrent restores into one name answer one `200` and one `409`, never a `500`.
   - **An entity that history references cannot be deleted while it is referenced (#121, R1):**
-    `409 POCKET_IN_USE` for a Pocket, soft-deleted Expenses included (built by the Expenses slice,
-    which adds the referencing table; until then nothing can reference a Pocket, so the code is not
-    in the contract), and `409 CATEGORY_IN_USE` for a Category (#130, PR 4), which today means an
-    allocation, a non-null amount, in a Budget Period **other than the current one** (the Expenses
-    slice extends it to any Expense, soft-deleted ones included). **The guard is not a `NOT EXISTS`
+    `409 POCKET_IN_USE` for a Pocket, soft-deleted Expenses included (#140), and `409 CATEGORY_IN_USE`
+    for a Category (#130, PR 4), which means an allocation, a non-null amount, in a Budget Period
+    **other than the current one**, **or any Expense, soft-deleted ones included** (#140; one code,
+    so the client cannot say which). Both answer with Deactivate. The guarded rows are the Pocket,
+    the Category and, for the currency, the Household. **The guard is not a `NOT EXISTS`
     in the delete's `WHERE`** (this bullet said so until #130): under `READ COMMITTED` an `UPDATE`
     whose target row is locked waits for the locker, then proceeds on the row's new version **without
     re-running its subquery**, so a referencing row committed during the wait is never seen. The
     shape that holds is one transaction of three statements, **in this order**: (1) `SELECT ... FOR
-    UPDATE` of the entity's row (an unknown or another Household's id is no row, `404`; a row already
+    UPDATE` of the entity's row (**`FOR NO KEY UPDATE`** where another writer's insert takes `FOR KEY
+    SHARE` on that row for a foreign key and must not wait behind it: the Household and, with it, the
+    Pocket, as the `LAST_POCKET` bullet below explains; a Category's is `FOR UPDATE` and nothing
+    else is in its way; both conflict with the `FOR SHARE` every referencing writer takes) (an unknown or another Household's id is no row, `404`; a row already
     deleted is the idempotent `204`, and the guard does not apply to it); (2) the `EXISTS` check, as a
     **separate statement**, which takes its snapshot only after the lock was granted and so sees
     everything committed by every writer that held the row; (3) the soft delete. Every write that
     inserts a referencing row takes `FOR SHARE` on the entity's row **in the same statement that
-    verifies it is live** (`INSERT ... SELECT ... FROM categories ... FOR SHARE`), so a writer that
+    verifies it is live** (`INSERT ... SELECT ... FROM categories ... FOR SHARE`; an Expense create,
+    its own statement per row, §4's *Idempotent create*), so a writer that
     comes after the delete finds it deleted and refuses, and one that came first is seen by the check.
-    Lock order: the delete holds one row, so it cannot deadlock with the writers, which take their
-    rows in key order (the sorted allocation writes, above). The test for a guard of this kind runs
+    Lock order: a Category's delete holds one row, so it cannot deadlock with the writers, which take
+    their rows in key order (the sorted allocation writes, above). A Pocket's delete holds the
+    Household and then the Pocket, and an Expense create takes the Household, then the Pocket, then the
+    Category, the same order, so the two cannot wait on each other in a cycle; the currency change holds
+    the Household alone. An Expense create's `FOR SHARE` on the Household also makes a plain `UPDATE
+    households` (a rename, say) wait for it, briefly, which is harmless. The test for a guard of this kind runs
     the same scenario against a single `UPDATE ... WHERE NOT EXISTS` and shows it lose
-    (`category_delete_integration_test.go`).
+    (`category_delete_integration_test.go`). The three guards' races against an Expense create, in both
+    orders, each with its red proof (the same interleaving with **all** of one side's locks taken off,
+    which leaves a deleted Pocket or Category referenced, or an Expense in a currency the Household no
+    longer has), are in `internal/expense/race_integration_test.go`. Lock by lock, the proof is red for
+    the Category lock and for the currency's Household lock, **but not for the Pocket's**: the Household
+    pair (`FOR NO KEY UPDATE` of a removal against the create's `FOR SHARE`) already serialises a Pocket
+    delete against a create, so stripping only the Pocket lock, or only the Household lock, stays green,
+    and the test says so. The Pocket lock is kept because it is the one the recipe names for the protected
+    row, and a writer that does not take the Household first (a restore, or an edit that re-points an
+    Expense, in the slices that follow) will rely on it alone.
   - **A Household always keeps one active, live Pocket (#140, R1): `409 LAST_POCKET`**, a code with no
     `args`, refuses a `DELETE /pockets/{id}` or a `PATCH` with `active: false` that would leave none.
     It is the same recipe with the **Household's** row as the lock, because the invariant is a count over
@@ -263,8 +309,9 @@ with zoneinfo answers from it, so a case-insensitive filesystem (a Mac) also acc
     a Pocket not yet committed is the answer the request ordered ahead of it would have got). A `PATCH`
     that leaves a Pocket active stays the one statement. The lock order is Household, then Pocket,
     and the **mode** matters as much as the order: removals take `FOR NO KEY UPDATE` on the Household and
-    then on the Pocket; writers that insert a referencing row (Expenses, the next slice) take `FOR SHARE`
-    on the Pocket; and the FK check of any insert takes `FOR KEY SHARE` on its parent rows, which
+    then on the Pocket (and `POCKET_IN_USE` is one more separate statement after both, ordered after
+    `LAST_POCKET`); writers that insert a referencing row (Expenses) take `FOR SHARE` on the Household and
+    then the Pocket; and the FK check of any insert takes `FOR KEY SHARE` on its parent rows, which
     `FOR NO KEY UPDATE` does not block. A plain `FOR UPDATE` on the Household would make a writer that
     holds `FOR SHARE` on a Pocket wait, at its FK check, behind a removal that is itself waiting on that
     Pocket: a `40P01` deadlock, answered `500`. The test runs two removals of the last two Pockets with each
@@ -778,7 +825,9 @@ live row of the caller's own Household, and `NAME_TAKEN` a name another live row
 a rename or a restore; both are
 `409`, carry no `args`, and name no entity. `LAST_POCKET` (#140) is the delete or deactivation of the
 Household's last active Pocket (`409`, no `args`; the guard is in §4). `NOT_FOUND` (#121) is an `{id}` that names no live row of
-the caller's own Household (`404`, no `args`; see *Tenancy on a path id*, §4). An **empty** `{id}`
+the caller's own Household (`404`, no `args`; see *Tenancy on a path id*, §4). `POCKET_IN_USE`,
+`CATEGORY_IN_USE` and `CURRENCY_LOCKED` (#140) are `409`s with no `args`, each a delete or a change
+refused because an Expense references the row or exists (§4, *Soft delete*, *Currency*). An **empty** `{id}`
 segment on a route that still matches, such as `/pockets//restore`, is a malformed id like any other:
 `400 VALIDATION {field: id, rule: invalid}`, after the session check, as the binder refuses it
 (ratified by the maintainer, 22 Nov, #121 PR 3). Only a path no route matches is the bare `404`: the
@@ -805,7 +854,15 @@ collection's `/pockets/` with a trailing slash, for one.
   `period_start_day` (`min`). Registration and every later write behave the same (#113).
 - `rule` uses go-playground/validator's tag names (`required`, `min`, `max`, `email`), plus `pattern`,
   and, for a handler's own rules, `unique` (a repeated `category_id`) and `invalid` (a path `{id}` that is
-  not a uuid, or a `category_id` that names no live Category of the Household). A contract failure inside
+  not a uuid, or a `category_id` that names no live Category of the Household), **`inactive`** (a
+  `pocket_id` or `category_id` naming the caller's own Pocket or Category that is no longer offered for
+  new capture; unknown, another Household's and deleted are `invalid`, one answer) and **`nonzero`**
+  (#140: an Expense's amount of zero in any spelling, `"0"`, `"0.0000"` or `"-0"`; go-playground's own
+  tag is `ne`, which says nothing to a reader of the envelope, and the word echoes the
+  `expenses_amount_nonzero` check that is the net under it). An Expense's `description` is the name rule
+  with a cap of 200, and `occurred_on` is `invalid` for a real-looking date that is not a day or has no
+  year (its contract rule is a `pattern`, not `format: date`, because a failed format is a bare
+  `INVALID_JSON_BODY` with no field). A contract failure inside
   an array item names its path in `field` (`allocations.0.allocation`); a handler rule names the bare
   property (`category_id`, `allocation`).
 - `minLength` and `maxLength` count code points, JSON Schema's characters: an emoji is one, not two
@@ -944,6 +1001,14 @@ over-allocation, Commitments above the Budget, a zero allocation, an inactive Ca
 deleted one not, no Monthly Budget yet). The backend's budget tests read it row by row through
 `GET /budget` and keep no copy of the numbers. `trajectory.json` is untouched: `Calculate` takes the
 Daily Pool as an input, and these rows are where that pool comes from.
+
+**`contract/testdata/expense_order.json` pins the order of `GET /expenses`** (#140, R7) and where a
+keyset page may end: date, the effective time (an offset into the Period Day, so with a 04:00 start
+01:30 sorts after 23:00; the capture's time of day only when it was captured on the Expense's own
+Period Day, judged on the capturer's wall clock, which a spring-forward and a fall-back day test),
+captured instant, then id, in scenarios of named rows with the order they must come back in and
+explicit pages. The backend's test (`internal/expense/list_integration_test.go`) reads it row by row
+and walks every page size over each scenario.
 
 ## 7. Migrations — correction to the Decisions draft
 

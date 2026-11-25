@@ -951,3 +951,38 @@
     rows:
       - sql: SELECT category_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM categories
         rows: [{name: Rent, active: true, deleted: false}]
+
+# POST /expenses (#140): a cross-site page must not be able to record spending,
+# and a refused request writes nothing.
+
+- name: "csrf - cross-site expense create is blocked and nothing is written"
+  issue: "140"
+  given:
+    - sql: |
+        INSERT INTO pockets (id, household_id, pocket_display_name) VALUES ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO')
+    - request: {"method": "POST", "path": "/auth/local/login", "headers": {"Content-Type": "application/json"}, "body": "{\"email\":\"alice@example.com\",\"password\":\"conformance-correct-horse\"}"}
+      status: 204
+  request: {"method": "POST", "path": "/expenses", "headers": {"Content-Type": "application/json", "Sec-Fetch-Site": "cross-site"}, "body": "{\"id\":\"0192f0a0-0000-7000-8004-000000000001\",\"amount\":\"1\",\"pocket_id\":\"0192f0a0-0000-7000-8001-000000000001\"}"}
+  expect:
+    status: 403
+    body_json: {"code": "CROSS_SITE_REQUEST_BLOCKED"}
+    cookies: {}
+    rows:
+      - sql: "SELECT count(*)::int AS n FROM expenses"
+        rows: [{"n": 0}]
+
+- name: "csrf - a foreign Origin on an expense create is blocked"
+  issue: "140"
+  given:
+    - sql: |
+        INSERT INTO pockets (id, household_id, pocket_display_name) VALUES ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO')
+    - request: {"method": "POST", "path": "/auth/local/login", "headers": {"Content-Type": "application/json"}, "body": "{\"email\":\"alice@example.com\",\"password\":\"conformance-correct-horse\"}"}
+      status: 204
+  request: {"method": "POST", "path": "/expenses", "headers": {"Content-Type": "application/json", "Origin": "http://evil.example"}, "body": "{\"id\":\"0192f0a0-0000-7000-8004-000000000001\",\"amount\":\"1\",\"pocket_id\":\"0192f0a0-0000-7000-8001-000000000001\"}"}
+  expect:
+    status: 403
+    body_json: {"code": "CROSS_SITE_REQUEST_BLOCKED"}
+    cookies: {}
+    rows:
+      - sql: "SELECT count(*)::int AS n FROM expenses"
+        rows: [{"n": 0}]

@@ -129,6 +129,11 @@ FOR NO KEY UPDATE
 // a removal waiting on that Pocket. NO KEY UPDATE still conflicts with FOR SHARE
 // and with itself, and not with KEY SHARE. No row is a Household that is gone,
 // which a live session cannot have.
+//
+// It is also the lock of CURRENCY_LOCKED (PATCH /household, #140 R12), which
+// conflicts with the FOR SHARE every Expense create takes on this row while it
+// stamps the Household's currency (LockHouseholdShared). The lock order, for every
+// writer, is Household, then Pocket, then Category.
 func (q *Queries) LockHousehold(ctx context.Context, householdID pgtype.UUID) (pgtype.UUID, error) {
 	row := q.db.QueryRow(ctx, lockHousehold, householdID)
 	var id pgtype.UUID
@@ -249,12 +254,14 @@ type SoftDeletePocketParams struct {
 // The guards are NOT here, and none may be folded in as a NOT EXISTS in the
 // WHERE: under READ COMMITTED an UPDATE that waits for a lock proceeds on the
 // row's new version without re-running its subquery, so a row committed during
-// the wait is never seen. The handler calls this last, in a transaction that
-// has locked the Household (LockHousehold), counted the other active Pockets
-// in a SEPARATE later statement (OtherActivePocketExists) and locked the row
-// (LockPocket). The in-use guard (PRD R1, #121: 409 POCKET_IN_USE while any
-// Expense references the Pocket) arrives with the Expenses table and takes
-// the same shape.
+// the wait is never seen. The handler calls this last, in one transaction of
+// statements in this order (BOOTSTRAP.md §4): LockHousehold, LockPocket, then the
+// guards as SEPARATE later statements, whose snapshots are taken only after the
+// locks were granted: OtherActivePocketExists (409 LAST_POCKET) and
+// PocketHasExpenses (409 POCKET_IN_USE, any Expense, live or deleted), then this
+// write. Every Expense create share-locks the Household and then the Pocket
+// first (expense.sql), so an Expense that committed before the delete's guard is
+// seen by it, and one that comes after finds the Pocket deleted and is refused.
 func (q *Queries) SoftDeletePocket(ctx context.Context, arg SoftDeletePocketParams) (int64, error) {
 	result, err := q.db.Exec(ctx, softDeletePocket, arg.ID, arg.HouseholdID)
 	if err != nil {

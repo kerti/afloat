@@ -50,9 +50,18 @@ const (
 	CodeNameTaken Code = "NAME_TAKEN"
 
 	// CodeCategoryInUse is a delete of a Category that holds an allocation, a
-	// non-null amount, in a Budget Period other than the current one (#130 C8).
-	// The Expenses slice extends it to any Expense that references the Category.
+	// non-null amount, in a Budget Period other than the current one (#130 C8),
+	// or any Expense, live or deleted, references the Category (#140 R12).
 	CodeCategoryInUse Code = "CATEGORY_IN_USE"
+
+	// CodePocketInUse is a delete of a Pocket that any Expense, live or deleted,
+	// references. The answer is to deactivate it instead (#121 R1, #140 R12).
+	CodePocketInUse Code = "POCKET_IN_USE"
+
+	// CodeCurrencyLocked is a change of the Household's reporting_currency to
+	// another currency once it holds any Expense, live or deleted (#113 D2,
+	// #140 R12). A refusal on a setting, never on spending.
+	CodeCurrencyLocked Code = "CURRENCY_LOCKED"
 
 	// CodeLastPocket is a delete, or a deactivation, of the Household's last
 	// active Pocket: a Household always keeps one, so that capture is never

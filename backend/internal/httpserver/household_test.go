@@ -52,7 +52,7 @@ func newHouseholdFixture(t *testing.T) householdFixture {
 			SessionMaxLifetime: 90 * 24 * time.Hour,
 			CookieSecure:       true,
 		}),
-		Household:      household.New(household.Deps{Querier: tdb.Queries}),
+		Household:      household.New(household.Deps{Querier: tdb.Queries, Beginner: tdb.Pool}),
 		HandlerTimeout: testHandlerTimeout,
 	})
 	return householdFixture{tdb: tdb, srv: srv, householdID: householdID, cookie: auth.SessionCookieName + "=" + token}

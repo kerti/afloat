@@ -101,7 +101,12 @@ func (h *Handlers) UpdateMe(ctx context.Context, request api.UpdateMeRequestObje
 		}
 		return internalError[api.UpdateMeResponseObject]()
 	}
-	return api.UpdateMe200JSONResponse(meResponse(row, household)), nil
+	me, err := h.meResponse(row, household)
+	if err != nil {
+		slog.Error("update me: work out today", "err", err)
+		return internalError[api.UpdateMeResponseObject]()
+	}
+	return api.UpdateMe200JSONResponse(me), nil
 }
 
 // fieldFailure is a field breaking a rule the contract cannot state.

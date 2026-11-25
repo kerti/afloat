@@ -7,7 +7,8 @@ whole scaffold sheet. If the two ever disagree, `BOOTSTRAP.md` wins and this fil
 - **Money:** `DECIMAL(20,4)` columns, strings on the wire. A JSON number or scientific notation is a
   bug. Worth its own conformance test rather than trusting review. Out: exactly four decimals
   (`StringFixed(4)`). In: an unsigned decimal string, at most 16 integer digits and 4 decimals, refused
-  and never rounded (`MoneyInput`'s `pattern`). The Household's plan (income, the Monthly Budget,
+  and never rounded (`MoneyInput`'s `pattern`); an Expense's amount is a `SignedMoneyInput` (a leading
+  `-` is a refund) and zero is `VALIDATION {amount, nonzero}`. The Household's plan (income, the Monthly Budget,
   allocations) has no `currency` column: it is in `reporting_currency`.
 - **Ids:** UUIDv7, client-generated, column type `uuid`. A row only the server creates and no request
   addresses by id (the Budget tables, allocations included) has a composite natural key and no `id`. Create is idempotent:
@@ -34,6 +35,9 @@ whole scaffold sheet. If the two ever disagree, `BOOTSTRAP.md` wins and this fil
   statements is read from one `REPEATABLE READ`, `READ ONLY` snapshot (`GET /budget`, and `PATCH /budget` after its
   write commits: a failed read then is a `500` with the change saved).
 - **Collections:** `{"items": [...]}`, empty is `{"items": []}` never `null`, ordered by `created_at, id`.
+  The exception is the unbounded Expense list: keyset-paged (`limit` 1 to 100, opaque `after` and
+  `next`, `next` omitted on the last page), an order ending in `id`, any computed sort key in the
+  cursor. Every query on a growing table ships its plan (`EXPLAIN ANALYZE`) in the PR.
 - **Tenancy:** `household_id` filtered in SQL on every Household-scoped query, never only in
   middleware.
 - **Dates:** `occurred_on` is a `date` (the Period Day); `captured_at` is `timestamptz`; everything
@@ -46,11 +50,13 @@ whole scaffold sheet. If the two ever disagree, `BOOTSTRAP.md` wins and this fil
   entity); both idempotent on the caller's own row in one `household_id`-scoped statement, a repeat
   changes no column, and a delete keeps the first `deleted_at`. A restore into a held name is
   `409 NAME_TAKEN` (the unique index decides it, never a lookup). An entity that history references
-  cannot be deleted while referenced (`409 <ENTITY>_IN_USE`, built with the referencing table: lock the row
-  `FOR UPDATE`, run the `EXISTS` check as a **separate later statement**, then delete, all in one
-  transaction, with every referencing write taking `FOR SHARE` on the row. Never a `NOT EXISTS` in
+  cannot be deleted while referenced (`409 <ENTITY>_IN_USE`, `POCKET_IN_USE` and `CATEGORY_IN_USE`, any
+  Expense live or deleted; and `reporting_currency` is locked by any Expense, `409 CURRENCY_LOCKED`: lock the row
+  `FOR UPDATE` (`FOR NO KEY UPDATE` for the Household and the Pocket, so a foreign-key insert is not
+  blocked; BOOTSTRAP §4), run the `EXISTS` check as a **separate later statement**, then delete, all in one
+  transaction, with every referencing write taking `FOR SHARE` on the row (an Expense create locks the Household, then the Pocket, then the Category, each its own statement). Never a `NOT EXISTS` in
   the `UPDATE`'s `WHERE`: under `READ COMMITTED` it does not see what committed during the lock wait;
-  BOOTSTRAP §4). **A Household always keeps an active Pocket** (`409 LAST_POCKET`): the same recipe with the **Household's** row as the lock (`FOR UPDATE` it, lock the Pocket, `EXISTS` another active live Pocket as a separate later statement, then write), taken by every writer that can shrink the active set (delete, and `PATCH` with `active: false`), `NOT_FOUND` decided first; BOOTSTRAP §4. A restore is "as if it was never deleted": it redoes, in its own transaction, what a carry-forward skipped (a Category's allocation, through the carry-forward's own SQL, `ON CONFLICT DO NOTHING`; BOOTSTRAP §4). Deactivating is not deleting.
+  BOOTSTRAP §4). **A Household always keeps an active Pocket** (`409 LAST_POCKET`): the same recipe with the **Household's** row as the lock (`FOR NO KEY UPDATE` it, lock the Pocket, `EXISTS` another active live Pocket as a separate later statement, then write), taken by every writer that can shrink the active set (delete, and `PATCH` with `active: false`), `NOT_FOUND` decided first; BOOTSTRAP §4. A restore is "as if it was never deleted": it redoes, in its own transaction, what a carry-forward skipped (a Category's allocation, through the carry-forward's own SQL, `ON CONFLICT DO NOTHING`; BOOTSTRAP §4). Deactivating is not deleting.
 - **Constraints:** `CHECK (amount <> 0)` on expenses. Negative amounts are valid (refunds with no
   recorded original); zero is not.
 - **Error envelope:** one shape, identical to Balances ADR-0027:

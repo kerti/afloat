@@ -27,6 +27,7 @@ import (
 	"github.com/kerti/afloat/backend/internal/category"
 	"github.com/kerti/afloat/backend/internal/config"
 	"github.com/kerti/afloat/backend/internal/db"
+	"github.com/kerti/afloat/backend/internal/expense"
 	"github.com/kerti/afloat/backend/internal/household"
 	"github.com/kerti/afloat/backend/internal/httpserver"
 	"github.com/kerti/afloat/backend/internal/pocket"
@@ -111,10 +112,11 @@ func run() error {
 			MaxBackoff:         cfg.LoginMaxBackoff,
 			FoundingDisabled:   cfg.FoundingDisabled,
 		}),
-		Household: household.New(household.Deps{Querier: queries}),
+		Household: household.New(household.Deps{Querier: queries, Beginner: pool}),
 		Pocket:    pocket.New(pocket.Deps{Querier: queries, Beginner: pool}),
 		Budget:    budget.New(budget.Deps{Querier: queries, Beginner: pool, Now: time.Now}),
 		Category:  category.New(category.Deps{Querier: queries, Beginner: pool, Now: time.Now}),
+		Expense:   expense.New(expense.Deps{Querier: queries, Beginner: pool, Now: time.Now}),
 		System: system.New(system.Deps{
 			Querier:          queries,
 			Version:          cfg.Version,

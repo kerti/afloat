@@ -8,6 +8,7 @@ import (
 
 	"github.com/kerti/afloat/backend/internal/api"
 	"github.com/kerti/afloat/backend/internal/db"
+	"github.com/kerti/afloat/backend/internal/period"
 	openapi_types "github.com/oapi-codegen/runtime/types"
 )
 
@@ -76,8 +77,22 @@ func formatDayStartsAt(t pgtype.Time) string {
 }
 
 // meResponse projects the User, and their Household nested, onto the wire
-// shape.
-func meResponse(user db.User, household db.Household) api.Me {
+// shape, with the caller's Today (#140 R15): the Period Day on the wall clock of
+// the User's own time zone, less one day while that clock still reads earlier
+// than the Household's day_starts_at. The same period.Today every handler that
+// dates a request uses, so the answer and a date resolved by the server agree.
+// The only error is a time zone the server cannot load, which the writes that
+// set one refuse.
+func (h *Handlers) meResponse(user db.User, household db.Household) (api.Me, error) {
+	loc, err := time.LoadLocation(user.TimeZone)
+	if err != nil {
+		return api.Me{}, fmt.Errorf("load time zone: %w", err)
+	}
+	var dayStartsAt time.Duration
+	if household.DayStartsAt.Valid {
+		dayStartsAt = time.Duration(household.DayStartsAt.Microseconds) * time.Microsecond
+	}
+	today := period.Today(h.now(), loc, dayStartsAt)
 	return api.Me{
 		Id:              openapi_types.UUID(user.ID.Bytes),
 		Email:           user.Email,
@@ -86,7 +101,8 @@ func meResponse(user db.User, household db.Household) api.Me {
 		TimeZone:        user.TimeZone,
 		Appearance:      api.Appearance(user.Appearance),
 		Household:       HouseholdResponse(household),
-	}
+		Today:           openapi_types.Date{Time: today.Time()},
+	}, nil
 }
 
 // HouseholdResponse projects a Household onto the wire shape. It lives here,

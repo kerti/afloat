@@ -252,7 +252,7 @@ func TestGetMeNestsTheHousehold(t *testing.T) {
 	if err := json.Unmarshal(wire, &me); err != nil {
 		t.Fatal(err)
 	}
-	if got, want := slices.Sorted(maps.Keys(me)), []string{"appearance", "email", "household", "id", "locale", "time_zone", "user_display_name"}; !slices.Equal(got, want) {
+	if got, want := slices.Sorted(maps.Keys(me)), []string{"appearance", "email", "household", "id", "locale", "time_zone", "today", "user_display_name"}; !slices.Equal(got, want) {
 		t.Errorf("Me keys = %v, want %v", got, want)
 	}
 
@@ -267,5 +267,59 @@ func TestGetMeNestsTheHousehold(t *testing.T) {
 	}
 	if household["id"] != householdID.String() {
 		t.Errorf("household id = %v", household["id"])
+	}
+}
+
+// today is the caller's current Period Day (#140 R15): the date on the wall clock
+// of the User's own time zone, less one day while that clock still reads earlier
+// than the Household's day_starts_at, the same period.Today every dating
+// handler uses. The clock is injected.
+func TestGetMeCarriesTheCallersToday(t *testing.T) {
+	at := func(s string) time.Time {
+		t.Helper()
+		v, err := time.Parse(time.RFC3339, s)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return v
+	}
+	for _, tc := range []struct {
+		name, zone, dayStartsAt, now, want string
+	}{
+		// Asia/Jakarta is UTC+7 with no daylight saving.
+		{"03:59 local is still yesterday", "Asia/Jakarta", "04:00", "2026-11-25T20:59:00Z", "2026-11-25"},
+		{"04:00 local is the new day", "Asia/Jakarta", "04:00", "2026-11-25T21:00:00Z", "2026-11-26"},
+		{"a midnight start has no wrap", "Asia/Jakarta", "00:00", "2026-11-25T17:00:00Z", "2026-11-26"},
+		{"another zone, on its own wall clock", "America/New_York", "04:00", "2026-11-25T08:59:00Z", "2026-11-24"},
+		{"another zone, after its rollover", "America/New_York", "04:00", "2026-11-25T09:00:00Z", "2026-11-25"},
+		{"UTC", "UTC", "04:00", "2026-11-25T03:59:59Z", "2026-11-24"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t, func() time.Time { return at(tc.now) })
+			ctx := context.Background()
+			householdID := h.tdb.CreateHousehold(t, "Test Household")
+			userID := h.tdb.CreateUser(t, householdID, "a@example.com", "A")
+			if _, err := h.tdb.Pool.Exec(ctx, `UPDATE users SET time_zone = $1 WHERE id = $2`, tc.zone, userID); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := h.tdb.Pool.Exec(ctx, `UPDATE households SET day_starts_at = $1::time WHERE id = $2`, tc.dayStartsAt, householdID); err != nil {
+				t.Fatal(err)
+			}
+			user, err := h.tdb.Queries.GetUserByID(ctx, userID)
+			if err != nil {
+				t.Fatalf("GetUserByID: %v", err)
+			}
+			resp, err := h.auth.GetMe(auth.WithUser(ctx, user), api.GetMeRequestObject{})
+			if err != nil {
+				t.Fatalf("GetMe: %v", err)
+			}
+			me, ok := resp.(api.GetMe200JSONResponse)
+			if !ok {
+				t.Fatalf("GetMe = %#v, want 200", resp)
+			}
+			if got := me.Today.Format("2006-01-02"); got != tc.want {
+				t.Errorf("today = %s, want %s", got, tc.want)
+			}
+		})
 	}
 }

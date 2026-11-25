@@ -1,0 +1,788 @@
+# GET /expenses (#140, PR 3a): the first paginated list, newest first. Order is
+# declared, never the database's: occurred_on DESC, then the effective time DESC
+# (occurred_time; else, when captured on that same Period Day, the time of day it
+# was captured at in the caller's zone; else the start of the day; every time is an
+# offset into its Period Day, so with the seeded 04:00 start 01:30 sorts AFTER
+# 23:00), then captured_at DESC, then id DESC. Keyset-paged: `next` is an opaque
+# cursor, omitted on the last page; `after` is the cursor of the previous page.
+#
+# The cursors below are written by hand in the spelling the backend produces (base64url
+# of {"o": date, "k": microseconds into the Period Day, "c": microseconds since the
+# epoch, "i": id}), which is the one place this file knows more than the contract
+# promises ("opaque"): it is how a page boundary can be pinned without a server
+# state to read `next` from. `next` itself is only matched by shape.
+#
+# The seeded User is in Asia/Jakarta (UTC+7), the Household rolls over at 04:00:
+#   E1  2026-11-24  no time, captured the same day          newest day
+#   E4  2026-11-23  no time, captured 02:00 on the 24th     Period Day the 23rd, offset 22:00
+#   E2  2026-11-23  01:30 given                             offset 21:30 (the END of the day)
+#   E3  2026-11-23  23:00 given                             offset 19:00
+#   E5  2026-11-23  no time, captured 10:00 on the 23rd     offset 06:00
+#   E6  2026-11-23  no time, captured on the 25th           back-dated: offset 00:00, captured later
+#   E7  2026-11-23  04:00 given                             offset 00:00, captured earlier
+#   E8  2026-11-22  23:59 given, a refund                   older day
+#   E9  deleted, E90 another Household's: never listed.
+# The default Pocket (#140 R3) is derived on GET /pockets and shown here beside the list.
+
+- name: "expenses list - an empty Household is items and no next"
+  issue: "140"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO users (id, household_id, email, user_display_name) VALUES ('0192f0a0-0000-7000-8000-0000000000d1', '0192f0a0-0000-7000-8000-000000000002', 'dave@example.com', 'Dave');
+        INSERT INTO pockets (id, household_id, pocket_display_name, active, deleted_at, created_at) VALUES
+          ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO',    true,  NULL,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Dana',   false, NULL,  '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Gopay',  true,  now(), '2026-01-03T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', true,  NULL,  '2026-01-04T00:00:00Z');
+        INSERT INTO categories (id, household_id, category_display_name, bucket, active, deleted_at, created_at) VALUES
+          ('0192f0a0-0000-7000-8003-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'Food',   'daily', true,  NULL,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Gym',    'daily', false, NULL,  '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Typo',   'daily', true,  now(), '2026-01-03T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', 'daily', true,  NULL,  '2026-01-04T00:00:00Z');
+    - request: {"method": "POST", "path": "/auth/local/login", "headers": {"Content-Type": "application/json"}, "body": "{\"email\":\"alice@example.com\",\"password\":\"conformance-correct-horse\"}"}
+      status: 204
+  request: {"method": "GET", "path": "/expenses"}
+  expect:
+    status: 200
+    headers: {"Content-Type": "application/json"}
+    body_json: {"items": []}
+    cookies: {}
+
+- name: "expenses list - newest first: date, then the effective time (wrapping at 04:00), then captured_at; deleted and foreign rows are not listed"
+  issue: "140"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO users (id, household_id, email, user_display_name) VALUES ('0192f0a0-0000-7000-8000-0000000000d1', '0192f0a0-0000-7000-8000-000000000002', 'dave@example.com', 'Dave');
+        INSERT INTO pockets (id, household_id, pocket_display_name, active, deleted_at, created_at) VALUES
+          ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO',    true,  NULL,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Dana',   false, NULL,  '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Gopay',  true,  now(), '2026-01-03T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', true,  NULL,  '2026-01-04T00:00:00Z');
+        INSERT INTO categories (id, household_id, category_display_name, bucket, active, deleted_at, created_at) VALUES
+          ('0192f0a0-0000-7000-8003-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'Food',   'daily', true,  NULL,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Gym',    'daily', false, NULL,  '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Typo',   'daily', true,  now(), '2026-01-03T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', 'daily', true,  NULL,  '2026-01-04T00:00:00Z');;
+        INSERT INTO expenses (id, household_id, occurred_on, occurred_time, captured_at, amount, currency, pocket_id, deleted_at) VALUES
+          ('0192f0a0-0000-7000-8004-000000000001', '0192f0a0-0000-7000-8000-000000000001', '2026-11-24', NULL, '2026-11-24T05:00:00Z', 25000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL),
+          ('0192f0a0-0000-7000-8004-000000000002', '0192f0a0-0000-7000-8000-000000000001', '2026-11-23', '01:30', '2026-11-23T05:00:00Z', 25000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL),
+          ('0192f0a0-0000-7000-8004-000000000003', '0192f0a0-0000-7000-8000-000000000001', '2026-11-23', '23:00', '2026-11-23T05:00:00Z', 25000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL),
+          ('0192f0a0-0000-7000-8004-000000000004', '0192f0a0-0000-7000-8000-000000000001', '2026-11-23', NULL, '2026-11-23T19:00:00Z', 25000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL),
+          ('0192f0a0-0000-7000-8004-000000000005', '0192f0a0-0000-7000-8000-000000000001', '2026-11-23', NULL, '2026-11-23T03:00:00Z', 25000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL),
+          ('0192f0a0-0000-7000-8004-000000000006', '0192f0a0-0000-7000-8000-000000000001', '2026-11-23', NULL, '2026-11-25T05:00:00Z', 25000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL),
+          ('0192f0a0-0000-7000-8004-000000000007', '0192f0a0-0000-7000-8000-000000000001', '2026-11-23', '04:00', '2026-11-20T05:00:00Z', 25000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL),
+          ('0192f0a0-0000-7000-8004-000000000008', '0192f0a0-0000-7000-8000-000000000001', '2026-11-22', '23:59', '2026-11-21T05:00:00Z', -450000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL),
+          ('0192f0a0-0000-7000-8004-000000000009', '0192f0a0-0000-7000-8000-000000000001', '2026-11-24', NULL, '2026-11-24T06:00:00Z', 25000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', now()),
+          ('0192f0a0-0000-7000-8004-00000000005a', '0192f0a0-0000-7000-8000-000000000002', '2026-11-25', NULL, '2026-11-25T06:00:00Z', 25000, 'IDR', '0192f0a0-0000-7000-8001-000000000009', NULL)
+    - request: {"method": "POST", "path": "/auth/local/login", "headers": {"Content-Type": "application/json"}, "body": "{\"email\":\"alice@example.com\",\"password\":\"conformance-correct-horse\"}"}
+      status: 204
+  request: {"method": "GET", "path": "/expenses"}
+  expect:
+    status: 200
+    body_json: {"items": [{"id": "0192f0a0-0000-7000-8004-000000000001", "occurred_on": "2026-11-24", "captured_at": "2026-11-24T05:00:00Z", "amount": "25000.0000", "currency": "IDR", "pocket_id": "0192f0a0-0000-7000-8001-000000000001", "ownership": "joint"}, {"id": "0192f0a0-0000-7000-8004-000000000004", "occurred_on": "2026-11-23", "captured_at": "2026-11-23T19:00:00Z", "amount": "25000.0000", "currency": "IDR", "pocket_id": "0192f0a0-0000-7000-8001-000000000001", "ownership": "joint"}, {"id": "0192f0a0-0000-7000-8004-000000000002", "occurred_on": "2026-11-23", "captured_at": "2026-11-23T05:00:00Z", "amount": "25000.0000", "currency": "IDR", "pocket_id": "0192f0a0-0000-7000-8001-000000000001", "ownership": "joint", "occurred_time": "01:30"}, {"id": "0192f0a0-0000-7000-8004-000000000003", "occurred_on": "2026-11-23", "captured_at": "2026-11-23T05:00:00Z", "amount": "25000.0000", "currency": "IDR", "pocket_id": "0192f0a0-0000-7000-8001-000000000001", "ownership": "joint", "occurred_time": "23:00"}, {"id": "0192f0a0-0000-7000-8004-000000000005", "occurred_on": "2026-11-23", "captured_at": "2026-11-23T03:00:00Z", "amount": "25000.0000", "currency": "IDR", "pocket_id": "0192f0a0-0000-7000-8001-000000000001", "ownership": "joint"}, {"id": "0192f0a0-0000-7000-8004-000000000006", "occurred_on": "2026-11-23", "captured_at": "2026-11-25T05:00:00Z", "amount": "25000.0000", "currency": "IDR", "pocket_id": "0192f0a0-0000-7000-8001-000000000001", "ownership": "joint"}, {"id": "0192f0a0-0000-7000-8004-000000000007", "occurred_on": "2026-11-23", "captured_at": "2026-11-20T05:00:00Z", "amount": "25000.0000", "currency": "IDR", "pocket_id": "0192f0a0-0000-7000-8001-000000000001", "ownership": "joint", "occurred_time": "04:00"}, {"id": "0192f0a0-0000-7000-8004-000000000008", "occurred_on": "2026-11-22", "captured_at": "2026-11-21T05:00:00Z", "amount": "-450000.0000", "currency": "IDR", "pocket_id": "0192f0a0-0000-7000-8001-000000000001", "ownership": "joint", "occurred_time": "23:59"}]}
+    cookies: {}
+
+- name: "expenses list - a page of three carries a cursor"
+  issue: "140"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO users (id, household_id, email, user_display_name) VALUES ('0192f0a0-0000-7000-8000-0000000000d1', '0192f0a0-0000-7000-8000-000000000002', 'dave@example.com', 'Dave');
+        INSERT INTO pockets (id, household_id, pocket_display_name, active, deleted_at, created_at) VALUES
+          ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO',    true,  NULL,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Dana',   false, NULL,  '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Gopay',  true,  now(), '2026-01-03T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', true,  NULL,  '2026-01-04T00:00:00Z');
+        INSERT INTO categories (id, household_id, category_display_name, bucket, active, deleted_at, created_at) VALUES
+          ('0192f0a0-0000-7000-8003-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'Food',   'daily', true,  NULL,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Gym',    'daily', false, NULL,  '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Typo',   'daily', true,  now(), '2026-01-03T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', 'daily', true,  NULL,  '2026-01-04T00:00:00Z');;
+        INSERT INTO expenses (id, household_id, occurred_on, occurred_time, captured_at, amount, currency, pocket_id, deleted_at) VALUES
+          ('0192f0a0-0000-7000-8004-000000000001', '0192f0a0-0000-7000-8000-000000000001', '2026-11-24', NULL, '2026-11-24T05:00:00Z', 25000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL),
+          ('0192f0a0-0000-7000-8004-000000000002', '0192f0a0-0000-7000-8000-000000000001', '2026-11-23', '01:30', '2026-11-23T05:00:00Z', 25000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL),
+          ('0192f0a0-0000-7000-8004-000000000003', '0192f0a0-0000-7000-8000-000000000001', '2026-11-23', '23:00', '2026-11-23T05:00:00Z', 25000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL),
+          ('0192f0a0-0000-7000-8004-000000000004', '0192f0a0-0000-7000-8000-000000000001', '2026-11-23', NULL, '2026-11-23T19:00:00Z', 25000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL),
+          ('0192f0a0-0000-7000-8004-000000000005', '0192f0a0-0000-7000-8000-000000000001', '2026-11-23', NULL, '2026-11-23T03:00:00Z', 25000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL),
+          ('0192f0a0-0000-7000-8004-000000000006', '0192f0a0-0000-7000-8000-000000000001', '2026-11-23', NULL, '2026-11-25T05:00:00Z', 25000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL),
+          ('0192f0a0-0000-7000-8004-000000000007', '0192f0a0-0000-7000-8000-000000000001', '2026-11-23', '04:00', '2026-11-20T05:00:00Z', 25000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL),
+          ('0192f0a0-0000-7000-8004-000000000008', '0192f0a0-0000-7000-8000-000000000001', '2026-11-22', '23:59', '2026-11-21T05:00:00Z', -450000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL),
+          ('0192f0a0-0000-7000-8004-000000000009', '0192f0a0-0000-7000-8000-000000000001', '2026-11-24', NULL, '2026-11-24T06:00:00Z', 25000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', now()),
+          ('0192f0a0-0000-7000-8004-00000000005a', '0192f0a0-0000-7000-8000-000000000002', '2026-11-25', NULL, '2026-11-25T06:00:00Z', 25000, 'IDR', '0192f0a0-0000-7000-8001-000000000009', NULL)
+    - request: {"method": "POST", "path": "/auth/local/login", "headers": {"Content-Type": "application/json"}, "body": "{\"email\":\"alice@example.com\",\"password\":\"conformance-correct-horse\"}"}
+      status: 204
+  request: {"method": "GET", "path": "/expenses?limit=3"}
+  expect:
+    status: 200
+    body_json: {"items": [{"id": "0192f0a0-0000-7000-8004-000000000001", "occurred_on": "2026-11-24", "captured_at": "2026-11-24T05:00:00Z", "amount": "25000.0000", "currency": "IDR", "pocket_id": "0192f0a0-0000-7000-8001-000000000001", "ownership": "joint"}, {"id": "0192f0a0-0000-7000-8004-000000000004", "occurred_on": "2026-11-23", "captured_at": "2026-11-23T19:00:00Z", "amount": "25000.0000", "currency": "IDR", "pocket_id": "0192f0a0-0000-7000-8001-000000000001", "ownership": "joint"}, {"id": "0192f0a0-0000-7000-8004-000000000002", "occurred_on": "2026-11-23", "captured_at": "2026-11-23T05:00:00Z", "amount": "25000.0000", "currency": "IDR", "pocket_id": "0192f0a0-0000-7000-8001-000000000001", "ownership": "joint", "occurred_time": "01:30"}], "next": "<re:[A-Za-z0-9_-]{40,}>"}
+    cookies: {}
+
+- name: "expenses list - the page after a cursor resumes exactly after its row, on a wrapped time"
+  issue: "140"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO users (id, household_id, email, user_display_name) VALUES ('0192f0a0-0000-7000-8000-0000000000d1', '0192f0a0-0000-7000-8000-000000000002', 'dave@example.com', 'Dave');
+        INSERT INTO pockets (id, household_id, pocket_display_name, active, deleted_at, created_at) VALUES
+          ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO',    true,  NULL,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Dana',   false, NULL,  '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Gopay',  true,  now(), '2026-01-03T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', true,  NULL,  '2026-01-04T00:00:00Z');
+        INSERT INTO categories (id, household_id, category_display_name, bucket, active, deleted_at, created_at) VALUES
+          ('0192f0a0-0000-7000-8003-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'Food',   'daily', true,  NULL,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Gym',    'daily', false, NULL,  '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Typo',   'daily', true,  now(), '2026-01-03T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', 'daily', true,  NULL,  '2026-01-04T00:00:00Z');;
+        INSERT INTO expenses (id, household_id, occurred_on, occurred_time, captured_at, amount, currency, pocket_id, deleted_at) VALUES
+          ('0192f0a0-0000-7000-8004-000000000001', '0192f0a0-0000-7000-8000-000000000001', '2026-11-24', NULL, '2026-11-24T05:00:00Z', 25000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL),
+          ('0192f0a0-0000-7000-8004-000000000002', '0192f0a0-0000-7000-8000-000000000001', '2026-11-23', '01:30', '2026-11-23T05:00:00Z', 25000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL),
+          ('0192f0a0-0000-7000-8004-000000000003', '0192f0a0-0000-7000-8000-000000000001', '2026-11-23', '23:00', '2026-11-23T05:00:00Z', 25000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL),
+          ('0192f0a0-0000-7000-8004-000000000004', '0192f0a0-0000-7000-8000-000000000001', '2026-11-23', NULL, '2026-11-23T19:00:00Z', 25000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL),
+          ('0192f0a0-0000-7000-8004-000000000005', '0192f0a0-0000-7000-8000-000000000001', '2026-11-23', NULL, '2026-11-23T03:00:00Z', 25000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL),
+          ('0192f0a0-0000-7000-8004-000000000006', '0192f0a0-0000-7000-8000-000000000001', '2026-11-23', NULL, '2026-11-25T05:00:00Z', 25000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL),
+          ('0192f0a0-0000-7000-8004-000000000007', '0192f0a0-0000-7000-8000-000000000001', '2026-11-23', '04:00', '2026-11-20T05:00:00Z', 25000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL),
+          ('0192f0a0-0000-7000-8004-000000000008', '0192f0a0-0000-7000-8000-000000000001', '2026-11-22', '23:59', '2026-11-21T05:00:00Z', -450000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL),
+          ('0192f0a0-0000-7000-8004-000000000009', '0192f0a0-0000-7000-8000-000000000001', '2026-11-24', NULL, '2026-11-24T06:00:00Z', 25000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', now()),
+          ('0192f0a0-0000-7000-8004-00000000005a', '0192f0a0-0000-7000-8000-000000000002', '2026-11-25', NULL, '2026-11-25T06:00:00Z', 25000, 'IDR', '0192f0a0-0000-7000-8001-000000000009', NULL)
+    - request: {"method": "POST", "path": "/auth/local/login", "headers": {"Content-Type": "application/json"}, "body": "{\"email\":\"alice@example.com\",\"password\":\"conformance-correct-horse\"}"}
+      status: 204
+  request: {"method": "GET", "path": "/expenses?limit=3&after=eyJvIjoiMjAyNi0xMS0yMyIsImsiOjc3NDAwMDAwMDAwLCJjIjoxNzk1NDEwMDAwMDAwMDAwLCJpIjoiMDE5MmYwYTAtMDAwMC03MDAwLTgwMDQtMDAwMDAwMDAwMDAyIn0"}
+  expect:
+    status: 200
+    body_json: {"items": [{"id": "0192f0a0-0000-7000-8004-000000000003", "occurred_on": "2026-11-23", "captured_at": "2026-11-23T05:00:00Z", "amount": "25000.0000", "currency": "IDR", "pocket_id": "0192f0a0-0000-7000-8001-000000000001", "ownership": "joint", "occurred_time": "23:00"}, {"id": "0192f0a0-0000-7000-8004-000000000005", "occurred_on": "2026-11-23", "captured_at": "2026-11-23T03:00:00Z", "amount": "25000.0000", "currency": "IDR", "pocket_id": "0192f0a0-0000-7000-8001-000000000001", "ownership": "joint"}, {"id": "0192f0a0-0000-7000-8004-000000000006", "occurred_on": "2026-11-23", "captured_at": "2026-11-25T05:00:00Z", "amount": "25000.0000", "currency": "IDR", "pocket_id": "0192f0a0-0000-7000-8001-000000000001", "ownership": "joint"}], "next": "<re:[A-Za-z0-9_-]{40,}>"}
+    cookies: {}
+
+- name: "expenses list - the last page has no next"
+  issue: "140"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO users (id, household_id, email, user_display_name) VALUES ('0192f0a0-0000-7000-8000-0000000000d1', '0192f0a0-0000-7000-8000-000000000002', 'dave@example.com', 'Dave');
+        INSERT INTO pockets (id, household_id, pocket_display_name, active, deleted_at, created_at) VALUES
+          ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO',    true,  NULL,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Dana',   false, NULL,  '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Gopay',  true,  now(), '2026-01-03T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', true,  NULL,  '2026-01-04T00:00:00Z');
+        INSERT INTO categories (id, household_id, category_display_name, bucket, active, deleted_at, created_at) VALUES
+          ('0192f0a0-0000-7000-8003-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'Food',   'daily', true,  NULL,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Gym',    'daily', false, NULL,  '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Typo',   'daily', true,  now(), '2026-01-03T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', 'daily', true,  NULL,  '2026-01-04T00:00:00Z');;
+        INSERT INTO expenses (id, household_id, occurred_on, occurred_time, captured_at, amount, currency, pocket_id, deleted_at) VALUES
+          ('0192f0a0-0000-7000-8004-000000000001', '0192f0a0-0000-7000-8000-000000000001', '2026-11-24', NULL, '2026-11-24T05:00:00Z', 25000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL),
+          ('0192f0a0-0000-7000-8004-000000000002', '0192f0a0-0000-7000-8000-000000000001', '2026-11-23', '01:30', '2026-11-23T05:00:00Z', 25000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL),
+          ('0192f0a0-0000-7000-8004-000000000003', '0192f0a0-0000-7000-8000-000000000001', '2026-11-23', '23:00', '2026-11-23T05:00:00Z', 25000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL),
+          ('0192f0a0-0000-7000-8004-000000000004', '0192f0a0-0000-7000-8000-000000000001', '2026-11-23', NULL, '2026-11-23T19:00:00Z', 25000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL),
+          ('0192f0a0-0000-7000-8004-000000000005', '0192f0a0-0000-7000-8000-000000000001', '2026-11-23', NULL, '2026-11-23T03:00:00Z', 25000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL),
+          ('0192f0a0-0000-7000-8004-000000000006', '0192f0a0-0000-7000-8000-000000000001', '2026-11-23', NULL, '2026-11-25T05:00:00Z', 25000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL),
+          ('0192f0a0-0000-7000-8004-000000000007', '0192f0a0-0000-7000-8000-000000000001', '2026-11-23', '04:00', '2026-11-20T05:00:00Z', 25000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL),
+          ('0192f0a0-0000-7000-8004-000000000008', '0192f0a0-0000-7000-8000-000000000001', '2026-11-22', '23:59', '2026-11-21T05:00:00Z', -450000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL),
+          ('0192f0a0-0000-7000-8004-000000000009', '0192f0a0-0000-7000-8000-000000000001', '2026-11-24', NULL, '2026-11-24T06:00:00Z', 25000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', now()),
+          ('0192f0a0-0000-7000-8004-00000000005a', '0192f0a0-0000-7000-8000-000000000002', '2026-11-25', NULL, '2026-11-25T06:00:00Z', 25000, 'IDR', '0192f0a0-0000-7000-8001-000000000009', NULL)
+    - request: {"method": "POST", "path": "/auth/local/login", "headers": {"Content-Type": "application/json"}, "body": "{\"email\":\"alice@example.com\",\"password\":\"conformance-correct-horse\"}"}
+      status: 204
+  request: {"method": "GET", "path": "/expenses?limit=3&after=eyJvIjoiMjAyNi0xMS0yMyIsImsiOjAsImMiOjE3OTUxNTA4MDAwMDAwMDAsImkiOiIwMTkyZjBhMC0wMDAwLTcwMDAtODAwNC0wMDAwMDAwMDAwMDcifQ"}
+  expect:
+    status: 200
+    body_json: {"items": [{"id": "0192f0a0-0000-7000-8004-000000000008", "occurred_on": "2026-11-22", "captured_at": "2026-11-21T05:00:00Z", "amount": "-450000.0000", "currency": "IDR", "pocket_id": "0192f0a0-0000-7000-8001-000000000001", "ownership": "joint", "occurred_time": "23:59"}]}
+    cookies: {}
+
+- name: "expenses list - a page that holds every row has no next"
+  issue: "140"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO users (id, household_id, email, user_display_name) VALUES ('0192f0a0-0000-7000-8000-0000000000d1', '0192f0a0-0000-7000-8000-000000000002', 'dave@example.com', 'Dave');
+        INSERT INTO pockets (id, household_id, pocket_display_name, active, deleted_at, created_at) VALUES
+          ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO',    true,  NULL,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Dana',   false, NULL,  '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Gopay',  true,  now(), '2026-01-03T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', true,  NULL,  '2026-01-04T00:00:00Z');
+        INSERT INTO categories (id, household_id, category_display_name, bucket, active, deleted_at, created_at) VALUES
+          ('0192f0a0-0000-7000-8003-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'Food',   'daily', true,  NULL,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Gym',    'daily', false, NULL,  '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Typo',   'daily', true,  now(), '2026-01-03T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', 'daily', true,  NULL,  '2026-01-04T00:00:00Z');;
+        INSERT INTO expenses (id, household_id, occurred_on, occurred_time, captured_at, amount, currency, pocket_id, deleted_at) VALUES
+          ('0192f0a0-0000-7000-8004-000000000001', '0192f0a0-0000-7000-8000-000000000001', '2026-11-24', NULL, '2026-11-24T05:00:00Z', 25000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL),
+          ('0192f0a0-0000-7000-8004-000000000002', '0192f0a0-0000-7000-8000-000000000001', '2026-11-23', '01:30', '2026-11-23T05:00:00Z', 25000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL),
+          ('0192f0a0-0000-7000-8004-000000000003', '0192f0a0-0000-7000-8000-000000000001', '2026-11-23', '23:00', '2026-11-23T05:00:00Z', 25000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL),
+          ('0192f0a0-0000-7000-8004-000000000004', '0192f0a0-0000-7000-8000-000000000001', '2026-11-23', NULL, '2026-11-23T19:00:00Z', 25000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL),
+          ('0192f0a0-0000-7000-8004-000000000005', '0192f0a0-0000-7000-8000-000000000001', '2026-11-23', NULL, '2026-11-23T03:00:00Z', 25000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL),
+          ('0192f0a0-0000-7000-8004-000000000006', '0192f0a0-0000-7000-8000-000000000001', '2026-11-23', NULL, '2026-11-25T05:00:00Z', 25000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL),
+          ('0192f0a0-0000-7000-8004-000000000007', '0192f0a0-0000-7000-8000-000000000001', '2026-11-23', '04:00', '2026-11-20T05:00:00Z', 25000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL),
+          ('0192f0a0-0000-7000-8004-000000000008', '0192f0a0-0000-7000-8000-000000000001', '2026-11-22', '23:59', '2026-11-21T05:00:00Z', -450000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL),
+          ('0192f0a0-0000-7000-8004-000000000009', '0192f0a0-0000-7000-8000-000000000001', '2026-11-24', NULL, '2026-11-24T06:00:00Z', 25000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', now()),
+          ('0192f0a0-0000-7000-8004-00000000005a', '0192f0a0-0000-7000-8000-000000000002', '2026-11-25', NULL, '2026-11-25T06:00:00Z', 25000, 'IDR', '0192f0a0-0000-7000-8001-000000000009', NULL)
+    - request: {"method": "POST", "path": "/auth/local/login", "headers": {"Content-Type": "application/json"}, "body": "{\"email\":\"alice@example.com\",\"password\":\"conformance-correct-horse\"}"}
+      status: 204
+  request: {"method": "GET", "path": "/expenses?limit=8"}
+  expect:
+    status: 200
+    body_json: {"items": [{"id": "0192f0a0-0000-7000-8004-000000000001", "occurred_on": "2026-11-24", "captured_at": "2026-11-24T05:00:00Z", "amount": "25000.0000", "currency": "IDR", "pocket_id": "0192f0a0-0000-7000-8001-000000000001", "ownership": "joint"}, {"id": "0192f0a0-0000-7000-8004-000000000004", "occurred_on": "2026-11-23", "captured_at": "2026-11-23T19:00:00Z", "amount": "25000.0000", "currency": "IDR", "pocket_id": "0192f0a0-0000-7000-8001-000000000001", "ownership": "joint"}, {"id": "0192f0a0-0000-7000-8004-000000000002", "occurred_on": "2026-11-23", "captured_at": "2026-11-23T05:00:00Z", "amount": "25000.0000", "currency": "IDR", "pocket_id": "0192f0a0-0000-7000-8001-000000000001", "ownership": "joint", "occurred_time": "01:30"}, {"id": "0192f0a0-0000-7000-8004-000000000003", "occurred_on": "2026-11-23", "captured_at": "2026-11-23T05:00:00Z", "amount": "25000.0000", "currency": "IDR", "pocket_id": "0192f0a0-0000-7000-8001-000000000001", "ownership": "joint", "occurred_time": "23:00"}, {"id": "0192f0a0-0000-7000-8004-000000000005", "occurred_on": "2026-11-23", "captured_at": "2026-11-23T03:00:00Z", "amount": "25000.0000", "currency": "IDR", "pocket_id": "0192f0a0-0000-7000-8001-000000000001", "ownership": "joint"}, {"id": "0192f0a0-0000-7000-8004-000000000006", "occurred_on": "2026-11-23", "captured_at": "2026-11-25T05:00:00Z", "amount": "25000.0000", "currency": "IDR", "pocket_id": "0192f0a0-0000-7000-8001-000000000001", "ownership": "joint"}, {"id": "0192f0a0-0000-7000-8004-000000000007", "occurred_on": "2026-11-23", "captured_at": "2026-11-20T05:00:00Z", "amount": "25000.0000", "currency": "IDR", "pocket_id": "0192f0a0-0000-7000-8001-000000000001", "ownership": "joint", "occurred_time": "04:00"}, {"id": "0192f0a0-0000-7000-8004-000000000008", "occurred_on": "2026-11-22", "captured_at": "2026-11-21T05:00:00Z", "amount": "-450000.0000", "currency": "IDR", "pocket_id": "0192f0a0-0000-7000-8001-000000000001", "ownership": "joint", "occurred_time": "23:59"}]}
+    cookies: {}
+
+- name: "expenses list - a limit of 100 is accepted"
+  issue: "140"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO users (id, household_id, email, user_display_name) VALUES ('0192f0a0-0000-7000-8000-0000000000d1', '0192f0a0-0000-7000-8000-000000000002', 'dave@example.com', 'Dave');
+        INSERT INTO pockets (id, household_id, pocket_display_name, active, deleted_at, created_at) VALUES
+          ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO',    true,  NULL,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Dana',   false, NULL,  '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Gopay',  true,  now(), '2026-01-03T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', true,  NULL,  '2026-01-04T00:00:00Z');
+        INSERT INTO categories (id, household_id, category_display_name, bucket, active, deleted_at, created_at) VALUES
+          ('0192f0a0-0000-7000-8003-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'Food',   'daily', true,  NULL,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Gym',    'daily', false, NULL,  '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Typo',   'daily', true,  now(), '2026-01-03T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', 'daily', true,  NULL,  '2026-01-04T00:00:00Z');;
+        INSERT INTO expenses (id, household_id, occurred_on, occurred_time, captured_at, amount, currency, pocket_id, deleted_at) VALUES
+          ('0192f0a0-0000-7000-8004-000000000001', '0192f0a0-0000-7000-8000-000000000001', '2026-11-24', NULL, '2026-11-24T05:00:00Z', 25000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL),
+          ('0192f0a0-0000-7000-8004-000000000002', '0192f0a0-0000-7000-8000-000000000001', '2026-11-23', '01:30', '2026-11-23T05:00:00Z', 25000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL),
+          ('0192f0a0-0000-7000-8004-000000000003', '0192f0a0-0000-7000-8000-000000000001', '2026-11-23', '23:00', '2026-11-23T05:00:00Z', 25000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL),
+          ('0192f0a0-0000-7000-8004-000000000004', '0192f0a0-0000-7000-8000-000000000001', '2026-11-23', NULL, '2026-11-23T19:00:00Z', 25000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL),
+          ('0192f0a0-0000-7000-8004-000000000005', '0192f0a0-0000-7000-8000-000000000001', '2026-11-23', NULL, '2026-11-23T03:00:00Z', 25000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL),
+          ('0192f0a0-0000-7000-8004-000000000006', '0192f0a0-0000-7000-8000-000000000001', '2026-11-23', NULL, '2026-11-25T05:00:00Z', 25000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL),
+          ('0192f0a0-0000-7000-8004-000000000007', '0192f0a0-0000-7000-8000-000000000001', '2026-11-23', '04:00', '2026-11-20T05:00:00Z', 25000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL),
+          ('0192f0a0-0000-7000-8004-000000000008', '0192f0a0-0000-7000-8000-000000000001', '2026-11-22', '23:59', '2026-11-21T05:00:00Z', -450000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL),
+          ('0192f0a0-0000-7000-8004-000000000009', '0192f0a0-0000-7000-8000-000000000001', '2026-11-24', NULL, '2026-11-24T06:00:00Z', 25000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', now()),
+          ('0192f0a0-0000-7000-8004-00000000005a', '0192f0a0-0000-7000-8000-000000000002', '2026-11-25', NULL, '2026-11-25T06:00:00Z', 25000, 'IDR', '0192f0a0-0000-7000-8001-000000000009', NULL)
+    - request: {"method": "POST", "path": "/auth/local/login", "headers": {"Content-Type": "application/json"}, "body": "{\"email\":\"alice@example.com\",\"password\":\"conformance-correct-horse\"}"}
+      status: 204
+  request: {"method": "GET", "path": "/expenses?limit=100"}
+  expect:
+    status: 200
+    body_json: {"items": [{"id": "0192f0a0-0000-7000-8004-000000000001", "occurred_on": "2026-11-24", "captured_at": "2026-11-24T05:00:00Z", "amount": "25000.0000", "currency": "IDR", "pocket_id": "0192f0a0-0000-7000-8001-000000000001", "ownership": "joint"}, {"id": "0192f0a0-0000-7000-8004-000000000004", "occurred_on": "2026-11-23", "captured_at": "2026-11-23T19:00:00Z", "amount": "25000.0000", "currency": "IDR", "pocket_id": "0192f0a0-0000-7000-8001-000000000001", "ownership": "joint"}, {"id": "0192f0a0-0000-7000-8004-000000000002", "occurred_on": "2026-11-23", "captured_at": "2026-11-23T05:00:00Z", "amount": "25000.0000", "currency": "IDR", "pocket_id": "0192f0a0-0000-7000-8001-000000000001", "ownership": "joint", "occurred_time": "01:30"}, {"id": "0192f0a0-0000-7000-8004-000000000003", "occurred_on": "2026-11-23", "captured_at": "2026-11-23T05:00:00Z", "amount": "25000.0000", "currency": "IDR", "pocket_id": "0192f0a0-0000-7000-8001-000000000001", "ownership": "joint", "occurred_time": "23:00"}, {"id": "0192f0a0-0000-7000-8004-000000000005", "occurred_on": "2026-11-23", "captured_at": "2026-11-23T03:00:00Z", "amount": "25000.0000", "currency": "IDR", "pocket_id": "0192f0a0-0000-7000-8001-000000000001", "ownership": "joint"}, {"id": "0192f0a0-0000-7000-8004-000000000006", "occurred_on": "2026-11-23", "captured_at": "2026-11-25T05:00:00Z", "amount": "25000.0000", "currency": "IDR", "pocket_id": "0192f0a0-0000-7000-8001-000000000001", "ownership": "joint"}, {"id": "0192f0a0-0000-7000-8004-000000000007", "occurred_on": "2026-11-23", "captured_at": "2026-11-20T05:00:00Z", "amount": "25000.0000", "currency": "IDR", "pocket_id": "0192f0a0-0000-7000-8001-000000000001", "ownership": "joint", "occurred_time": "04:00"}, {"id": "0192f0a0-0000-7000-8004-000000000008", "occurred_on": "2026-11-22", "captured_at": "2026-11-21T05:00:00Z", "amount": "-450000.0000", "currency": "IDR", "pocket_id": "0192f0a0-0000-7000-8001-000000000001", "ownership": "joint", "occurred_time": "23:59"}]}
+    cookies: {}
+
+- name: "expenses list - equal sort keys are ordered by id descending"
+  issue: "140"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO users (id, household_id, email, user_display_name) VALUES ('0192f0a0-0000-7000-8000-0000000000d1', '0192f0a0-0000-7000-8000-000000000002', 'dave@example.com', 'Dave');
+        INSERT INTO pockets (id, household_id, pocket_display_name, active, deleted_at, created_at) VALUES
+          ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO',    true,  NULL,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Dana',   false, NULL,  '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Gopay',  true,  now(), '2026-01-03T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', true,  NULL,  '2026-01-04T00:00:00Z');
+        INSERT INTO categories (id, household_id, category_display_name, bucket, active, deleted_at, created_at) VALUES
+          ('0192f0a0-0000-7000-8003-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'Food',   'daily', true,  NULL,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Gym',    'daily', false, NULL,  '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Typo',   'daily', true,  now(), '2026-01-03T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', 'daily', true,  NULL,  '2026-01-04T00:00:00Z');;
+        INSERT INTO expenses (id, household_id, occurred_on, occurred_time, captured_at, amount, currency, pocket_id) VALUES
+          ('0192f0a0-0000-7000-8004-000000000001', '0192f0a0-0000-7000-8000-000000000001', '2026-11-23', '10:00', '2026-11-23T05:00:00Z', 25000, 'IDR', '0192f0a0-0000-7000-8001-000000000001'),
+          ('0192f0a0-0000-7000-8004-000000000002', '0192f0a0-0000-7000-8000-000000000001', '2026-11-23', '10:00', '2026-11-23T05:00:00Z', 25000, 'IDR', '0192f0a0-0000-7000-8001-000000000001'),
+          ('0192f0a0-0000-7000-8004-000000000003', '0192f0a0-0000-7000-8000-000000000001', '2026-11-23', '10:00', '2026-11-23T05:00:00Z', 25000, 'IDR', '0192f0a0-0000-7000-8001-000000000001'),
+          ('0192f0a0-0000-7000-8004-000000000004', '0192f0a0-0000-7000-8000-000000000001', '2026-11-23', '10:00', '2026-11-23T05:00:00Z', 25000, 'IDR', '0192f0a0-0000-7000-8001-000000000001'),
+          ('0192f0a0-0000-7000-8004-000000000005', '0192f0a0-0000-7000-8000-000000000001', '2026-11-23', '10:00', '2026-11-23T05:00:00Z', 25000, 'IDR', '0192f0a0-0000-7000-8001-000000000001')
+    - request: {"method": "POST", "path": "/auth/local/login", "headers": {"Content-Type": "application/json"}, "body": "{\"email\":\"alice@example.com\",\"password\":\"conformance-correct-horse\"}"}
+      status: 204
+  request: {"method": "GET", "path": "/expenses"}
+  expect:
+    status: 200
+    body_json: {"items": [{"id": "0192f0a0-0000-7000-8004-000000000005", "occurred_on": "2026-11-23", "captured_at": "2026-11-23T05:00:00Z", "amount": "25000.0000", "currency": "IDR", "pocket_id": "0192f0a0-0000-7000-8001-000000000001", "ownership": "joint", "occurred_time": "10:00"}, {"id": "0192f0a0-0000-7000-8004-000000000004", "occurred_on": "2026-11-23", "captured_at": "2026-11-23T05:00:00Z", "amount": "25000.0000", "currency": "IDR", "pocket_id": "0192f0a0-0000-7000-8001-000000000001", "ownership": "joint", "occurred_time": "10:00"}, {"id": "0192f0a0-0000-7000-8004-000000000003", "occurred_on": "2026-11-23", "captured_at": "2026-11-23T05:00:00Z", "amount": "25000.0000", "currency": "IDR", "pocket_id": "0192f0a0-0000-7000-8001-000000000001", "ownership": "joint", "occurred_time": "10:00"}, {"id": "0192f0a0-0000-7000-8004-000000000002", "occurred_on": "2026-11-23", "captured_at": "2026-11-23T05:00:00Z", "amount": "25000.0000", "currency": "IDR", "pocket_id": "0192f0a0-0000-7000-8001-000000000001", "ownership": "joint", "occurred_time": "10:00"}, {"id": "0192f0a0-0000-7000-8004-000000000001", "occurred_on": "2026-11-23", "captured_at": "2026-11-23T05:00:00Z", "amount": "25000.0000", "currency": "IDR", "pocket_id": "0192f0a0-0000-7000-8001-000000000001", "ownership": "joint", "occurred_time": "10:00"}]}
+    cookies: {}
+
+- name: "expenses list - a cursor on equal keys neither repeats nor skips: the rows below its id follow"
+  issue: "140"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO users (id, household_id, email, user_display_name) VALUES ('0192f0a0-0000-7000-8000-0000000000d1', '0192f0a0-0000-7000-8000-000000000002', 'dave@example.com', 'Dave');
+        INSERT INTO pockets (id, household_id, pocket_display_name, active, deleted_at, created_at) VALUES
+          ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO',    true,  NULL,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Dana',   false, NULL,  '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Gopay',  true,  now(), '2026-01-03T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', true,  NULL,  '2026-01-04T00:00:00Z');
+        INSERT INTO categories (id, household_id, category_display_name, bucket, active, deleted_at, created_at) VALUES
+          ('0192f0a0-0000-7000-8003-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'Food',   'daily', true,  NULL,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Gym',    'daily', false, NULL,  '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Typo',   'daily', true,  now(), '2026-01-03T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', 'daily', true,  NULL,  '2026-01-04T00:00:00Z');;
+        INSERT INTO expenses (id, household_id, occurred_on, occurred_time, captured_at, amount, currency, pocket_id) VALUES
+          ('0192f0a0-0000-7000-8004-000000000001', '0192f0a0-0000-7000-8000-000000000001', '2026-11-23', '10:00', '2026-11-23T05:00:00Z', 25000, 'IDR', '0192f0a0-0000-7000-8001-000000000001'),
+          ('0192f0a0-0000-7000-8004-000000000002', '0192f0a0-0000-7000-8000-000000000001', '2026-11-23', '10:00', '2026-11-23T05:00:00Z', 25000, 'IDR', '0192f0a0-0000-7000-8001-000000000001'),
+          ('0192f0a0-0000-7000-8004-000000000003', '0192f0a0-0000-7000-8000-000000000001', '2026-11-23', '10:00', '2026-11-23T05:00:00Z', 25000, 'IDR', '0192f0a0-0000-7000-8001-000000000001'),
+          ('0192f0a0-0000-7000-8004-000000000004', '0192f0a0-0000-7000-8000-000000000001', '2026-11-23', '10:00', '2026-11-23T05:00:00Z', 25000, 'IDR', '0192f0a0-0000-7000-8001-000000000001'),
+          ('0192f0a0-0000-7000-8004-000000000005', '0192f0a0-0000-7000-8000-000000000001', '2026-11-23', '10:00', '2026-11-23T05:00:00Z', 25000, 'IDR', '0192f0a0-0000-7000-8001-000000000001')
+    - request: {"method": "POST", "path": "/auth/local/login", "headers": {"Content-Type": "application/json"}, "body": "{\"email\":\"alice@example.com\",\"password\":\"conformance-correct-horse\"}"}
+      status: 204
+  request: {"method": "GET", "path": "/expenses?limit=2&after=eyJvIjoiMjAyNi0xMS0yMyIsImsiOjIxNjAwMDAwMDAwLCJjIjoxNzk1NDEwMDAwMDAwMDAwLCJpIjoiMDE5MmYwYTAtMDAwMC03MDAwLTgwMDQtMDAwMDAwMDAwMDA0In0"}
+  expect:
+    status: 200
+    body_json: {"items": [{"id": "0192f0a0-0000-7000-8004-000000000003", "occurred_on": "2026-11-23", "captured_at": "2026-11-23T05:00:00Z", "amount": "25000.0000", "currency": "IDR", "pocket_id": "0192f0a0-0000-7000-8001-000000000001", "ownership": "joint", "occurred_time": "10:00"}, {"id": "0192f0a0-0000-7000-8004-000000000002", "occurred_on": "2026-11-23", "captured_at": "2026-11-23T05:00:00Z", "amount": "25000.0000", "currency": "IDR", "pocket_id": "0192f0a0-0000-7000-8001-000000000001", "ownership": "joint", "occurred_time": "10:00"}], "next": "<re:[A-Za-z0-9_-]{40,}>"}
+    cookies: {}
+
+- name: "expenses list - a limit of 0 is min"
+  issue: "140"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO users (id, household_id, email, user_display_name) VALUES ('0192f0a0-0000-7000-8000-0000000000d1', '0192f0a0-0000-7000-8000-000000000002', 'dave@example.com', 'Dave');
+        INSERT INTO pockets (id, household_id, pocket_display_name, active, deleted_at, created_at) VALUES
+          ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO',    true,  NULL,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Dana',   false, NULL,  '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Gopay',  true,  now(), '2026-01-03T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', true,  NULL,  '2026-01-04T00:00:00Z');
+        INSERT INTO categories (id, household_id, category_display_name, bucket, active, deleted_at, created_at) VALUES
+          ('0192f0a0-0000-7000-8003-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'Food',   'daily', true,  NULL,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Gym',    'daily', false, NULL,  '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Typo',   'daily', true,  now(), '2026-01-03T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', 'daily', true,  NULL,  '2026-01-04T00:00:00Z');
+    - request: {"method": "POST", "path": "/auth/local/login", "headers": {"Content-Type": "application/json"}, "body": "{\"email\":\"alice@example.com\",\"password\":\"conformance-correct-horse\"}"}
+      status: 204
+  request: {"method": "GET", "path": "/expenses?limit=0"}
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "limit", "rule": "min"}}
+    cookies: {}
+
+- name: "expenses list - a limit of -1 is min"
+  issue: "140"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO users (id, household_id, email, user_display_name) VALUES ('0192f0a0-0000-7000-8000-0000000000d1', '0192f0a0-0000-7000-8000-000000000002', 'dave@example.com', 'Dave');
+        INSERT INTO pockets (id, household_id, pocket_display_name, active, deleted_at, created_at) VALUES
+          ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO',    true,  NULL,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Dana',   false, NULL,  '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Gopay',  true,  now(), '2026-01-03T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', true,  NULL,  '2026-01-04T00:00:00Z');
+        INSERT INTO categories (id, household_id, category_display_name, bucket, active, deleted_at, created_at) VALUES
+          ('0192f0a0-0000-7000-8003-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'Food',   'daily', true,  NULL,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Gym',    'daily', false, NULL,  '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Typo',   'daily', true,  now(), '2026-01-03T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', 'daily', true,  NULL,  '2026-01-04T00:00:00Z');
+    - request: {"method": "POST", "path": "/auth/local/login", "headers": {"Content-Type": "application/json"}, "body": "{\"email\":\"alice@example.com\",\"password\":\"conformance-correct-horse\"}"}
+      status: 204
+  request: {"method": "GET", "path": "/expenses?limit=-1"}
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "limit", "rule": "min"}}
+    cookies: {}
+
+- name: "expenses list - a limit of 101 is max"
+  issue: "140"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO users (id, household_id, email, user_display_name) VALUES ('0192f0a0-0000-7000-8000-0000000000d1', '0192f0a0-0000-7000-8000-000000000002', 'dave@example.com', 'Dave');
+        INSERT INTO pockets (id, household_id, pocket_display_name, active, deleted_at, created_at) VALUES
+          ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO',    true,  NULL,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Dana',   false, NULL,  '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Gopay',  true,  now(), '2026-01-03T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', true,  NULL,  '2026-01-04T00:00:00Z');
+        INSERT INTO categories (id, household_id, category_display_name, bucket, active, deleted_at, created_at) VALUES
+          ('0192f0a0-0000-7000-8003-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'Food',   'daily', true,  NULL,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Gym',    'daily', false, NULL,  '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Typo',   'daily', true,  now(), '2026-01-03T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', 'daily', true,  NULL,  '2026-01-04T00:00:00Z');
+    - request: {"method": "POST", "path": "/auth/local/login", "headers": {"Content-Type": "application/json"}, "body": "{\"email\":\"alice@example.com\",\"password\":\"conformance-correct-horse\"}"}
+      status: 204
+  request: {"method": "GET", "path": "/expenses?limit=101"}
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "limit", "rule": "max"}}
+    cookies: {}
+
+- name: "expenses list - a limit of 1000000 is max"
+  issue: "140"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO users (id, household_id, email, user_display_name) VALUES ('0192f0a0-0000-7000-8000-0000000000d1', '0192f0a0-0000-7000-8000-000000000002', 'dave@example.com', 'Dave');
+        INSERT INTO pockets (id, household_id, pocket_display_name, active, deleted_at, created_at) VALUES
+          ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO',    true,  NULL,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Dana',   false, NULL,  '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Gopay',  true,  now(), '2026-01-03T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', true,  NULL,  '2026-01-04T00:00:00Z');
+        INSERT INTO categories (id, household_id, category_display_name, bucket, active, deleted_at, created_at) VALUES
+          ('0192f0a0-0000-7000-8003-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'Food',   'daily', true,  NULL,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Gym',    'daily', false, NULL,  '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Typo',   'daily', true,  now(), '2026-01-03T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', 'daily', true,  NULL,  '2026-01-04T00:00:00Z');
+    - request: {"method": "POST", "path": "/auth/local/login", "headers": {"Content-Type": "application/json"}, "body": "{\"email\":\"alice@example.com\",\"password\":\"conformance-correct-horse\"}"}
+      status: 204
+  request: {"method": "GET", "path": "/expenses?limit=1000000"}
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "limit", "rule": "max"}}
+    cookies: {}
+
+- name: "expenses list - a limit of \"abc\" is not an integer"
+  issue: "140"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO users (id, household_id, email, user_display_name) VALUES ('0192f0a0-0000-7000-8000-0000000000d1', '0192f0a0-0000-7000-8000-000000000002', 'dave@example.com', 'Dave');
+        INSERT INTO pockets (id, household_id, pocket_display_name, active, deleted_at, created_at) VALUES
+          ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO',    true,  NULL,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Dana',   false, NULL,  '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Gopay',  true,  now(), '2026-01-03T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', true,  NULL,  '2026-01-04T00:00:00Z');
+        INSERT INTO categories (id, household_id, category_display_name, bucket, active, deleted_at, created_at) VALUES
+          ('0192f0a0-0000-7000-8003-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'Food',   'daily', true,  NULL,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Gym',    'daily', false, NULL,  '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Typo',   'daily', true,  now(), '2026-01-03T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', 'daily', true,  NULL,  '2026-01-04T00:00:00Z');
+    - request: {"method": "POST", "path": "/auth/local/login", "headers": {"Content-Type": "application/json"}, "body": "{\"email\":\"alice@example.com\",\"password\":\"conformance-correct-horse\"}"}
+      status: 204
+  request: {"method": "GET", "path": "/expenses?limit=abc"}
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "limit", "rule": "invalid"}}
+    cookies: {}
+
+- name: "expenses list - a limit of \"1.5\" is not an integer"
+  issue: "140"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO users (id, household_id, email, user_display_name) VALUES ('0192f0a0-0000-7000-8000-0000000000d1', '0192f0a0-0000-7000-8000-000000000002', 'dave@example.com', 'Dave');
+        INSERT INTO pockets (id, household_id, pocket_display_name, active, deleted_at, created_at) VALUES
+          ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO',    true,  NULL,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Dana',   false, NULL,  '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Gopay',  true,  now(), '2026-01-03T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', true,  NULL,  '2026-01-04T00:00:00Z');
+        INSERT INTO categories (id, household_id, category_display_name, bucket, active, deleted_at, created_at) VALUES
+          ('0192f0a0-0000-7000-8003-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'Food',   'daily', true,  NULL,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Gym',    'daily', false, NULL,  '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Typo',   'daily', true,  now(), '2026-01-03T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', 'daily', true,  NULL,  '2026-01-04T00:00:00Z');
+    - request: {"method": "POST", "path": "/auth/local/login", "headers": {"Content-Type": "application/json"}, "body": "{\"email\":\"alice@example.com\",\"password\":\"conformance-correct-horse\"}"}
+      status: 204
+  request: {"method": "GET", "path": "/expenses?limit=1.5"}
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "limit", "rule": "invalid"}}
+    cookies: {}
+
+- name: "expenses list - a limit of \"\" is not an integer"
+  issue: "140"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO users (id, household_id, email, user_display_name) VALUES ('0192f0a0-0000-7000-8000-0000000000d1', '0192f0a0-0000-7000-8000-000000000002', 'dave@example.com', 'Dave');
+        INSERT INTO pockets (id, household_id, pocket_display_name, active, deleted_at, created_at) VALUES
+          ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO',    true,  NULL,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Dana',   false, NULL,  '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Gopay',  true,  now(), '2026-01-03T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', true,  NULL,  '2026-01-04T00:00:00Z');
+        INSERT INTO categories (id, household_id, category_display_name, bucket, active, deleted_at, created_at) VALUES
+          ('0192f0a0-0000-7000-8003-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'Food',   'daily', true,  NULL,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Gym',    'daily', false, NULL,  '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Typo',   'daily', true,  now(), '2026-01-03T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', 'daily', true,  NULL,  '2026-01-04T00:00:00Z');
+    - request: {"method": "POST", "path": "/auth/local/login", "headers": {"Content-Type": "application/json"}, "body": "{\"email\":\"alice@example.com\",\"password\":\"conformance-correct-horse\"}"}
+      status: 204
+  request: {"method": "GET", "path": "/expenses?limit="}
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "limit", "rule": "invalid"}}
+    cookies: {}
+
+- name: "expenses list - a limit of \"1e1\" is not an integer"
+  issue: "140"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO users (id, household_id, email, user_display_name) VALUES ('0192f0a0-0000-7000-8000-0000000000d1', '0192f0a0-0000-7000-8000-000000000002', 'dave@example.com', 'Dave');
+        INSERT INTO pockets (id, household_id, pocket_display_name, active, deleted_at, created_at) VALUES
+          ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO',    true,  NULL,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Dana',   false, NULL,  '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Gopay',  true,  now(), '2026-01-03T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', true,  NULL,  '2026-01-04T00:00:00Z');
+        INSERT INTO categories (id, household_id, category_display_name, bucket, active, deleted_at, created_at) VALUES
+          ('0192f0a0-0000-7000-8003-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'Food',   'daily', true,  NULL,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Gym',    'daily', false, NULL,  '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Typo',   'daily', true,  now(), '2026-01-03T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', 'daily', true,  NULL,  '2026-01-04T00:00:00Z');
+    - request: {"method": "POST", "path": "/auth/local/login", "headers": {"Content-Type": "application/json"}, "body": "{\"email\":\"alice@example.com\",\"password\":\"conformance-correct-horse\"}"}
+      status: 204
+  request: {"method": "GET", "path": "/expenses?limit=1e1"}
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "limit", "rule": "invalid"}}
+    cookies: {}
+
+- name: "expenses list - a cursor that is garbage is invalid"
+  issue: "140"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO users (id, household_id, email, user_display_name) VALUES ('0192f0a0-0000-7000-8000-0000000000d1', '0192f0a0-0000-7000-8000-000000000002', 'dave@example.com', 'Dave');
+        INSERT INTO pockets (id, household_id, pocket_display_name, active, deleted_at, created_at) VALUES
+          ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO',    true,  NULL,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Dana',   false, NULL,  '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Gopay',  true,  now(), '2026-01-03T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', true,  NULL,  '2026-01-04T00:00:00Z');
+        INSERT INTO categories (id, household_id, category_display_name, bucket, active, deleted_at, created_at) VALUES
+          ('0192f0a0-0000-7000-8003-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'Food',   'daily', true,  NULL,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Gym',    'daily', false, NULL,  '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Typo',   'daily', true,  now(), '2026-01-03T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', 'daily', true,  NULL,  '2026-01-04T00:00:00Z');
+    - request: {"method": "POST", "path": "/auth/local/login", "headers": {"Content-Type": "application/json"}, "body": "{\"email\":\"alice@example.com\",\"password\":\"conformance-correct-horse\"}"}
+      status: 204
+  request: {"method": "GET", "path": "/expenses?after=garbage"}
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "after", "rule": "invalid"}}
+    cookies: {}
+
+- name: "expenses list - a cursor that is empty is invalid"
+  issue: "140"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO users (id, household_id, email, user_display_name) VALUES ('0192f0a0-0000-7000-8000-0000000000d1', '0192f0a0-0000-7000-8000-000000000002', 'dave@example.com', 'Dave');
+        INSERT INTO pockets (id, household_id, pocket_display_name, active, deleted_at, created_at) VALUES
+          ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO',    true,  NULL,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Dana',   false, NULL,  '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Gopay',  true,  now(), '2026-01-03T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', true,  NULL,  '2026-01-04T00:00:00Z');
+        INSERT INTO categories (id, household_id, category_display_name, bucket, active, deleted_at, created_at) VALUES
+          ('0192f0a0-0000-7000-8003-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'Food',   'daily', true,  NULL,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Gym',    'daily', false, NULL,  '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Typo',   'daily', true,  now(), '2026-01-03T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', 'daily', true,  NULL,  '2026-01-04T00:00:00Z');
+    - request: {"method": "POST", "path": "/auth/local/login", "headers": {"Content-Type": "application/json"}, "body": "{\"email\":\"alice@example.com\",\"password\":\"conformance-correct-horse\"}"}
+      status: 204
+  request: {"method": "GET", "path": "/expenses?after="}
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "after", "rule": "invalid"}}
+    cookies: {}
+
+- name: "expenses list - a cursor that is a JSON object with nothing in it is invalid"
+  issue: "140"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO users (id, household_id, email, user_display_name) VALUES ('0192f0a0-0000-7000-8000-0000000000d1', '0192f0a0-0000-7000-8000-000000000002', 'dave@example.com', 'Dave');
+        INSERT INTO pockets (id, household_id, pocket_display_name, active, deleted_at, created_at) VALUES
+          ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO',    true,  NULL,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Dana',   false, NULL,  '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Gopay',  true,  now(), '2026-01-03T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', true,  NULL,  '2026-01-04T00:00:00Z');
+        INSERT INTO categories (id, household_id, category_display_name, bucket, active, deleted_at, created_at) VALUES
+          ('0192f0a0-0000-7000-8003-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'Food',   'daily', true,  NULL,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Gym',    'daily', false, NULL,  '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Typo',   'daily', true,  now(), '2026-01-03T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', 'daily', true,  NULL,  '2026-01-04T00:00:00Z');
+    - request: {"method": "POST", "path": "/auth/local/login", "headers": {"Content-Type": "application/json"}, "body": "{\"email\":\"alice@example.com\",\"password\":\"conformance-correct-horse\"}"}
+      status: 204
+  request: {"method": "GET", "path": "/expenses?after=e30"}
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "after", "rule": "invalid"}}
+    cookies: {}
+
+- name: "expenses list - a cursor that is a valid cursor for another shape is invalid"
+  issue: "140"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO users (id, household_id, email, user_display_name) VALUES ('0192f0a0-0000-7000-8000-0000000000d1', '0192f0a0-0000-7000-8000-000000000002', 'dave@example.com', 'Dave');
+        INSERT INTO pockets (id, household_id, pocket_display_name, active, deleted_at, created_at) VALUES
+          ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO',    true,  NULL,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Dana',   false, NULL,  '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Gopay',  true,  now(), '2026-01-03T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', true,  NULL,  '2026-01-04T00:00:00Z');
+        INSERT INTO categories (id, household_id, category_display_name, bucket, active, deleted_at, created_at) VALUES
+          ('0192f0a0-0000-7000-8003-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'Food',   'daily', true,  NULL,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Gym',    'daily', false, NULL,  '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Typo',   'daily', true,  now(), '2026-01-03T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', 'daily', true,  NULL,  '2026-01-04T00:00:00Z');
+    - request: {"method": "POST", "path": "/auth/local/login", "headers": {"Content-Type": "application/json"}, "body": "{\"email\":\"alice@example.com\",\"password\":\"conformance-correct-horse\"}"}
+      status: 204
+  request: {"method": "GET", "path": "/expenses?after=eyJvIjoiMjAyNi0wMi0zMCIsImsiOjAsImMiOjEsImkiOiJ4In0"}
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "after", "rule": "invalid"}}
+    cookies: {}
+
+- name: "expenses list - a cursor that is too long is invalid"
+  issue: "140"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO users (id, household_id, email, user_display_name) VALUES ('0192f0a0-0000-7000-8000-0000000000d1', '0192f0a0-0000-7000-8000-000000000002', 'dave@example.com', 'Dave');
+        INSERT INTO pockets (id, household_id, pocket_display_name, active, deleted_at, created_at) VALUES
+          ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO',    true,  NULL,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Dana',   false, NULL,  '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Gopay',  true,  now(), '2026-01-03T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', true,  NULL,  '2026-01-04T00:00:00Z');
+        INSERT INTO categories (id, household_id, category_display_name, bucket, active, deleted_at, created_at) VALUES
+          ('0192f0a0-0000-7000-8003-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'Food',   'daily', true,  NULL,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Gym',    'daily', false, NULL,  '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Typo',   'daily', true,  now(), '2026-01-03T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', 'daily', true,  NULL,  '2026-01-04T00:00:00Z');
+    - request: {"method": "POST", "path": "/auth/local/login", "headers": {"Content-Type": "application/json"}, "body": "{\"email\":\"alice@example.com\",\"password\":\"conformance-correct-horse\"}"}
+      status: 204
+  request: {"method": "GET", "path": "/expenses?after=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "after", "rule": "invalid"}}
+    cookies: {}
+
+- name: "expenses list - a cursor of the other Household's moves through the caller's own rows only"
+  issue: "140"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO users (id, household_id, email, user_display_name) VALUES ('0192f0a0-0000-7000-8000-0000000000d1', '0192f0a0-0000-7000-8000-000000000002', 'dave@example.com', 'Dave');
+        INSERT INTO pockets (id, household_id, pocket_display_name, active, deleted_at, created_at) VALUES
+          ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO',    true,  NULL,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Dana',   false, NULL,  '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Gopay',  true,  now(), '2026-01-03T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', true,  NULL,  '2026-01-04T00:00:00Z');
+        INSERT INTO categories (id, household_id, category_display_name, bucket, active, deleted_at, created_at) VALUES
+          ('0192f0a0-0000-7000-8003-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'Food',   'daily', true,  NULL,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Gym',    'daily', false, NULL,  '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Typo',   'daily', true,  now(), '2026-01-03T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', 'daily', true,  NULL,  '2026-01-04T00:00:00Z');;
+        INSERT INTO expenses (id, household_id, occurred_on, occurred_time, captured_at, amount, currency, pocket_id, deleted_at) VALUES
+          ('0192f0a0-0000-7000-8004-000000000001', '0192f0a0-0000-7000-8000-000000000001', '2026-11-24', NULL, '2026-11-24T05:00:00Z', 25000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL),
+          ('0192f0a0-0000-7000-8004-000000000002', '0192f0a0-0000-7000-8000-000000000001', '2026-11-23', '01:30', '2026-11-23T05:00:00Z', 25000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL),
+          ('0192f0a0-0000-7000-8004-000000000003', '0192f0a0-0000-7000-8000-000000000001', '2026-11-23', '23:00', '2026-11-23T05:00:00Z', 25000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL),
+          ('0192f0a0-0000-7000-8004-000000000004', '0192f0a0-0000-7000-8000-000000000001', '2026-11-23', NULL, '2026-11-23T19:00:00Z', 25000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL),
+          ('0192f0a0-0000-7000-8004-000000000005', '0192f0a0-0000-7000-8000-000000000001', '2026-11-23', NULL, '2026-11-23T03:00:00Z', 25000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL),
+          ('0192f0a0-0000-7000-8004-000000000006', '0192f0a0-0000-7000-8000-000000000001', '2026-11-23', NULL, '2026-11-25T05:00:00Z', 25000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL),
+          ('0192f0a0-0000-7000-8004-000000000007', '0192f0a0-0000-7000-8000-000000000001', '2026-11-23', '04:00', '2026-11-20T05:00:00Z', 25000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL),
+          ('0192f0a0-0000-7000-8004-000000000008', '0192f0a0-0000-7000-8000-000000000001', '2026-11-22', '23:59', '2026-11-21T05:00:00Z', -450000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL),
+          ('0192f0a0-0000-7000-8004-000000000009', '0192f0a0-0000-7000-8000-000000000001', '2026-11-24', NULL, '2026-11-24T06:00:00Z', 25000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', now()),
+          ('0192f0a0-0000-7000-8004-00000000005a', '0192f0a0-0000-7000-8000-000000000002', '2026-11-25', NULL, '2026-11-25T06:00:00Z', 25000, 'IDR', '0192f0a0-0000-7000-8001-000000000009', NULL)
+    - request: {"method": "POST", "path": "/auth/local/login", "headers": {"Content-Type": "application/json"}, "body": "{\"email\":\"alice@example.com\",\"password\":\"conformance-correct-horse\"}"}
+      status: 204
+  request: {"method": "GET", "path": "/expenses?after=eyJvIjoiMjAyNi0xMS0yNSIsImsiOjAsImMiOjE3OTU1ODY0MDAwMDAwMDAsImkiOiIwMTkyZjBhMC0wMDAwLTcwMDAtODAwNC0wMDAwMDAwMDAwNWEifQ&limit=2"}
+  expect:
+    status: 200
+    body_json: {"items": [{"id": "0192f0a0-0000-7000-8004-000000000001", "occurred_on": "2026-11-24", "captured_at": "2026-11-24T05:00:00Z", "amount": "25000.0000", "currency": "IDR", "pocket_id": "0192f0a0-0000-7000-8001-000000000001", "ownership": "joint"}, {"id": "0192f0a0-0000-7000-8004-000000000004", "occurred_on": "2026-11-23", "captured_at": "2026-11-23T19:00:00Z", "amount": "25000.0000", "currency": "IDR", "pocket_id": "0192f0a0-0000-7000-8001-000000000001", "ownership": "joint"}], "next": "<re:[A-Za-z0-9_-]{40,}>"}
+    cookies: {}
+
+- name: "expenses list - with no cookie a read is unauthorized"
+  issue: "140"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO users (id, household_id, email, user_display_name) VALUES ('0192f0a0-0000-7000-8000-0000000000d1', '0192f0a0-0000-7000-8000-000000000002', 'dave@example.com', 'Dave');
+        INSERT INTO pockets (id, household_id, pocket_display_name, active, deleted_at, created_at) VALUES
+          ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO',    true,  NULL,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Dana',   false, NULL,  '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Gopay',  true,  now(), '2026-01-03T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', true,  NULL,  '2026-01-04T00:00:00Z');
+        INSERT INTO categories (id, household_id, category_display_name, bucket, active, deleted_at, created_at) VALUES
+          ('0192f0a0-0000-7000-8003-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'Food',   'daily', true,  NULL,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Gym',    'daily', false, NULL,  '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Typo',   'daily', true,  now(), '2026-01-03T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', 'daily', true,  NULL,  '2026-01-04T00:00:00Z');
+  request: {"method": "GET", "path": "/expenses"}
+  expect:
+    status: 401
+    body_json: {"code": "UNAUTHORIZED"}
+
+- name: "expenses list - with no cookie, even a malformed limit is unauthorized first"
+  issue: "140"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO users (id, household_id, email, user_display_name) VALUES ('0192f0a0-0000-7000-8000-0000000000d1', '0192f0a0-0000-7000-8000-000000000002', 'dave@example.com', 'Dave');
+        INSERT INTO pockets (id, household_id, pocket_display_name, active, deleted_at, created_at) VALUES
+          ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO',    true,  NULL,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Dana',   false, NULL,  '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Gopay',  true,  now(), '2026-01-03T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', true,  NULL,  '2026-01-04T00:00:00Z');
+        INSERT INTO categories (id, household_id, category_display_name, bucket, active, deleted_at, created_at) VALUES
+          ('0192f0a0-0000-7000-8003-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'Food',   'daily', true,  NULL,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Gym',    'daily', false, NULL,  '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Typo',   'daily', true,  now(), '2026-01-03T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', 'daily', true,  NULL,  '2026-01-04T00:00:00Z');
+  request: {"method": "GET", "path": "/expenses?limit=abc"}
+  expect:
+    status: 401
+    body_json: {"code": "UNAUTHORIZED"}
+
+- name: "pockets default - with no Expense there is no default_pocket_id"
+  issue: "140"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO users (id, household_id, email, user_display_name) VALUES ('0192f0a0-0000-7000-8000-0000000000d1', '0192f0a0-0000-7000-8000-000000000002', 'dave@example.com', 'Dave');
+        INSERT INTO pockets (id, household_id, pocket_display_name, active, deleted_at, created_at) VALUES
+          ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO',    true,  NULL,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Dana',   false, NULL,  '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Gopay',  true,  now(), '2026-01-03T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', true,  NULL,  '2026-01-04T00:00:00Z');
+        INSERT INTO categories (id, household_id, category_display_name, bucket, active, deleted_at, created_at) VALUES
+          ('0192f0a0-0000-7000-8003-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'Food',   'daily', true,  NULL,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Gym',    'daily', false, NULL,  '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Typo',   'daily', true,  now(), '2026-01-03T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', 'daily', true,  NULL,  '2026-01-04T00:00:00Z');
+    - request: {"method": "POST", "path": "/auth/local/login", "headers": {"Content-Type": "application/json"}, "body": "{\"email\":\"alice@example.com\",\"password\":\"conformance-correct-horse\"}"}
+      status: 204
+  request: {"method": "GET", "path": "/pockets"}
+  expect:
+    status: 200
+    body_json: {"items": [{"id": "0192f0a0-0000-7000-8001-000000000001", "pocket_display_name": "OVO", "active": true}, {"id": "0192f0a0-0000-7000-8001-000000000002", "pocket_display_name": "Dana", "active": false}]}
+    cookies: {}
+
+- name: "pockets default - the last used by captured_at, skipping an inactive Pocket, a deleted Expense and another Household's"
+  issue: "140"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO users (id, household_id, email, user_display_name) VALUES ('0192f0a0-0000-7000-8000-0000000000d1', '0192f0a0-0000-7000-8000-000000000002', 'dave@example.com', 'Dave');
+        INSERT INTO pockets (id, household_id, pocket_display_name, active, deleted_at, created_at) VALUES
+          ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO',    true,  NULL,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Dana',   false, NULL,  '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Gopay',  true,  now(), '2026-01-03T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', true,  NULL,  '2026-01-04T00:00:00Z');
+        INSERT INTO categories (id, household_id, category_display_name, bucket, active, deleted_at, created_at) VALUES
+          ('0192f0a0-0000-7000-8003-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'Food',   'daily', true,  NULL,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Gym',    'daily', false, NULL,  '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Typo',   'daily', true,  now(), '2026-01-03T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', 'daily', true,  NULL,  '2026-01-04T00:00:00Z');;
+        INSERT INTO pockets (id, household_id, pocket_display_name, created_at) VALUES ('0192f0a0-0000-7000-8001-000000000004', '0192f0a0-0000-7000-8000-000000000001', 'Wallet', '2026-01-05T00:00:00Z');
+        INSERT INTO expenses (id, household_id, occurred_on, captured_at, amount, currency, pocket_id, deleted_at) VALUES
+          ('0192f0a0-0000-7000-8004-000000000001', '0192f0a0-0000-7000-8000-000000000001', '2026-11-20', '2026-11-20T05:00:00Z', 1, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL),
+          ('0192f0a0-0000-7000-8004-000000000002', '0192f0a0-0000-7000-8000-000000000001', '2026-11-21', '2026-11-21T05:00:00Z', 1, 'IDR', '0192f0a0-0000-7000-8001-000000000002', NULL),
+          ('0192f0a0-0000-7000-8004-000000000003', '0192f0a0-0000-7000-8000-000000000001', '2026-11-22', '2026-11-22T05:00:00Z', 1, 'IDR', '0192f0a0-0000-7000-8001-000000000004', now()),
+          ('0192f0a0-0000-7000-8004-00000000005a', '0192f0a0-0000-7000-8000-000000000002', '2026-11-23', '2026-11-23T05:00:00Z', 1, 'IDR', '0192f0a0-0000-7000-8001-000000000009', NULL)
+    - request: {"method": "POST", "path": "/auth/local/login", "headers": {"Content-Type": "application/json"}, "body": "{\"email\":\"alice@example.com\",\"password\":\"conformance-correct-horse\"}"}
+      status: 204
+  request: {"method": "GET", "path": "/pockets"}
+  expect:
+    status: 200
+    body_json: {"items": [{"id": "0192f0a0-0000-7000-8001-000000000001", "pocket_display_name": "OVO", "active": true}, {"id": "0192f0a0-0000-7000-8001-000000000002", "pocket_display_name": "Dana", "active": false}, {"id": "0192f0a0-0000-7000-8001-000000000004", "pocket_display_name": "Wallet", "active": true}], "default_pocket_id": "0192f0a0-0000-7000-8001-000000000001"}
+    cookies: {}
+
+- name: "pockets default - with no Expense but a deleted one there is none"
+  issue: "140"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO users (id, household_id, email, user_display_name) VALUES ('0192f0a0-0000-7000-8000-0000000000d1', '0192f0a0-0000-7000-8000-000000000002', 'dave@example.com', 'Dave');
+        INSERT INTO pockets (id, household_id, pocket_display_name, active, deleted_at, created_at) VALUES
+          ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO',    true,  NULL,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Dana',   false, NULL,  '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Gopay',  true,  now(), '2026-01-03T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', true,  NULL,  '2026-01-04T00:00:00Z');
+        INSERT INTO categories (id, household_id, category_display_name, bucket, active, deleted_at, created_at) VALUES
+          ('0192f0a0-0000-7000-8003-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'Food',   'daily', true,  NULL,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Gym',    'daily', false, NULL,  '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Typo',   'daily', true,  now(), '2026-01-03T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', 'daily', true,  NULL,  '2026-01-04T00:00:00Z');;
+        INSERT INTO expenses (id, household_id, occurred_on, amount, currency, pocket_id, deleted_at) VALUES ('0192f0a0-0000-7000-8004-000000000001', '0192f0a0-0000-7000-8000-000000000001', '2026-11-20', 1, 'IDR', '0192f0a0-0000-7000-8001-000000000001', now())
+    - request: {"method": "POST", "path": "/auth/local/login", "headers": {"Content-Type": "application/json"}, "body": "{\"email\":\"alice@example.com\",\"password\":\"conformance-correct-horse\"}"}
+      status: 204
+  request: {"method": "GET", "path": "/pockets"}
+  expect:
+    status: 200
+    body_json: {"items": [{"id": "0192f0a0-0000-7000-8001-000000000001", "pocket_display_name": "OVO", "active": true}, {"id": "0192f0a0-0000-7000-8001-000000000002", "pocket_display_name": "Dana", "active": false}]}
+    cookies: {}

@@ -876,3 +876,52 @@
     rows:
       - sql: SELECT category_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted FROM categories
         rows: [{name: Rent, active: true, deleted: true}]
+
+# /expenses serves GET (and HEAD, which answers like it) and POST (#140). The verbs
+# that act on one Expense arrive with their slices; a collection never replaces,
+# patches or deletes, so every other verb is a 405 and writes nothing.
+
+- name: "http methods - PUT on the Expenses collection is method not allowed and writes nothing"
+  issue: "140"
+  given:
+    - sql: |
+        INSERT INTO pockets (id, household_id, pocket_display_name) VALUES ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO')
+    - request: {"method": "POST", "path": "/auth/local/login", "headers": {"Content-Type": "application/json"}, "body": "{\"email\":\"alice@example.com\",\"password\":\"conformance-correct-horse\"}"}
+      status: 204
+  request: {"method": "PUT", "path": "/expenses", "headers": {"Content-Type": "application/json"}, "body": "{\"id\":\"0192f0a0-0000-7000-8004-000000000001\",\"amount\":\"1\",\"pocket_id\":\"0192f0a0-0000-7000-8001-000000000001\"}"}
+  expect:
+    status: 405
+    body_empty: true
+    rows:
+      - sql: "SELECT count(*)::int AS n FROM expenses"
+        rows: [{"n": 0}]
+
+- name: "http methods - PATCH on the Expenses collection is method not allowed and writes nothing"
+  issue: "140"
+  given:
+    - sql: |
+        INSERT INTO pockets (id, household_id, pocket_display_name) VALUES ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO')
+    - request: {"method": "POST", "path": "/auth/local/login", "headers": {"Content-Type": "application/json"}, "body": "{\"email\":\"alice@example.com\",\"password\":\"conformance-correct-horse\"}"}
+      status: 204
+  request: {"method": "PATCH", "path": "/expenses", "headers": {"Content-Type": "application/json"}, "body": "{\"id\":\"0192f0a0-0000-7000-8004-000000000001\",\"amount\":\"1\",\"pocket_id\":\"0192f0a0-0000-7000-8001-000000000001\"}"}
+  expect:
+    status: 405
+    body_empty: true
+    rows:
+      - sql: "SELECT count(*)::int AS n FROM expenses"
+        rows: [{"n": 0}]
+
+- name: "http methods - DELETE on the Expenses collection is method not allowed and writes nothing"
+  issue: "140"
+  given:
+    - sql: |
+        INSERT INTO pockets (id, household_id, pocket_display_name) VALUES ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO')
+    - request: {"method": "POST", "path": "/auth/local/login", "headers": {"Content-Type": "application/json"}, "body": "{\"email\":\"alice@example.com\",\"password\":\"conformance-correct-horse\"}"}
+      status: 204
+  request: {"method": "DELETE", "path": "/expenses", "headers": {"Content-Type": "application/json"}, "body": "{\"id\":\"0192f0a0-0000-7000-8004-000000000001\",\"amount\":\"1\",\"pocket_id\":\"0192f0a0-0000-7000-8001-000000000001\"}"}
+  expect:
+    status: 405
+    body_empty: true
+    rows:
+      - sql: "SELECT count(*)::int AS n FROM expenses"
+        rows: [{"n": 0}]

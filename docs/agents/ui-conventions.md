@@ -253,7 +253,7 @@ role table follows Uruni `docs/Design-System.md` § Typography.)
   it closes and raises the Undo toast; a refusal shows as a form-level `FieldError` (`role="alert"`)
   above `DetailActions`, and the dialog cannot be dismissed while the act is in flight (outside tap,
   Esc and the X are ignored only while it is pending). Reactivate is never refused and closes at
-  once. Pockets will refuse a Delete the same way for `POCKET_IN_USE` when Expenses lands.
+  once. A Pocket's Delete refuses the same way for `POCKET_IN_USE`.
   (Uruni #768; ruled 22 Nov. The refusable Delete: confirmed by the maintainer, 24 Nov 2026, for
   #130 PR 4; extended to Pockets and a refusable Deactivate, 24 Nov 2026, #140 R1.)
 - **Footer:** holds only the dialog's decision. Create: [Cancel | Add]. Edit: [Save] alone, with no

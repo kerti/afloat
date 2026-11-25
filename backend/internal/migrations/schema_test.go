@@ -29,6 +29,8 @@ const (
 	p1      = "019212e0-0000-7000-8000-000000000011"
 	c1      = "019212e0-0000-7000-8000-000000000021"
 	c2      = "019212e0-0000-7000-8000-000000000022"
+	e1      = "019212e0-0000-7000-8000-000000000031"
+	e2      = "019212e0-0000-7000-8000-000000000032"
 )
 
 // categoryInsert is the INSERT of a live, active Category of the given bucket.
@@ -44,6 +46,15 @@ func allocationInsert(household, effectiveOn, category, amount string) string {
 // pocketInsert is the INSERT of a live, active Pocket.
 func pocketInsert(id, household, name string) string {
 	return `INSERT INTO pockets (id, household_id, pocket_display_name) VALUES ('` + id + `', '` + household + `', '` + name + `')`
+}
+
+// expenseInsert is the INSERT of a live Expense on Pocket p1 for 2026-11-23,
+// with the given amount and any extra columns, which come as two parallel
+// strings, the names and the SQL values, each starting with a comma (or both
+// empty).
+func expenseInsert(id, household, amount, extraCols, extraVals string) string {
+	return `INSERT INTO expenses (id, household_id, occurred_on, amount, currency, pocket_id` + extraCols + `)
+		VALUES ('` + id + `', '` + household + `', '2026-11-23', ` + amount + `, 'IDR', '` + p1 + `'` + extraVals + `)`
 }
 
 // budgetInsert is the INSERT of a Budget row, the marker a Monthly Budget hangs
@@ -199,6 +210,53 @@ func TestSchemaRefuses(t *testing.T) {
 			uniqueViolation, "allocations_pkey"},
 		{"an allocation past DECIMAL(20,4)", categoryInsert(c1, hh, "Rent", "commitment") + `;` + budgetInsert("2026-11") + `;` + allocationInsert(hh, "2026-11-01", c1, "100000000000000000"),
 			"22003", ""},
+		// Expenses (#140). Every refusal is named by SQLSTATE and constraint.
+		{"a zero amount", pocketInsert(p1, hh, "OVO") + `;` + expenseInsert(e1, hh, "0", "", ""),
+			checkViolation, "expenses_amount_nonzero"},
+		{"a zero amount written with decimals", pocketInsert(p1, hh, "OVO") + `;` + expenseInsert(e1, hh, "0.0000", "", ""),
+			checkViolation, "expenses_amount_nonzero"},
+		{"an amount that rounds to zero is stored as zero and refused", pocketInsert(p1, hh, "OVO") + `;` + expenseInsert(e1, hh, "0.00004", "", ""),
+			checkViolation, "expenses_amount_nonzero"},
+		{"a lower-case currency", pocketInsert(p1, hh, "OVO") + `;` + `INSERT INTO expenses (id, household_id, occurred_on, amount, currency, pocket_id) VALUES ('` + e1 + `', '` + hh + `', '2026-11-23', 1, 'idr', '` + p1 + `')`,
+			checkViolation, "expenses_currency_iso4217"},
+		{"a two-letter currency", pocketInsert(p1, hh, "OVO") + `;` + `INSERT INTO expenses (id, household_id, occurred_on, amount, currency, pocket_id) VALUES ('` + e1 + `', '` + hh + `', '2026-11-23', 1, 'ID', '` + p1 + `')`,
+			checkViolation, "expenses_currency_iso4217"},
+		{"a blank description", pocketInsert(p1, hh, "OVO") + `;` + expenseInsert(e1, hh, "1", ", description", ", '   '"),
+			checkViolation, "expenses_description_not_blank"},
+		{"an unknown ownership", pocketInsert(p1, hh, "OVO") + `;` + expenseInsert(e1, hh, "1", ", ownership", ", 'shared'"),
+			checkViolation, "expenses_ownership_known"},
+		{"a sole_owner with no owner", pocketInsert(p1, hh, "OVO") + `;` + expenseInsert(e1, hh, "1", ", ownership", ", 'sole_owner'"),
+			checkViolation, "expenses_owner_matches_ownership"},
+		{"a joint Expense with an owner", pocketInsert(p1, hh, "OVO") + `;` + expenseInsert(e1, hh, "1", ", owner_user_id", ", '"+u1+"'"),
+			checkViolation, "expenses_owner_matches_ownership"},
+		{"an Expense with no Pocket", `INSERT INTO expenses (id, household_id, occurred_on, amount, currency) VALUES ('` + e1 + `', '` + hh + `', '2026-11-23', 1, 'IDR')`,
+			"23502", ""},
+		{"an Expense on a Pocket that doesn't exist", expenseInsert(e1, hh, "1", "", ""),
+			fkViolation, "expenses_household_id_pocket_id_fkey"},
+		// The composite foreign keys: the Household's own id beside another
+		// Household's row, which a single-column key would accept.
+		{"an Expense on another Household's Pocket", `INSERT INTO households (id, household_display_name) VALUES ('` + hhOther + `', 'Other');` +
+			pocketInsert(p1, hhOther, "Theirs") + `;` + expenseInsert(e1, hh, "1", "", ""),
+			fkViolation, "expenses_household_id_pocket_id_fkey"},
+		{"an Expense in another Household's Category", `INSERT INTO households (id, household_display_name) VALUES ('` + hhOther + `', 'Other');` +
+			pocketInsert(p1, hh, "OVO") + `;` + categoryInsert(c1, hhOther, "Theirs", "daily") + `;` + expenseInsert(e1, hh, "1", ", category_id", ", '"+c1+"'"),
+			fkViolation, "expenses_household_id_category_id_fkey"},
+		{"an Expense owned by another Household's User", `INSERT INTO households (id, household_display_name) VALUES ('` + hhOther + `', 'Other');
+			INSERT INTO users (id, household_id, email, user_display_name) VALUES ('` + u2 + `', '` + hhOther + `', 'b@example.com', 'B');` +
+			pocketInsert(p1, hh, "OVO") + `;` + expenseInsert(e1, hh, "1", ", ownership, owner_user_id", ", 'sole_owner', '"+u2+"'"),
+			fkViolation, "expenses_household_id_owner_user_id_fkey"},
+		{"a second Expense under one id", pocketInsert(p1, hh, "OVO") + `;` + expenseInsert(e1, hh, "1", "", "") + `;` + expenseInsert(e1, hh, "2", "", ""),
+			uniqueViolation, "expenses_pkey"},
+		{"an amount past DECIMAL(20,4)", pocketInsert(p1, hh, "OVO") + `;` + expenseInsert(e1, hh, "100000000000000000", "", ""),
+			"22003", ""},
+		{"a second Pocket under one (household, id)", pocketInsert(p1, hh, "OVO") + `;` + pocketInsert(p1, hh, "Other name"),
+			uniqueViolation, "pockets_pkey"},
+		// No row is ever hard-deleted, and nothing cascades: a referenced Pocket,
+		// Category or User cannot be removed from under an Expense.
+		{"a hard delete of a Pocket an Expense references", pocketInsert(p1, hh, "OVO") + `;` + expenseInsert(e1, hh, "1", "", "") + `;DELETE FROM pockets WHERE id = '` + p1 + `'`,
+			fkViolation, "expenses_household_id_pocket_id_fkey"},
+		{"a hard delete of a Category an Expense references", pocketInsert(p1, hh, "OVO") + `;` + categoryInsert(c1, hh, "Food", "daily") + `;` + expenseInsert(e1, hh, "1", ", category_id", ", '"+c1+"'") + `;DELETE FROM categories WHERE id = '` + c1 + `'`,
+			fkViolation, "expenses_household_id_category_id_fkey"},
 		// Users are soft-deleted, so a live one always holds its Household.
 		{"household delete under live users", `DELETE FROM households WHERE id = '` + hh + `'`,
 			fkViolation, "users_household_id_fkey"},
@@ -263,6 +321,18 @@ func TestSchemaAccepts(t *testing.T) {
 		{"two Categories' allocations on one day, and one Category's on two days", categoryInsert(c1, hh, "Rent", "commitment") + `;` + categoryInsert(c2, hh, "Food", "daily") + `;` + budgetInsert("2026-11") + `;` +
 			allocationInsert(hh, "2026-11-01", c1, "1") + `;` + allocationInsert(hh, "2026-11-01", c2, "2") + `;` + allocationInsert(hh, "2026-11-14", c1, "3")},
 		{"an allocation for a deleted Category: nothing in the schema forbids the log keeping it", `INSERT INTO categories (id, household_id, category_display_name, bucket, deleted_at) VALUES ('` + c1 + `', '` + hh + `', 'Rent', 'commitment', now());` + budgetInsert("2026-11") + `;` + allocationInsert(hh, "2026-11-01", c1, "1")},
+		// Expenses (#140).
+		{"an Expense with only what is required", pocketInsert(p1, hh, "OVO") + `;` + expenseInsert(e1, hh, "25000", "", "")},
+		{"a negative amount: a refund with no recorded original", pocketInsert(p1, hh, "OVO") + `;` + expenseInsert(e1, hh, "-25000", "", "")},
+		{"the smallest amount the type holds, either sign", pocketInsert(p1, hh, "OVO") + `;` + expenseInsert(e1, hh, "0.0001", "", "") + `;` + expenseInsert(e2, hh, "-0.0001", "", "")},
+		{"the largest amount the type holds", pocketInsert(p1, hh, "OVO") + `;` + expenseInsert(e1, hh, "9999999999999999.9999", "", "")},
+		{"a null Category, time and description", pocketInsert(p1, hh, "OVO") + `;` + expenseInsert(e1, hh, "1", ", category_id, occurred_time, description", ", NULL, NULL, NULL")},
+		{"an Expense with a Category, a time and a description", pocketInsert(p1, hh, "OVO") + `;` + categoryInsert(c1, hh, "Food", "daily") + `;` +
+			expenseInsert(e1, hh, "1", ", category_id, occurred_time, description", ", '"+c1+"', '19:05', 'Lunch'")},
+		{"a sole_owner naming a User of the Household", pocketInsert(p1, hh, "OVO") + `;` + expenseInsert(e1, hh, "1", ", ownership, owner_user_id", ", 'sole_owner', '"+u1+"'")},
+		{"an Expense dated in the future", pocketInsert(p1, hh, "OVO") + `;` + expenseInsert(e1, hh, "1", "", "") + `;UPDATE expenses SET occurred_on = '2999-01-01'`},
+		{"an inactive, soft-deleted Pocket still referenced by a deleted Expense", `INSERT INTO pockets (id, household_id, pocket_display_name, active, deleted_at) VALUES ('` + p1 + `', '` + hh + `', 'OVO', false, now());` +
+			expenseInsert(e1, hh, "1", ", deleted_at", ", now()")},
 		{"login_attempts row", `INSERT INTO login_attempts (key, failure_count, backoff_until) VALUES ('ip:203.0.113.7', 3, now() + interval '4 seconds')`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -291,6 +361,50 @@ func TestSchemaDefaults(t *testing.T) {
 	mustExec(t, tdb, categoryInsert(c1, hh, "Rent", "commitment"))
 	if got := scalar(t, tdb, `SELECT active || ' / ' || (deleted_at IS NULL) || ' / ' || (created_at IS NOT NULL) FROM categories WHERE id = '`+c1+`'`); got != "true / true / true" {
 		t.Errorf("category defaults (active / deleted_at null / created_at set) = %q", got)
+	}
+}
+
+// The Expense defaults are the schema's: the Household's own joint ownership, a
+// capture instant, and nothing deleted.
+func TestExpenseDefaults(t *testing.T) {
+	tdb := seeded(t)
+	mustExec(t, tdb, pocketInsert(p1, hh, "OVO"))
+	mustExec(t, tdb, expenseInsert(e1, hh, "25000", "", ""))
+	if got := scalar(t, tdb, `SELECT ownership || ' / ' || (owner_user_id IS NULL) || ' / ' || (deleted_at IS NULL) || ' / ' ||
+		(captured_at IS NOT NULL) || ' / ' || (created_at IS NOT NULL) || ' / ' || (updated_at IS NOT NULL) || ' / ' ||
+		(occurred_time IS NULL) || ' / ' || (category_id IS NULL) || ' / ' || (description IS NULL)
+		FROM expenses WHERE id = '`+e1+`'`); got != "joint / true / true / true / true / true / true / true / true" {
+		t.Errorf("expense defaults = %q", got)
+	}
+	// Stored at the scale, whatever scale it was written at, and a refund keeps
+	// its sign.
+	mustExec(t, tdb, expenseInsert(e2, hh, "-25000", "", ""))
+	if got := scalar(t, tdb, `SELECT amount::text FROM expenses WHERE id = '`+e2+`'`); got != "-25000.0000" {
+		t.Errorf("amount = %s, want -25000.0000", got)
+	}
+}
+
+// The seven indexes of #140 R7 are all in the baseline, so the later slices
+// need no second db-reset; a dropped or renamed one should fail here, not in a
+// plan nobody reads. Their definitions are pinned as well: the partial
+// predicates and the sort directions are what make each one serve its query.
+func TestExpenseIndexes(t *testing.T) {
+	tdb := seeded(t)
+	for name, want := range map[string]string{
+		"expenses_household_live_idx":          "(household_id, occurred_on DESC, captured_at DESC, id DESC) WHERE (deleted_at IS NULL)",
+		"expenses_household_uncategorised_idx": "(household_id, occurred_on DESC, id DESC) WHERE ((deleted_at IS NULL) AND (category_id IS NULL))",
+		"expenses_household_captured_idx":      "(household_id, captured_at DESC) WHERE (deleted_at IS NULL)",
+		"expenses_household_bin_idx":           "(household_id, deleted_at DESC) WHERE (deleted_at IS NOT NULL)",
+		"expenses_household_pocket_idx":        "(household_id, pocket_id)",
+		"expenses_household_category_idx":      "(household_id, category_id) WHERE (category_id IS NOT NULL)",
+		"expenses_household_owner_idx":         "(household_id, owner_user_id) WHERE (owner_user_id IS NOT NULL)",
+	} {
+		got := scalar(t, tdb, `SELECT coalesce(substring(indexdef from 'USING btree (.*)$'), 'MISSING')
+			FROM (SELECT indexdef FROM pg_indexes WHERE schemaname = 'public' AND indexname = '`+name+`'
+			      UNION ALL SELECT 'USING btree MISSING' WHERE NOT EXISTS (SELECT 1 FROM pg_indexes WHERE indexname = '`+name+`')) x LIMIT 1`)
+		if got != want {
+			t.Errorf("%s = %s, want %s", name, got, want)
+		}
 	}
 }
 

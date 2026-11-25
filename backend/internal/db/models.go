@@ -42,6 +42,24 @@ type Credential struct {
 	UpdatedAt    pgtype.Timestamptz
 }
 
+type Expense struct {
+	ID           pgtype.UUID
+	HouseholdID  pgtype.UUID
+	OccurredOn   pgtype.Date
+	OccurredTime pgtype.Time
+	CapturedAt   pgtype.Timestamptz
+	Amount       decimal.Decimal
+	Currency     string
+	PocketID     pgtype.UUID
+	CategoryID   pgtype.UUID
+	Description  *string
+	Ownership    string
+	OwnerUserID  pgtype.UUID
+	CreatedAt    pgtype.Timestamptz
+	UpdatedAt    pgtype.Timestamptz
+	DeletedAt    pgtype.Timestamptz
+}
+
 type Household struct {
 	ID                    pgtype.UUID
 	HouseholdDisplayName  string

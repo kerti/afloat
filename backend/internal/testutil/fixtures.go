@@ -74,3 +74,28 @@ func (tdb *TestDB) CreateCategory(t *testing.T, householdID pgtype.UUID, categor
 	}
 	return id
 }
+
+// ExpenseOpts are the columns a test may set on CreateExpense. The zero value
+// is a live, uncategorised Expense of 25000 on 2026-11-23, in IDR.
+type ExpenseOpts struct {
+	// Category is the Expense's Category; the zero (invalid) UUID is none.
+	Category pgtype.UUID
+	// Deleted puts the Expense in the Recycle Bin.
+	Deleted bool
+}
+
+// CreateExpense inserts an Expense on a Pocket of a Household and returns its
+// id. It writes the row directly, as the other fixtures do, so a test of a guard
+// needs no handler to have an Expense to guard against.
+func (tdb *TestDB) CreateExpense(t *testing.T, householdID, pocketID pgtype.UUID, opts ExpenseOpts) pgtype.UUID {
+	t.Helper()
+	id := NewUUID(t)
+	_, err := tdb.Pool.Exec(context.Background(),
+		`INSERT INTO expenses (id, household_id, occurred_on, amount, currency, pocket_id, category_id, deleted_at)
+		 VALUES ($1, $2, '2026-11-23', 25000, 'IDR', $3, $4, CASE WHEN $5::boolean THEN now() END)`,
+		id, householdID, pocketID, opts.Category, opts.Deleted)
+	if err != nil {
+		t.Fatalf("testutil: create expense: %v", err)
+	}
+	return id
+}

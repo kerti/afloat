@@ -26,8 +26,8 @@ info:
     create with the allocation a new Category starts with, rename, deactivate
     and reactivate), the Budget of the current Budget Period (PRD S9, S12,
     S13: the Monthly Budget and the allocations, read, and both changed) and
-    the Household's Expenses (PRD E1 to E10: create, and the live list; the
-    rest of an Expense's life lands with its own slices). Invitation
+    the Household's Expenses (PRD E1 to E10: create, correct, and the live list;
+    the rest of an Expense's life lands with its own slices). Invitation
     acceptance and the remaining domain resources land in step 9 and are
     deliberately absent here.
   license:
@@ -1247,6 +1247,93 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
 
+  /expenses/{id}:
+    patch:
+      tags: [expense]
+      operationId: updateExpense
+      summary: Correct an Expense.
+      description: |
+        Merge-style, as every `PATCH` (BOOTSTRAP.md §4): a property left out is
+        unchanged, none is required, and `{}` is a no-op that answers the
+        Expense as it stands. Two writers of different properties both land,
+        and the last write to one property wins (no `If-Match`). The answer is
+        the whole Expense. `GET`, `DELETE` and the restore of one Expense are
+        later slices.
+
+        **Editable:** `amount`, `occurred_on`, `occurred_time`, `pocket_id`,
+        `category_id`, `description`, and `ownership` with `owner_user_id`.
+        **Not editable:** `id`, `currency`, `captured_at`, `household_id` and
+        `deleted_at`, which are not properties of this request
+        (`INVALID_JSON_BODY`): an Expense stays in the currency it was recorded
+        in, and is never relabelled without being converted.
+
+        **Clearable:** `occurred_time`, `category_id` and `description` take
+        `null`, which clears them (`category_id: null` makes the Expense
+        uncategorised again); left out means unchanged, and a value sets. `null`
+        for any other property is `INVALID_JSON_BODY`.
+
+        `amount` is a `SignedMoneyInput` and zero is refused (`VALIDATION
+        {field: amount, rule: nonzero}`), as at creation. `occurred_on` is a
+        calendar date, future ones included: one that is not a real date or has
+        no year is `{occurred_on, invalid}`. `description` is trimmed, at most
+        200 code points, and blank after the trim is `{description, required}`;
+        to remove it, send `null`. It is user content and is never logged.
+
+        `ownership` and `owner_user_id` are a pair, as at creation: both or
+        neither, so `sole_owner` with a User, or `joint`, which clears the owner.
+        An owner with no `ownership`, a `sole_owner` with none, a `joint` with
+        one, or a User who is not a live member of the caller's Household is
+        `{owner_user_id, invalid}`.
+
+        **References are judged only when sent and different from what is
+        stored.** A `pocket_id` or `category_id` equal to the stored one is not
+        looked at again, so the amount of an Expense whose Pocket was
+        deactivated since can still be fixed. A changed one is judged as at
+        creation: unknown, another Household's or deleted is `{pocket_id,
+        invalid}` (one answer for the three), the caller's own inactive Pocket
+        is `{pocket_id, inactive}`, and a Category the same way. A changed
+        reference is share-locked in the same transaction as the write, so a
+        Pocket or Category deleted at the same moment is either refused here or
+        found by the delete's own check (`POCKET_IN_USE`, `CATEGORY_IN_USE`).
+
+        A write that changes nothing (`{}`, or every value as stored) does not
+        move the Expense's `updated_at`.
+
+        An id that is unknown, that belongs to another Household, or that is
+        deleted is `404 NOT_FOUND`, the same answer in every case, and it is
+        given even for `{}`: no request confirms another Household's id. There
+        is no `409`: nothing here has a name to clash with.
+
+        Order of checks: the cross-site guard, the session, the id's shape, the
+        body (the contract's rules, then the handler's: the amount's zero, the
+        date, the description, the pair), then the lookup (`404`), then the
+        references. **Validation before lookup**: a foreign id with a bad body
+        answers what an unknown one does, and a bad body beside a bad reference
+        answers the body.
+      parameters:
+        - $ref: '#/components/parameters/ExpenseId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateExpenseRequest'
+      responses:
+        '200':
+          description: The Expense as it now stands.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Expense'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
   /onboarding/options:
     get:
       tags: [onboarding]
@@ -1357,6 +1444,18 @@ components:
       required: true
       description: |
         A Category's id. Deliberately no `pattern` and no `maxLength`, for the
+        reason `PocketId` gives (#106). A value that is not a UUID is
+        `400 VALIDATION {field: id, rule: invalid}`, from the binder.
+      schema:
+        type: string
+        format: uuid
+
+    ExpenseId:
+      name: id
+      in: path
+      required: true
+      description: |
+        An Expense's id. Deliberately no `pattern` and no `maxLength`, for the
         reason `PocketId` gives (#106). A value that is not a UUID is
         `400 VALIDATION {field: id, rule: invalid}`, from the binder.
       schema:
@@ -1991,6 +2090,53 @@ components:
           # An outer bound that counts padding; the handler's 200 code points
           # applies to the trimmed text.
           maxLength: 1000
+        ownership:
+          $ref: '#/components/schemas/Ownership'
+        owner_user_id:
+          type: string
+          format: uuid
+          pattern: '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$'
+      additionalProperties: false
+
+    UpdateExpenseRequest:
+      type: object
+      description: |
+        What an Expense may change, merge-style: a property left out is
+        unchanged, and none is required. `id`, `currency`, `captured_at`,
+        `household_id`, `deleted_at` and any other property are not accepted.
+        `occurred_time`, `category_id` and `description` are nullable, and
+        `null` clears them; `null` is not accepted for any other property.
+      properties:
+        amount:
+          $ref: '#/components/schemas/SignedMoneyInput'
+        occurred_on:
+          type: string
+          # As on CreateExpenseRequest: a pattern, with the calendar check
+          # `VALIDATION {field: occurred_on, rule: invalid}` the handler's.
+          pattern: '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
+          example: '2026-11-23'
+        occurred_time:
+          type: string
+          nullable: true
+          pattern: '^([01][0-9]|2[0-3]):[0-5][0-9]$'
+          description: An `HH:MM`, or `null` to clear it.
+        pocket_id:
+          type: string
+          format: uuid
+          pattern: '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$'
+        category_id:
+          type: string
+          format: uuid
+          nullable: true
+          pattern: '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$'
+          description: A Category's id, or `null` to make the Expense uncategorised.
+        description:
+          type: string
+          nullable: true
+          # An outer bound that counts padding; the handler's 200 code points
+          # applies to the trimmed text.
+          maxLength: 1000
+          description: Free text, or `null` to remove it.
         ownership:
           $ref: '#/components/schemas/Ownership'
         owner_user_id:

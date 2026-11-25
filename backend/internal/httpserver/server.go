@@ -161,6 +161,10 @@ func (s *Server) CreateExpense(ctx context.Context, r api.CreateExpenseRequestOb
 	return s.expense.CreateExpense(ctx, r)
 }
 
+func (s *Server) UpdateExpense(ctx context.Context, r api.UpdateExpenseRequestObject) (api.UpdateExpenseResponseObject, error) {
+	return s.expense.UpdateExpense(ctx, r)
+}
+
 // New builds the router: the API under the contract's base path (basePath,
 // /api today), with the middleware every request passes through.
 //

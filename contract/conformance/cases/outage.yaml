@@ -312,3 +312,24 @@
     rows:
       - sql: "SELECT count(*)::int AS n FROM expenses"
         rows: [{"n": 0}]
+
+# PATCH /expenses/{id} (#140, PR 3b): the session is unreadable, so the answer is
+# 500, the cookie is kept (#27) and nothing is written.
+
+- name: "outage - an expense update with a session is 500 and writes nothing"
+  issue: "140"
+  given:
+    - sql: |
+        INSERT INTO pockets (id, household_id, pocket_display_name) VALUES ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO');
+        INSERT INTO expenses (id, household_id, occurred_on, amount, currency, pocket_id, updated_at) VALUES ('0192f0a0-0000-7000-8004-000000000001', '0192f0a0-0000-7000-8000-000000000001', '2026-11-20', 25000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', '2026-01-01T00:00:00Z')
+    - request: {"method": "POST", "path": "/auth/local/login", "headers": {"Content-Type": "application/json"}, "body": "{\"email\":\"alice@example.com\",\"password\":\"conformance-correct-horse\"}"}
+      status: 204
+    - outage: true
+  request: {"method": "PATCH", "path": "/expenses/0192f0a0-0000-7000-8004-000000000001", "headers": {"Content-Type": "application/json"}, "body": "{\"amount\":\"1\"}"}
+  expect:
+    status: 500
+    body_json: {"code": "INTERNAL"}
+    cookies: {}
+    rows:
+      - sql: "SELECT amount::text AS amount, (updated_at = '2026-01-01T00:00:00Z') AS untouched FROM expenses"
+        rows: [{"amount": "25000.0000", "untouched": true}]

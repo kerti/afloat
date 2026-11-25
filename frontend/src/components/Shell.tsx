@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
+import { ChartPie, GearSix, House, Plus, Receipt, type Icon } from "@phosphor-icons/react";
 import { useTranslation } from "react-i18next";
-import { Link } from "react-router";
+import { Link, NavLink } from "react-router";
 import { toastError } from "@/lib/plainToast";
 import type { ApiError } from "@/api/client";
 import { useLogout } from "@/api/queries";
@@ -15,11 +16,20 @@ import { routes } from "@/lib/routes";
 // device's safe areas (index.html carries viewport-fit=cover), and main
 // reserves the bar's height: the notch inset, its 3.5rem row and 1px border.
 // The one column, max-w-xl, is set here and screens never set their own width.
-// There is no bottom tab bar until the dashboard and capture slices decide the
-// tabs; when it lands it is fixed too, and main reserves its height as well.
+// The bottom tab bar is fixed too, always visible, and main reserves its height
+// as well.
+type Tab = { to: string; icon: Icon; label: string; end?: boolean; raised?: boolean };
+
 export function Shell({ children }: { children: ReactNode }) {
   const { t } = useTranslation();
   const logout = useLogout();
+  const tabs: Tab[] = [
+    { to: routes.home, icon: House, label: t("shell.tabs.home"), end: true },
+    { to: routes.expenses, icon: Receipt, label: t("shell.tabs.expenses") },
+    { to: routes.capture, icon: Plus, label: t("shell.tabs.capture"), raised: true },
+    { to: routes.budget, icon: ChartPie, label: t("shell.tabs.budget") },
+    { to: routes.settings, icon: GearSix, label: t("shell.tabs.settings") },
+  ];
 
   function signOut() {
     // No form is open, so a failure is a toast; success unmounts the Shell.
@@ -51,9 +61,50 @@ export function Shell({ children }: { children: ReactNode }) {
           </Button>
         </div>
       </header>
-      <main className="pt-[calc(env(safe-area-inset-top)+3.5rem+1px+1.5rem)] pr-[max(1rem,env(safe-area-inset-right))] pb-[calc(env(safe-area-inset-bottom)+2rem)] pl-[max(1rem,env(safe-area-inset-left))]">
+      <main className="pt-[calc(env(safe-area-inset-top)+3.5rem+1px+1.5rem)] pr-[max(1rem,env(safe-area-inset-right))] pb-[calc(env(safe-area-inset-bottom)+4rem+2rem)] pl-[max(1rem,env(safe-area-inset-left))]">
         <div className="mx-auto flex w-full max-w-xl flex-col gap-6">{children}</div>
       </main>
+      <nav
+        aria-label={t("shell.mainNav")}
+        className="bar-glass fixed inset-x-0 bottom-0 z-10 border-t pb-[env(safe-area-inset-bottom)]"
+      >
+        <ul className="mx-auto flex w-full max-w-xl items-stretch">
+          {tabs.map(({ to, icon: TabIcon, label, end, raised }) => (
+            <li key={to} className="flex-1">
+              <NavLink
+                to={to}
+                end={end}
+                className={({ isActive }) =>
+                  `relative flex min-h-15 flex-col items-center justify-end gap-1 px-1 pb-2 text-[11px] leading-4 font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
+                    isActive ? "text-primary" : "text-muted-foreground"
+                  }`
+                }
+              >
+                {({ isActive }) => (
+                  <>
+                    {isActive && (
+                      <span
+                        aria-hidden="true"
+                        className="absolute inset-x-0 -top-px h-0.5 bg-primary"
+                      />
+                    )}
+                    <span className="flex h-6 items-center justify-center">
+                      {raised ? (
+                        <span className="fab-glass absolute -top-7 left-1/2 flex size-14 -translate-x-1/2 items-center justify-center rounded-2xl bg-primary text-primary-foreground">
+                          <TabIcon aria-hidden="true" className="size-7" weight="bold" />
+                        </span>
+                      ) : (
+                        <TabIcon aria-hidden="true" className="size-6" />
+                      )}
+                    </span>
+                    <span>{label}</span>
+                  </>
+                )}
+              </NavLink>
+            </li>
+          ))}
+        </ul>
+      </nav>
     </div>
   );
 }

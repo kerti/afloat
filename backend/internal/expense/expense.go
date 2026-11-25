@@ -1,6 +1,6 @@
-// Package expense owns the Household's Expenses (PRD E1 to E10): recording one
-// and listing them. Correcting, deleting and restoring one are later slices of
-// #140. Handlers live with their domain (docs/adr/go/0001).
+// Package expense owns the Household's Expenses (PRD E1 to E10): recording one,
+// listing them and correcting one. Reading one, deleting and restoring are later
+// slices of #140. Handlers live with their domain (docs/adr/go/0001).
 //
 // The dependency runs one way: this package imports auth, for the User in the
 // request context and the shared text rule, and budget, for the one place a
@@ -432,11 +432,15 @@ func (h *Handlers) inTx(ctx context.Context, fn func(q *db.Queries) error) error
 }
 
 func validation(f failure) api.CreateExpenseResponseObject {
-	return api.CreateExpense400JSONResponse{
-		BadRequestJSONResponse: api.BadRequestJSONResponse{
-			Code: api.VALIDATION,
-			Args: &map[string]interface{}{"field": f.field, "rule": f.rule},
-		},
+	return api.CreateExpense400JSONResponse{BadRequestJSONResponse: badRequest(f)}
+}
+
+// badRequest is the VALIDATION envelope for one failure, shared by every
+// operation of this package.
+func badRequest(f failure) api.BadRequestJSONResponse {
+	return api.BadRequestJSONResponse{
+		Code: api.VALIDATION,
+		Args: &map[string]interface{}{"field": f.field, "rule": f.rule},
 	}
 }
 

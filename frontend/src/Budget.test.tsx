@@ -28,7 +28,7 @@ describe("budget", () => {
     server.use(...defaultHandlers(signedIn({ budget: planned })));
     const user = userEvent.setup();
     renderApp("/");
-    await user.click(await screen.findByRole("link", { name: enGB.home.budgetLink }));
+    await user.click(await screen.findByRole("link", { name: enGB.shell.tabs.budget }));
     expect(await screen.findByRole("heading", { name: enGB.budget.title })).toBeInTheDocument();
   });
 

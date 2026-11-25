@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/kerti/afloat/backend/internal/api"
 )
@@ -89,7 +90,7 @@ func TestASelectThenInsertCreateLosesTheRace(t *testing.T) {
 	}
 }
 
-// Expenses, Pocket deletions and deactivations, Category deletions and currency
+// Expenses (recorded and re-pointed), Pocket deletions and deactivations, Category deletions and currency
 // changes run together on one Household must never deadlock (40P01 is a 500) and
 // never leave the data wrong. The lock order is Household, then Pocket, then
 // Category, for every writer, in the modes BOOTSTRAP.md §4 names (a removal's
@@ -109,6 +110,26 @@ func TestEveryWriterTogetherNeverDeadlocksAndNeverLeavesTheDataWrong(t *testing.
 			func(int) string {
 				c := uuid.UUID(w.category.Bytes)
 				return w.create(t, api.CreateExpenseRequest{Id: uuid.Must(uuid.NewV7()), Amount: "1", PocketId: w.keeper.Bytes, CategoryId: &c})
+			},
+			// An edit is the create's twin: Expenses made on the keeper Pocket and
+			// then re-pointed at the Pocket, the Category and the extra Pocket the
+			// removals are after, and a Category cleared.
+			func(int) string {
+				id := uuid.Must(uuid.NewV7())
+				w.create(t, api.CreateExpenseRequest{Id: id, Amount: "1", PocketId: w.keeper.Bytes})
+				return w.edit(t, pgtype.UUID{Bytes: id, Valid: true}, api.UpdateExpenseRequest{PocketId: idPtr(w.pocket)})
+			},
+			func(int) string {
+				id := uuid.Must(uuid.NewV7())
+				w.create(t, api.CreateExpenseRequest{Id: id, Amount: "1", PocketId: w.keeper.Bytes})
+				c := uuid.UUID(w.category.Bytes)
+				return w.edit(t, pgtype.UUID{Bytes: id, Valid: true}, api.UpdateExpenseRequest{PocketId: idPtr(extra), CategoryId: valueOf(c)})
+			},
+			func(int) string {
+				id := uuid.Must(uuid.NewV7())
+				c := uuid.UUID(w.category.Bytes)
+				w.create(t, api.CreateExpenseRequest{Id: id, Amount: "1", PocketId: w.keeper.Bytes, CategoryId: &c})
+				return w.edit(t, pgtype.UUID{Bytes: id, Valid: true}, api.UpdateExpenseRequest{CategoryId: nullOf[uuid.UUID](), Amount: amount("2")})
 			},
 			func(int) string { // the last two active Pockets are w.pocket and w.keeper and extra: remove two of three
 				resp, _ := w.pockets.DeletePocket(w.ctx, api.DeletePocketRequestObject{Id: w.pocket.Bytes})

@@ -29,7 +29,7 @@ describe("the Settings screen", () => {
     for (const name of ["Profile", "Email", "Password"]) {
       expect(within(you).getByRole("region", { name })).toBeInTheDocument();
     }
-    expect(screen.getByRole("link", { name: "Home" })).toHaveAttribute("href", "/");
+    expect(screen.getByRole("main").querySelector('a[href="/"]')).toBeNull();
   });
 
   it("words its sections in Indonesian", async () => {

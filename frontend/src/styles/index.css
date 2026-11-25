@@ -28,13 +28,41 @@
    edge facing the content and a soft glow falling from it. Colours are the
    --glass-* tokens in theme.css, so dark mode has its own. */
 @utility header-glass {
-  background-color: color-mix(in srgb, var(--background) 60%, transparent);
+  background-color: color-mix(in srgb, var(--card) 75%, transparent);
   -webkit-backdrop-filter: blur(20px) saturate(1.6);
   backdrop-filter: blur(20px) saturate(1.6);
   box-shadow:
     inset 0 -1px 0 var(--glass-rim),
     inset 0 -10px 14px -10px var(--glass-glow),
     0 4px 16px var(--glass-shadow);
+}
+
+/* The bottom bar's glass: header-glass mirrored, the rim and glow on the edge
+   facing the content, which is now the top (Uruni web/src/index.css bar-glass). */
+@utility bar-glass {
+  background-color: color-mix(in srgb, var(--card) 75%, transparent);
+  -webkit-backdrop-filter: blur(20px) saturate(1.6);
+  backdrop-filter: blur(20px) saturate(1.6);
+  box-shadow:
+    inset 0 1px 0 var(--glass-rim),
+    inset 0 10px 14px -10px var(--glass-glow),
+    0 -4px 16px var(--glass-shadow);
+}
+
+/* Capture's raised square: a soft highlight and two-layer lift, so it reads
+   above the bar's own shadow (Uruni web/src/index.css fab-glass). */
+@utility fab-glass {
+  background-image: radial-gradient(
+    90% 70% at 30% 10%,
+    rgb(255 255 255 / 0.28) 0%,
+    rgb(255 255 255 / 0) 60%
+  );
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.35),
+    inset 0 -2px 4px rgb(0 0 0 / 0.12),
+    0 2px 3px var(--fab-shadow-near),
+    0 8px 14px var(--fab-shadow-near),
+    0 18px 36px var(--fab-shadow-far);
 }
 
 /* A 44px touch target around a control drawn smaller than that, without the
@@ -89,6 +117,7 @@
   html {
     /* Shell's top bar is fixed: keep a focused field out from under it. */
     scroll-padding-top: calc(env(safe-area-inset-top) + 3.5rem);
+    scroll-padding-bottom: calc(env(safe-area-inset-bottom) + 4rem);
   }
   * {
     @apply border-border;

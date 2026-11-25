@@ -16,7 +16,12 @@
     "expectedMonthlyIncome": "Expected monthly income (optional)",
     "categoryDisplayName": "Category name",
     "categoryBucket": "Kind",
-    "allocation": "Allocation"
+    "allocation": "Allocation",
+    "amount": "Amount",
+    "pocket": "Pocket",
+    "category": "Category (optional)",
+    "description": "Description (optional)",
+    "date": "Date"
   },
   "fieldNames": {
     "reporting_currency": "reporting currency",
@@ -34,7 +39,12 @@
     "category_display_name": "Category name",
     "bucket": "kind",
     "allocation": "allocation",
-    "category_id": "Category"
+    "category_id": "Category",
+    "amount": "amount",
+    "pocket_id": "Pocket",
+    "occurred_on": "date",
+    "occurred_time": "time",
+    "description": "description"
   },
   "login": {
     "title": "Sign in",
@@ -48,8 +58,6 @@
     "signedInAs": "Signed in as {{name}}.",
     "household": "Household: {{name}}",
     "comingSoon": "Your dashboard will appear here.",
-    "settingsLink": "Settings",
-    "budgetLink": "Budget",
     "founded": {
       "dismiss": "Dismiss",
       "named": "We named your Household <strong>{{household}}</strong> and your first Pocket <strong>{{pocket}}</strong>, and set your currency to <strong>{{currency}}</strong>.",
@@ -135,7 +143,9 @@
     "title": "Settings",
     "household": {
       "title": "Household",
-      "periodStartDayHint": "Each Budget Period starts on this day, from 1 to 28. Changing it re-dates your Budget Periods straight away."
+      "periodStartDayHint": "Each Budget Period starts on this day, from 1 to 28. Changing it re-dates your Budget Periods straight away.",
+      "searchCurrencies": "Search currencies",
+      "noCurrency": "No matching currency"
     },
     "pockets": {
       "title": "Pockets"
@@ -147,7 +157,9 @@
         "name": "Your name",
         "language": "Language",
         "appearance": "Appearance",
-        "timeZone": "Time zone"
+        "timeZone": "Time zone",
+        "searchTimeZones": "Search time zones",
+        "noTimeZone": "No matching time zone"
       },
       "languages": {
         "enGB": "English (UK)",
@@ -191,7 +203,15 @@
     "close": "Close"
   },
   "shell": {
-    "signOut": "Sign out"
+    "signOut": "Sign out",
+    "mainNav": "Main",
+    "tabs": {
+      "home": "Home",
+      "expenses": "Expenses",
+      "capture": "Capture",
+      "budget": "Budget",
+      "settings": "Settings"
+    }
   },
   "budget": {
     "title": "Budget",
@@ -232,5 +252,40 @@
     "showInactive": "Show inactive Categories ({{count}})",
     "allocationDailyEditHint": "Optional. Clear it to give this Category no allocation for this Budget Period.",
     "delete": "Delete"
+  },
+  "capture": {
+    "title": "Capture",
+    "refund": "This is a refund",
+    "noCategory": "No Category",
+    "add": "Add",
+    "adding": "Adding…",
+    "amountRequired": "Enter an amount.",
+    "amountNonzero": "Enter an amount other than zero.",
+    "pocketRequired": "Choose a Pocket.",
+    "pocketUnusable": "That Pocket is no longer in use. Choose another.",
+    "categoryUnusable": "That Category is no longer in use. Choose another.",
+    "dateInvalid": "That isn't a real date. Choose another.",
+    "noPocket": "Add a Pocket first. Every Expense is recorded in one.",
+    "noPocketLink": "Go to Settings"
+  },
+  "expenses": {
+    "title": "Expenses",
+    "empty": "Your Expenses will appear here.",
+    "yesterday": "Yesterday",
+    "uncategorised": "Uncategorised",
+    "loadMore": "Load more"
+  },
+  "dates": {
+    "today": "Today",
+    "addTime": "Add time",
+    "time": "Time, {{time}}",
+    "hour": "Hour",
+    "clearTime": "Clear time",
+    "timePicker": "Time",
+    "backToHours": "Back to hours",
+    "previousMonth": "Previous month",
+    "nextMonth": "Next month",
+    "previousYear": "Previous year",
+    "nextYear": "Next year"
   }
 }

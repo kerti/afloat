@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { screen, waitFor, within } from "@testing-library/react";
+import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import { toast } from "sonner";
@@ -17,6 +17,13 @@ const pocket = (id: string, name: string, active = true) => ({
 });
 const signedIn = (extra: Partial<State> = {}): State => ({ signedIn: true, me: alice, ...extra });
 const toastMock = vi.mocked(toast);
+// A second toast would arrive after the UI settles; let it, then count again.
+async function noLateToast() {
+  await act(async () => {
+    await new Promise((r) => setTimeout(r, 20));
+  });
+  expect(toastMock).toHaveBeenCalledTimes(1);
+}
 const p = enGB.pockets;
 const action = (call: number) =>
   (toastMock.mock.calls[call]![1]!.action as unknown as { onClick: () => void }).onClick();
@@ -74,17 +81,18 @@ describe("deleting a Pocket", () => {
     await user.click(within(dialog).getByRole("button", { name: p.delete }));
 
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
-    expect(view.param("edit")).toBeNull();
+    await waitFor(() => expect(view.param("edit")).toBeNull());
     await waitFor(() =>
       expect(screen.queryByRole("button", { name: "Edit OVO" })).not.toBeInTheDocument(),
     );
+    await waitFor(() => expect(toastMock).toHaveBeenCalledTimes(1));
     expect(state.pocketDeletes).toEqual(["b"]);
-    expect(toastMock).toHaveBeenCalledTimes(1);
     const [message, options] = toastMock.mock.calls[0]!;
     expect(message).toBe("Deleted OVO.");
     expect(options?.duration).toBe(UNDO_TOAST_MS);
     expect(UNDO_TOAST_MS).toBe(8000);
     expect(options?.action).toMatchObject({ label: "Undo" });
+    await noLateToast();
   });
 
   it("Undo calls restore and the row comes back", async () => {
@@ -170,7 +178,8 @@ describe("deleting a Pocket", () => {
 
     await waitFor(() => expect(toastMock.error).toHaveBeenCalledTimes(1));
     expect(toastMock.error.mock.calls[0]![0]).toBe(enGB.errors.NAME_TAKEN);
-    expect(toastMock).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(toastMock).toHaveBeenCalledTimes(1));
+    await noLateToast();
   });
 });
 

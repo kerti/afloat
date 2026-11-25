@@ -1,3 +1,4 @@
+import { CircleNotch, WarningCircle } from "@phosphor-icons/react";
 import { useTranslation } from "react-i18next";
 import type { ApiError } from "@/api/client";
 import { errorMessage } from "@/api/errors";
@@ -10,17 +11,7 @@ export function Loading() {
   const { t } = useTranslation();
   return (
     <p role="status" className="flex items-center gap-2 text-muted-foreground">
-      <svg
-        aria-hidden="true"
-        viewBox="0 0 24 24"
-        className="size-4 animate-spin"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="3"
-        strokeLinecap="round"
-      >
-        <path d="M12 3a9 9 0 1 0 9 9" />
-      </svg>
+      <CircleNotch aria-hidden="true" weight="regular" className="size-4 animate-spin" />
       {t("app.loading")}
     </p>
   );
@@ -31,19 +22,7 @@ export function ErrorState({ error, onRetry }: { error: ApiError; onRetry: () =>
   return (
     <div role="alert" className="flex flex-col gap-2 text-attention">
       <p className="flex items-center gap-2">
-        <svg
-          aria-hidden="true"
-          viewBox="0 0 24 24"
-          className="size-5 shrink-0"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        >
-          <circle cx="12" cy="12" r="9" />
-          <path d="M12 7v6M12 16.5v.5" />
-        </svg>
+        <WarningCircle aria-hidden="true" className="size-5 shrink-0" />
         {errorMessage(t, error)}
       </p>
       <Button className="w-full" onClick={onRetry}>

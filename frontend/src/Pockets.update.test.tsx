@@ -17,6 +17,13 @@ const pocket = (id: string, name: string, active = true) => ({
 });
 const signedIn = (extra: Partial<State> = {}): State => ({ signedIn: true, me: alice, ...extra });
 const toastMock = vi.mocked(toast);
+// A second toast would arrive after the UI settles; let it, then count again.
+async function noLateToast() {
+  await act(async () => {
+    await new Promise((r) => setTimeout(r, 20));
+  });
+  expect(toastMock).toHaveBeenCalledTimes(1);
+}
 const p = enGB.pockets;
 const nameField = (dialog: HTMLElement) =>
   within(dialog).getByLabelText(enGB.fields.pocketDisplayName);
@@ -68,23 +75,23 @@ describe("the edit dialog", () => {
     await openEdit(user, "Cash");
     await user.click(document.querySelector('[data-slot="dialog-overlay"]')!);
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
-    expect(view.param("edit")).toBeNull();
+    await waitFor(() => expect(view.param("edit")).toBeNull());
 
     await openEdit(user, "Cash");
 
     await user.keyboard("{Escape}");
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
-    expect(view.param("edit")).toBeNull();
+    await waitFor(() => expect(view.param("edit")).toBeNull());
 
     await openEdit(user, "Cash");
     act(() => view.navigate(-1));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
-    expect(view.param("edit")).toBeNull();
+    await waitFor(() => expect(view.param("edit")).toBeNull());
 
     const again = await openEdit(user, "Cash");
     await user.click(within(again).getByRole("button", { name: enGB.dialog.close }));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
-    expect(view.param("edit")).toBeNull();
+    await waitFor(() => expect(view.param("edit")).toBeNull());
   });
 });
 
@@ -107,10 +114,11 @@ describe("renaming a Pocket", () => {
     expect(await screen.findByRole("button", { name: "Edit Wallet" })).toBeInTheDocument();
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(state.pocketPatches).toEqual([{ pocket_display_name: "Wallet" }]);
-    expect(toastMock).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(toastMock).toHaveBeenCalledTimes(1));
     expect(toastMock.mock.calls[0]![0]).toBe("Saved.");
     expect(toastMock.mock.calls[0]![1]).toMatchObject({ duration: 4000 });
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    await noLateToast();
   });
 
   it("disables Save again when the name is typed back to the original", async () => {
@@ -219,7 +227,7 @@ describe("renaming a Pocket", () => {
 
     expect(await screen.findByText(p.empty)).toBeInTheDocument();
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
-    expect(view.param("edit")).toBeNull();
+    await waitFor(() => expect(view.param("edit")).toBeNull());
   });
 });
 
@@ -234,17 +242,18 @@ describe("deactivating and reactivating, from the dialog", () => {
     await user.click(within(dialog).getByRole("button", { name: p.deactivate }));
 
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
-    expect(view.param("edit")).toBeNull();
+    await waitFor(() => expect(view.param("edit")).toBeNull());
     await waitFor(() =>
       expect(screen.queryByRole("button", { name: "Edit Cash" })).not.toBeInTheDocument(),
     );
     expect(state.pocketPatches).toEqual([{ active: false }]);
-    expect(toastMock).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(toastMock).toHaveBeenCalledTimes(1));
     const [message, options] = toastMock.mock.calls[0]!;
     expect(message).toBe("Deactivated Cash.");
     expect(options?.duration).toBe(UNDO_TOAST_MS);
     expect(UNDO_TOAST_MS).toBe(8000);
     expect(options?.action).toMatchObject({ label: "Undo" });
+    await noLateToast();
   });
 
   it("Undo sends active:true and the row comes back", async () => {
@@ -280,7 +289,8 @@ describe("deactivating and reactivating, from the dialog", () => {
 
     await waitFor(() => expect(toastMock.error).toHaveBeenCalledTimes(1));
     expect(toastMock.error.mock.calls[0]![0]).toMatch(/Try again in a moment\./);
-    expect(toastMock).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(toastMock).toHaveBeenCalledTimes(1));
+    await noLateToast();
   });
 
   it("a failed deactivation stays in the dialog as a form error, with no toast", async () => {
@@ -338,11 +348,12 @@ describe("deactivating and reactivating, from the dialog", () => {
       ).not.toBeInTheDocument(),
     );
     expect(state.pocketPatches).toEqual([{ active: true }]);
-    expect(toastMock).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(toastMock).toHaveBeenCalledTimes(1));
     const [message, options] = toastMock.mock.calls[0]!;
     expect(message).toBe("Reactivated Cash.");
     expect(options?.duration).toBe(UNDO_TOAST_MS);
     expect(options?.action).toMatchObject({ label: "Undo" });
+    await noLateToast();
   });
 
   it("Undo after reactivating sends active:false and the row is inactive again", async () => {
@@ -406,7 +417,7 @@ describe("Show inactive Pockets", () => {
     expect(screen.queryByText("Old")).not.toBeInTheDocument();
 
     await user.click(box);
-    const rows = screen.getAllByRole("listitem");
+    const rows = within(screen.getByRole("main")).getAllByRole("listitem");
     expect(rows.map((r) => r.firstElementChild?.firstElementChild?.textContent)).toEqual([
       "Cash",
       "Old",

@@ -38,7 +38,7 @@ describe("pockets list", () => {
 
     await user.click(await screen.findByRole("link", { name: "Settings" }));
 
-    const rows = await screen.findAllByRole("listitem");
+    const rows = await within(screen.getByRole("main")).findAllByRole("listitem");
     expect(rows.map((r) => r.textContent)).toEqual(["Cash", "BCA debit", "OVO"]);
     // One button per row, named for the Pocket: no Edit/Deactivate pair.
     expect(screen.getAllByRole("button", { name: /^(Edit|Deactivate|Reactivate) / })).toHaveLength(
@@ -65,7 +65,7 @@ describe("pockets list", () => {
     const user = userEvent.setup();
     const view = renderApp("/settings");
     expect(await screen.findByText(p.empty)).toBeInTheDocument();
-    expect(screen.queryByRole("list")).not.toBeInTheDocument();
+    expect(within(screen.getByRole("main")).queryByRole("list")).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: p.addHeading }));
     expect(await screen.findByRole("dialog", { name: p.addHeading })).toBeInTheDocument();
@@ -462,7 +462,7 @@ describe("session and locale", () => {
 
     await user.click(await screen.findByRole("link", { name: "Settings" }));
     expect(await screen.findByText("Cash")).toBeInTheDocument();
-    await user.click(screen.getByRole("link", { name: "Home" }));
+    await user.click(within(screen.getByRole("navigation")).getByRole("link", { name: "Home" }));
     await user.click(await screen.findByRole("button", { name: "Sign out" }));
     await screen.findByRole("heading", { name: "Sign in" });
     expect(client.getQueryData(["pockets"])).toBeUndefined();
@@ -491,7 +491,9 @@ describe("session and locale", () => {
 
     expect(await screen.findByRole("heading", { name: "Kantong" })).toBeInTheDocument();
     expect(await screen.findByRole("button", { name: "Ubah Tunai" })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: idID.home.title })).toBeInTheDocument();
+    expect(
+      within(screen.getByRole("navigation")).getByRole("link", { name: idID.shell.tabs.home }),
+    ).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: ip.addHeading }));
     const dialog = await screen.findByRole("dialog", { name: ip.addHeading });

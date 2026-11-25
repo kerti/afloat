@@ -15,6 +15,8 @@ export default defineConfig({
   resolve: { alias },
   test: {
     environment: "jsdom",
+    // Above setup.ts's asyncUtilTimeout, so a starved wait fails as its own error.
+    testTimeout: 15_000,
     include: ["src/**/*.test.{ts,tsx}"],
     setupFiles: ["./src/test/setup.ts"],
     coverage: {

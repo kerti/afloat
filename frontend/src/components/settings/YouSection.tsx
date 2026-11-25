@@ -9,13 +9,8 @@ import { TextSetting } from "@/components/TextSetting";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  NativeSelect,
-} from "@/components/ui/select";
+import { Select, SelectContent, SelectItem, SelectTrigger } from "@/components/ui/select";
+import { SearchSelect } from "@/components/ui/search-select";
 import { useAppearance } from "@/lib/useAppearance";
 import { toastPlain } from "@/lib/plainToast";
 import { useChoice } from "@/lib/useChoice";
@@ -126,13 +121,14 @@ function ProfileSubsection({ me }: { me: Me }) {
       </Field>
       <Field>
         <Label htmlFor="user-time-zone">{t("settings.user.profile.timeZone")}</Label>
-        <NativeSelect id="user-time-zone" value={zone} onChange={(e) => chooseZone(e.target.value)}>
-          {zones.map((z) => (
-            <option key={z} value={z}>
-              {z}
-            </option>
-          ))}
-        </NativeSelect>
+        <SearchSelect
+          id="user-time-zone"
+          value={zone}
+          onValueChange={chooseZone}
+          options={zones.map((z) => ({ value: z, label: z }))}
+          searchLabel={t("settings.user.profile.searchTimeZones")}
+          noMatch={t("settings.user.profile.noTimeZone")}
+        />
       </Field>
     </Section>
   );

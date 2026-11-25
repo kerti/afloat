@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import { alice, defaultHandlers, envelope, server } from "@/test/server";
 import { renderApp } from "@/test/render";
 import enGB from "@/locales/en-GB.json";
+import idID from "@/locales/id-ID.json";
 
 vi.mock("sonner", async () => (await import("@/test/sonnerMock")).sonnerMock());
 const toastMock = vi.mocked(toast);
@@ -15,7 +16,7 @@ beforeEach(() => {
 });
 
 describe("the Shell", () => {
-  it("frames every signed-in screen: a fixed top bar, one max-w-xl column, no bottom bar", async () => {
+  it("frames every signed-in screen: a fixed top bar, one max-w-xl column, a fixed bottom bar", async () => {
     server.use(...defaultHandlers({ signedIn: true, me: alice }));
     const user = userEvent.setup();
     renderApp("/");
@@ -24,22 +25,92 @@ describe("the Shell", () => {
     expect(bar).toHaveClass("fixed");
     expect(within(bar).getByRole("link", { name: "Afloat" })).toHaveAttribute("href", "/");
     expect(within(bar).getByRole("button", { name: enGB.shell.signOut })).toBeInTheDocument();
-    expect(screen.queryByRole("navigation")).not.toBeInTheDocument();
+    const tabs = screen.getByRole("navigation", { name: enGB.shell.mainNav });
+    expect(tabs).toHaveClass("fixed");
 
     await user.click(await screen.findByRole("link", { name: "Settings" }));
     expect(screen.getByRole("main").firstElementChild).toHaveClass("max-w-xl");
     expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
   });
 
-  it("gives a sub-screen a BackLink to Home, at least 44px tall, above the title", async () => {
+  it("gives a tab screen no back link to Home", async () => {
     server.use(...defaultHandlers({ signedIn: true, me: alice }));
     renderApp("/settings");
 
-    const back = await screen.findByRole("link", { name: enGB.home.title });
-    expect(back).toHaveAttribute("href", "/");
-    expect(back).toHaveClass("min-h-11");
-    const heading = screen.getByRole("heading", { level: 1 });
-    expect(back.compareDocumentPosition(heading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    await screen.findByRole("heading", { level: 1 });
+    expect(
+      within(screen.getByRole("main")).queryByRole("link", { name: enGB.home.title }),
+    ).toBeNull();
+  });
+
+  it("has five tabs in order, each an icon over a label, always visible", async () => {
+    server.use(...defaultHandlers({ signedIn: true, me: alice }));
+    renderApp("/");
+
+    const tabs = await screen.findByRole("navigation", { name: enGB.shell.mainNav });
+    const links = within(tabs).getAllByRole("link");
+    expect(links.map((l) => l.textContent)).toEqual([
+      "Home",
+      "Expenses",
+      "Capture",
+      "Budget",
+      "Settings",
+    ]);
+    expect(links.map((l) => l.getAttribute("href"))).toEqual([
+      "/",
+      "/expenses",
+      "/capture",
+      "/budget",
+      "/settings",
+    ]);
+    for (const link of links)
+      expect(link.querySelector("svg")).toHaveAttribute("aria-hidden", "true");
+  });
+
+  it.each([
+    ["/", "Home"],
+    ["/expenses", "Expenses"],
+    ["/capture", "Capture"],
+    ["/budget", "Budget"],
+    ["/settings", "Settings"],
+  ])("lights only the tab for %s", async (path, label) => {
+    server.use(...defaultHandlers({ signedIn: true, me: alice }));
+    renderApp(path);
+
+    const tabs = await screen.findByRole("navigation", { name: enGB.shell.mainNav });
+    const current = within(tabs)
+      .getAllByRole("link")
+      .filter((l) => l.getAttribute("aria-current") === "page");
+    expect(current.map((l) => l.textContent)).toEqual([label]);
+  });
+
+  it("lights a tab across its own sub-paths, and Home only on /", async () => {
+    server.use(...defaultHandlers({ signedIn: true, me: alice }));
+    const user = userEvent.setup();
+    renderApp("/settings");
+
+    const tabs = await screen.findByRole("navigation", { name: enGB.shell.mainNav });
+    expect(within(tabs).getByRole("link", { name: "Home" })).not.toHaveAttribute("aria-current");
+    await user.click(within(tabs).getByRole("link", { name: "Home" }));
+    expect(within(tabs).getByRole("link", { name: "Home" })).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
+    expect(within(tabs).getByRole("link", { name: "Settings" })).not.toHaveAttribute(
+      "aria-current",
+    );
+  });
+
+  it("words the bar in Indonesian", async () => {
+    server.use(...defaultHandlers({ signedIn: true, me: { ...alice, locale: "id-ID" } }));
+    renderApp("/");
+
+    const tabs = await screen.findByRole("navigation", { name: idID.shell.mainNav });
+    expect(
+      within(tabs)
+        .getAllByRole("link")
+        .map((l) => l.textContent),
+    ).toEqual(["Beranda", "Pengeluaran", "Catat", "Anggaran", "Pengaturan"]);
   });
 
   it("leaves auth screens outside it, in a max-w-sm card", async () => {

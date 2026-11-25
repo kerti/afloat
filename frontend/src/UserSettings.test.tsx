@@ -5,6 +5,7 @@ import { http, HttpResponse } from "msw";
 import { toast } from "sonner";
 import { alice, defaultHandlers, envelope, server, type State } from "@/test/server";
 import { renderApp } from "@/test/render";
+import { searchOptions, searchPick } from "@/test/pickers";
 
 vi.mock("sonner", async () => (await import("@/test/sonnerMock")).sonnerMock());
 const toastMock = vi.mocked(toast);
@@ -40,7 +41,7 @@ describe("user settings", () => {
 
     expect(profile().getByLabelText("Your name")).toHaveValue("Alice");
     expect(profile().getByRole("combobox", { name: "Language" })).toHaveTextContent("English (UK)");
-    expect(profile().getByLabelText("Time zone")).toHaveValue("Asia/Jakarta");
+    expect(profile().getByRole("button", { name: "Time zone" })).toHaveTextContent("Asia/Jakarta");
     expect(profile().getByRole("button", { name: "Save" })).toBeDisabled();
     expect(password().getByText(/signs you out everywhere else/)).toBeInTheDocument();
   });
@@ -51,11 +52,9 @@ describe("user settings", () => {
     renderApp("/settings");
     await open();
 
-    const select = profile().getByLabelText("Time zone");
-    expect(select).toHaveValue("Mars/Base");
-    const offered = within(select)
-      .getAllByRole("option")
-      .map((o) => o.getAttribute("value"));
+    const select = profile().getByRole("button", { name: "Time zone" });
+    expect(select).toHaveTextContent("Mars/Base");
+    const offered = await searchOptions(userEvent.setup(), select);
     expect(offered).toContain("Asia/Makassar");
     expect(offered).toContain("Mars/Base");
   });
@@ -76,7 +75,7 @@ describe("user settings", () => {
     expect(toastMock).toHaveBeenCalledWith("Saved.", expect.objectContaining({ duration: 4000 }));
     expect(state.mePatches).toEqual([{ user_display_name: "Alicia" }]);
 
-    await user.click(screen.getByRole("link", { name: "Home" }));
+    await user.click(within(screen.getByRole("navigation")).getByRole("link", { name: "Home" }));
     expect(await screen.findByText("Signed in as Alicia.")).toBeInTheDocument();
   });
 
@@ -87,12 +86,17 @@ describe("user settings", () => {
     renderApp("/settings");
     await open();
 
-    await user.selectOptions(profile().getByLabelText("Time zone"), "Asia/Makassar");
+    await searchPick(
+      user,
+      profile().getByRole("button", { name: "Time zone" }),
+      "Makassar",
+      "Asia/Makassar",
+    );
 
     await waitFor(() => expect(toastMock).toHaveBeenCalledTimes(1));
     expect(toastMock).toHaveBeenCalledWith("Saved.", expect.objectContaining({ duration: 4000 }));
     expect(state.mePatches).toEqual([{ time_zone: "Asia/Makassar" }]);
-    expect(profile().getByLabelText("Time zone")).toHaveValue("Asia/Makassar");
+    expect(profile().getByRole("button", { name: "Time zone" })).toHaveTextContent("Asia/Makassar");
   });
 
   it("flips the UI language when the language is chosen", async () => {
@@ -168,13 +172,18 @@ describe("user settings", () => {
     await open();
 
     if (field === "time_zone") {
-      await user.selectOptions(profile().getByLabelText("Time zone"), "Asia/Makassar");
+      await searchPick(
+        user,
+        profile().getByRole("button", { name: "Time zone" }),
+        "Makassar",
+        "Asia/Makassar",
+      );
     } else {
       await chooseLanguage(user, "Bahasa Indonesia");
     }
 
     await waitFor(() => expect(toastMock.error).toHaveBeenCalledWith(text, expect.anything()));
-    expect(profile().getByLabelText("Time zone")).toHaveValue("Asia/Jakarta");
+    expect(profile().getByRole("button", { name: "Time zone" })).toHaveTextContent("Asia/Jakarta");
     expect(profile().getByRole("combobox", { name: "Language" })).toHaveTextContent("English (UK)");
     expect(toastMock).not.toHaveBeenCalled();
   });

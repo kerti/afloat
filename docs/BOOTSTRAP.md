@@ -275,7 +275,8 @@ with zoneinfo answers from it, so a case-insensitive filesystem (a Mac) also acc
     everything committed by every writer that held the row; (3) the soft delete. Every write that
     inserts a referencing row takes `FOR SHARE` on the entity's row **in the same statement that
     verifies it is live** (`INSERT ... SELECT ... FROM categories ... FOR SHARE`; an Expense create,
-    its own statement per row, §4's *Idempotent create*), so a writer that
+    its own statement per row, §4's *Idempotent create*, and an Expense edit that changes a
+    reference, §4's *A `PATCH` on an Expense*), so a writer that
     comes after the delete finds it deleted and refuses, and one that came first is seen by the check.
     Lock order: a Category's delete holds one row, so it cannot deadlock with the writers, which take
     their rows in key order (the sorted allocation writes, above). A Pocket's delete holds the
@@ -284,16 +285,16 @@ with zoneinfo answers from it, so a case-insensitive filesystem (a Mac) also acc
     the Household alone. An Expense create's `FOR SHARE` on the Household also makes a plain `UPDATE
     households` (a rename, say) wait for it, briefly, which is harmless. The test for a guard of this kind runs
     the same scenario against a single `UPDATE ... WHERE NOT EXISTS` and shows it lose
-    (`category_delete_integration_test.go`). The three guards' races against an Expense create, in both
-    orders, each with its red proof (the same interleaving with **all** of one side's locks taken off,
+    (`category_delete_integration_test.go`). The three guards' races against an Expense create, and the Pocket's and the Category's
+    against an Expense edit that re-points one, in both orders, each with its red proof (the same interleaving with **all** of one side's locks taken off,
     which leaves a deleted Pocket or Category referenced, or an Expense in a currency the Household no
     longer has), are in `internal/expense/race_integration_test.go`. Lock by lock, the proof is red for
     the Category lock and for the currency's Household lock, **but not for the Pocket's**: the Household
     pair (`FOR NO KEY UPDATE` of a removal against the create's `FOR SHARE`) already serialises a Pocket
     delete against a create, so stripping only the Pocket lock, or only the Household lock, stays green,
     and the test says so. The Pocket lock is kept because it is the one the recipe names for the protected
-    row, and a writer that does not take the Household first (a restore, or an edit that re-points an
-    Expense, in the slices that follow) will rely on it alone.
+    row, and a writer that does not take the Household first (a restore, in the slice that follows)
+    will rely on it alone.
   - **A Household always keeps one active, live Pocket (#140, R1): `409 LAST_POCKET`**, a code with no
     `args`, refuses a `DELETE /pockets/{id}` or a `PATCH` with `active: false` that would leave none.
     It is the same recipe with the **Household's** row as the lock, because the invariant is a count over
@@ -372,6 +373,34 @@ with zoneinfo answers from it, so a case-insensitive filesystem (a Mac) also acc
   `*bool`** (`PATCH /pockets/{id}`'s `active`): a plain `bool` zero value would read as "absent" and
   silently drop every deactivation. A row that the `WHERE` does not match is no row, and the answer
   is `404 NOT_FOUND` (next bullet).
+- **A `PATCH` on an Expense** (#140, X9 and R9; `PATCH /expenses/{id}`) is the merge `PATCH` above with
+  a state-dependent write, so it has the shape of the Expense create (*Idempotent create*, above) and
+  not that of the Pocket's: **one transaction on the request's context, of statements in this
+  order.** The body's own rules come first, before any statement (the amount's zero, the date, the
+  description, the ownership pair, the least `(field, rule)`), so a foreign id with a bad body answers
+  what an unknown one does. Then (1) read the Expense `FOR NO KEY UPDATE`, scoped by `household_id`
+  and `deleted_at IS NULL`: no row is the one `404` (unknown, another Household's, deleted; `{}`
+  included); (2) lock, `FOR SHARE` and in the create's order (the Household, then the Pocket, the
+  Category, the owner), **each reference the body sends and that differs from the stored value**,
+  each with its liveness predicate in the locking statement; a reference equal to the stored one is
+  not looked at, so the amount of an Expense in a Pocket deactivated since can still be fixed
+  (`invalid` and `inactive` are as at creation, and a body that changes no reference takes none of
+  these locks, the Household's included); (3) one `UPDATE`, `household_id` in its `WHERE`, whose
+  columns are `coalesce(arg, column)` where `null` cannot clear and the flagged `CASE` of the clearable
+  rule where it can (`occurred_time`, `category_id`, `description`, and `owner_user_id`, which `joint`
+  clears), so two writers of different columns both land. `ownership` and `owner_user_id` are a pair
+  as at creation, except that sending neither leaves both as stored. **The Expense's own row lock in
+  step 1 is not there for the merge** (the `UPDATE` merges by itself, and a test runs it without the
+  lock) **but for the comparison in step 2**: "differs from the stored value" is decided from a
+  read, and without the lock an edit that sends the stored `pocket_id` could read it, wait while
+  another edit moves the Expense to a second Pocket and a delete takes the first (now unreferenced),
+  and then write the first back, leaving the Expense on a deleted Pocket; the test that shows this
+  is `TestAnEditThatLeavesAReferenceAloneCannotReattachADeletedOne`. The lock is taken first and
+  nothing a removal holds ever waits on an Expense row, so it adds no cycle. **`updated_at` is moved
+  only by a write that changes something** (a row-wise `IS DISTINCT FROM` of the stored columns
+  against the values the `SET` list stores, in the same statement, so the statement still answers the
+  row for a no-op and "no row" can only mean `404`); this is the rule #137 asks of the other
+  `PATCH`es. There is no `409`. Nothing logs an amount or a description.
 - **A list of changes inside a `PATCH`** (#130, PR 3: `PATCH /budget`'s `allocations`) is an array of
   `{key, value}` items, not a map (OpenAPI 3.0.3 has no `patternProperties`). A value that may be cleared
   is **required and nullable** on the item (`allocation: null` is "none", an absent key is a contract
@@ -854,7 +883,8 @@ collection's `/pockets/` with a trailing slash, for one.
   `period_start_day` (`min`). Registration and every later write behave the same (#113).
 - `rule` uses go-playground/validator's tag names (`required`, `min`, `max`, `email`), plus `pattern`,
   and, for a handler's own rules, `unique` (a repeated `category_id`) and `invalid` (a path `{id}` that is
-  not a uuid, or a `category_id` that names no live Category of the Household), **`inactive`** (a
+  not a uuid, a `category_id` that names no live Category of the Household, or an Expense's
+  `owner_user_id` that is half a pair or no live User of the Household), **`inactive`** (a
   `pocket_id` or `category_id` naming the caller's own Pocket or Category that is no longer offered for
   new capture; unknown, another Household's and deleted are `invalid`, one answer) and **`nonzero`**
   (#140: an Expense's amount of zero in any spelling, `"0"`, `"0.0000"` or `"-0"`; go-playground's own

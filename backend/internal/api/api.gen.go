@@ -877,6 +877,45 @@ type UpdateCategoryRequest struct {
 	CategoryDisplayName *string `json:"category_display_name,omitempty"`
 }
 
+// UpdateExpenseRequest What an Expense may change, merge-style: a property left out is
+// unchanged, and none is required. `id`, `currency`, `captured_at`,
+// `household_id`, `deleted_at` and any other property are not accepted.
+// `occurred_time`, `category_id` and `description` are nullable, and
+// `null` clears them; `null` is not accepted for any other property.
+type UpdateExpenseRequest struct {
+	// Amount A `MoneyInput` with an optional leading minus: a decimal sent as a
+	// string, at most 16 integer digits and at most 4 decimals, no exponent, no
+	// separator and no whitespace. More than four decimals is refused and never
+	// rounded; a JSON number is `INVALID_JSON_BODY`. A negative amount is a
+	// refund. **The pattern cannot say "not zero"** (the regexp engine has no
+	// lookahead), so `"0"`, `"0.0000"` and `"-0"` pass it and the handler
+	// refuses them: `VALIDATION {rule: nonzero}`. The answer carries the amount
+	// as a `Money`.
+	//
+	//
+	// Example: -25000
+	Amount *SignedMoneyInput `json:"amount,omitempty"`
+
+	// CategoryId A Category's id, or `null` to make the Expense uncategorised.
+	CategoryId nullable.Nullable[openapi_types.UUID] `json:"category_id,omitempty"`
+
+	// Description Free text, or `null` to remove it.
+	Description nullable.Nullable[string] `json:"description,omitempty"`
+
+	// OccurredOn Example: 2026-11-23
+	OccurredOn *string `json:"occurred_on,omitempty"`
+
+	// OccurredTime An `HH:MM`, or `null` to clear it.
+	OccurredTime nullable.Nullable[string] `json:"occurred_time,omitempty"`
+	OwnerUserId  *openapi_types.UUID       `json:"owner_user_id,omitempty"`
+
+	// Ownership Whose an Expense is (CONTEXT.md): `joint`, the Household's, or
+	// `sole_owner`, attributed to one User (`owner_user_id`). Stored and on the
+	// wire; no control sets it until a second member exists.
+	Ownership *Ownership          `json:"ownership,omitempty"`
+	PocketId  *openapi_types.UUID `json:"pocket_id,omitempty"`
+}
+
 // UpdateHouseholdRequest The settings a Household may change today, merge-style: a property left
 // out is unchanged, and none is required. A property naming a setting not
 // listed here is not accepted. `null` is accepted for
@@ -934,6 +973,9 @@ type UpdatePocketRequest struct {
 
 // CategoryId defines model for CategoryId.
 type CategoryId = openapi_types.UUID
+
+// ExpenseId defines model for ExpenseId.
+type ExpenseId = openapi_types.UUID
 
 // PocketId defines model for PocketId.
 type PocketId = openapi_types.UUID
@@ -1029,6 +1071,9 @@ type UpdateCategoryJSONRequestBody = UpdateCategoryRequest
 // CreateExpenseJSONRequestBody defines body for CreateExpense for application/json ContentType.
 type CreateExpenseJSONRequestBody = CreateExpenseRequest
 
+// UpdateExpenseJSONRequestBody defines body for UpdateExpense for application/json ContentType.
+type UpdateExpenseJSONRequestBody = UpdateExpenseRequest
+
 // UpdateHouseholdJSONRequestBody defines body for UpdateHousehold for application/json ContentType.
 type UpdateHouseholdJSONRequestBody = UpdateHouseholdRequest
 
@@ -1091,6 +1136,9 @@ type ServerInterface interface {
 	// CreateExpense Record an Expense.
 	// (POST /expenses)
 	CreateExpense(w http.ResponseWriter, r *http.Request)
+	// UpdateExpense Correct an Expense.
+	// (PATCH /expenses/{id})
+	UpdateExpense(w http.ResponseWriter, r *http.Request, id ExpenseId)
 	// GetHealth Liveness and readiness of this instance.
 	// (GET /health)
 	GetHealth(w http.ResponseWriter, r *http.Request)
@@ -1217,6 +1265,12 @@ func (_ Unimplemented) ListExpenses(w http.ResponseWriter, r *http.Request, para
 // CreateExpense Record an Expense.
 // (POST /expenses)
 func (_ Unimplemented) CreateExpense(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// UpdateExpense Correct an Expense.
+// (PATCH /expenses/{id})
+func (_ Unimplemented) UpdateExpense(w http.ResponseWriter, r *http.Request, id ExpenseId) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
@@ -1564,6 +1618,32 @@ func (siw *ServerInterfaceWrapper) CreateExpense(w http.ResponseWriter, r *http.
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.CreateExpense(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// UpdateExpense operation middleware
+func (siw *ServerInterfaceWrapper) UpdateExpense(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id ExpenseId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", chi.URLParam(r, "id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: r.URL.RawPath == ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.UpdateExpense(w, r, id)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -1947,6 +2027,9 @@ func HandlerWithOptions(si ServerInterface, options ChiServerOptions) http.Handl
 	})
 	r.Group(func(r chi.Router) {
 		r.Post(options.BaseURL+"/expenses", wrapper.CreateExpense)
+	})
+	r.Group(func(r chi.Router) {
+		r.Patch(options.BaseURL+"/expenses/{id}", wrapper.UpdateExpense)
 	})
 	r.Group(func(r chi.Router) {
 		r.Get(options.BaseURL+"/onboarding/options", wrapper.GetOnboardingOptions)
@@ -3099,6 +3182,85 @@ func (response CreateExpense500JSONResponse) VisitCreateExpenseResponse(w http.R
 	return err
 }
 
+type UpdateExpenseRequestObject struct {
+	Id   ExpenseId `json:"id"`
+	Body *UpdateExpenseJSONRequestBody
+}
+
+type UpdateExpenseResponseObject interface {
+	VisitUpdateExpenseResponse(w http.ResponseWriter) error
+}
+
+type UpdateExpense200JSONResponse Expense
+
+func (response UpdateExpense200JSONResponse) VisitUpdateExpenseResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateExpense400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response UpdateExpense400JSONResponse) VisitUpdateExpenseResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateExpense401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response UpdateExpense401JSONResponse) VisitUpdateExpenseResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateExpense404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response UpdateExpense404JSONResponse) VisitUpdateExpenseResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateExpense500JSONResponse struct{ InternalErrorJSONResponse }
+
+func (response UpdateExpense500JSONResponse) VisitUpdateExpenseResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type GetHealthRequestObject struct {
 }
 
@@ -3937,6 +4099,9 @@ type StrictServerInterface interface {
 	// CreateExpense Record an Expense.
 	// (POST /expenses)
 	CreateExpense(ctx context.Context, request CreateExpenseRequestObject) (CreateExpenseResponseObject, error)
+	// UpdateExpense Correct an Expense.
+	// (PATCH /expenses/{id})
+	UpdateExpense(ctx context.Context, request UpdateExpenseRequestObject) (UpdateExpenseResponseObject, error)
 	// GetHealth Liveness and readiness of this instance.
 	// (GET /health)
 	GetHealth(ctx context.Context, request GetHealthRequestObject) (GetHealthResponseObject, error)
@@ -4428,6 +4593,39 @@ func (sh *strictHandler) CreateExpense(w http.ResponseWriter, r *http.Request) {
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(CreateExpenseResponseObject); ok {
 		if err := validResponse.VisitCreateExpenseResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// UpdateExpense operation middleware
+func (sh *strictHandler) UpdateExpense(w http.ResponseWriter, r *http.Request, id ExpenseId) {
+	var request UpdateExpenseRequestObject
+
+	request.Id = id
+
+	var body UpdateExpenseJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.UpdateExpense(ctx, request.(UpdateExpenseRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "UpdateExpense")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(UpdateExpenseResponseObject); ok {
+		if err := validResponse.VisitUpdateExpenseResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

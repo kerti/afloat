@@ -42,9 +42,15 @@ import (
 // too. Stripping only one layer therefore stays green, which the last tests here
 // state (TestThePocketGuardHoldsOnEitherLayerAlone); only stripping both is red.
 // The Pocket lock is kept anyway because it is the lock the recipe names for the
-// protected row, and a writer that does not take the Household first (a restore
-// or an edit that re-points an Expense, in the slices that follow) relies on it
-// alone.
+// protected row, and a writer that does not take the Household first (a restore,
+// in a slice that follows) relies on it alone.
+//
+// An edit that re-points an Expense (PATCH /expenses/{id}) is the second writer
+// of the recipe, and every test below that is about "the Expense side" runs for
+// both: the create and the edit take the same shared locks in the same order, so
+// the same two interleavings and the same red proofs hold. The currency guard is
+// not among the edit's: an edit never names a currency, and the Expense it edits
+// already pins it.
 
 // gate holds a transaction at a statement until the test opens it.
 type gate struct {
@@ -106,12 +112,15 @@ func strip(sql, clause string, statements ...string) string {
 // (so the guarded one is never the last), and every handler a guard involves,
 // each on its own wrapped transactions.
 type world struct {
-	tdb        *testutil.TestDB
-	household  pgtype.UUID
-	pocket     pgtype.UUID
-	keeper     pgtype.UUID
-	category   pgtype.UUID
-	ctx        context.Context
+	tdb       *testutil.TestDB
+	household pgtype.UUID
+	pocket    pgtype.UUID
+	keeper    pgtype.UUID
+	category  pgtype.UUID
+	ctx       context.Context
+	// stored is a live, uncategorised Expense on the keeper Pocket, for the
+	// writers that edit one; invalid for a world built with newWorld.
+	stored     pgtype.UUID
 	expenses   *expense.Handlers
 	pockets    *pocket.Handlers
 	categories *category.Handlers
@@ -142,6 +151,57 @@ func newWorld(t *testing.T, createWrap, removalWrap func(db.DBTX) db.DBTX) world
 	return w
 }
 
+// newWorldFor is newWorld with what the writer needs to exist beforehand.
+func newWorldFor(t *testing.T, wr writer, createWrap, removalWrap func(db.DBTX) db.DBTX) world {
+	t.Helper()
+	w := newWorld(t, createWrap, removalWrap)
+	if wr.edits {
+		w.stored = w.tdb.CreateExpense(t, w.household, w.keeper, testutil.ExpenseOpts{})
+	}
+	return w
+}
+
+// edit sends a PATCH of the Expense and answers its status.
+func (w world) edit(t *testing.T, id pgtype.UUID, req api.UpdateExpenseRequest) string {
+	t.Helper()
+	resp, err := w.expenses.UpdateExpense(w.ctx, api.UpdateExpenseRequestObject{Id: id.Bytes, Body: &req})
+	if err != nil {
+		t.Errorf("UpdateExpense returned an error: %v", err)
+	}
+	return status(resp)
+}
+
+// writer is an Expense write that names the protected row: a create, or an edit
+// that re-points an Expense at it.
+type writer struct {
+	name string
+	// ok is the status it answers when it lands.
+	ok string
+	// edits says it needs an existing Expense (world.stored).
+	edits bool
+	// heldBefore is the statement its transaction is held before, with every
+	// lock it takes already held.
+	heldBefore string
+	// run sends it, against the guard's protected row.
+	run func(t *testing.T, w world, g guard) string
+	// applies says whether the guard has this writer at all.
+	applies func(g guard) bool
+}
+
+var (
+	creator = writer{
+		name: "create", ok: "201", heldBefore: createQuery,
+		run:     func(t *testing.T, w world, g guard) string { return w.create(t, g.create(w)) },
+		applies: func(guard) bool { return true },
+	}
+	editor = writer{
+		name: "edit", ok: "200", edits: true, heldBefore: updateQuery,
+		run:     func(t *testing.T, w world, g guard) string { return w.edit(t, w.stored, g.edit(w)) },
+		applies: func(g guard) bool { return g.edit != nil },
+	}
+	writers = []writer{creator, editor}
+)
+
 func (w world) create(t *testing.T, req api.CreateExpenseRequest) string {
 	t.Helper()
 	resp, err := w.expenses.CreateExpense(w.ctx, api.CreateExpenseRequestObject{Body: &req})
@@ -160,6 +220,9 @@ type guard struct {
 	name string
 	// create is the request that names the protected row.
 	create func(w world) api.CreateExpenseRequest
+	// edit is the PATCH of world.stored that re-points it at the protected row,
+	// or nil when the guard is not one an edit can race.
+	edit func(w world) api.UpdateExpenseRequest
 	// remove runs the guarded write and answers its status.
 	remove func(t *testing.T, w world) string
 	// heldAfter is the removal's statement that the red proof for "the Expense
@@ -173,12 +236,21 @@ type guard struct {
 	createLocks []string
 	// violated says what is wrong with the data, or "" when it is right.
 	violated func(t *testing.T, w world) string
-	// What each interleaving must answer.
-	createFirst  outcome // the Expense create got there first
+	// What each interleaving must answer; "201" stands for whatever the writer
+	// answers when it lands.
+	createFirst  outcome // the Expense write got there first
 	removalFirst outcome // the guarded write got there first
 }
 
 type outcome struct{ create, removal string }
+
+// asWrittenBy is the outcome as the writer answers it.
+func (o outcome) asWrittenBy(wr writer) outcome {
+	if o.create == "201" {
+		o.create = wr.ok
+	}
+	return o
+}
 
 func scalarInt(t *testing.T, w world, sql string) int {
 	t.Helper()
@@ -214,6 +286,9 @@ var guards = []guard{
 		create: func(w world) api.CreateExpenseRequest {
 			return api.CreateExpenseRequest{Id: uuid.Must(uuid.NewV7()), Amount: "25000", PocketId: w.pocket.Bytes}
 		},
+		edit: func(w world) api.UpdateExpenseRequest {
+			return api.UpdateExpenseRequest{PocketId: idPtr(w.pocket)}
+		},
 		remove: func(t *testing.T, w world) string {
 			resp, err := w.pockets.DeletePocket(w.ctx, api.DeletePocketRequestObject{Id: w.pocket.Bytes})
 			if err != nil {
@@ -239,6 +314,9 @@ var guards = []guard{
 		create: func(w world) api.CreateExpenseRequest {
 			c := uuid.UUID(w.category.Bytes)
 			return api.CreateExpenseRequest{Id: uuid.Must(uuid.NewV7()), Amount: "25000", PocketId: w.pocket.Bytes, CategoryId: &c}
+		},
+		edit: func(w world) api.UpdateExpenseRequest {
+			return api.UpdateExpenseRequest{CategoryId: valueOf(uuid.UUID(w.category.Bytes))}
 		},
 		remove: func(t *testing.T, w world) string {
 			resp, err := w.categories.DeleteCategory(w.ctx, api.DeleteCategoryRequestObject{Id: w.category.Bytes})
@@ -289,9 +367,10 @@ var guards = []guard{
 	},
 }
 
-// createWrap holds the create's transaction just before its INSERT, with every
-// lock it takes already held, and optionally takes those locks off.
-func createWrap(g *gate, noLocks []string) func(db.DBTX) db.DBTX {
+// createWrap holds the Expense write's transaction just before its INSERT or
+// UPDATE (before), with every lock it takes already held, and optionally takes
+// those locks off.
+func createWrap(g *gate, before string, noLocks []string) func(db.DBTX) db.DBTX {
 	return func(tx db.DBTX) db.DBTX {
 		h := hooked{DBTX: tx}
 		if len(noLocks) > 0 {
@@ -299,7 +378,7 @@ func createWrap(g *gate, noLocks []string) func(db.DBTX) db.DBTX {
 		}
 		if g != nil {
 			h.before = func(sql string) {
-				if strings.Contains(sql, marker(createQuery)) {
+				if strings.Contains(sql, marker(before)) {
 					g.pause()
 				}
 			}
@@ -350,23 +429,23 @@ const blockedFor = 400 * time.Millisecond
 
 // holdCreate holds an Expense create with its locks held, starts the guarded
 // write, and then lets the create finish.
-func (g guard) holdCreate(t *testing.T, createNoLocks bool) result {
+func (g guard) holdCreate(t *testing.T, wr writer, createNoLocks bool) result {
 	t.Helper()
 	if createNoLocks {
-		return g.holdCreateWithout(t, g.createLocks)
+		return g.holdCreateWithout(t, wr, g.createLocks)
 	}
-	return g.holdCreateWithout(t, nil)
+	return g.holdCreateWithout(t, wr, nil)
 }
 
 // holdCreateWithout is holdCreate with the named locking statements of the create
 // run without their lock clause.
-func (g guard) holdCreateWithout(t *testing.T, noLocks []string) result {
+func (g guard) holdCreateWithout(t *testing.T, wr writer, noLocks []string) result {
 	t.Helper()
 	held := newGate()
-	w := newWorld(t, createWrap(held, noLocks), identity)
+	w := newWorldFor(t, wr, createWrap(held, wr.heldBefore, noLocks), identity)
 
 	created := make(chan string, 1)
-	go func() { created <- w.create(t, g.create(w)) }()
+	go func() { created <- wr.run(t, w, g) }()
 	held.waitReached(t)
 
 	removed := make(chan string, 1)
@@ -383,27 +462,27 @@ func (g guard) holdCreateWithout(t *testing.T, noLocks []string) result {
 
 // holdRemoval holds the guarded write after its EXISTS, with its locks held,
 // starts an Expense create, and then lets the write finish.
-func (g guard) holdRemoval(t *testing.T, removalNoLocks bool) result {
+func (g guard) holdRemoval(t *testing.T, wr writer, removalNoLocks bool) result {
 	t.Helper()
 	if removalNoLocks {
-		return g.holdRemovalWithout(t, g.removalLocks)
+		return g.holdRemovalWithout(t, wr, g.removalLocks)
 	}
-	return g.holdRemovalWithout(t, nil)
+	return g.holdRemovalWithout(t, wr, nil)
 }
 
 // holdRemovalWithout is holdRemoval with the named locking statements of the
 // guarded write run without their lock clause.
-func (g guard) holdRemovalWithout(t *testing.T, noLocks []string) result {
+func (g guard) holdRemovalWithout(t *testing.T, wr writer, noLocks []string) result {
 	t.Helper()
 	held := newGate()
-	w := newWorld(t, identity, removalWrap(held, g.heldAfter, g.removalClause, noLocks))
+	w := newWorldFor(t, wr, identity, removalWrap(held, g.heldAfter, g.removalClause, noLocks))
 
 	removed := make(chan string, 1)
 	go func() { removed <- g.remove(t, w) }()
 	held.waitReached(t)
 
 	created := make(chan string, 1)
-	go func() { created <- w.create(t, g.create(w)) }()
+	go func() { created <- wr.run(t, w, g) }()
 	create, finished := within(created, blockedFor)
 
 	held.let()
@@ -414,42 +493,54 @@ func (g guard) holdRemovalWithout(t *testing.T, noLocks []string) result {
 	return result{create: create, removal: removal, followerBlocked: !finished, violation: g.violated(t, w)}
 }
 
-func TestAnExpenseThatGetsThereFirstIsSeenByTheGuardedWrite(t *testing.T) {
-	for _, g := range guards {
-		t.Run(g.name, func(t *testing.T) {
-			for round := range 3 {
-				got := g.holdCreate(t, false)
-				if !got.followerBlocked {
-					t.Errorf("round %d: the guarded write did not wait for the Expense that held the lock", round)
-				}
-				if got.create != g.createFirst.create || got.removal != g.createFirst.removal {
-					t.Errorf("round %d: create %s, write %s; want %s and %s", round, got.create, got.removal, g.createFirst.create, g.createFirst.removal)
-				}
-				if got.violation != "" {
-					t.Errorf("round %d: %s", round, got.violation)
-				}
+// eachWriter runs a test for every guard a writer can race, as a subtest named
+// for both.
+func eachWriter(t *testing.T, fn func(t *testing.T, wr writer, g guard)) {
+	t.Helper()
+	for _, wr := range writers {
+		for _, g := range guards {
+			if !wr.applies(g) {
+				continue
 			}
-		})
+			t.Run(wr.name+" "+g.name, func(t *testing.T) { fn(t, wr, g) })
+		}
 	}
 }
 
-func TestAGuardedWriteThatGetsThereFirstIsSeenByTheExpense(t *testing.T) {
-	for _, g := range guards {
-		t.Run(g.name, func(t *testing.T) {
-			for round := range 3 {
-				got := g.holdRemoval(t, false)
-				if !got.followerBlocked {
-					t.Errorf("round %d: the Expense did not wait for the guarded write that held the lock", round)
-				}
-				if got.create != g.removalFirst.create || got.removal != g.removalFirst.removal {
-					t.Errorf("round %d: create %s, write %s; want %s and %s", round, got.create, got.removal, g.removalFirst.create, g.removalFirst.removal)
-				}
-				if got.violation != "" {
-					t.Errorf("round %d: %s", round, got.violation)
-				}
+func TestAnExpenseThatGetsThereFirstIsSeenByTheGuardedWrite(t *testing.T) {
+	eachWriter(t, func(t *testing.T, wr writer, g guard) {
+		want := g.createFirst.asWrittenBy(wr)
+		for round := range 3 {
+			got := g.holdCreate(t, wr, false)
+			if !got.followerBlocked {
+				t.Errorf("round %d: the guarded write did not wait for the Expense that held the lock", round)
 			}
-		})
-	}
+			if got.create != want.create || got.removal != want.removal {
+				t.Errorf("round %d: %s %s, write %s; want %s and %s", round, wr.name, got.create, got.removal, want.create, want.removal)
+			}
+			if got.violation != "" {
+				t.Errorf("round %d: %s", round, got.violation)
+			}
+		}
+	})
+}
+
+func TestAGuardedWriteThatGetsThereFirstIsSeenByTheExpense(t *testing.T) {
+	eachWriter(t, func(t *testing.T, wr writer, g guard) {
+		want := g.removalFirst.asWrittenBy(wr)
+		for round := range 3 {
+			got := g.holdRemoval(t, wr, false)
+			if !got.followerBlocked {
+				t.Errorf("round %d: the Expense did not wait for the guarded write that held the lock", round)
+			}
+			if got.create != want.create || got.removal != want.removal {
+				t.Errorf("round %d: %s %s, write %s; want %s and %s", round, wr.name, got.create, got.removal, want.create, want.removal)
+			}
+			if got.violation != "" {
+				t.Errorf("round %d: %s", round, got.violation)
+			}
+		}
+	})
 }
 
 // The red proofs, kept. The same two interleavings with one side's locks taken
@@ -459,31 +550,27 @@ func TestAGuardedWriteThatGetsThereFirstIsSeenByTheExpense(t *testing.T) {
 // holds the invariant and the handler needs a rethink, not a quiet deletion.
 
 func TestWithoutTheExpensesSharedLocksTheGuardedWriteDoesNotWaitAndTheDataIsWrong(t *testing.T) {
-	for _, g := range guards {
-		t.Run(g.name, func(t *testing.T) {
-			got := g.holdCreate(t, true)
-			if got.followerBlocked {
-				t.Error("the guarded write waited although the Expense held no lock")
-			}
-			if got.violation == "" {
-				t.Errorf("create %s, write %s: nothing is wrong, so the shared locks are not what the guard relies on", got.create, got.removal)
-			}
-		})
-	}
+	eachWriter(t, func(t *testing.T, wr writer, g guard) {
+		got := g.holdCreate(t, wr, true)
+		if got.followerBlocked {
+			t.Error("the guarded write waited although the Expense held no lock")
+		}
+		if got.violation == "" {
+			t.Errorf("%s %s, write %s: nothing is wrong, so the shared locks are not what the guard relies on", wr.name, got.create, got.removal)
+		}
+	})
 }
 
 func TestWithoutTheGuardedWritesLocksTheExpenseDoesNotWaitAndTheDataIsWrong(t *testing.T) {
-	for _, g := range guards {
-		t.Run(g.name, func(t *testing.T) {
-			got := g.holdRemoval(t, true)
-			if got.followerBlocked {
-				t.Error("the Expense waited although the guarded write held no lock")
-			}
-			if got.violation == "" {
-				t.Errorf("create %s, write %s: nothing is wrong, so the lock is not what the guard relies on", got.create, got.removal)
-			}
-		})
-	}
+	eachWriter(t, func(t *testing.T, wr writer, g guard) {
+		got := g.holdRemoval(t, wr, true)
+		if got.followerBlocked {
+			t.Error("the Expense waited although the guarded write held no lock")
+		}
+		if got.violation == "" {
+			t.Errorf("%s %s, write %s: nothing is wrong, so the lock is not what the guard relies on", wr.name, got.create, got.removal)
+		}
+	})
 }
 
 // The Pocket guard has two layers, the Household lock and the Pocket's own (see
@@ -496,15 +583,17 @@ func TestThePocketGuardHoldsOnEitherLayerAlone(t *testing.T) {
 	if g.name != "POCKET_IN_USE" {
 		t.Fatal("guards[0] is no longer the Pocket guard")
 	}
-	for name, run := range map[string]func() result{
-		"create without its Pocket lock":     func() result { return g.holdCreateWithout(t, []string{lockPocketShared}) },
-		"create without its Household lock":  func() result { return g.holdCreateWithout(t, []string{lockHouseholdShared}) },
-		"removal without its Pocket lock":    func() result { return g.holdRemovalWithout(t, []string{"LockPocket"}) },
-		"removal without its Household lock": func() result { return g.holdRemovalWithout(t, []string{"LockHousehold"}) },
-	} {
-		got := run()
-		if !got.followerBlocked || got.violation != "" {
-			t.Errorf("%s: blocked %v, violation %q; the other layer was expected to carry the guard", name, got.followerBlocked, got.violation)
+	for _, wr := range writers {
+		for name, run := range map[string]func() result{
+			wr.name + " without its Pocket lock":                   func() result { return g.holdCreateWithout(t, wr, []string{lockPocketShared}) },
+			wr.name + " without its Household lock":                func() result { return g.holdCreateWithout(t, wr, []string{lockHouseholdShared}) },
+			"removal without its Pocket lock (" + wr.name + ")":    func() result { return g.holdRemovalWithout(t, wr, []string{"LockPocket"}) },
+			"removal without its Household lock (" + wr.name + ")": func() result { return g.holdRemovalWithout(t, wr, []string{"LockHousehold"}) },
+		} {
+			got := run()
+			if !got.followerBlocked || got.violation != "" {
+				t.Errorf("%s: blocked %v, violation %q; the other layer was expected to carry the guard", name, got.followerBlocked, got.violation)
+			}
 		}
 	}
 }

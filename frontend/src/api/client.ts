@@ -294,9 +294,17 @@ export async function restoreCategory(id: string): Promise<Category> {
 
 // One page of the Household's Expenses, newest first. `after` is the previous
 // page's opaque `next`; a page without `next` is the last.
-export async function listExpenses(after?: string): Promise<ExpenseList> {
-  const query = after === undefined ? "" : `?after=${encodeURIComponent(after)}`;
+export async function listExpenses(after?: string, uncategorised?: boolean): Promise<ExpenseList> {
+  const params = new URLSearchParams();
+  if (after !== undefined) params.set("after", after);
+  if (uncategorised) params.set("uncategorised", "true");
+  const query = params.size > 0 ? `?${params.toString()}` : "";
   return (await request(`/expenses${query}`)).json() as Promise<ExpenseList>;
+}
+
+// One live Expense. 404 NOT_FOUND covers unknown, another Household's and deleted.
+export async function getExpense(id: string): Promise<Expense> {
+  return (await request(`/expenses/${encodeURIComponent(id)}`)).json() as Promise<Expense>;
 }
 
 // Idempotent on the client's id: 201 the first time, 200 with the Expense as it

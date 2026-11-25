@@ -85,7 +85,7 @@ afloat/
 │       ├── period/                 # Period Day and Budget Period arithmetic, pure — §6 (#130)
 │       ├── budget/                 # the Budget of the current Period, its materialisation and its changes (#130)
 │       ├── category/               # Categories: list, create (with the allocation one starts with), rename, deactivate or reactivate (#130)
-│       ├── expense/                # Expenses: create and the live, keyset-paged list; the rest of an Expense's life follows (#140)
+│       ├── expense/                # Expenses: create, get, edit and the live, keyset-paged list; delete and restore follow (#140)
 │       ├── migrations/             # CANONICAL goose migrations, hand-written, //go:embed — §7
 │       └── auth/common_passwords.txt  # the password denylist — §5.1
 ├── frontend/                       # React app
@@ -203,7 +203,14 @@ with zoneinfo answers from it, so a case-insensitive filesystem (a Mac) also acc
   `VALIDATION {after, invalid}`. The order is declared in SQL and ends in `id` so a page boundary is
   exact over rows equal in every other key, and any key that is **computed** on read (the Expense list's
   effective time) is in the cursor, or a boundary on it repeats rows. A row another writer edits
-  between two reads may repeat or be skipped; no snapshot is held. **Every query on a table that
+  between two reads may repeat or be skipped; no snapshot is held. **A filter is a statement of its
+  own when its predicate must be a literal for a partial index** (`?uncategorised=true`, R8, is
+  `category_id IS NULL` in its own `ListUncategorisedExpenses`, since a flag parameter on the one
+  statement lets a generic plan fall back to the live index and filter), and a cursor names a position
+  in the one order, so it resumes in the filtered list or the whole one alike. **A count that rides
+  beside a page** (`uncategorised_count`, the Household's live uncategorised rows, whatever the filter
+  and the page) is its own statement after the page's, derived on every read and never stored; a write
+  between the two can leave it one off from the rows beside it, which the next read corrects. **Every query on a table that
   grows ships its plan in the PR that adds it** (`EXPLAIN ANALYZE` over a seeded throwaway database,
   in the PR body), not a plan-asserting test.
 - **Money:** `DECIMAL(20,4)`, serialised as **strings** on the wire, at exactly the storage scale —

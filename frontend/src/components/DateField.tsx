@@ -95,7 +95,11 @@ export function DateField({
   today,
   error,
   disabled,
+  format,
 }: {
+  /** Words for the trigger when the date is not the default's: the edit route
+   * says "Yesterday" or "Saturday, 22 November" as the list does. */
+  format?: (iso: string) => string;
   disabled?: boolean;
   id?: string;
   /** The id of the field's error message, when it has one. */
@@ -108,7 +112,11 @@ export function DateField({
   const { t, i18n } = useTranslation();
   const [open, setOpen] = useState(false);
   const shown = value || today;
-  const label = shown === today ? t("dates.today") : formatDate(shown, i18n.language);
+  const label = format
+    ? format(shown)
+    : shown === today
+      ? t("dates.today")
+      : formatDate(shown, i18n.language);
   const name = t("fields.date");
   return (
     <Popover.Root open={open} onOpenChange={setOpen}>

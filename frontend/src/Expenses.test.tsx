@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { screen, within } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import { alice, defaultHandlers, envelope, server, type State } from "@/test/server";
@@ -88,7 +88,8 @@ describe("Expenses", () => {
     renderApp("/expenses");
     await shown();
 
-    const rows = await list().findAllByRole("listitem");
+    // The "Needs a category" row leads the list while an Expense has none.
+    const [, ...rows] = await list().findAllByRole("listitem");
     expect(rows).toHaveLength(3);
     // description: the Category and the time join the Pocket on the detail line
     expect(rows[0]).toHaveTextContent("Nasi padang");
@@ -248,5 +249,105 @@ describe("Expenses", () => {
         .map((h) => h.textContent),
     ).toEqual([idID.dates.today, idID.expenses.yesterday, "Minggu, 22 November"]);
     expect(list().getByText("Rp25.000")).toBeInTheDocument();
+  });
+});
+
+describe("The uncategorised surface", () => {
+  const needs = (n: number) => `Needs a category (${n})`;
+  const path = () => screen.getByTestId("location").textContent;
+  const withBoth = () =>
+    signedIn({
+      expenses: [
+        expense("1", { occurred_on: "2026-11-25", description: "Coffee" }),
+        expense("2", { occurred_on: "2026-11-24", category_id: "c-food", description: "Lunch" }),
+        expense("3", { occurred_on: "2026-11-23", description: "Parking" }),
+      ],
+    });
+
+  it("shows one 'Needs a category (N)' row only while N is above zero", async () => {
+    server.use(...defaultHandlers(withBoth()));
+    const view = renderApp("/expenses");
+    await shown();
+
+    expect(await list().findByRole("link", { name: needs(2) })).toHaveAttribute(
+      "href",
+      "/expenses?uncategorised=true",
+    );
+    view.unmount();
+
+    server.use(
+      ...defaultHandlers(
+        signedIn({
+          expenses: [expense("2", { occurred_on: "2026-11-24", category_id: "c-food" })],
+        }),
+      ),
+    );
+    renderApp("/expenses");
+    await shown();
+    await list().findByText("Eating out");
+    expect(list().queryByRole("link", { name: /Needs a category/ })).not.toBeInTheDocument();
+  });
+
+  it("filters through the URL, with a way back, a line saying what it is, and no row", async () => {
+    const state = withBoth();
+    server.use(...defaultHandlers(state));
+    const user = userEvent.setup();
+    renderApp("/expenses");
+    await shown();
+
+    await user.click(await list().findByRole("link", { name: needs(2) }));
+    await list().findByText(enGB.expenses.uncategorisedFilter);
+    expect(path()).toBe("/expenses?uncategorised=true");
+    expect(state.expenseListQueries).toContain("uncategorised=true");
+    expect(list().getByRole("link", { name: enGB.expenses.allExpenses })).toBeInTheDocument();
+    expect(list().queryByRole("link", { name: /Needs a category/ })).not.toBeInTheDocument();
+    expect(await list().findByRole("link", { name: "Edit Coffee, Rp10,000" })).toBeVisible();
+    expect(list().getByRole("link", { name: "Edit Parking, Rp10,000" })).toBeVisible();
+    expect(list().queryByRole("link", { name: /Lunch/ })).not.toBeInTheDocument();
+
+    await user.click(list().getByRole("link", { name: enGB.expenses.allExpenses }));
+    expect(await list().findByRole("link", { name: "Edit Lunch, Rp10,000" })).toBeVisible();
+    expect(path()).toBe("/expenses");
+  });
+
+  it("opens straight on the filter from a link, and says when nothing is missing a Category", async () => {
+    server.use(
+      ...defaultHandlers(
+        signedIn({
+          expenses: [expense("2", { occurred_on: "2026-11-24", category_id: "c-food" })],
+        }),
+      ),
+    );
+    renderApp("/expenses?uncategorised=true");
+    await shown();
+
+    expect(await screen.findByText(enGB.expenses.uncategorisedEmpty)).toBeInTheDocument();
+  });
+
+  it("drops an Expense from the filter once a Category is chosen on its edit route", async () => {
+    const state = withBoth();
+    server.use(...defaultHandlers(state));
+    const user = userEvent.setup();
+    renderApp("/expenses?uncategorised=true");
+    await shown();
+
+    await user.click(await list().findByRole("link", { name: "Edit Coffee, Rp10,000" }));
+    await user.click(await screen.findByRole("combobox", { name: enGB.fields.category }));
+    await user.click(await screen.findByRole("option", { name: "Eating out" }));
+    await user.click(screen.getByRole("button", { name: enGB.expenses.save }));
+
+    await waitFor(() => expect(path()).toBe("/expenses?uncategorised=true"));
+    await list().findByRole("link", { name: "Edit Parking, Rp10,000" });
+    await waitFor(() =>
+      expect(list().queryByRole("link", { name: "Edit Coffee, Rp10,000" })).not.toBeInTheDocument(),
+    );
+  });
+
+  it("words the row in Indonesian", async () => {
+    server.use(...defaultHandlers({ ...withBoth(), me: { ...alice, locale: "id-ID" } }));
+    renderApp("/expenses");
+    await screen.findByRole("heading", { level: 1, name: idID.expenses.title });
+
+    expect(await list().findByRole("link", { name: "Perlu kategori (2)" })).toBeInTheDocument();
   });
 });

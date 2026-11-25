@@ -926,8 +926,8 @@
       - sql: "SELECT count(*)::int AS n FROM expenses"
         rows: [{"n": 0}]
 
-# /expenses/{id} serves PATCH (#140, PR 3b); GET, DELETE and the restore arrive with
-# their slices. A verb the router does not serve there is a 405 that writes
+# /expenses/{id} serves GET (#140, PR 4) and PATCH (PR 3b); DELETE and the restore
+# arrive with their slice. A verb the router does not serve there is a 405 that writes
 # nothing, PUT (a replacement) and POST (an id is the client's, and a create is
 # the collection's) among them.
 

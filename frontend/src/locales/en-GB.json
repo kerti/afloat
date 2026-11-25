@@ -197,7 +197,8 @@
     "deactivated": "Deactivated {{name}}.",
     "reactivated": "Reactivated {{name}}.",
     "deleted": "Deleted {{name}}.",
-    "undo": "Undo"
+    "undo": "Undo",
+    "edit": "Edit"
   },
   "dialog": {
     "close": "Close"
@@ -273,7 +274,16 @@
     "empty": "Your Expenses will appear here.",
     "yesterday": "Yesterday",
     "uncategorised": "Uncategorised",
-    "loadMore": "Load more"
+    "loadMore": "Load more",
+    "editTitle": "Edit Expense",
+    "editRow": "Edit {{name}}, {{amount}}",
+    "save": "Save",
+    "saving": "Saving…",
+    "inactiveOption": "{{name}} (inactive)",
+    "needsCategory": "Needs a category ({{count}})",
+    "allExpenses": "All Expenses",
+    "uncategorisedFilter": "Expenses with no Category.",
+    "uncategorisedEmpty": "No Expenses are missing a Category."
   },
   "dates": {
     "today": "Today",

@@ -33,6 +33,23 @@ func (q *Queries) CategoryHasExpenses(ctx context.Context, arg CategoryHasExpens
 	return exists, err
 }
 
+const countUncategorisedExpenses = `-- name: CountUncategorisedExpenses :one
+SELECT count(*) FROM expenses
+WHERE household_id = $1
+  AND deleted_at IS NULL
+  AND category_id IS NULL
+`
+
+// How many live Expenses of the Household have no Category: the figure behind
+// "Needs a category (N)", independent of the page and the filter. Derived on
+// every read (N5), never stored. Served by the same partial index.
+func (q *Queries) CountUncategorisedExpenses(ctx context.Context, householdID pgtype.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, countUncategorisedExpenses, householdID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const createExpense = `-- name: CreateExpense :one
 INSERT INTO expenses (
     id, household_id, occurred_on, occurred_time, amount, currency,
@@ -328,6 +345,104 @@ func (q *Queries) ListExpenses(ctx context.Context, arg ListExpensesParams) ([]L
 	items := []ListExpensesRow{}
 	for rows.Next() {
 		var i ListExpensesRow
+		if err := rows.Scan(
+			&i.Expense.ID,
+			&i.Expense.HouseholdID,
+			&i.Expense.OccurredOn,
+			&i.Expense.OccurredTime,
+			&i.Expense.CapturedAt,
+			&i.Expense.Amount,
+			&i.Expense.Currency,
+			&i.Expense.PocketID,
+			&i.Expense.CategoryID,
+			&i.Expense.Description,
+			&i.Expense.Ownership,
+			&i.Expense.OwnerUserID,
+			&i.Expense.CreatedAt,
+			&i.Expense.UpdatedAt,
+			&i.Expense.DeletedAt,
+			&i.TimeKey,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listUncategorisedExpenses = `-- name: ListUncategorisedExpenses :many
+SELECT e.id, e.household_id, e.occurred_on, e.occurred_time, e.captured_at, e.amount, e.currency, e.pocket_id, e.category_id, e.description, e.ownership, e.owner_user_id, e.created_at, e.updated_at, e.deleted_at, k.time_key::time AS time_key
+FROM expenses e
+JOIN households h ON h.id = e.household_id
+CROSS JOIN LATERAL (
+    SELECT CASE
+        WHEN e.occurred_time IS NOT NULL
+            THEN e.occurred_time - (h.day_starts_at - time '00:00')
+        WHEN ((e.captured_at AT TIME ZONE $1::text) - (h.day_starts_at - time '00:00'))::date = e.occurred_on
+            THEN (e.captured_at AT TIME ZONE $1::text)::time - (h.day_starts_at - time '00:00')
+        ELSE time '00:00'
+    END AS time_key
+) k
+WHERE e.household_id = $2
+  AND e.deleted_at IS NULL
+  AND e.category_id IS NULL
+  AND e.occurred_on <= coalesce($3::date, 'infinity'::date)
+  AND (
+        $3::date IS NULL
+        OR e.occurred_on < $3::date
+        OR (k.time_key, e.captured_at, e.id)
+           < ($4::time, $5::timestamptz, $6::uuid)
+  )
+ORDER BY e.occurred_on DESC, k.time_key DESC, e.captured_at DESC, e.id DESC
+LIMIT $7
+`
+
+type ListUncategorisedExpensesParams struct {
+	TimeZone        string
+	HouseholdID     pgtype.UUID
+	AfterOccurredOn pgtype.Date
+	AfterTimeKey    pgtype.Time
+	AfterCapturedAt pgtype.Timestamptz
+	AfterID         pgtype.UUID
+	PageSize        int32
+}
+
+type ListUncategorisedExpensesRow struct {
+	Expense Expense
+	TimeKey pgtype.Time
+}
+
+// ---- the uncategorised list and its count -----------------------------------
+//
+// GET /expenses?uncategorised=true (#140 R8): ListExpenses with one more
+// predicate, `category_id IS NULL`, and everything else the same (the order, the
+// effective time and the keyset), so a cursor from either list resumes in the
+// other. A statement of its own and not a boolean argument on ListExpenses, on
+// purpose: the predicate has to be a literal in the text for the planner to
+// choose the partial index (household_id, occurred_on DESC, id DESC) WHERE
+// deleted_at IS NULL AND category_id IS NULL (expenses_household_uncategorised_idx),
+// which a prepared statement's generic plan, with the flag as a parameter, cannot
+// promise. Keep the two bodies in step.
+func (q *Queries) ListUncategorisedExpenses(ctx context.Context, arg ListUncategorisedExpensesParams) ([]ListUncategorisedExpensesRow, error) {
+	rows, err := q.db.Query(ctx, listUncategorisedExpenses,
+		arg.TimeZone,
+		arg.HouseholdID,
+		arg.AfterOccurredOn,
+		arg.AfterTimeKey,
+		arg.AfterCapturedAt,
+		arg.AfterID,
+		arg.PageSize,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListUncategorisedExpensesRow{}
+	for rows.Next() {
+		var i ListUncategorisedExpensesRow
 		if err := rows.Scan(
 			&i.Expense.ID,
 			&i.Expense.HouseholdID,

@@ -12,6 +12,7 @@ import {
   deletePocket,
   getAuthMethods,
   getBudget,
+  getExpense,
   getMe,
   getOnboardingOptions,
   listExpenses,
@@ -287,18 +288,43 @@ export const expensesKey = ["expenses"] as const;
 // Keyset paging: each page's `next` is the following request's `after`, and a
 // page without one is the last. Pages are only ever appended on demand, never
 // fetched ahead.
-export function useExpenses() {
+export function useExpenses(uncategorised = false) {
   return useInfiniteQuery<
     ExpenseList,
     ApiError,
     { pages: ExpenseList[] },
-    readonly string[],
+    readonly unknown[],
     string | undefined
   >({
-    queryKey: expensesKey,
-    queryFn: ({ pageParam }) => listExpenses(pageParam),
+    // Under expensesKey, so one invalidation moves every filtered view too.
+    queryKey: [...expensesKey, { uncategorised }],
+    queryFn: ({ pageParam }) => listExpenses(pageParam, uncategorised),
     initialPageParam: undefined,
     getNextPageParam: (last) => last.next,
+  });
+}
+
+export const expenseKey = (id: string) => ["expense", id] as const;
+
+// A gone Expense answers NOT_FOUND at once; retrying it only holds the screen
+// on Loading before the gone-record redirect. Anything else gets the default 3.
+export const retryUnlessGone = (failures: number, err: ApiError) =>
+  err.status !== 404 && failures < 3;
+
+// One Expense, for the edit route. The form is filled from it once, and Save
+// diffs against that same read, so it never refetches while the screen is open
+// (a refetch would make an untouched field look changed and overwrite another
+// member's edit). A visit never starts from a cached copy: it is dropped when
+// the screen is left.
+export function useExpense(id: string) {
+  return useQuery<Expense, ApiError>({
+    queryKey: expenseKey(id),
+    queryFn: () => getExpense(id),
+    gcTime: 0,
+    staleTime: Infinity,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+    retry: retryUnlessGone,
   });
 }
 

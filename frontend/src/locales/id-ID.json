@@ -195,7 +195,8 @@
     "deactivated": "{{name}} dinonaktifkan.",
     "reactivated": "{{name}} diaktifkan kembali.",
     "deleted": "{{name}} dihapus.",
-    "undo": "Urungkan"
+    "undo": "Urungkan",
+    "edit": "Ubah"
   },
   "dialog": {
     "close": "Tutup"
@@ -271,7 +272,16 @@
     "empty": "Pengeluaran Anda akan tampil di sini.",
     "yesterday": "Kemarin",
     "uncategorised": "Tanpa kategori",
-    "loadMore": "Muat lebih banyak"
+    "loadMore": "Muat lebih banyak",
+    "editTitle": "Ubah pengeluaran",
+    "editRow": "Ubah {{name}}, {{amount}}",
+    "save": "Simpan",
+    "saving": "Menyimpan…",
+    "inactiveOption": "{{name}} (nonaktif)",
+    "needsCategory": "Perlu kategori ({{count}})",
+    "allExpenses": "Semua pengeluaran",
+    "uncategorisedFilter": "Pengeluaran tanpa kategori.",
+    "uncategorisedEmpty": "Semua pengeluaran sudah punya kategori."
   },
   "dates": {
     "today": "Hari ini",

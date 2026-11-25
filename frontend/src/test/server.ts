@@ -59,6 +59,9 @@ export type State = {
   // Every PATCH /expenses/{id}, in order, with the id it named.
   expensePatches?: { id: string; body: UpdateExpenseBody }[];
   expensePageSize?: number;
+  // The query string of every GET /expenses, and the id of every GET /expenses/{id}.
+  expenseListQueries?: string[];
+  expenseGets?: string[];
   // Ids of Pockets an Expense references: DELETE answers 409 POCKET_IN_USE.
   pocketsInUse?: string[];
   // The fake server's Categories in creation order, and every POST /categories
@@ -269,12 +272,32 @@ export function defaultHandlers(state: State = { signedIn: false, me: alice }) {
     http.get("/api/expenses", ({ request }) => {
       if (!state.signedIn) return HttpResponse.json(envelope("UNAUTHORIZED"), { status: 401 });
       // The cursor is opaque to the client; here it is the offset of the next row.
-      const offset = Number(new URL(request.url).searchParams.get("after") ?? 0);
+      const params = new URL(request.url).searchParams;
+      const offset = Number(params.get("after") ?? 0);
       const size = state.expensePageSize ?? 25;
-      const all = state.expenses ?? [];
+      const live = state.expenses ?? [];
+      (state.expenseListQueries ??= []).push(request.url.split("?")[1] ?? "");
+      // `uncategorised_count` is of the whole live list, whatever the filter.
+      const uncategorised_count = live.filter((e) => e.category_id === undefined).length;
+      const all =
+        params.get("uncategorised") === "true"
+          ? live.filter((e) => e.category_id === undefined)
+          : live;
       const items = all.slice(offset, offset + size);
       const more = offset + size < all.length;
-      return HttpResponse.json({ items, ...(more && { next: String(offset + size) }) });
+      return HttpResponse.json({
+        items,
+        ...(more && { next: String(offset + size) }),
+        uncategorised_count,
+      });
+    }),
+    http.get("/api/expenses/:id", ({ params }) => {
+      if (!state.signedIn) return HttpResponse.json(envelope("UNAUTHORIZED"), { status: 401 });
+      (state.expenseGets ??= []).push(String(params.id));
+      const held = state.expenses?.find((e) => e.id === params.id);
+      return held
+        ? HttpResponse.json(held)
+        : HttpResponse.json(envelope("NOT_FOUND"), { status: 404 });
     }),
     http.post("/api/expenses", async ({ request }) => {
       if (!state.signedIn) return HttpResponse.json(envelope("UNAUTHORIZED"), { status: 401 });

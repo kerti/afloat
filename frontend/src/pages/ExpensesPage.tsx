@@ -1,20 +1,35 @@
 import { useTranslation } from "react-i18next";
+import { useSearchParams } from "react-router";
 import type { Me } from "@/api/client";
 import { useCategories, useExpenses, usePockets } from "@/api/queries";
-import { DayGroup, ExpenseRow, LoadMore } from "@/components/ExpenseList";
+import { BackLink } from "@/components/BackLink";
+import { DayGroup, ExpenseRow, FilterRow, LoadMore } from "@/components/ExpenseList";
 import { ErrorState, Loading } from "@/components/states";
-import { EmptyState, PageTitle } from "@/components/Text";
-import { formatWeekdayDate, previousDay, yearOf } from "@/lib/dates";
+import { EmptyState, MutedText, PageTitle } from "@/components/Text";
 import { formatMoney } from "@/lib/money";
+import { routes } from "@/lib/routes";
+import { useDayHeading } from "@/lib/useDayHeading";
 
 // The Household's Expenses, newest first, a page at a time behind a Load more
 // button (never infinite scroll). Every day heading is worked out from the
-// server's Today, never the device's (CLAUDE.md rule 5).
+// server's Today, never the device's (CLAUDE.md rule 5). `?uncategorised=true`
+// narrows it to the Expenses with no Category (#140 R8); filters live in the URL.
 export function ExpensesPage({ me }: { me: Me }) {
   const { t, i18n } = useTranslation();
-  const expenses = useExpenses();
+  const [params] = useSearchParams();
+  const uncategorised = params.get("uncategorised") === "true";
+  const expenses = useExpenses(uncategorised);
+  const heading = useDayHeading(me.today);
   const pockets = usePockets();
   const categories = useCategories();
+
+  // The same head in every state, so the title is not remounted when data lands.
+  const head = (
+    <>
+      {uncategorised && <BackLink to={routes.expenses} label={t("expenses.allExpenses")} />}
+      <PageTitle>{t("expenses.title")}</PageTitle>
+    </>
+  );
 
   // A failed refetch behind data already on screen keeps the screen.
   const failed =
@@ -25,7 +40,7 @@ export function ExpensesPage({ me }: { me: Me }) {
   if (failed) {
     return (
       <>
-        <PageTitle>{t("expenses.title")}</PageTitle>
+        {head}
         <ErrorState
           error={failed}
           onRetry={() => {
@@ -40,7 +55,7 @@ export function ExpensesPage({ me }: { me: Me }) {
   if (!expenses.data || !pockets.data || !categories.data) {
     return (
       <>
-        <PageTitle>{t("expenses.title")}</PageTitle>
+        {head}
         <Loading />
       </>
     );
@@ -49,14 +64,6 @@ export function ExpensesPage({ me }: { me: Me }) {
   const pocketName = new Map(pockets.data.items.map((p) => [p.id, p.pocket_display_name]));
   const categoryName = new Map(categories.data.items.map((c) => [c.id, c.category_display_name]));
   const items = expenses.data.pages.flatMap((page) => page.items);
-
-  const yesterday = previousDay(me.today);
-  const heading = (day: string) =>
-    day === me.today
-      ? t("dates.today")
-      : day === yesterday
-        ? t("expenses.yesterday")
-        : formatWeekdayDate(day, i18n.language, yearOf(day) !== yearOf(me.today));
 
   // The list is ordered by day, so a day is one run of rows, across pages too.
   const days: { day: string; rows: typeof items }[] = [];
@@ -68,8 +75,18 @@ export function ExpensesPage({ me }: { me: Me }) {
 
   return (
     <>
-      <PageTitle>{t("expenses.title")}</PageTitle>
-      {items.length === 0 && <EmptyState>{t("expenses.empty")}</EmptyState>}
+      {head}
+      {uncategorised && <MutedText>{t("expenses.uncategorisedFilter")}</MutedText>}
+      {!uncategorised && expenses.data.pages[0]!.uncategorised_count > 0 && (
+        <FilterRow to={routes.uncategorisedExpenses}>
+          {t("expenses.needsCategory", { count: expenses.data.pages[0]!.uncategorised_count })}
+        </FilterRow>
+      )}
+      {items.length === 0 && (
+        <EmptyState>
+          {t(uncategorised ? "expenses.uncategorisedEmpty" : "expenses.empty")}
+        </EmptyState>
+      )}
       {days.map(({ day, rows }) => (
         <DayGroup key={day} heading={heading(day)}>
           {rows.map((e) => {
@@ -82,13 +99,17 @@ export function ExpensesPage({ me }: { me: Me }) {
             ]
               .filter((part): part is string => part !== undefined && part !== "")
               .join(" · ");
+            const amount = formatMoney(e.amount, e.currency, i18n.language);
+            const name = title ?? t("expenses.uncategorised");
             return (
               <ExpenseRow
                 key={e.id}
-                title={title ?? t("expenses.uncategorised")}
+                to={routes.expense(e.id)}
+                label={t("expenses.editRow", { name, amount })}
+                title={name}
                 muted={title === undefined}
                 detail={detail}
-                amount={formatMoney(e.amount, e.currency, i18n.language)}
+                amount={amount}
               />
             );
           })}

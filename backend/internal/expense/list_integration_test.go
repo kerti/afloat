@@ -62,7 +62,14 @@ func sid(n int) uuid.UUID {
 
 func (f fixture) list(ctx context.Context, t *testing.T, limit *int, after *string) api.ExpenseList {
 	t.Helper()
-	resp, err := f.handlers.ListExpenses(ctx, api.ListExpensesRequestObject{Params: api.ListExpensesParams{Limit: limit, After: after}})
+	return f.listFiltered(ctx, t, limit, after, nil)
+}
+
+// listFiltered is the list with ?uncategorised as the caller sent it: nil is the
+// parameter absent.
+func (f fixture) listFiltered(ctx context.Context, t *testing.T, limit *int, after *string, uncategorised *bool) api.ExpenseList {
+	t.Helper()
+	resp, err := f.handlers.ListExpenses(ctx, api.ListExpensesRequestObject{Params: api.ListExpensesParams{Limit: limit, After: after, Uncategorised: uncategorised}})
 	if err != nil {
 		t.Fatalf("ListExpenses returned an error: %v", err)
 	}
@@ -104,8 +111,8 @@ func TestAnEmptyHouseholdIsAnEmptyItemsArrayAndNoNext(t *testing.T) {
 	f := newFixture(t)
 	_, _, ctx := f.member(t, "Home", "a@example.com")
 	page := f.list(ctx, t, nil, nil)
-	if got := wire(t, page); got != `{"items":[]}` {
-		t.Errorf("wire = %s, want {\"items\":[]}", got)
+	if got := wire(t, page); got != `{"items":[],"uncategorised_count":0}` {
+		t.Errorf("wire = %s, want {\"items\":[],\"uncategorised_count\":0}", got)
 	}
 }
 

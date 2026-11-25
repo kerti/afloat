@@ -7,6 +7,7 @@ import { LegacyRedirect } from "@/components/LegacyRedirect";
 import { legacyRedirects, routes } from "@/lib/routes";
 import { BudgetPage } from "@/pages/BudgetPage";
 import { CapturePage } from "@/pages/CapturePage";
+import { EditExpensePage } from "@/pages/EditExpensePage";
 import { ExpensesPage } from "@/pages/ExpensesPage";
 import { HomePage } from "@/pages/HomePage";
 import { LoginPage } from "@/pages/LoginPage";
@@ -43,6 +44,10 @@ export function App() {
         <Route
           path={routes.expenses}
           element={<RequireSession>{(me) => <ExpensesPage me={me} />}</RequireSession>}
+        />
+        <Route
+          path={routes.expensePattern}
+          element={<RequireSession>{(me) => <EditExpensePage me={me} />}</RequireSession>}
         />
         <Route path="*" element={<Navigate to={routes.home} replace />} />
       </Routes>

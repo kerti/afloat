@@ -77,6 +77,10 @@ type Querier interface {
 	// allocations alike, whole Period or one Category. A standing default (Q-17) or an
 	// annual plan (Q-20) would be consulted here, first, and no stored row would change.
 	CopySource(ctx context.Context, arg CopySourceParams) (string, error)
+	// How many live Expenses of the Household have no Category: the figure behind
+	// "Needs a category (N)", independent of the page and the filter. Derived on
+	// every read (N5), never stored. Served by the same partial index.
+	CountUncategorisedExpenses(ctx context.Context, householdID pgtype.UUID) (int64, error)
 	// ON CONFLICT (id) arbitrates the primary key only: a row back is a create, no
 	// row is the id already being held (see GetLiveCategory). A name clash is not
 	// arbitrated and still raises 23505 on categories_household_name_idx.
@@ -255,6 +259,18 @@ type Querier interface {
 	// rename or a deactivation must not reshuffle the list, and the order is
 	// independent of the database's collation.
 	ListPockets(ctx context.Context, householdID pgtype.UUID) ([]Pocket, error)
+	// ---- the uncategorised list and its count -----------------------------------
+	//
+	// GET /expenses?uncategorised=true (#140 R8): ListExpenses with one more
+	// predicate, `category_id IS NULL`, and everything else the same (the order, the
+	// effective time and the keyset), so a cursor from either list resumes in the
+	// other. A statement of its own and not a boolean argument on ListExpenses, on
+	// purpose: the predicate has to be a literal in the text for the planner to
+	// choose the partial index (household_id, occurred_on DESC, id DESC) WHERE
+	// deleted_at IS NULL AND category_id IS NULL (expenses_household_uncategorised_idx),
+	// which a prepared statement's generic plan, with the flag as a parameter, cannot
+	// promise. Keep the two bodies in step.
+	ListUncategorisedExpenses(ctx context.Context, arg ListUncategorisedExpensesParams) ([]ListUncategorisedExpensesRow, error)
 	// The first statement of a delete, in the delete's own transaction: it takes the
 	// Category's row lock (FOR UPDATE, which conflicts with the FOR SHARE every
 	// allocation write and every Expense create holds, and with the key-share an

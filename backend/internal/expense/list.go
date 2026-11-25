@@ -36,7 +36,8 @@ var (
 )
 
 // ListExpenses answers one page of the caller's Household's live Expenses,
-// newest first (#140 R7). The Household is the authenticated User's, taken from
+// newest first (#140 R7), or of those with no Category with ?uncategorised=true
+// (R8), and the Household's count of them either way. The Household is the authenticated User's, taken from
 // the context and never from the request, and the SELECT filters on it in SQL.
 //
 // The order is declared in the statement (queries/expense.sql), with id as its
@@ -88,7 +89,7 @@ func (h *Handlers) ListExpenses(ctx context.Context, request api.ListExpensesReq
 		params.AfterID = pgtype.UUID{Bytes: c.id, Valid: true}
 	}
 
-	rows, err := h.q.ListExpenses(ctx, params)
+	rows, err := h.listRows(ctx, params, request.Params.Uncategorised != nil && *request.Params.Uncategorised)
 	if err != nil {
 		logFailure("list expenses", err)
 		return api.ListExpenses500JSONResponse{
@@ -96,18 +97,66 @@ func (h *Handlers) ListExpenses(ctx context.Context, request api.ListExpensesReq
 		}, nil
 	}
 
-	out := api.ExpenseList{Items: make([]api.Expense, 0, min(len(rows), limit))}
+	// The count is its own statement, after the page and outside any
+	// transaction: a write landing between the two can leave it one off from the
+	// rows beside it, which the next read corrects and nothing is decided on.
+	// Not carried by the Recycle Bin read (#140 R8, PR 5), which will skip this.
+	count, err := h.q.CountUncategorisedExpenses(ctx, user.HouseholdID)
+	if err != nil {
+		logFailure("count uncategorised expenses", err)
+		return api.ListExpenses500JSONResponse{
+			InternalErrorJSONResponse: api.InternalErrorJSONResponse{Code: api.INTERNAL},
+		}, nil
+	}
+
+	out := api.ExpenseList{
+		Items:              make([]api.Expense, 0, min(len(rows), limit)),
+		UncategorisedCount: int(count),
+	}
 	for i, row := range rows {
 		if i == limit {
 			// The extra row is only the proof that there is another page.
-			last := rows[limit-1]
-			next := encodeCursor(last)
+			next := encodeCursor(rows[limit-1])
 			out.Next = &next
 			break
 		}
-		out.Items = append(out.Items, response(row.Expense))
+		out.Items = append(out.Items, response(row.expense))
 	}
 	return api.ListExpenses200JSONResponse(out), nil
+}
+
+// listRow is a row of either list: the Expense and the effective time it was
+// sorted by, which the cursor carries.
+type listRow struct {
+	expense db.Expense
+	timeKey pgtype.Time
+}
+
+// listRows runs the statement for the whole live list, or for the one with no
+// Category. They take the same arguments and answer the same columns; they are
+// two statements so the second names `category_id IS NULL` in its text and the
+// partial index can serve it (see ListUncategorisedExpenses).
+func (h *Handlers) listRows(ctx context.Context, params db.ListExpensesParams, uncategorised bool) ([]listRow, error) {
+	if uncategorised {
+		rows, err := h.q.ListUncategorisedExpenses(ctx, db.ListUncategorisedExpensesParams(params))
+		if err != nil {
+			return nil, err
+		}
+		out := make([]listRow, len(rows))
+		for i, r := range rows {
+			out[i] = listRow{expense: r.Expense, timeKey: r.TimeKey}
+		}
+		return out, nil
+	}
+	rows, err := h.q.ListExpenses(ctx, params)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]listRow, len(rows))
+	for i, r := range rows {
+		out[i] = listRow{expense: r.Expense, timeKey: r.TimeKey}
+	}
+	return out, nil
 }
 
 func listValidation(field, rule string) api.ListExpensesResponseObject {
@@ -139,11 +188,11 @@ type wireCursor struct {
 	ID         *string `json:"i"`
 }
 
-func encodeCursor(row db.ListExpensesRow) string {
-	on := period.DateOf(row.Expense.OccurredOn.Time).String()
-	key := row.TimeKey.Microseconds
-	captured := row.Expense.CapturedAt.Time.UnixMicro()
-	id := uuid.UUID(row.Expense.ID.Bytes).String()
+func encodeCursor(row listRow) string {
+	on := period.DateOf(row.expense.OccurredOn.Time).String()
+	key := row.timeKey.Microseconds
+	captured := row.expense.CapturedAt.Time.UnixMicro()
+	id := uuid.UUID(row.expense.ID.Bytes).String()
 	raw, err := json.Marshal(wireCursor{OccurredOn: &on, TimeKey: &key, CapturedAt: &captured, ID: &id})
 	if err != nil {
 		// A struct of strings and integers cannot fail to marshal.

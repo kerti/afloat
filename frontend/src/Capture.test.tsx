@@ -71,12 +71,14 @@ describe("Capture", () => {
     const body = state.expensePosts![0]!;
     expect(body).toEqual({ id: expect.stringMatching(v7), amount: "25000", pocket_id: "p-cash" });
     expect(toastMock).toHaveBeenCalledTimes(1);
+    // The toast lasts 8 s and carries an Edit action, never an Undo (R16).
     expect(toastMock).toHaveBeenCalledWith(
       "Added Rp25,000.",
-      expect.objectContaining({ duration: 4000 }),
+      expect.objectContaining({
+        duration: 8000,
+        action: expect.objectContaining({ label: enGB.toast.edit }),
+      }),
     );
-    // No Undo, no Edit action yet (R16).
-    expect(toastMock.mock.calls[0]![1]).not.toHaveProperty("action");
   });
 
   it("sends the Category, a trimmed description, the picked date and time", async () => {

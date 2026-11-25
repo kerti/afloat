@@ -15,6 +15,10 @@ export type Category = components["schemas"]["Category"];
 export type CategoryList = components["schemas"]["CategoryList"];
 export type CreateCategoryRequest = components["schemas"]["CreateCategoryRequest"];
 export type UpdateCategoryRequest = components["schemas"]["UpdateCategoryRequest"];
+export type Expense = components["schemas"]["Expense"];
+export type ExpenseList = components["schemas"]["ExpenseList"];
+export type CreateExpenseRequest = components["schemas"]["CreateExpenseRequest"];
+export type UpdateExpenseRequest = components["schemas"]["UpdateExpenseRequest"];
 export type Bucket = components["schemas"]["Bucket"];
 export type Budget = components["schemas"]["Budget"];
 export type UpdateBudgetRequest = components["schemas"]["UpdateBudgetRequest"];
@@ -286,4 +290,36 @@ export async function restoreCategory(id: string): Promise<Category> {
   return (
     await request(`/categories/${encodeURIComponent(id)}/restore`, { method: "POST" })
   ).json() as Promise<Category>;
+}
+
+// One page of the Household's Expenses, newest first. `after` is the previous
+// page's opaque `next`; a page without `next` is the last.
+export async function listExpenses(after?: string): Promise<ExpenseList> {
+  const query = after === undefined ? "" : `?after=${encodeURIComponent(after)}`;
+  return (await request(`/expenses${query}`)).json() as Promise<ExpenseList>;
+}
+
+// Idempotent on the client's id: 201 the first time, 200 with the Expense as it
+// stands on a replay. Both are a success and both resolve to the Expense.
+export async function createExpense(body: CreateExpenseRequest): Promise<Expense> {
+  return (
+    await request("/expenses", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    })
+  ).json() as Promise<Expense>;
+}
+
+// Merge update: only the fields sent change; `null` clears the time, Category or
+// description. The answer is the Expense as it now stands. 404 NOT_FOUND covers
+// unknown, another Household's and deleted.
+export async function updateExpense(id: string, body: UpdateExpenseRequest): Promise<Expense> {
+  return (
+    await request(`/expenses/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    })
+  ).json() as Promise<Expense>;
 }

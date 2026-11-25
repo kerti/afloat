@@ -1,6 +1,6 @@
 import "@testing-library/jest-dom/vitest";
 import { afterAll, afterEach, beforeAll, expect } from "vitest";
-import { cleanup } from "@testing-library/react";
+import { cleanup, configure } from "@testing-library/react";
 import { server } from "./server";
 import { i18n, initI18n } from "@/i18n";
 // The boot script, as index.html loads it: it sets window.afloatAppearance,
@@ -8,6 +8,14 @@ import { i18n, initI18n } from "@/i18n";
 import "../../public/appearance-init.js";
 
 initI18n("en-GB");
+
+// findBy* and waitFor wait for the fake network and a render, never for a clock,
+// so the limit only matters when the machine is starved. Idle, the slowest
+// first render here (the Settings screen, a cold first test in a file) takes
+// about 0.2 s; with CPU contention (full suite beside other work, load above the
+// core count) the same step took 1.3 to 2.4 s and tripped the 1 s default, with
+// no change to the code under test. A passing test never waits this long.
+configure({ asyncUtilTimeout: 8000 });
 
 // sonner captures the pointer on a toast press; jsdom has no pointer capture.
 Element.prototype.setPointerCapture ??= () => {};

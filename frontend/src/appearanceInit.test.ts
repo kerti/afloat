@@ -27,7 +27,7 @@ function load(): Engine {
 function freshDoc(): Document {
   return new DOMParser().parseFromString(
     `<!doctype html><html><head>
-      <meta name="theme-color" media="(prefers-color-scheme: light)" content="#f7f9fa">
+      <meta name="theme-color" media="(prefers-color-scheme: light)" content="#f0f3f5">
       <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0c1820">
     </head><body></body></html>`,
     "text/html",
@@ -57,7 +57,7 @@ describe("appearance boot script", () => {
     const doc = freshDoc();
     engine.boot(doc, store(value));
     expect(doc.documentElement.hasAttribute("data-appearance")).toBe(false);
-    expect(colours(doc)).toEqual(["#f7f9fa", "#0c1820"]);
+    expect(colours(doc)).toEqual(["#f0f3f5", "#0c1820"]);
   });
 
   it("survives storage that throws", () => {
@@ -75,9 +75,9 @@ describe("appearance boot script", () => {
     engine.apply(doc, "appearance", "dark");
     expect(colours(doc)).toEqual(["#0c1820", "#0c1820"]);
     engine.apply(doc, "appearance", "light");
-    expect(colours(doc)).toEqual(["#f7f9fa", "#f7f9fa"]);
+    expect(colours(doc)).toEqual(["#f0f3f5", "#f0f3f5"]);
     engine.apply(doc, "appearance", "system");
-    expect(colours(doc)).toEqual(["#f7f9fa", "#0c1820"]);
+    expect(colours(doc)).toEqual(["#f0f3f5", "#0c1820"]);
     expect(doc.documentElement.hasAttribute("data-appearance")).toBe(false);
   });
 

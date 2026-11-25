@@ -15,6 +15,9 @@ type UpdatePocketBody = components["schemas"]["UpdatePocketRequest"];
 type Category = components["schemas"]["Category"];
 type CreateCategoryBody = components["schemas"]["CreateCategoryRequest"];
 type UpdateCategoryBody = components["schemas"]["UpdateCategoryRequest"];
+type Expense = components["schemas"]["Expense"];
+type CreateExpenseBody = components["schemas"]["CreateExpenseRequest"];
+type UpdateExpenseBody = components["schemas"]["UpdateExpenseRequest"];
 type Budget = components["schemas"]["Budget"];
 type UpdateBudgetBody = components["schemas"]["UpdateBudgetRequest"];
 type ChoiceBody = components["schemas"]["OnboardingChoiceRequest"];
@@ -47,6 +50,15 @@ export type State = {
   deletedPockets?: Pocket[];
   pocketDeletes?: string[];
   pocketRestores?: string[];
+  // The Pocket capture offers first (GET /pockets `default_pocket_id`).
+  defaultPocketId?: string;
+  // The fake server's Expenses, newest first, every POST /expenses body it was
+  // sent, and how many a GET /expenses page holds (default 25).
+  expenses?: Expense[];
+  expensePosts?: CreateExpenseBody[];
+  // Every PATCH /expenses/{id}, in order, with the id it named.
+  expensePatches?: { id: string; body: UpdateExpenseBody }[];
+  expensePageSize?: number;
   // Ids of Pockets an Expense references: DELETE answers 409 POCKET_IN_USE.
   pocketsInUse?: string[];
   // The fake server's Categories in creation order, and every POST /categories
@@ -249,7 +261,94 @@ export function defaultHandlers(state: State = { signedIn: false, me: alice }) {
     }),
     http.get("/api/pockets", () => {
       if (!state.signedIn) return HttpResponse.json(envelope("UNAUTHORIZED"), { status: 401 });
-      return HttpResponse.json({ items: state.pockets ?? [] });
+      return HttpResponse.json({
+        items: state.pockets ?? [],
+        ...(state.defaultPocketId !== undefined && { default_pocket_id: state.defaultPocketId }),
+      });
+    }),
+    http.get("/api/expenses", ({ request }) => {
+      if (!state.signedIn) return HttpResponse.json(envelope("UNAUTHORIZED"), { status: 401 });
+      // The cursor is opaque to the client; here it is the offset of the next row.
+      const offset = Number(new URL(request.url).searchParams.get("after") ?? 0);
+      const size = state.expensePageSize ?? 25;
+      const all = state.expenses ?? [];
+      const items = all.slice(offset, offset + size);
+      const more = offset + size < all.length;
+      return HttpResponse.json({ items, ...(more && { next: String(offset + size) }) });
+    }),
+    http.post("/api/expenses", async ({ request }) => {
+      if (!state.signedIn) return HttpResponse.json(envelope("UNAUTHORIZED"), { status: 401 });
+      const body = (await request.json()) as CreateExpenseBody;
+      (state.expensePosts ??= []).push(body);
+      const bad = (field: string, rule: string) =>
+        HttpResponse.json(envelope("VALIDATION", { field, rule }), { status: 400 });
+      // As the handler: the body's own rules first, then the references.
+      if (/^-?0+(\.0+)?$/.test(body.amount)) return bad("amount", "nonzero");
+      if (body.description !== undefined && body.description.trim() === "") {
+        return bad("description", "required");
+      }
+      const list = (state.expenses ??= []);
+      const held = list.find((e) => e.id === body.id);
+      if (held) return HttpResponse.json(held, { status: 200 });
+      const pocket = state.pockets?.find((p) => p.id === body.pocket_id);
+      if (!pocket) return bad("pocket_id", "invalid");
+      if (!pocket.active) return bad("pocket_id", "inactive");
+      if (body.category_id !== undefined) {
+        const category = state.categories?.find((c) => c.id === body.category_id);
+        if (!category) return bad("category_id", "invalid");
+        if (!category.active) return bad("category_id", "inactive");
+      }
+      const expense: Expense = {
+        id: body.id,
+        occurred_on: body.occurred_on ?? state.me.today,
+        ...(body.occurred_time !== undefined && { occurred_time: body.occurred_time }),
+        captured_at: "2026-11-25T03:00:00Z",
+        amount: body.amount,
+        currency: state.me.household.reporting_currency,
+        pocket_id: body.pocket_id,
+        ...(body.category_id !== undefined && { category_id: body.category_id }),
+        ...(body.description !== undefined && { description: body.description.trim() }),
+        ownership: "joint",
+      };
+      list.unshift(expense);
+      return HttpResponse.json(expense, { status: 201 });
+    }),
+    http.patch("/api/expenses/:id", async ({ request, params }) => {
+      if (!state.signedIn) return HttpResponse.json(envelope("UNAUTHORIZED"), { status: 401 });
+      const id = String(params.id);
+      const body = (await request.json()) as UpdateExpenseBody;
+      (state.expensePatches ??= []).push({ id, body });
+      const list = (state.expenses ??= []);
+      const at = list.findIndex((e) => e.id === id);
+      if (at < 0) return HttpResponse.json(envelope("NOT_FOUND"), { status: 404 });
+      const bad = (field: string, rule: string) =>
+        HttpResponse.json(envelope("VALIDATION", { field, rule }), { status: 400 });
+      if (body.amount !== undefined && /^-?0+(\.0+)?$/.test(body.amount)) {
+        return bad("amount", "nonzero");
+      }
+      if (typeof body.description === "string" && body.description.trim() === "") {
+        return bad("description", "required");
+      }
+      // Merge: a field left out is unchanged, a null clears the optional ones.
+      const { occurred_time, category_id, description, ...rest } = list[at]!;
+      const next: Expense = {
+        ...rest,
+        ...(body.amount !== undefined && { amount: body.amount }),
+        ...(body.pocket_id !== undefined && { pocket_id: body.pocket_id }),
+        ...(body.occurred_on !== undefined && { occurred_on: body.occurred_on }),
+        ...(body.ownership !== undefined && { ownership: body.ownership }),
+        ...(("occurred_time" in body ? body.occurred_time : occurred_time) != null && {
+          occurred_time: ("occurred_time" in body ? body.occurred_time : occurred_time)!,
+        }),
+        ...(("category_id" in body ? body.category_id : category_id) != null && {
+          category_id: ("category_id" in body ? body.category_id : category_id)!,
+        }),
+        ...(("description" in body ? body.description : description) != null && {
+          description: ("description" in body ? body.description : description)!.trim(),
+        }),
+      };
+      list[at] = next;
+      return HttpResponse.json(next, { status: 200 });
     }),
     http.post("/api/pockets", async ({ request }) => {
       if (!state.signedIn) return HttpResponse.json(envelope("UNAUTHORIZED"), { status: 401 });

@@ -16,7 +16,12 @@
     "expectedMonthlyIncome": "Penghasilan bulanan yang diharapkan (opsional)",
     "categoryDisplayName": "Nama kategori",
     "categoryBucket": "Jenis",
-    "allocation": "Alokasi"
+    "allocation": "Alokasi",
+    "amount": "Jumlah",
+    "pocket": "Kantong",
+    "category": "Kategori (opsional)",
+    "description": "Keterangan (opsional)",
+    "date": "Tanggal"
   },
   "fieldNames": {
     "reporting_currency": "mata uang pelaporan",
@@ -34,7 +39,12 @@
     "category_display_name": "nama kategori",
     "bucket": "jenis",
     "allocation": "alokasi",
-    "category_id": "kategori"
+    "category_id": "kategori",
+    "amount": "jumlah",
+    "pocket_id": "kantong",
+    "occurred_on": "tanggal",
+    "occurred_time": "waktu",
+    "description": "keterangan"
   },
   "login": {
     "title": "Masuk",
@@ -48,8 +58,6 @@
     "signedInAs": "Masuk sebagai {{name}}.",
     "household": "Rumah tangga: {{name}}",
     "comingSoon": "Dasbor Anda akan muncul di sini.",
-    "settingsLink": "Pengaturan",
-    "budgetLink": "Anggaran",
     "founded": {
       "dismiss": "Tutup",
       "named": "Kami menamai rumah tangga Anda <strong>{{household}}</strong> dan kantong pertama Anda <strong>{{pocket}}</strong>, dengan mata uang <strong>{{currency}}</strong>.",
@@ -133,7 +141,9 @@
     "title": "Pengaturan",
     "household": {
       "title": "Rumah tangga",
-      "periodStartDayHint": "Setiap periode anggaran dimulai pada tanggal ini, dari 1 sampai 28. Mengubahnya langsung menggeser tanggal periode anggaran Anda."
+      "periodStartDayHint": "Setiap periode anggaran dimulai pada tanggal ini, dari 1 sampai 28. Mengubahnya langsung menggeser tanggal periode anggaran Anda.",
+      "searchCurrencies": "Cari mata uang",
+      "noCurrency": "Mata uang tidak ditemukan"
     },
     "pockets": {
       "title": "Kantong"
@@ -145,7 +155,9 @@
         "name": "Nama Anda",
         "language": "Bahasa",
         "appearance": "Tampilan",
-        "timeZone": "Zona waktu"
+        "timeZone": "Zona waktu",
+        "searchTimeZones": "Cari zona waktu",
+        "noTimeZone": "Zona waktu tidak ditemukan"
       },
       "languages": {
         "enGB": "English (UK)",
@@ -189,7 +201,15 @@
     "close": "Tutup"
   },
   "shell": {
-    "signOut": "Keluar"
+    "signOut": "Keluar",
+    "mainNav": "Utama",
+    "tabs": {
+      "home": "Beranda",
+      "expenses": "Pengeluaran",
+      "capture": "Catat",
+      "budget": "Anggaran",
+      "settings": "Pengaturan"
+    }
   },
   "budget": {
     "title": "Anggaran",
@@ -230,5 +250,40 @@
     "showInactive": "Tampilkan kategori nonaktif ({{count}})",
     "allocationDailyEditHint": "Opsional. Kosongkan jika kategori ini tidak punya alokasi pada periode anggaran ini.",
     "delete": "Hapus"
+  },
+  "capture": {
+    "title": "Catat",
+    "refund": "Ini pengembalian dana",
+    "noCategory": "Tanpa kategori",
+    "add": "Tambah",
+    "adding": "Menambahkan…",
+    "amountRequired": "Masukkan jumlah.",
+    "amountNonzero": "Masukkan jumlah selain nol.",
+    "pocketRequired": "Pilih kantong.",
+    "pocketUnusable": "Kantong itu sudah tidak dipakai. Pilih yang lain.",
+    "categoryUnusable": "Kategori itu sudah tidak dipakai. Pilih yang lain.",
+    "dateInvalid": "Itu bukan tanggal yang valid. Pilih yang lain.",
+    "noPocket": "Tambahkan kantong dulu. Setiap pengeluaran dicatat di salah satunya.",
+    "noPocketLink": "Buka Pengaturan"
+  },
+  "expenses": {
+    "title": "Pengeluaran",
+    "empty": "Pengeluaran Anda akan tampil di sini.",
+    "yesterday": "Kemarin",
+    "uncategorised": "Tanpa kategori",
+    "loadMore": "Muat lebih banyak"
+  },
+  "dates": {
+    "today": "Hari ini",
+    "addTime": "Tambah waktu",
+    "time": "Waktu, {{time}}",
+    "hour": "Jam",
+    "clearTime": "Hapus waktu",
+    "timePicker": "Waktu",
+    "backToHours": "Kembali ke jam",
+    "previousMonth": "Bulan sebelumnya",
+    "nextMonth": "Bulan berikutnya",
+    "previousYear": "Tahun sebelumnya",
+    "nextYear": "Tahun berikutnya"
   }
 }

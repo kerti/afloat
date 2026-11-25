@@ -151,6 +151,16 @@ func status(resp any) string {
 		code = r.Code
 	case api.CreateExpense500JSONResponse:
 		return "500"
+	case api.UpdateExpense200JSONResponse:
+		return "200"
+	case api.UpdateExpense400JSONResponse:
+		code, args = r.Code, r.Args
+	case api.UpdateExpense401JSONResponse:
+		return "401"
+	case api.UpdateExpense404JSONResponse:
+		code = r.Code
+	case api.UpdateExpense500JSONResponse:
+		return "500"
 	case api.ListExpenses200JSONResponse:
 		return "200"
 	case api.ListExpenses400JSONResponse:
@@ -771,6 +781,7 @@ func TestAFailureLogsNeitherTheAmountNorTheDescription(t *testing.T) {
 // reflow of the SQL under it does not silently stop a marker matching.
 const (
 	createQuery         = "CreateExpense"
+	updateQuery         = "UpdateExpense"
 	listQuery           = "ListExpenses"
 	getLiveQuery        = "GetLiveExpense"
 	lockHouseholdShared = "LockHouseholdShared"

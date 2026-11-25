@@ -72,7 +72,7 @@
 
 :root {
   --font-ui: "Figtree", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  --background: light-dark(#f7f9fa, #0c1820);
+  --background: light-dark(#f0f3f5, #0c1820);
   --foreground: light-dark(#14232e, #e3eef4);
   --muted: light-dark(#e3f1fa, #14354a);
   /* Light #566a78, not the study's #5e7280: the muted badge text on --muted was
@@ -80,8 +80,10 @@
   --muted-foreground: light-dark(#566a78, #8ea6b5);
   --card: light-dark(#ffffff, #12222d);
   --card-foreground: light-dark(#14232e, #e3eef4);
-  --border: light-dark(#d8e4eb, #1f3442);
-  --input: light-dark(#d8e4eb, #1f3442);
+  --border: light-dark(#d0dde5, #1f3442);
+  /* The edge of a field: WCAG 1.4.11 asks 3:1. Light #658faa is 3.11:1 on the page,
+     3.46:1 on white; dark #43708e is 3.05:1 on the page, 3.38:1 on cards. */
+  --input: light-dark(#658faa, #43708e);
   --ring: light-dark(#2e8bc9, #5db2e8);
   --primary: light-dark(#1f74ac, #5db2e8);
   --primary-foreground: light-dark(#ffffff, #06131c);
@@ -96,5 +98,10 @@
   --glass-rim: light-dark(rgb(255 255 255 / 0.85), rgb(255 255 255 / 0.1));
   --glass-glow: light-dark(rgb(255 255 255 / 0.7), rgb(255 255 255 / 0.05));
   --glass-shadow: light-dark(rgb(20 35 46 / 0.08), rgb(0 0 0 / 0.35));
+  /* Capture's raised square floats over the bar, so it needs more lift than
+     any other surface: a tight contact shadow and a soft ambient one, neutral
+     ink (Uruni --shadow-fab). */
+  --fab-shadow-near: light-dark(rgb(20 35 46 / 0.22), rgb(0 0 0 / 0.55));
+  --fab-shadow-far: light-dark(rgb(20 35 46 / 0.3), rgb(0 0 0 / 0.65));
   --radius: 0.625rem;
 }

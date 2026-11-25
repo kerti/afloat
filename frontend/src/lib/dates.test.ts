@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatDate, formatDateRange } from "./dates";
+import { formatDate, formatDateRange, formatWeekdayDate, previousDay, yearOf } from "./dates";
 
 describe("formatDate", () => {
   it("is long style with the month in full", () => {
@@ -37,5 +37,31 @@ describe("formatDateRange", () => {
       start: "25 December 2026",
       end: "24 January 2027",
     });
+  });
+});
+
+describe("formatWeekdayDate", () => {
+  it("names the weekday from the date's own parts, in both locales", () => {
+    expect(formatWeekdayDate("2026-11-22", "en-GB")).toBe("Sunday, 22 November");
+    expect(formatWeekdayDate("2026-11-22", "id-ID")).toBe("Minggu, 22 November");
+    expect(formatWeekdayDate("2025-12-31", "en-GB", true)).toBe("Wednesday, 31 December 2025");
+  });
+
+  it("renders anything that is not a real date as given", () => {
+    expect(formatWeekdayDate("soon", "en-GB")).toBe("soon");
+  });
+});
+
+describe("previousDay and yearOf", () => {
+  it("steps back over month and year ends", () => {
+    expect(previousDay("2026-11-25")).toBe("2026-11-24");
+    expect(previousDay("2026-03-01")).toBe("2026-02-28");
+    expect(previousDay("2026-01-01")).toBe("2025-12-31");
+    expect(previousDay("soon")).toBe("soon");
+  });
+
+  it("reads the year", () => {
+    expect(yearOf("2026-11-25")).toBe("2026");
+    expect(yearOf("soon")).toBeNull();
   });
 });

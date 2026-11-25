@@ -1,10 +1,12 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ApiError,
   changeEmail,
   changePassword,
   commitOnboardingChoice,
   createCategory,
+  createExpense,
+  updateExpense,
   createPocket,
   deleteCategory,
   deletePocket,
@@ -12,6 +14,7 @@ import {
   getBudget,
   getMe,
   getOnboardingOptions,
+  listExpenses,
   listCategories,
   listPockets,
   localLogin,
@@ -28,7 +31,11 @@ import {
   type CreateCategoryRequest,
   type ChangeEmailRequest,
   type ChangePasswordRequest,
+  type CreateExpenseRequest,
+  type UpdateExpenseRequest,
   type CreatePocketRequest,
+  type Expense,
+  type ExpenseList,
   type Household,
   type LocalRegisterRequest,
   type Me,
@@ -272,5 +279,52 @@ export function useDeleteCategory() {
     onError: (err) => {
       if (err.code === "NOT_FOUND") void refetch();
     },
+  });
+}
+
+export const expensesKey = ["expenses"] as const;
+
+// Keyset paging: each page's `next` is the following request's `after`, and a
+// page without one is the last. Pages are only ever appended on demand, never
+// fetched ahead.
+export function useExpenses() {
+  return useInfiniteQuery<
+    ExpenseList,
+    ApiError,
+    { pages: ExpenseList[] },
+    readonly string[],
+    string | undefined
+  >({
+    queryKey: expensesKey,
+    queryFn: ({ pageParam }) => listExpenses(pageParam),
+    initialPageParam: undefined,
+    getNextPageParam: (last) => last.next,
+  });
+}
+
+// A change to an Expense moves the list and, through the Pocket, the default.
+export function useUpdateExpense() {
+  const qc = useQueryClient();
+  return useMutation<Expense, ApiError, { id: string; body: UpdateExpenseRequest }>({
+    mutationFn: ({ id, body }) => updateExpense(id, body),
+    onSuccess: () =>
+      Promise.all([
+        qc.invalidateQueries({ queryKey: expensesKey }),
+        qc.invalidateQueries({ queryKey: pocketsKey }),
+      ]),
+  });
+}
+
+// A new Expense moves the list and the default Pocket (the Pockets read carries
+// it), so both are invalidated and the write settles after they have refetched.
+export function useCreateExpense() {
+  const qc = useQueryClient();
+  return useMutation<Expense, ApiError, CreateExpenseRequest>({
+    mutationFn: createExpense,
+    onSuccess: () =>
+      Promise.all([
+        qc.invalidateQueries({ queryKey: expensesKey }),
+        qc.invalidateQueries({ queryKey: pocketsKey }),
+      ]),
   });
 }

@@ -6,6 +6,8 @@ import { UpdatePrompt } from "@/components/UpdatePrompt";
 import { LegacyRedirect } from "@/components/LegacyRedirect";
 import { legacyRedirects, routes } from "@/lib/routes";
 import { BudgetPage } from "@/pages/BudgetPage";
+import { CapturePage } from "@/pages/CapturePage";
+import { ExpensesPage } from "@/pages/ExpensesPage";
 import { HomePage } from "@/pages/HomePage";
 import { LoginPage } from "@/pages/LoginPage";
 import { OnboardingPage } from "@/pages/OnboardingPage";
@@ -33,6 +35,14 @@ export function App() {
         <Route
           path={routes.budget}
           element={<RequireSession>{(me) => <BudgetPage me={me} />}</RequireSession>}
+        />
+        <Route
+          path={routes.capture}
+          element={<RequireSession>{(me) => <CapturePage me={me} />}</RequireSession>}
+        />
+        <Route
+          path={routes.expenses}
+          element={<RequireSession>{(me) => <ExpensesPage me={me} />}</RequireSession>}
         />
         <Route path="*" element={<Navigate to={routes.home} replace />} />
       </Routes>

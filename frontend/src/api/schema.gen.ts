@@ -900,6 +900,82 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/expenses/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Correct an Expense.
+         * @description Merge-style, as every `PATCH` (BOOTSTRAP.md §4): a property left out is
+         *     unchanged, none is required, and `{}` is a no-op that answers the
+         *     Expense as it stands. Two writers of different properties both land,
+         *     and the last write to one property wins (no `If-Match`). The answer is
+         *     the whole Expense. `GET`, `DELETE` and the restore of one Expense are
+         *     later slices.
+         *
+         *     **Editable:** `amount`, `occurred_on`, `occurred_time`, `pocket_id`,
+         *     `category_id`, `description`, and `ownership` with `owner_user_id`.
+         *     **Not editable:** `id`, `currency`, `captured_at`, `household_id` and
+         *     `deleted_at`, which are not properties of this request
+         *     (`INVALID_JSON_BODY`): an Expense stays in the currency it was recorded
+         *     in, and is never relabelled without being converted.
+         *
+         *     **Clearable:** `occurred_time`, `category_id` and `description` take
+         *     `null`, which clears them (`category_id: null` makes the Expense
+         *     uncategorised again); left out means unchanged, and a value sets. `null`
+         *     for any other property is `INVALID_JSON_BODY`.
+         *
+         *     `amount` is a `SignedMoneyInput` and zero is refused (`VALIDATION
+         *     {field: amount, rule: nonzero}`), as at creation. `occurred_on` is a
+         *     calendar date, future ones included: one that is not a real date or has
+         *     no year is `{occurred_on, invalid}`. `description` is trimmed, at most
+         *     200 code points, and blank after the trim is `{description, required}`;
+         *     to remove it, send `null`. It is user content and is never logged.
+         *
+         *     `ownership` and `owner_user_id` are a pair, as at creation: both or
+         *     neither, so `sole_owner` with a User, or `joint`, which clears the owner.
+         *     An owner with no `ownership`, a `sole_owner` with none, a `joint` with
+         *     one, or a User who is not a live member of the caller's Household is
+         *     `{owner_user_id, invalid}`.
+         *
+         *     **References are judged only when sent and different from what is
+         *     stored.** A `pocket_id` or `category_id` equal to the stored one is not
+         *     looked at again, so the amount of an Expense whose Pocket was
+         *     deactivated since can still be fixed. A changed one is judged as at
+         *     creation: unknown, another Household's or deleted is `{pocket_id,
+         *     invalid}` (one answer for the three), the caller's own inactive Pocket
+         *     is `{pocket_id, inactive}`, and a Category the same way. A changed
+         *     reference is share-locked in the same transaction as the write, so a
+         *     Pocket or Category deleted at the same moment is either refused here or
+         *     found by the delete's own check (`POCKET_IN_USE`, `CATEGORY_IN_USE`).
+         *
+         *     A write that changes nothing (`{}`, or every value as stored) does not
+         *     move the Expense's `updated_at`.
+         *
+         *     An id that is unknown, that belongs to another Household, or that is
+         *     deleted is `404 NOT_FOUND`, the same answer in every case, and it is
+         *     given even for `{}`: no request confirms another Household's id. There
+         *     is no `409`: nothing here has a name to clash with.
+         *
+         *     Order of checks: the cross-site guard, the session, the id's shape, the
+         *     body (the contract's rules, then the handler's: the amount's zero, the
+         *     date, the description, the pair), then the lookup (`404`), then the
+         *     references. **Validation before lookup**: a foreign id with a bad body
+         *     answers what an unknown one does, and a bad body beside a bad reference
+         *     answers the body.
+         */
+        patch: operations["updateExpense"];
+        trace?: never;
+    };
     "/onboarding/options": {
         parameters: {
             query?: never;
@@ -1369,6 +1445,32 @@ export interface components {
             owner_user_id?: string;
         };
         /**
+         * @description What an Expense may change, merge-style: a property left out is
+         *     unchanged, and none is required. `id`, `currency`, `captured_at`,
+         *     `household_id`, `deleted_at` and any other property are not accepted.
+         *     `occurred_time`, `category_id` and `description` are nullable, and
+         *     `null` clears them; `null` is not accepted for any other property.
+         */
+        UpdateExpenseRequest: {
+            amount?: components["schemas"]["SignedMoneyInput"];
+            /** @example 2026-11-23 */
+            occurred_on?: string;
+            /** @description An `HH:MM`, or `null` to clear it. */
+            occurred_time?: string | null;
+            /** Format: uuid */
+            pocket_id?: string;
+            /**
+             * Format: uuid
+             * @description A Category's id, or `null` to make the Expense uncategorised.
+             */
+            category_id?: string | null;
+            /** @description Free text, or `null` to remove it. */
+            description?: string | null;
+            ownership?: components["schemas"]["Ownership"];
+            /** Format: uuid */
+            owner_user_id?: string;
+        };
+        /**
          * @description A `MoneyInput`, or `null` where a write may say "none": what a Category
          *     is planned at when it is created or changed (a Commitment's `null` is the
          *     required-allocation rule, a Daily Category's is none), and the
@@ -1695,6 +1797,12 @@ export interface components {
          *     `400 VALIDATION {field: id, rule: invalid}`, from the binder.
          */
         CategoryId: string;
+        /**
+         * @description An Expense's id. Deliberately no `pattern` and no `maxLength`, for the
+         *     reason `PocketId` gives (#106). A value that is not a UUID is
+         *     `400 VALIDATION {field: id, rule: invalid}`, from the binder.
+         */
+        ExpenseId: string;
     };
     requestBodies: never;
     headers: never;
@@ -2402,6 +2510,41 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             409: components["responses"]["Conflict"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    updateExpense: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description An Expense's id. Deliberately no `pattern` and no `maxLength`, for the
+                 *     reason `PocketId` gives (#106). A value that is not a UUID is
+                 *     `400 VALIDATION {field: id, rule: invalid}`, from the binder.
+                 */
+                id: components["parameters"]["ExpenseId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateExpenseRequest"];
+            };
+        };
+        responses: {
+            /** @description The Expense as it now stands. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Expense"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
             500: components["responses"]["InternalError"];
         };
     };

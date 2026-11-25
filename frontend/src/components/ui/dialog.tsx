@@ -1,4 +1,5 @@
 import * as React from "react";
+import { X } from "@phosphor-icons/react";
 import { Dialog as DialogPrimitive } from "radix-ui";
 import { useKeyboardInset } from "@/lib/useKeyboardInset";
 import { cn } from "@/lib/utils";
@@ -89,17 +90,7 @@ function DialogContent({
           aria-label={closeLabel}
           className="absolute top-1 right-1 z-20 flex size-11 items-center justify-center rounded-full outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
-          <svg
-            aria-hidden="true"
-            viewBox="0 0 20 20"
-            className="size-5"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="1.75"
-            strokeLinecap="round"
-          >
-            <path d="M5 5l10 10M15 5L5 15" />
-          </svg>
+          <X aria-hidden="true" weight="regular" className="size-5" />
         </DialogPrimitive.Close>
       </DialogPrimitive.Content>
     </DialogPrimitive.Portal>

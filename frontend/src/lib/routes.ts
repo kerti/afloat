@@ -9,6 +9,8 @@ export const routes = {
   onboarding: "/onboarding",
   settings: "/settings",
   budget: "/budget",
+  expenses: "/expenses",
+  capture: "/capture",
 } as const;
 
 // Paths that used to be screens. Each only redirects to /settings, keeping the

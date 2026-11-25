@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import { alice, defaultHandlers, envelope, server, type State } from "@/test/server";
 import currencyFixture from "../../contract/testdata/currency.json";
 import { renderApp } from "@/test/render";
+import { searchOptions, searchPick, selectPick } from "@/test/pickers";
 import enGB from "@/locales/en-GB.json";
 
 vi.mock("sonner", async () => (await import("@/test/sonnerMock")).sonnerMock());
@@ -28,8 +29,10 @@ describe("household settings", () => {
     await user.click(await screen.findByRole("link", { name: "Settings" }));
 
     expect(await screen.findByLabelText("Household name")).toHaveValue("Test Household");
-    expect(screen.getByLabelText("Reporting currency")).toHaveValue("IDR");
-    expect(screen.getByLabelText("Budget Period starts on day")).toHaveValue("1");
+    expect(screen.getByRole("button", { name: "Reporting currency" })).toHaveTextContent(/^IDR/);
+    expect(screen.getByRole("combobox", { name: "Budget Period starts on day" })).toHaveTextContent(
+      /^1$/,
+    );
     expect(screen.getByText(/Each Budget Period starts on this day/)).toBeInTheDocument();
     expect(household().getByRole("button", { name: "Save" })).toBeDisabled();
   });
@@ -39,11 +42,11 @@ describe("household settings", () => {
     server.use(...defaultHandlers(signedIn({ me: odd })));
     renderApp("/settings");
 
-    const select = await screen.findByLabelText("Reporting currency");
-    expect(select).toHaveValue("ZWL");
-    const offered = within(select)
-      .getAllByRole("option")
-      .map((o) => o.getAttribute("value"));
+    const select = await screen.findByRole("button", { name: "Reporting currency" });
+    expect(select).toHaveTextContent(/^ZWL/);
+    const offered = (await searchOptions(userEvent.setup(), select)).map(
+      (label) => label.split(" · ")[0],
+    );
     expect(offered.sort()).toEqual([...currencyFixture.codes, "ZWL"].sort());
     expect(currencyFixture.codes).not.toContain("ZWL");
   });
@@ -66,7 +69,7 @@ describe("household settings", () => {
     expect(household().getByRole("button", { name: "Save" })).toBeDisabled();
 
     // /me was invalidated, so the shell answers with the new name.
-    await user.click(screen.getByRole("link", { name: "Home" }));
+    await user.click(within(screen.getByRole("navigation")).getByRole("link", { name: "Home" }));
     expect(await screen.findByText("Household: Kos Kuning")).toBeInTheDocument();
   });
 
@@ -97,9 +100,18 @@ describe("household settings", () => {
     const user = userEvent.setup();
     renderApp("/settings");
 
-    await user.selectOptions(await screen.findByLabelText("Reporting currency"), "USD");
+    await searchPick(
+      user,
+      await screen.findByRole("button", { name: "Reporting currency" }),
+      "USD",
+      "USD",
+    );
     await waitFor(() => expect(toastMock).toHaveBeenCalledTimes(1));
-    await user.selectOptions(screen.getByLabelText("Budget Period starts on day"), "25");
+    await selectPick(
+      user,
+      screen.getByRole("combobox", { name: "Budget Period starts on day" }),
+      "25",
+    );
     await waitFor(() => expect(toastMock).toHaveBeenCalledTimes(2));
 
     expect(toastMock).toHaveBeenNthCalledWith(
@@ -108,8 +120,10 @@ describe("household settings", () => {
       expect.objectContaining({ duration: 4000 }),
     );
     expect(state.patches).toEqual([{ reporting_currency: "USD" }, { period_start_day: 25 }]);
-    expect(screen.getByLabelText("Reporting currency")).toHaveValue("USD");
-    expect(screen.getByLabelText("Budget Period starts on day")).toHaveValue("25");
+    expect(screen.getByRole("button", { name: "Reporting currency" })).toHaveTextContent(/^USD/);
+    expect(screen.getByRole("combobox", { name: "Budget Period starts on day" })).toHaveTextContent(
+      /^25$/,
+    );
     // No Save button for a choice: the only one is the name's.
     expect(household().getAllByRole("button", { name: "Save" })).toHaveLength(1);
   });
@@ -166,10 +180,18 @@ describe("household settings", () => {
       const user = userEvent.setup();
       renderApp("/settings");
 
-      await user.selectOptions(await screen.findByLabelText(label), after);
+      if (field === "reporting_currency") {
+        await searchPick(user, await screen.findByRole("button", { name: label }), after, after);
+      } else {
+        await selectPick(user, await screen.findByRole("combobox", { name: label }), after);
+      }
 
       await waitFor(() => expect(toastMock.error).toHaveBeenCalledWith(text, expect.anything()));
-      expect(screen.getByLabelText(label)).toHaveValue(before);
+      const control =
+        field === "reporting_currency"
+          ? screen.getByRole("button", { name: label })
+          : screen.getByRole("combobox", { name: label });
+      expect(control).toHaveTextContent(new RegExp(`^${before}`));
       expect(toastMock).not.toHaveBeenCalled();
     },
   );
@@ -184,12 +206,17 @@ describe("household settings", () => {
     const user = userEvent.setup();
     renderApp("/settings");
 
-    await user.selectOptions(await screen.findByLabelText("Reporting currency"), "USD");
+    await searchPick(
+      user,
+      await screen.findByRole("button", { name: "Reporting currency" }),
+      "USD",
+      "USD",
+    );
 
     await waitFor(() =>
       expect(toastMock.error).toHaveBeenCalledWith(enGB.errors.CURRENCY_LOCKED, expect.anything()),
     );
-    expect(screen.getByLabelText("Reporting currency")).toHaveValue("IDR");
+    expect(screen.getByRole("button", { name: "Reporting currency" })).toHaveTextContent(/^IDR/);
     expect(toastMock).not.toHaveBeenCalled();
   });
 

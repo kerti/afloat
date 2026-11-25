@@ -156,6 +156,58 @@ func (q *Queries) GetLiveExpense(ctx context.Context, arg GetLiveExpenseParams) 
 	return i, err
 }
 
+const getLiveExpenseForUpdate = `-- name: GetLiveExpenseForUpdate :one
+
+SELECT id, household_id, occurred_on, occurred_time, captured_at, amount, currency, pocket_id, category_id, description, ownership, owner_user_id, created_at, updated_at, deleted_at FROM expenses
+WHERE id = $1 AND household_id = $2 AND deleted_at IS NULL
+FOR NO KEY UPDATE
+`
+
+type GetLiveExpenseForUpdateParams struct {
+	ID          pgtype.UUID
+	HouseholdID pgtype.UUID
+}
+
+// ---- the edit -------------------------------------------------------------
+//
+// A PATCH is one transaction of statements in this order (BOOTSTRAP.md §4,
+// "Updates are PATCH"; #140 X9): GetLiveExpenseForUpdate, then, for each
+// reference the body CHANGES, LockHouseholdShared, LockLivePocketShared,
+// LockLiveCategoryShared and LockLiveUserShared in that order (the create's, so
+// no writer waits on a row another holds while holding one it wants), then
+// UpdateExpense. A reference the body leaves as stored is not looked at.
+// The Expense being edited, row-locked for the transaction. The merge itself
+// does not need it: UpdateExpense is one statement of coalesce and flags, so two
+// writers of different columns both land. The lock is for the decision made
+// BEFORE it, "is this reference different from the stored one": without it a
+// concurrent edit could move the Expense off a Pocket (leaving that Pocket
+// deletable) and a delete of the Pocket could commit between this read and the
+// write, which would then "leave the Pocket alone" and re-attach a deleted one.
+// FOR NO KEY UPDATE conflicts with another edit's and with nothing else an
+// Expense row is read by (it has no foreign keys pointing at it).
+func (q *Queries) GetLiveExpenseForUpdate(ctx context.Context, arg GetLiveExpenseForUpdateParams) (Expense, error) {
+	row := q.db.QueryRow(ctx, getLiveExpenseForUpdate, arg.ID, arg.HouseholdID)
+	var i Expense
+	err := row.Scan(
+		&i.ID,
+		&i.HouseholdID,
+		&i.OccurredOn,
+		&i.OccurredTime,
+		&i.CapturedAt,
+		&i.Amount,
+		&i.Currency,
+		&i.PocketID,
+		&i.CategoryID,
+		&i.Description,
+		&i.Ownership,
+		&i.OwnerUserID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.DeletedAt,
+	)
+	return i, err
+}
+
 const householdHasExpenses = `-- name: HouseholdHasExpenses :one
 SELECT EXISTS (
     SELECT 1 FROM expenses WHERE household_id = $1
@@ -413,4 +465,103 @@ func (q *Queries) PocketHasExpenses(ctx context.Context, arg PocketHasExpensesPa
 	var exists bool
 	err := row.Scan(&exists)
 	return exists, err
+}
+
+const updateExpense = `-- name: UpdateExpense :one
+UPDATE expenses SET
+    amount        = coalesce($1::numeric(20,4), amount),
+    occurred_on   = coalesce($2::date, occurred_on),
+    occurred_time = CASE WHEN $3::boolean
+                         THEN $4::time ELSE occurred_time END,
+    pocket_id     = coalesce($5::uuid, pocket_id),
+    category_id   = CASE WHEN $6::boolean
+                         THEN $7::uuid ELSE category_id END,
+    description   = CASE WHEN $8::boolean
+                         THEN $9::text ELSE description END,
+    ownership     = coalesce($10::text, ownership),
+    owner_user_id = CASE WHEN $11::boolean
+                         THEN $12::uuid ELSE owner_user_id END,
+    updated_at    = CASE WHEN (amount, occurred_on, occurred_time, pocket_id, category_id, description, ownership, owner_user_id)
+                              IS DISTINCT FROM (
+                                  coalesce($1::numeric(20,4), amount),
+                                  coalesce($2::date, occurred_on),
+                                  CASE WHEN $3::boolean
+                                       THEN $4::time ELSE occurred_time END,
+                                  coalesce($5::uuid, pocket_id),
+                                  CASE WHEN $6::boolean
+                                       THEN $7::uuid ELSE category_id END,
+                                  CASE WHEN $8::boolean
+                                       THEN $9::text ELSE description END,
+                                  coalesce($10::text, ownership),
+                                  CASE WHEN $11::boolean
+                                       THEN $12::uuid ELSE owner_user_id END
+                              )
+                         THEN now() ELSE updated_at END
+WHERE id = $13 AND household_id = $14 AND deleted_at IS NULL
+RETURNING id, household_id, occurred_on, occurred_time, captured_at, amount, currency, pocket_id, category_id, description, ownership, owner_user_id, created_at, updated_at, deleted_at
+`
+
+type UpdateExpenseParams struct {
+	Amount          decimal.NullDecimal
+	OccurredOn      pgtype.Date
+	SetOccurredTime bool
+	OccurredTime    pgtype.Time
+	PocketID        pgtype.UUID
+	SetCategoryID   bool
+	CategoryID      pgtype.UUID
+	SetDescription  bool
+	Description     *string
+	Ownership       *string
+	SetOwnerUserID  bool
+	OwnerUserID     pgtype.UUID
+	ID              pgtype.UUID
+	HouseholdID     pgtype.UUID
+}
+
+// Merge semantics: a NULL argument leaves a column alone (coalesce) where the
+// column cannot be cleared, and a column that can (occurred_time, category_id,
+// description, owner_user_id) takes an explicit set flag beside its value, which
+// is NULL for a clear. One statement, so two writers of different columns both
+// land and the last write to one wins; never a read-modify-write.
+//
+// updated_at moves only when something does (#140 R9; the other PATCHes' no-op
+// is #137's): the row-wise IS DISTINCT FROM compares what is stored with what the
+// SET list is about to store, NULLs included. The statement still answers the
+// row on a no-op, so no row can only mean "not the caller's, or deleted".
+func (q *Queries) UpdateExpense(ctx context.Context, arg UpdateExpenseParams) (Expense, error) {
+	row := q.db.QueryRow(ctx, updateExpense,
+		arg.Amount,
+		arg.OccurredOn,
+		arg.SetOccurredTime,
+		arg.OccurredTime,
+		arg.PocketID,
+		arg.SetCategoryID,
+		arg.CategoryID,
+		arg.SetDescription,
+		arg.Description,
+		arg.Ownership,
+		arg.SetOwnerUserID,
+		arg.OwnerUserID,
+		arg.ID,
+		arg.HouseholdID,
+	)
+	var i Expense
+	err := row.Scan(
+		&i.ID,
+		&i.HouseholdID,
+		&i.OccurredOn,
+		&i.OccurredTime,
+		&i.CapturedAt,
+		&i.Amount,
+		&i.Currency,
+		&i.PocketID,
+		&i.CategoryID,
+		&i.Description,
+		&i.Ownership,
+		&i.OwnerUserID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.DeletedAt,
+	)
+	return i, err
 }

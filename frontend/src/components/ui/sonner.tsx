@@ -3,6 +3,10 @@ import { Toaster as Sonner, toast, type ToasterProps } from "sonner";
 import { useAppearance } from "@/lib/useAppearance";
 import { tappedToastId } from "@/lib/tapToDismiss";
 
+// Bottom toasts sit above the fixed tab bar, its raised Capture square included,
+// and the device's bottom inset: the same 4rem + 2rem main reserves.
+const clearOfTabBar = "calc(env(safe-area-inset-bottom) + 4rem + 2rem)";
+
 // The one toast viewport, mounted once at the app root so a toast outlives the
 // screen that raised it. Sonner follows the person's appearance, and its colours
 // are mapped onto theme.css tokens.
@@ -22,6 +26,8 @@ export function Toaster(props: ToasterProps) {
         theme={appearance}
         className="toaster group"
         position="bottom-center"
+        offset={{ bottom: clearOfTabBar }}
+        mobileOffset={{ bottom: clearOfTabBar }}
         toastOptions={{
           classNames: { error: "bg-card! text-attention! border-attention!" },
         }}

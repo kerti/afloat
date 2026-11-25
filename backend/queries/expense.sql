@@ -77,6 +77,72 @@ INSERT INTO expenses (
 ON CONFLICT (id) DO NOTHING
 RETURNING *;
 
+-- ---- the edit -------------------------------------------------------------
+--
+-- A PATCH is one transaction of statements in this order (BOOTSTRAP.md §4,
+-- "Updates are PATCH"; #140 X9): GetLiveExpenseForUpdate, then, for each
+-- reference the body CHANGES, LockHouseholdShared, LockLivePocketShared,
+-- LockLiveCategoryShared and LockLiveUserShared in that order (the create's, so
+-- no writer waits on a row another holds while holding one it wants), then
+-- UpdateExpense. A reference the body leaves as stored is not looked at.
+
+-- The Expense being edited, row-locked for the transaction. The merge itself
+-- does not need it: UpdateExpense is one statement of coalesce and flags, so two
+-- writers of different columns both land. The lock is for the decision made
+-- BEFORE it, "is this reference different from the stored one": without it a
+-- concurrent edit could move the Expense off a Pocket (leaving that Pocket
+-- deletable) and a delete of the Pocket could commit between this read and the
+-- write, which would then "leave the Pocket alone" and re-attach a deleted one.
+-- FOR NO KEY UPDATE conflicts with another edit's and with nothing else an
+-- Expense row is read by (it has no foreign keys pointing at it).
+-- name: GetLiveExpenseForUpdate :one
+SELECT * FROM expenses
+WHERE id = sqlc.arg(id) AND household_id = sqlc.arg(household_id) AND deleted_at IS NULL
+FOR NO KEY UPDATE;
+
+-- Merge semantics: a NULL argument leaves a column alone (coalesce) where the
+-- column cannot be cleared, and a column that can (occurred_time, category_id,
+-- description, owner_user_id) takes an explicit set flag beside its value, which
+-- is NULL for a clear. One statement, so two writers of different columns both
+-- land and the last write to one wins; never a read-modify-write.
+--
+-- updated_at moves only when something does (#140 R9; the other PATCHes' no-op
+-- is #137's): the row-wise IS DISTINCT FROM compares what is stored with what the
+-- SET list is about to store, NULLs included. The statement still answers the
+-- row on a no-op, so no row can only mean "not the caller's, or deleted".
+-- name: UpdateExpense :one
+UPDATE expenses SET
+    amount        = coalesce(sqlc.narg(amount)::numeric(20,4), amount),
+    occurred_on   = coalesce(sqlc.narg(occurred_on)::date, occurred_on),
+    occurred_time = CASE WHEN sqlc.arg(set_occurred_time)::boolean
+                         THEN sqlc.narg(occurred_time)::time ELSE occurred_time END,
+    pocket_id     = coalesce(sqlc.narg(pocket_id)::uuid, pocket_id),
+    category_id   = CASE WHEN sqlc.arg(set_category_id)::boolean
+                         THEN sqlc.narg(category_id)::uuid ELSE category_id END,
+    description   = CASE WHEN sqlc.arg(set_description)::boolean
+                         THEN sqlc.narg(description)::text ELSE description END,
+    ownership     = coalesce(sqlc.narg(ownership)::text, ownership),
+    owner_user_id = CASE WHEN sqlc.arg(set_owner_user_id)::boolean
+                         THEN sqlc.narg(owner_user_id)::uuid ELSE owner_user_id END,
+    updated_at    = CASE WHEN (amount, occurred_on, occurred_time, pocket_id, category_id, description, ownership, owner_user_id)
+                              IS DISTINCT FROM (
+                                  coalesce(sqlc.narg(amount)::numeric(20,4), amount),
+                                  coalesce(sqlc.narg(occurred_on)::date, occurred_on),
+                                  CASE WHEN sqlc.arg(set_occurred_time)::boolean
+                                       THEN sqlc.narg(occurred_time)::time ELSE occurred_time END,
+                                  coalesce(sqlc.narg(pocket_id)::uuid, pocket_id),
+                                  CASE WHEN sqlc.arg(set_category_id)::boolean
+                                       THEN sqlc.narg(category_id)::uuid ELSE category_id END,
+                                  CASE WHEN sqlc.arg(set_description)::boolean
+                                       THEN sqlc.narg(description)::text ELSE description END,
+                                  coalesce(sqlc.narg(ownership)::text, ownership),
+                                  CASE WHEN sqlc.arg(set_owner_user_id)::boolean
+                                       THEN sqlc.narg(owner_user_id)::uuid ELSE owner_user_id END
+                              )
+                         THEN now() ELSE updated_at END
+WHERE id = sqlc.arg(id) AND household_id = sqlc.arg(household_id) AND deleted_at IS NULL
+RETURNING *;
+
 -- ---- the list --------------------------------------------------------------
 --
 -- Newest first, keyset-paged (#140 R7). The order is declared here and never

@@ -67,3 +67,31 @@ export function formatDateRange(
   const sameYear = a !== null && b !== null && a.year === b.year;
   return { start: formatDate(start, locale, !sameYear), end: formatDate(end, locale) };
 }
+
+const WEEKDAYS: Record<string, readonly string[]> = {
+  "en-GB": ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"],
+  "id-ID": ["Minggu", "Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu"],
+};
+
+/** "Saturday, 22 November", and the year too when `withYear`. Anything that is
+ * not a real `YYYY-MM-DD` comes back as given. The weekday is calendar
+ * arithmetic on the date's own parts, never the device's clock or zone. */
+export function formatWeekdayDate(iso: string, locale: string, withYear = false): string {
+  const p = parts(iso);
+  if (!p) return iso;
+  const weekday = new Date(Date.UTC(Number(p.year), p.month - 1, p.day)).getUTCDay();
+  const names = WEEKDAYS[locale] ?? WEEKDAYS["en-GB"]!;
+  return `${names[weekday]}, ${formatDate(iso, locale, withYear)}`;
+}
+
+/** The calendar day before a `YYYY-MM-DD`, or the input when it is not one. */
+export function previousDay(iso: string): string {
+  const p = parts(iso);
+  if (!p) return iso;
+  return new Date(Date.UTC(Number(p.year), p.month - 1, p.day - 1)).toISOString().slice(0, 10);
+}
+
+/** A business date's year, or null when it is not a `YYYY-MM-DD`. */
+export function yearOf(iso: string): string | null {
+  return parts(iso)?.year ?? null;
+}

@@ -21,7 +21,6 @@ import {
 import { errorMessage } from "@/api/errors";
 import { CategoryEditDialog } from "@/components/CategoryEditDialog";
 import { CheckboxRow } from "@/components/CheckboxRow";
-import { BackLink } from "@/components/BackLink";
 import { CategoryCreateDialog } from "@/components/CategoryCreateDialog";
 import { FigureRow } from "@/components/FigureRow";
 import { Section } from "@/components/Form";
@@ -34,7 +33,6 @@ import { Button } from "@/components/ui/button";
 import { formatDateRange } from "@/lib/dates";
 import { compareMoney, formatMoney } from "@/lib/money";
 import { toastError } from "@/lib/plainToast";
-import { routes } from "@/lib/routes";
 import { useDialogParam } from "@/lib/useDialogParam";
 import { toastUndoable } from "@/lib/undoToast";
 import { uuidv7 } from "@/lib/uuid";
@@ -145,7 +143,6 @@ export function BudgetPage({ me }: { me: Me }) {
 
   return (
     <>
-      <BackLink to={routes.home} label={t("home.title")} />
       <PageTitle>{t("budget.title")}</PageTitle>
       {budget.error ? (
         <ErrorState error={budget.error} onRetry={() => void budget.refetch()} />

@@ -6,7 +6,8 @@ import { TextSetting } from "@/components/TextSetting";
 import { Field, Section } from "@/components/Form";
 import { FieldHint } from "@/components/Text";
 import { Label } from "@/components/ui/label";
-import { NativeSelect } from "@/components/ui/select";
+import { Select, SelectContent, SelectItem, SelectTrigger } from "@/components/ui/select";
+import { SearchSelect } from "@/components/ui/search-select";
 import { useChoice } from "@/lib/useChoice";
 import currencyFixture from "../../../../contract/testdata/currency.json";
 
@@ -47,32 +48,27 @@ export function HouseholdSection({ me }: { me: Me }) {
       />
       <Field>
         <Label htmlFor="reporting-currency">{t("fields.reportingCurrency")}</Label>
-        <NativeSelect
+        <SearchSelect
           id="reporting-currency"
           value={currency}
-          onChange={(e) => chooseCurrency(e.target.value)}
-        >
-          {currencies.map((c) => (
-            <option key={c.code} value={c.code}>
-              {c.code} · {c.name}
-            </option>
-          ))}
-        </NativeSelect>
+          onValueChange={chooseCurrency}
+          options={currencies.map((c) => ({ value: c.code, label: `${c.code} · ${c.name}` }))}
+          searchLabel={t("settings.household.searchCurrencies")}
+          noMatch={t("settings.household.noCurrency")}
+        />
       </Field>
       <Field>
         <Label htmlFor="period-start-day">{t("fields.periodStartDay")}</Label>
-        <NativeSelect
-          id="period-start-day"
-          value={day}
-          onChange={(e) => chooseDay(Number(e.target.value))}
-          aria-describedby="period-start-day-hint"
-        >
-          {days.map((d) => (
-            <option key={d} value={d}>
-              {d}
-            </option>
-          ))}
-        </NativeSelect>
+        <Select value={String(day)} onValueChange={(v) => chooseDay(Number(v))}>
+          <SelectTrigger id="period-start-day" aria-describedby="period-start-day-hint" />
+          <SelectContent>
+            {days.map((d) => (
+              <SelectItem key={d} value={String(d)}>
+                {d}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
         <FieldHint id="period-start-day-hint">
           {t("settings.household.periodStartDayHint")}
         </FieldHint>

@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { X } from "@phosphor-icons/react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
@@ -31,17 +32,7 @@ export function NoticeCard({
         onClick={onDismiss}
         className="absolute right-0 top-0 w-11 rounded-full px-0 text-muted-foreground"
       >
-        <svg
-          aria-hidden="true"
-          viewBox="0 0 24 24"
-          className="size-4"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2"
-          strokeLinecap="round"
-        >
-          <path d="M6 6l12 12M18 6L6 18" />
-        </svg>
+        <X aria-hidden="true" weight="regular" className="size-4" />
       </Button>
       {children}
     </section>

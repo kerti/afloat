@@ -88,6 +88,27 @@ tag each, so it has components only. A missing element is proposed first (see Ho
   `gap-6`.
 - `TextSetting` (`components/TextSetting.tsx`): a typed setting with its own Save and inline error.
 - `CheckboxRow` (`components/CheckboxRow.tsx`): a 20px checkbox in a 44px label ("Show inactive …").
+  It takes a `className` for layout only: `justify-start` puts it left under a field (Capture's "This
+  is a refund", directly under the amount) where it otherwise ends the row at the right.
+  (Uruni direction toggle; ruled 25 Nov 2026, #140 PR 3b.)
+- **The bottom bar** (`Shell`, `styles/index.css`): `bar-glass` (the page's `--card` at 75% over a
+  blur, as the top bar's `header-glass`), the Capture tab on a raised rounded square in `fab-glass`
+  (`--fab-shadow-near`/`--fab-shadow-far` in `theme.css`). **Always visible**: it does not hide when
+  the on-screen keyboard opens. Hiding it was tried and rejected as flaky, and Uruni's does not hide
+  either. (Uruni `Shell.tsx`, `index.css`; ruled 25 Nov 2026, #140 PR 3b.)
+- `DateField` (`components/DateField.tsx`): the date control. A full-width trigger reading the date
+  long-style ("20 November 2026"), and "Today" while it is untouched or equals the server's `today`,
+  that opens a `react-day-picker` calendar in a popover. Today is `me.today`, never the device's. An
+  untouched field sends no date and the server dates the Expense. (Uruni `web/src/components/
+DateField.tsx`; ruled 25 Nov 2026, #140 PR 3b.)
+- `TimeField` (`components/TimeField.tsx`): an optional time of day. Unset it is a quiet "Add time"
+  link-style trigger; set it is a small box with a clock and "19:05" and a ✕ that clears it. A popover
+  holds a 24-hour grid (4 by 6), then the minutes in 5-minute steps (4 by 3), in both locales. Never
+  pre-filled. No Uruni or Balances precedent. (Ruled 25 Nov 2026, #140 PR 3b.)
+- `SearchSelect` (`components/ui/search-select.tsx`): a themed picker with a search box, for a list
+  too long to scan: the currency and the time zone. A trigger like the Radix `Select`'s, and a popover
+  of `h-11` rows; arrow keys, Enter and Esc work from the search field; it says when nothing matches.
+  No Uruni or Balances precedent. (Ruled 25 Nov 2026, #140 PR 3b.)
 - `MoneyInput` (`components/MoneyInput.tsx`): the one money field (§ Forms). The currency sits inside
   the field as a prefix that is not part of the value (`Rp`, else the ISO code), `aria-hidden` and
   read as the field's description; no hint under the field repeats it. Digits are `tabular-nums`.
@@ -110,6 +131,14 @@ tag each, so it has components only. A missing element is proposed first (see Ho
   the badge sits beside the title and the amount ends the row. Category rows on `/budget` are
   `ListRow`s. (Confirmed by the maintainer, 23 Nov 2026, for #130 PR 3.)
 - `Badge` (`components/Badge.tsx`): the "Inactive" pill. Neutral only.
+- `DayGroup`, `ExpenseRow`, `LoadMore` (`components/ExpenseList.tsx`): the Expenses list. `DayGroup` is
+  a `SubsectionLabel` h3 over a bordered divided list, one per day ("Today", "Yesterday", else the
+  weekday and date, the year only when it differs from today's); `ExpenseRow` is a read-only two-line
+  `li`: a title (the description, else the Category, else a muted "Uncategorised") over a muted detail
+  line (Pocket, Category when not already the title, time; joined " · "), the amount at the right in
+  `tabular-nums` medium, and no chevron until a row opens something; `LoadMore` is a full-width
+  outline button that reads "Loading…" while it fetches. Never infinite scroll. (Uruni `web/src/
+screens/Home.tsx` purpose row, `web/src/components/LoadMore.tsx`; ruled 25 Nov 2026, #140 PR 3b.)
 - `FigureRow` (`components/FigureRow.tsx`): a read-only `li` for a `ListCard`, label left, amount
   right in `tabular-nums` medium. A negative figure is neutral, never coloured. A figure that cannot
   be computed yet is hidden, not shown as zero. An optional `badge` (the "Inactive" `Badge`) sits
@@ -140,15 +169,16 @@ appearance, not the OS. (Confirmed by the maintainer, 23 Nov 2026, for #124.)
 - `DetailActions`: the record-level acts of an edit dialog (Deactivate or Reactivate, Delete), in a
   two-column grid of outline buttons below a hairline (`border-t`), above the footer. The destructive
   act comes last, in the destructive text colour; an odd one out spans both columns (`fullRow`). No
-  icons (Afloat has no icon library). (Uruni `web/src/components/DetailActions.tsx`, #768; ruled 22 Nov.)
+  icons in the buttons. (Uruni `web/src/components/DetailActions.tsx`, #768; ruled 22 Nov; icons
+  elsewhere: § Icons.)
 - **The destructive tone**: `Button` `variant="destructive"` (tinted background, destructive text),
   and DetailActions' destructive act, an outline button with destructive text. For a Delete and
   nothing else. (Uruni `web/src/components/ui/button.tsx`, `DetailActions.tsx` `ActionButton`; ruled
   22 Nov.)
 
 **Primitives** (`components/ui/`): `Button` (`default` / `outline` / `ghost` / `destructive`, sizes `default` and
-`sm`, both `h-11`), `Input`, `Label` (the field label), `NativeSelect` and the Radix `Select`
-(`select.tsx`), `Dialog` with `DialogContent`, `DialogHeader`, `DialogTitle`, `DialogFooter`
+`sm`, both `h-11`), `Input`, `Label` (the field label), the Radix `Select`
+(`select.tsx`), `SearchSelect` (`search-select.tsx`), `Dialog` with `DialogContent`, `DialogHeader`, `DialogTitle`, `DialogFooter`
 (`dialog.tsx`), `Toaster` (`sonner.tsx`).
 
 ## Typography and spacing
@@ -156,22 +186,28 @@ appearance, not the OS. (Confirmed by the maintainer, 23 Nov 2026, for #124.)
 One font, Figtree (`--font-ui`). Sizes and weights come from these roles, never per screen. (The
 role table follows Uruni `docs/Design-System.md` § Typography.)
 
-| Role                     | Size             | Weight              | Colour                    | Used for                                                                                                     |
-| ------------------------ | ---------------- | ------------------- | ------------------------- | ------------------------------------------------------------------------------------------------------------ |
-| Page title               | 20px (`text-xl`) | semibold            | foreground                | `PageTitle`; every screen, auth included                                                                     |
-| Section and dialog title | 18px (`text-lg`) | semibold            | foreground                | `SectionTitle`, `DialogTitle`: one look (Uruni H2, 600; ruled 22 Nov)                                        |
-| Subsection label         | 14px (`text-sm`) | semibold            | muted-foreground          | `SubsectionLabel`: Uruni's grey semibold h3, one step under the section title (ruled 24 Nov 2026, #140 PR 1) |
-| Brand                    | 18px (`text-lg`) | semibold            | foreground                | the top bar's "Afloat" link                                                                                  |
-| Body                     | 16px (base)      | regular             | foreground                | `BodyText`, a list row's title, inputs, select values                                                        |
-| Muted body               | 16px             | regular             | muted-foreground          | `MutedText`, `EmptyState`, `Loading`, `BackLink`, an inactive row's title                                    |
-| Label                    | 14px (`text-sm`) | medium              | foreground                | `Label`, buttons                                                                                             |
-| Destructive label        | 14px             | medium              | destructive               | the `destructive` Button, DetailActions' Delete (ruled 22 Nov)                                               |
-| Hint                     | 14px             | regular             | muted-foreground          | `FieldHint`, `SectionDescription`, `CheckboxRow`                                                             |
-| Error                    | 14px             | regular             | attention                 | `FieldError`                                                                                                 |
-| Load failure             | 16px             | regular             | attention                 | `ErrorState`                                                                                                 |
-| Link                     | 14px             | regular, underlined | foreground                | `TextLink`                                                                                                   |
-| Badge                    | 12px (`text-xs`) | regular             | muted-foreground on muted | `Badge`                                                                                                      |
+| Role                     | Size             | Weight              | Colour                                | Used for                                                                                                     |
+| ------------------------ | ---------------- | ------------------- | ------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| Page title               | 20px (`text-xl`) | semibold            | foreground                            | `PageTitle`; every screen, auth included                                                                     |
+| Section and dialog title | 18px (`text-lg`) | semibold            | foreground                            | `SectionTitle`, `DialogTitle`: one look (Uruni H2, 600; ruled 22 Nov)                                        |
+| Subsection label         | 14px (`text-sm`) | semibold            | muted-foreground                      | `SubsectionLabel`: Uruni's grey semibold h3, one step under the section title (ruled 24 Nov 2026, #140 PR 1) |
+| Brand                    | 18px (`text-lg`) | semibold            | foreground                            | the top bar's "Afloat" link                                                                                  |
+| Body                     | 16px (base)      | regular             | foreground                            | `BodyText`, a list row's title, inputs, select values                                                        |
+| Muted body               | 16px             | regular             | muted-foreground                      | `MutedText`, `EmptyState`, `Loading`, `BackLink`, an inactive row's title                                    |
+| Label                    | 14px (`text-sm`) | medium              | foreground                            | `Label`, buttons                                                                                             |
+| Destructive label        | 14px             | medium              | destructive                           | the `destructive` Button, DetailActions' Delete (ruled 22 Nov)                                               |
+| Hint                     | 14px             | regular             | muted-foreground                      | `FieldHint`, `SectionDescription`, `CheckboxRow`                                                             |
+| Error                    | 14px             | regular             | attention                             | `FieldError`                                                                                                 |
+| Load failure             | 16px             | regular             | attention                             | `ErrorState`                                                                                                 |
+| Link                     | 14px             | regular, underlined | foreground                            | `TextLink`                                                                                                   |
+| Badge                    | 12px (`text-xs`) | regular             | muted-foreground on muted             | `Badge`                                                                                                      |
+| Tab label                | 11px / 16px line | medium              | muted-foreground; primary when active | the bottom tab bar's labels (Uruni `Shell.tsx`)                                                              |
 
+- **Field borders** (`--input`) meet WCAG 3:1 non-text contrast against the surface they sit on:
+  light `#658faa` (3.11:1 on the page, 3.46:1 on white), dark `#43708e` (3.05:1 on the page, 3.38:1
+  on a card). Every field edge (inputs, `MoneyInput`, Select, SearchSelect, Date and Time triggers)
+  uses `border-input`; `--border` stays the paler hairline of cards, lists and bars, which are not
+  fields. (#140 PR 3b.)
 - **Radius:** `rounded-md` for controls, the list card, the badge and the back link (`--radius` is
   0.625rem); `rounded-lg` for the dialog and the update banner; `rounded-sm` for a select item;
   `rounded-full` for the dialog's close button.
@@ -182,17 +218,17 @@ role table follows Uruni `docs/Design-System.md` § Typography.)
 
 ## Layout and navigation
 
-- **One Shell.** A **fixed** top bar and, once the app has tabs, a **fixed** bottom tab bar (at most
-  five tabs, the active one marked with a top line and `aria-current`, derived from the URL). Fixed,
+- **One Shell.** A **fixed** top bar and a **fixed** bottom tab bar (at most five tabs, derived from
+  the URL). The active tab shows a top line **and** a primary-coloured icon and label, with
+  `aria-current` (as Uruni). Fixed,
   not sticky: a sticky header rides iOS's overscroll bounce while a fixed footer stays put. Both bars
   pad for `env(safe-area-inset-*)`; `main` reserves their height. (Uruni `Shell.tsx`.)
   - **The tabs** (ruled 24 Nov 2026, from Uruni ADR-032): **Home** `/`, **Expenses** `/expenses`,
     **Capture** `/capture`, **Budget** `/budget`, **Settings** `/settings`, in that order, each an icon
     over a label. Home is first and matches only `/`; every other tab stays lit across its own
     sub-paths. Capture is raised and centred, the one verb tab, on a **rounded square**, not Uruni's
-    circle (the maintainer, 24 Nov 2026); the line, not its colour, marks it active. On Capture
-    the square covers its line and the label alone marks it: accepted, the screen's title says
-    where you are. The bar ships with the first Expenses PR; until then the Shell has no bottom bar.
+    circle (the maintainer, 24 Nov 2026). On Capture the line shows either side of the raised
+    square and is Capture's active marker (Uruni the same). The bar is in the Shell: § Catalogue, "The bottom bar".
   - **The app opens on Home** (PRD Q-11, reversed 24 Nov 2026). **Capture is a full screen**, never
     a dialog, and returns to Home after a save. It is the only create without its noun's list; every
     other create lives on its own list. No floating button. (Uruni ADR-032, ADR-046.)
@@ -217,7 +253,7 @@ role table follows Uruni `docs/Design-System.md` § Typography.)
 - **Screen title:** one `h1`, 20px (`text-xl font-semibold`), sentence case, on every screen, Home
   included ("Home", "Beranda"): the top bar's "Afloat" is a link, not a heading. (Uruni.)
 - **Sub-screen back:** a quiet link, top-left above the title, naming its destination ("← Home"),
-  at least 44px tall: a router `Link` with an inline-SVG arrow, never a button. (Uruni `BackLink`.)
+  at least 44px tall: a router `Link` with a Phosphor `ArrowLeft` (`regular`), never a button. (Uruni `BackLink`.)
 - **Routes come from one builder module**, `lib/routes.ts`; no path literals in components (an ESLint
   rule fails a `to="/…"` or `navigate("/…")` literal). (Balances.)
 - **Tabs, filters and an open dialog live in the URL** (search params), so a link and Android's back
@@ -306,11 +342,25 @@ role table follows Uruni `docs/Design-System.md` § Typography.)
   footer. With no form open (a failed Undo, deactivate from a toast) it is a toast. The wire's text is
   never shown; the copy comes from the code. Never a generic "Something went wrong" when a code came
   back. (Balances ADR-0058 §5, Uruni.)
-- **Pickers:** Radix Select for short lists, full width, `h-11`. Long lists stay native `<select>`,
-  also `h-11`, until a searchable combobox is built: currency, time zone, and the period start day
-  (1 to 28). Language is a Radix Select. A picker starts blank unless there is only one choice. The
-  capture date field is decided in that slice. (Uruni, adapted.) The Appearance select lists System,
-  Light, Dark, the default first. (Confirmed by the maintainer, 23 Nov 2026, for #124.)
+- **Pickers:** every dropdown is themed; there is no native `<select>` anywhere, including the
+  calendar header. The calendar header is a month-year label between ‹ › month arrows with « »
+  year arrows outside them, all ghost `Button`s with 44px targets (ruled 25 Nov 2026, #140 PR 3b). A short list is the Radix
+  `Select`, full width, `h-11`: the period start day (1 to 28), language, appearance, Pocket,
+  Category. A long list, where scanning is slow, is `SearchSelect` with its search box: the currency
+  and the time zone. The date is `DateField`, the time `TimeField`. This supersedes "long lists stay
+  native". (Uruni, adapted; ruled 25 Nov 2026, #140 PR 3b.) A picker starts blank unless there is only
+  one choice. The Appearance select lists System, Light, Dark, the default first. (Confirmed by the
+  maintainer, 23 Nov 2026, for #124.)
+- **Capture's Pocket is the one exception to "starts blank"**: it is preselected to the Pocket of the
+  Household's last Expense (`default_pocket_id` on `GET /pockets`, #140 R3), else the only active
+  Pocket, else blank. Capture is the screen opened most, so a remembered choice saves a tap. Uruni's
+  counter-precedent, `web/src/lib/accountDefault.ts`, preselects only when there is exactly one
+  account and otherwise leaves it blank; Afloat departs from it on purpose. A chosen Pocket that has
+  gone inactive reads as blank, never as another Pocket the person did not pick. (Ruled 25 Nov 2026,
+  #140 PR 3b.)
+- **A popover uses the opaque card surface** (`bg-card`, `border`, `shadow-lg`): the date and time
+  calendars, the `SearchSelect` list and the Radix `Select` list alike. Never the glass of the bars,
+  never transparent over the page. (Ruled 25 Nov 2026, #140 PR 3b.)
 - **A Category's bucket field** is labelled "Kind" in en-GB ("Jenis" in id-ID), never "Type", and
   its options read Daily, then Commitment. (Confirmed by the maintainer, 23 Nov 2026, for #130.)
 - **A name's length counts code points**, as the server does, not UTF-16 units: a name field has no
@@ -347,6 +397,12 @@ role table follows Uruni `docs/Design-System.md` § Typography.)
   "Deactivated OVO." and "Reactivated OVO." each get the 8 s Undo, even though the reverse is one tap
   away in the dialog. Consistency wins over "it's cheap to redo". Failure with no form open: an error
   toast with the code's copy. (Balances ADR-0058 §4; Uruni "the one way to say saved"; ruled 22 Nov.)
+- **Capture's toast** is one plain 4 s toast naming the object by its amount: "Added Rp25.000." A
+  refund reads with its sign ("Added -Rp450.000."). **No Undo and no Edit action**: the Undo of a
+  create would be a delete into the Recycle Bin, so a slip is mended from the Expense itself. Capture
+  then returns to Home. (#140 R16; ruled 25 Nov 2026, #140 PR 3b.)
+- **Bottom toasts clear the tab bar**: the `Toaster` offsets them above the bar, its raised Capture
+  square and `env(safe-area-inset-bottom)`, so a toast never covers a tab. (#140 PR 3b.)
 - **A one-time notice is a `NoticeCard` in the page flow**, carried by router state and never
   stored: it is gone once dismissed or once the person leaves the page, and a refresh does not bring
   it back. (Ruled 24 Nov 2026, #140 R2.)
@@ -371,12 +427,23 @@ role table follows Uruni `docs/Design-System.md` § Typography.)
 ## States
 
 - **Loading:** a small inline spinner plus text, `role="status"`. No skeletons. (Uruni `Loading.tsx`.)
-  `components/states.tsx` holds `Loading` and `ErrorState`. Icons are inline SVG, `aria-hidden`;
-  there is no icon library.
+  `components/states.tsx` holds `Loading` and `ErrorState`. The spinner is Phosphor `CircleNotch`
+  (`regular`, an indicator) and the alert glyph `WarningCircle` (default duotone), both `aria-hidden`.
 - **Empty:** a plain sentence naming what will appear here, plus the create action. A separate string
   when a filter hides everything ("No active Pockets. 3 inactive hidden…"). (Uruni, Balances.)
 - **Load failure:** an alert in the attention colour with an icon, `role="alert"`, and a full-width
   Retry button in the primary (default) variant. (Uruni `ErrorState`.)
+
+## Icons
+
+- **Phosphor** (`@phosphor-icons/react`), **duotone app-wide**, set once by an `IconContext.Provider`
+  in `main.tsx` (weight `duotone`, size 24), as Uruni does. A page or component never sets a weight
+  of its own except in the two cases below. Icons are `aria-hidden` unless they are the only label.
+- **A glyph on a filled background** is `bold`, so it holds against the fill: the Capture plus on its
+  primary square.
+- **A glyph that is itself a control** is `regular`, never duotone: the close ✕ (dialog, notice, the
+  time clear) and the select chevrons (`X`, `CaretDown`).
+  (Uruni `web/src/main.tsx`; ruled 25 Nov 2026, #140 PR 3b.)
 
 ## Colour and type
 
@@ -392,6 +459,8 @@ role table follows Uruni `docs/Design-System.md` § Typography.)
 - **Raw Tailwind palette classes** (`text-red-500`, `bg-green-…`, `bg-white`, `bg-[#…]`) are banned in
   components; use the theme tokens. A test enforces it (`components/noRawColours.test.ts`). (Balances.)
 - **Light and dark** both real (PRD §9), via the tokens in `theme.css`; the appearance picker is #124.
+  The light page is `#f0f3f5` and its borders and input edges `#d0dde5`, the Shallows blue tint kept
+  so a card still reads against the page. (Ruled 25 Nov 2026, #140 PR 3b.)
 - **The dialog overlay** is `--scrim` (10% black) plus `backdrop-blur-xs` where supported, the same
   in light and dark. (Uruni `dialog.tsx`, Balances `dialog.tsx`: identical.)
 - **Weight marks the figure, not the name:** a row's title is regular weight; its amount is

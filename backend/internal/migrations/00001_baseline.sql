@@ -2,10 +2,9 @@
 -- domain tables as their slices land in step 9, edited in place until the
 -- freeze (BOOTSTRAP.md §7.1).
 -- Households, Users, credentials, sessions, onboarding handshakes, invitations,
--- login backoff, Pockets, Categories, Budgets. The rest of the domain
--- (expenses) lands with its own slice; a dev database already at
--- version 1 does not gain a table added here, so run `make db-reset` after
--- pulling one.
+-- login backoff, Pockets, Categories, Budgets, Expenses. A dev database already
+-- at version 1 does not gain a table or a constraint added here, so run
+-- `make db-reset` after pulling one.
 --
 -- Canonical and hand-written: the binary embeds it, goose applies it, and sqlc
 -- reads its Up section as the schema (BOOTSTRAP.md §7).
@@ -106,6 +105,12 @@ CREATE UNIQUE INDEX users_email_idx
 CREATE INDEX users_household_id_idx
     ON users (household_id)
     WHERE deleted_at IS NULL;
+
+-- The target of expenses' composite foreign key (owner_user_id): an Expense
+-- naming another Household's User as its owner is impossible by construction.
+-- Added with the Expenses slice (#140) by an in-place edit (BOOTSTRAP.md §7.1).
+ALTER TABLE users
+    ADD CONSTRAINT users_household_id_id_key UNIQUE (household_id, id);
 
 -- ---------------------------------------------------------------------------
 -- credentials
@@ -275,6 +280,13 @@ CREATE UNIQUE INDEX pockets_household_name_idx
     ON pockets (household_id, lower(pocket_display_name))
     WHERE deleted_at IS NULL;
 
+-- The target of expenses' composite foreign key, as categories has it: an
+-- Expense naming another Household's Pocket is impossible by construction.
+-- A second unique index on the id, which ON CONFLICT (id) does not arbitrate:
+-- a concurrent replay of one id can trip it (BOOTSTRAP.md §4).
+ALTER TABLE pockets
+    ADD CONSTRAINT pockets_household_id_id_key UNIQUE (household_id, id);
+
 -- ---------------------------------------------------------------------------
 -- categories
 -- ---------------------------------------------------------------------------
@@ -373,9 +385,106 @@ CREATE TABLE allocations (
         CHECK (allocation IS NULL OR allocation >= 0)
 );
 
+-- ---------------------------------------------------------------------------
+-- expenses
+-- ---------------------------------------------------------------------------
+
+-- What the Household spent (PRD E1 to E10, CONTEXT.md). Client-generated id, as
+-- every row a client creates (BOOTSTRAP.md §4). Nothing here is derived: no
+-- Period label, no total, no usage counter (PRD N5, CLAUDE.md rule 6).
+--
+-- occurred_on is the Period Day the Expense belongs to and is stored as a date:
+-- period_start_day re-cuts every window and rewrites no row. occurred_time is a
+-- wall-clock time with no zone (R6, #140), optional. captured_at is the
+-- instant the server stamped, never sent by a client.
+CREATE TABLE expenses (
+    id            uuid PRIMARY KEY,
+    household_id  uuid NOT NULL REFERENCES households (id),
+    occurred_on   date NOT NULL,
+    occurred_time time,
+    captured_at   timestamptz NOT NULL DEFAULT now(),
+    -- Signed: a negative amount is a refund with no recorded original (PRD E7,
+    -- Q-07). Zero is not an Expense.
+    amount        numeric(20,4) NOT NULL,
+    -- Stamped by the server from the Household's reporting_currency at the
+    -- create and never changed (PRD N3).
+    currency      text NOT NULL,
+    -- Every Expense has a Pocket (#140 R1); a Category is optional (PRD E4).
+    pocket_id     uuid NOT NULL,
+    category_id   uuid,
+    description   text,
+    -- Stored and on the wire, with no UI until a second member exists (#140 R6).
+    ownership     text NOT NULL DEFAULT 'joint',
+    owner_user_id uuid,
+    created_at    timestamptz NOT NULL DEFAULT now(),
+    updated_at    timestamptz NOT NULL DEFAULT now(),
+    deleted_at    timestamptz,
+
+    -- Composite foreign keys, so a reference to another Household's row is
+    -- impossible by construction. No ON DELETE: no row is ever hard-deleted,
+    -- and a CASCADE would be a trap (#121 P8.1). MATCH SIMPLE leaves a null
+    -- category_id or owner_user_id unchecked, which is the intent.
+    FOREIGN KEY (household_id, pocket_id)     REFERENCES pockets    (household_id, id),
+    FOREIGN KEY (household_id, category_id)   REFERENCES categories (household_id, id),
+    FOREIGN KEY (household_id, owner_user_id) REFERENCES users      (household_id, id),
+    CONSTRAINT expenses_amount_nonzero
+        CHECK (amount <> 0),
+    CONSTRAINT expenses_currency_iso4217
+        CHECK (currency ~ '^[A-Z]{3}$'),
+    CONSTRAINT expenses_description_not_blank
+        CHECK (description IS NULL OR btrim(description) <> ''),
+    CONSTRAINT expenses_ownership_known
+        CHECK (ownership IN ('joint', 'sole_owner')),
+    -- Balances' shape: a sole owner names a User, and a joint Expense names none.
+    CONSTRAINT expenses_owner_matches_ownership
+        CHECK ((ownership = 'sole_owner') = (owner_user_id IS NOT NULL))
+);
+
+-- The seven indexes of #140 R7, all here so the later slices (Correct an
+-- Expense, the Recycle Bin) need no second db-reset. The list's effective time
+-- depends on mutable settings, so it is not indexed: the date is, and Postgres
+-- orders within a day. Every query on this table ships its plan in its PR
+-- (BOOTSTRAP.md §4).
+
+-- The live list, and later the trajectory's Period-window sums.
+CREATE INDEX expenses_household_live_idx
+    ON expenses (household_id, occurred_on DESC, captured_at DESC, id DESC)
+    WHERE deleted_at IS NULL;
+
+-- The uncategorised filter and count (#140 R8).
+CREATE INDEX expenses_household_uncategorised_idx
+    ON expenses (household_id, occurred_on DESC, id DESC)
+    WHERE deleted_at IS NULL AND category_id IS NULL;
+
+-- The last-used Pocket (#140 R3).
+CREATE INDEX expenses_household_captured_idx
+    ON expenses (household_id, captured_at DESC)
+    WHERE deleted_at IS NULL;
+
+-- The Recycle Bin (#140 R11).
+CREATE INDEX expenses_household_bin_idx
+    ON expenses (household_id, deleted_at DESC)
+    WHERE deleted_at IS NOT NULL;
+
+-- POCKET_IN_USE and LAST_POCKET's guards, which count live and deleted rows,
+-- and the composite foreign key.
+CREATE INDEX expenses_household_pocket_idx
+    ON expenses (household_id, pocket_id);
+
+-- CATEGORY_IN_USE's guard and the composite foreign key.
+CREATE INDEX expenses_household_category_idx
+    ON expenses (household_id, category_id)
+    WHERE category_id IS NOT NULL;
+
+-- The composite foreign key to users.
+CREATE INDEX expenses_household_owner_idx
+    ON expenses (household_id, owner_user_id)
+    WHERE owner_user_id IS NOT NULL;
+
 -- +goose Down
 -- Reverse order of creation, so foreign keys drop before their targets.
 
+DROP TABLE IF EXISTS expenses;
 DROP TABLE IF EXISTS allocations;
 DROP TABLE IF EXISTS monthly_budgets;
 DROP TABLE IF EXISTS budgets;

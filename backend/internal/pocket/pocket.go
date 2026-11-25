@@ -28,6 +28,11 @@ import (
 // alone, because the primary key can raise 23505 too.
 const nameIndex = "pockets_household_name_idx"
 
+// householdIDKey is the unique constraint on (household_id, id), which the
+// composite foreign key from expenses needs. It is a second unique index on the
+// id, and ON CONFLICT (id) does not arbitrate it: see isIDKeyClash.
+const householdIDKey = "pockets_household_id_id_key"
+
 // Handlers implements the Pocket half of api.StrictServerInterface.
 type Handlers struct {
 	q  db.Querier
@@ -50,6 +55,10 @@ func New(d Deps) *Handlers {
 // deleted, inactive ones included, in creation order. The Household is the
 // authenticated User's, taken from the context and never from the request, and
 // the SELECT filters on it in SQL.
+//
+// It also names the Pocket capture offers first, default_pocket_id (#140 R3):
+// that of the Household's most recent live Expense by captured_at whose Pocket
+// is active and live, derived on read and omitted while there is none.
 func (h *Handlers) ListPockets(ctx context.Context, _ api.ListPocketsRequestObject) (api.ListPocketsResponseObject, error) {
 	user, ok := auth.UserFromContext(ctx)
 	if !ok {
@@ -62,6 +71,18 @@ func (h *Handlers) ListPockets(ctx context.Context, _ api.ListPocketsRequestObje
 		}, nil
 	}
 
+	// The default is read FIRST. A Pocket that has an Expense cannot be deleted,
+	// so one that was active and live a moment ago is in the list read after it,
+	// where the other order could name a Pocket created in between that the list
+	// missed. A default that was deactivated in between is still listed, and the
+	// client treats it as the stale answer it is.
+	last, err := h.q.LastUsedPocket(ctx, user.HouseholdID)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		slog.Error("list pockets: last used", "err", err)
+		return api.ListPockets500JSONResponse{
+			InternalErrorJSONResponse: api.InternalErrorJSONResponse{Code: api.INTERNAL},
+		}, nil
+	}
 	rows, err := h.q.ListPockets(ctx, user.HouseholdID)
 	if err != nil {
 		slog.Error("list pockets", "err", err)
@@ -73,7 +94,12 @@ func (h *Handlers) ListPockets(ctx context.Context, _ api.ListPocketsRequestObje
 	for _, row := range rows {
 		items = append(items, response(row))
 	}
-	return api.ListPockets200JSONResponse{Items: items}, nil
+	out := api.ListPockets200JSONResponse{Items: items}
+	if last.Valid {
+		id := openapi_types.UUID(last.Bytes)
+		out.DefaultPocketId = &id
+	}
+	return out, nil
 }
 
 // CreatePocket creates a Pocket, idempotently on the client's id (BOOTSTRAP.md
@@ -137,6 +163,12 @@ func (h *Handlers) CreatePocket(ctx context.Context, request api.CreatePocketReq
 		// the two apart: the id now names a live Pocket of this Household, and
 		// this was a replay (200), as it would have been a moment later.
 		return h.replayOr(ctx, user, id, api.NAMETAKEN), nil
+	case isIDKeyClash(err):
+		// Only a concurrent replay of this very id: see isIDKeyClash. The first
+		// insert has committed by the time the error is raised, so the read-back
+		// finds its Pocket (200), or finds nothing because it was deleted in the
+		// meantime (an id names one Pocket for ever).
+		return h.replayOr(ctx, user, id, api.IDTAKEN), nil
 	default:
 		// Never the request's body: a Pocket's name is user content.
 		slog.Error("create pocket", "err", err)
@@ -283,10 +315,17 @@ func (h *Handlers) UpdatePocket(ctx context.Context, request api.UpdatePocketReq
 // said about a Pocket of the caller's own Household, and a foreign id answers
 // what an unknown one does. See removeFromActive for the transaction.
 //
-// The in-use guard (PRD R1: 409 POCKET_IN_USE while any Expense references the
-// Pocket) arrives with the Expenses table and joins this transaction after the
-// same Household lock; see queries/pocket.sql. There is no Expense table yet,
-// so there is nothing to refuse and no code for it in the contract.
+// POCKET_IN_USE (#121 R1, #140 R12): a Pocket that any Expense references, live
+// or in the Recycle Bin, is refused with 409 and nothing changed; the answer is
+// to deactivate it. It is the same recipe as LAST_POCKET's, in the same
+// transaction: the Pocket's row is already locked (FOR NO KEY UPDATE, which
+// conflicts with the FOR SHARE every Expense create holds on it), and
+// PocketHasExpenses is a SEPARATE later statement, so it sees every create that
+// held the lock and committed. The order of the refusals is NOT_FOUND, then the
+// idempotent 204 of a Pocket already deleted, then LAST_POCKET, then
+// POCKET_IN_USE: a last active Pocket that is also in use answers LAST_POCKET,
+// since the Deactivate that POCKET_IN_USE offers would be refused for the same
+// reason, and the user is better told to add a Pocket first.
 func (h *Handlers) DeletePocket(ctx context.Context, request api.DeletePocketRequestObject) (api.DeletePocketResponseObject, error) {
 	user, ok := auth.UserFromContext(ctx)
 	if !ok {
@@ -301,6 +340,13 @@ func (h *Handlers) DeletePocket(ctx context.Context, request api.DeletePocketReq
 
 	id := pgtype.UUID{Bytes: request.Id, Valid: true}
 	err := h.removeFromActive(ctx, user, id, func(q *db.Queries) error {
+		used, err := q.PocketHasExpenses(ctx, db.PocketHasExpensesParams{HouseholdID: user.HouseholdID, PocketID: id})
+		if err != nil {
+			return opaque("check the expenses", err)
+		}
+		if used {
+			return errPocketInUse
+		}
 		n, err := q.SoftDeletePocket(ctx, db.SoftDeletePocketParams{ID: id, HouseholdID: user.HouseholdID})
 		if err != nil {
 			return opaque("delete", err)
@@ -319,6 +365,10 @@ func (h *Handlers) DeletePocket(ctx context.Context, request api.DeletePocketReq
 		return api.DeletePocket409JSONResponse{
 			ConflictJSONResponse: api.ConflictJSONResponse{Code: api.LASTPOCKET},
 		}, nil
+	case errors.Is(err, errPocketInUse):
+		return api.DeletePocket409JSONResponse{
+			ConflictJSONResponse: api.ConflictJSONResponse{Code: api.POCKETINUSE},
+		}, nil
 	case errors.Is(err, errNotFound):
 		return api.DeletePocket404JSONResponse{
 			NotFoundJSONResponse: api.NotFoundJSONResponse{Code: api.NOTFOUND},
@@ -335,7 +385,7 @@ func (h *Handlers) DeletePocket(ctx context.Context, request api.DeletePocketReq
 // the one transaction that keeps "a Household always has an active Pocket"
 // true. Statements, in this order:
 //
-//  1. LockHousehold: SELECT ... FOR UPDATE on the Household's row. Every writer
+//  1. LockHousehold: SELECT ... FOR NO KEY UPDATE on the Household's row. Every writer
 //     that can shrink the set takes it first, so two of them are ordered here
 //     and the second waits.
 //  2. LockPocket: the Pocket's own row, which says whether it is the caller's
@@ -394,6 +444,8 @@ var (
 	// errLastPocket is the guard's refusal, carried out of the transaction so
 	// it rolls back.
 	errLastPocket = errors.New("the Pocket is the Household's last active one")
+	// errPocketInUse is an Expense, live or deleted, referencing the Pocket.
+	errPocketInUse = errors.New("an Expense references the Pocket")
 	// errNotFound is no live Pocket of the caller's Household under the id.
 	errNotFound = errors.New("no such Pocket in the Household")
 	// errNameTaken is a rename into a name another live Pocket holds.
@@ -474,6 +526,18 @@ func response(row db.Pocket) api.Pocket {
 func isNameTaken(err error) bool {
 	var pgErr *pgconn.PgError
 	return errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == nameIndex
+}
+
+// isIDKeyClash is the same race as a name clash, on the other index that is not
+// the arbiter. A Pocket's id is unique twice (the primary key, and
+// (household_id, id) for the Expenses' foreign key), and ON CONFLICT (id)
+// arbitrates only the first: a concurrent replay of one id passes the arbiter's
+// pre-check while the first insert is uncommitted, inserts its tuple, and trips
+// over the first's entry in the second index once it commits. Left alone it is a
+// 500 for a request that should have been a 200 (BOOTSTRAP.md §4).
+func isIDKeyClash(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == householdIDKey
 }
 
 func conflict(code api.ErrorCode) api.CreatePocketResponseObject {

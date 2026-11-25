@@ -1,0 +1,101 @@
+{
+  "description": "Pins the order of GET /expenses (#140 R7) and where a keyset page may end. Newest first: occurred_on DESC, then the effective time DESC, then captured_at DESC, then id DESC. The effective time is an offset into the Period Day, (t - day_starts_at) mod 24h: occurred_time when set; else, when the Expense was captured on that same Period Day (its wall clock in the caller's zone, less day_starts_at, as a date), the capture's time of day; else the start of the day (offset 00:00). So with a 04:00 start 01:30 sorts AFTER 23:00. Rows are names in `order`, newest first; a row's id is the integer n written as the last digits of a UUIDv7, so `id DESC` is `n DESC`. `deleted` rows and rows of the `other` Household are never listed. The backend's test reads every scenario row by row, and walks every page size from 1 to the row count (and the explicit `pages`) asserting no row is repeated or skipped.",
+  "scenarios": [
+    {
+      "name": "Jakarta (UTC+7), 04:00 start: every branch of the effective time",
+      "time_zone": "Asia/Jakarta",
+      "day_starts_at": "04:00",
+      "rows": [
+        {"n": 1, "name": "newest day", "occurred_on": "2026-11-24", "captured_at": "2026-11-24T05:00:00Z"},
+        {"n": 2, "name": "01:30 given", "occurred_on": "2026-11-23", "occurred_time": "01:30", "captured_at": "2026-11-23T05:00:00Z"},
+        {"n": 3, "name": "23:00 given", "occurred_on": "2026-11-23", "occurred_time": "23:00", "captured_at": "2026-11-23T05:00:00Z"},
+        {"n": 4, "name": "captured 02:00 next morning", "occurred_on": "2026-11-23", "captured_at": "2026-11-23T19:00:00Z"},
+        {"n": 5, "name": "captured 10:00", "occurred_on": "2026-11-23", "captured_at": "2026-11-23T03:00:00Z"},
+        {"n": 6, "name": "back-dated, captured later", "occurred_on": "2026-11-23", "captured_at": "2026-11-25T05:00:00Z"},
+        {"n": 7, "name": "04:00 given", "occurred_on": "2026-11-23", "occurred_time": "04:00", "captured_at": "2026-11-20T05:00:00Z"},
+        {"n": 8, "name": "older day", "occurred_on": "2026-11-22", "occurred_time": "23:59", "captured_at": "2026-11-21T05:00:00Z"},
+        {"n": 9, "name": "deleted", "occurred_on": "2026-11-24", "captured_at": "2026-11-24T06:00:00Z", "deleted": true},
+        {"n": 90, "name": "another Household's", "occurred_on": "2026-11-25", "captured_at": "2026-11-25T06:00:00Z", "other": true}
+      ],
+      "order": [
+        "newest day",
+        "captured 02:00 next morning",
+        "01:30 given",
+        "23:00 given",
+        "captured 10:00",
+        "back-dated, captured later",
+        "04:00 given",
+        "older day"
+      ],
+      "pages": [
+        {"limit": 3, "pages": [
+          ["newest day", "captured 02:00 next morning", "01:30 given"],
+          ["23:00 given", "captured 10:00", "back-dated, captured later"],
+          ["04:00 given", "older day"]
+        ]}
+      ]
+    },
+    {
+      "name": "equal keys: ties on date, time and capture instant fall to id DESC, and a page boundary falls between them",
+      "time_zone": "Asia/Jakarta",
+      "day_starts_at": "04:00",
+      "rows": [
+        {"n": 1, "name": "wrapped 1", "occurred_on": "2026-11-23", "occurred_time": "01:30", "captured_at": "2026-11-23T05:00:00Z"},
+        {"n": 2, "name": "wrapped 2", "occurred_on": "2026-11-23", "occurred_time": "01:30", "captured_at": "2026-11-23T05:00:00Z"},
+        {"n": 3, "name": "wrapped 3", "occurred_on": "2026-11-23", "occurred_time": "01:30", "captured_at": "2026-11-23T05:00:00Z"},
+        {"n": 4, "name": "wrapped 4", "occurred_on": "2026-11-23", "occurred_time": "01:30", "captured_at": "2026-11-23T05:00:00Z"},
+        {"n": 5, "name": "untimed 5", "occurred_on": "2026-11-23", "captured_at": "2026-11-23T05:00:00Z"},
+        {"n": 6, "name": "untimed 6", "occurred_on": "2026-11-23", "captured_at": "2026-11-23T05:00:00Z"},
+        {"n": 7, "name": "untimed 7", "occurred_on": "2026-11-23", "captured_at": "2026-11-23T05:00:00Z"},
+        {"n": 8, "name": "next day", "occurred_on": "2026-11-24", "captured_at": "2026-11-23T05:00:00Z"}
+      ],
+      "order": ["next day", "wrapped 4", "wrapped 3", "wrapped 2", "wrapped 1", "untimed 7", "untimed 6", "untimed 5"],
+      "pages": [
+        {"limit": 2, "pages": [
+          ["next day", "wrapped 4"],
+          ["wrapped 3", "wrapped 2"],
+          ["wrapped 1", "untimed 7"],
+          ["untimed 6", "untimed 5"]
+        ]}
+      ]
+    },
+    {
+      "name": "London, spring forward (2026-03-29, 01:00Z): the capture's own wall clock decides whether it was the same Period Day",
+      "time_zone": "Europe/London",
+      "day_starts_at": "04:00",
+      "rows": [
+        {"n": 1, "name": "00:30 GMT, offset 20:30", "occurred_on": "2026-03-28", "captured_at": "2026-03-29T00:30:00Z"},
+        {"n": 2, "name": "02:30 BST (01:30Z), offset 22:30", "occurred_on": "2026-03-28", "captured_at": "2026-03-29T01:30:00Z"},
+        {"n": 3, "name": "23:00 given, offset 19:00", "occurred_on": "2026-03-28", "occurred_time": "23:00", "captured_at": "2026-03-20T12:00:00Z"},
+        {"n": 4, "name": "04:30 BST (03:30Z) is the 29th, offset 00:30", "occurred_on": "2026-03-29", "captured_at": "2026-03-29T03:30:00Z"},
+        {"n": 5, "name": "back-dated, captured later", "occurred_on": "2026-03-29", "captured_at": "2026-03-31T12:00:00Z"}
+      ],
+      "order": [
+        "04:30 BST (03:30Z) is the 29th, offset 00:30",
+        "back-dated, captured later",
+        "02:30 BST (01:30Z), offset 22:30",
+        "00:30 GMT, offset 20:30",
+        "23:00 given, offset 19:00"
+      ]
+    },
+    {
+      "name": "London, fall back (2026-10-25, 01:00Z): 01:30 happens twice and 03:30 GMT is still the 24th",
+      "time_zone": "Europe/London",
+      "day_starts_at": "04:00",
+      "rows": [
+        {"n": 1, "name": "01:30 BST (00:30Z), offset 21:30", "occurred_on": "2026-10-24", "captured_at": "2026-10-25T00:30:00Z"},
+        {"n": 2, "name": "01:30 GMT (01:30Z), offset 21:30, captured later", "occurred_on": "2026-10-24", "captured_at": "2026-10-25T01:30:00Z"},
+        {"n": 3, "name": "03:30 GMT (03:30Z) is still the 24th, offset 23:30", "occurred_on": "2026-10-24", "captured_at": "2026-10-25T03:30:00Z"},
+        {"n": 4, "name": "04:30 GMT (04:30Z) is the 25th, offset 00:30", "occurred_on": "2026-10-25", "captured_at": "2026-10-25T04:30:00Z"},
+        {"n": 5, "name": "back-dated, captured later", "occurred_on": "2026-10-25", "captured_at": "2026-11-02T12:00:00Z"}
+      ],
+      "order": [
+        "04:30 GMT (04:30Z) is the 25th, offset 00:30",
+        "back-dated, captured later",
+        "03:30 GMT (03:30Z) is still the 24th, offset 23:30",
+        "01:30 GMT (01:30Z), offset 21:30, captured later",
+        "01:30 BST (00:30Z), offset 21:30"
+      ]
+    }
+  ]
+}

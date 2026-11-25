@@ -47,6 +47,8 @@ export type State = {
   deletedPockets?: Pocket[];
   pocketDeletes?: string[];
   pocketRestores?: string[];
+  // Ids of Pockets an Expense references: DELETE answers 409 POCKET_IN_USE.
+  pocketsInUse?: string[];
   // The fake server's Categories in creation order, and every POST /categories
   // body it was sent.
   categories?: Category[];
@@ -82,6 +84,7 @@ export const alice: Me = {
   user_display_name: "Alice",
   locale: "en-GB",
   time_zone: "Asia/Jakarta",
+  today: "2026-11-25",
   appearance: "system",
   household: {
     id: "0192f0a0-0000-7000-8000-000000000001",
@@ -303,6 +306,9 @@ export function defaultHandlers(state: State = { signedIn: false, me: alice }) {
       const list = (state.pockets ??= []);
       const held = list.find((p) => p.id === params.id);
       if (!held) return HttpResponse.json(envelope("NOT_FOUND"), { status: 404 });
+      if (state.pocketsInUse?.includes(held.id)) {
+        return HttpResponse.json(envelope("POCKET_IN_USE"), { status: 409 });
+      }
       state.pocketDeletes = [...(state.pocketDeletes ?? []), held.id];
       (state.deletedPockets ??= []).push(held);
       state.pockets = list.filter((p) => p !== held);

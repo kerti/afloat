@@ -87,5 +87,10 @@ func (h *Handlers) ChangeLocalEmail(ctx context.Context, request api.ChangeLocal
 		logQueryError("change email", err)
 		return internalError[api.ChangeLocalEmailResponseObject]()
 	}
-	return api.ChangeLocalEmail200JSONResponse(meResponse(row, household)), nil
+	me, err := h.meResponse(row, household)
+	if err != nil {
+		slog.Error("change email: work out today", "err", err)
+		return internalError[api.ChangeLocalEmailResponseObject]()
+	}
+	return api.ChangeLocalEmail200JSONResponse(me), nil
 }

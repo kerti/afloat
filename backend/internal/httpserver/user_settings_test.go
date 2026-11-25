@@ -64,7 +64,7 @@ func newSettingsFixture(t *testing.T) settingsFixture {
 			FirstBackoff:       time.Second,
 			MaxBackoff:         time.Minute,
 		}),
-		Household:      household.New(household.Deps{Querier: tdb.Queries}),
+		Household:      household.New(household.Deps{Querier: tdb.Queries, Beginner: tdb.Pool}),
 		HandlerTimeout: testHandlerTimeout,
 	})
 	return f

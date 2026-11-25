@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import { alice, defaultHandlers, envelope, server, type State } from "@/test/server";
 import currencyFixture from "../../contract/testdata/currency.json";
 import { renderApp } from "@/test/render";
+import enGB from "@/locales/en-GB.json";
 
 vi.mock("sonner", async () => (await import("@/test/sonnerMock")).sonnerMock());
 const toastMock = vi.mocked(toast);
@@ -172,6 +173,25 @@ describe("household settings", () => {
       expect(toastMock).not.toHaveBeenCalled();
     },
   );
+
+  it("rolls a refused currency change (CURRENCY_LOCKED) back with its words in an error toast", async () => {
+    server.use(
+      http.patch("/api/household", () =>
+        HttpResponse.json(envelope("CURRENCY_LOCKED"), { status: 409 }),
+      ),
+      ...defaultHandlers(signedIn()),
+    );
+    const user = userEvent.setup();
+    renderApp("/settings");
+
+    await user.selectOptions(await screen.findByLabelText("Reporting currency"), "USD");
+
+    await waitFor(() =>
+      expect(toastMock.error).toHaveBeenCalledWith(enGB.errors.CURRENCY_LOCKED, expect.anything()),
+    );
+    expect(screen.getByLabelText("Reporting currency")).toHaveValue("IDR");
+    expect(toastMock).not.toHaveBeenCalled();
+  });
 
   it("sends the person to sign in when the session has ended", async () => {
     server.use(

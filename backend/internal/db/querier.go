@@ -24,6 +24,9 @@ type Querier interface {
 	// Whether the Period has been materialised. A request that finds it writes
 	// nothing, so only the first request after a boundary pays for the copy.
 	BudgetExists(ctx context.Context, arg BudgetExistsParams) (bool, error)
+	// Does any Expense, live or deleted, reference the Category? CATEGORY_IN_USE.
+	// Served by (household_id, category_id) WHERE category_id IS NOT NULL.
+	CategoryHasExpenses(ctx context.Context, arg CategoryHasExpensesParams) (bool, error)
 	// The in-use guard (#130 C8, R9): does the Category hold an allocation, a
 	// non-null amount, in any Budget Period but the current one? Any row counts, not
 	// only the latest of a Period: a Category an earlier Period held an amount for
@@ -80,6 +83,14 @@ type Querier interface {
 	CreateCategory(ctx context.Context, arg CreateCategoryParams) (Category, error)
 	// Plain INSERT, not UpsertCredential: a founding never overwrites one.
 	CreateCredential(ctx context.Context, arg CreateCredentialParams) error
+	// ON CONFLICT (id) arbitrates the primary key only: a row back is a create, and
+	// no row is the id already being held (a concurrent replay that has committed in
+	// the meantime), which the caller reads back. The references were checked and
+	// locked before this statement, so no row here never means "a reference failed"
+	// (#140 X4: an INSERT ... SELECT that checked its references would make
+	// ErrNoRows mean two things). captured_at, created_at and updated_at are the
+	// database's own clock. currency is the Household's, read under the lock above.
+	CreateExpense(ctx context.Context, arg CreateExpenseParams) (Expense, error)
 	// Founding. Ids are minted by the server, UUIDv7 (BOOTSTRAP.md §4): founding is
 	// an online auth flow, not an offline-capable write. Defaults the schema owns
 	// (currency, period start, time zone) are left to it.
@@ -114,6 +125,26 @@ type Querier interface {
 	// the caller's own live Category, and no row for anything else (another
 	// Household's, or a deleted one).
 	GetLiveCategory(ctx context.Context, arg GetLiveCategoryParams) (Category, error)
+	// Expenses (PRD E1 to E10). Tenant-scoped in SQL: every statement filters on the
+	// authenticated User's household_id, never anything the request supplied
+	// (BOOTSTRAP.md §4). No statement here hard-deletes, on purpose.
+	// ---- the create ------------------------------------------------------------
+	//
+	// A create is one transaction of statements in this order (BOOTSTRAP.md §4,
+	// "Idempotent create"; #140 X4): GetLiveExpense, then LockHouseholdShared,
+	// LockLivePocketShared, LockLiveCategoryShared and LockLiveUserShared as the
+	// body needs them, then CreateExpense. The locks are in that order, the
+	// Household first, for every writer, so none can wait on a row another holds
+	// while holding one it wants.
+	//
+	// Each lock is its own statement because a nullable reference cannot be locked
+	// through an outer join, and because "no row" is the refusal: the liveness
+	// predicate is in the locking statement, so a writer that comes after a delete
+	// finds the row deleted and refuses, and one that came first is seen by the
+	// delete's guard.
+	// The read-back of a create: the caller's own live Expense is a replay, and no
+	// row is anything else (another Household's, or a deleted one).
+	GetLiveExpense(ctx context.Context, arg GetLiveExpenseParams) (Expense, error)
 	// A read, not a claim: it lets a request be refused (400, 403) without
 	// spending the handshake. The commit's own claim is ClaimOnboardingHandshake.
 	GetLiveOnboardingHandshake(ctx context.Context, id string) (OnboardingHandshake, error)
@@ -145,6 +176,9 @@ type Querier interface {
 	// what the index considers a duplicate. Soft-deleted Users are invisible here.
 	GetUserByEmail(ctx context.Context, email string) (User, error)
 	GetUserByID(ctx context.Context, id pgtype.UUID) (User, error)
+	// Does the Household hold any Expense, live or deleted? CURRENCY_LOCKED.
+	// Served by the leading household_id of any of the table's indexes.
+	HouseholdHasExpenses(ctx context.Context, householdID pgtype.UUID) (bool, error)
 	// The materialisation marker. ON CONFLICT DO NOTHING, not a SELECT then an
 	// INSERT: a row back means THIS request is the materialiser and copies; no row
 	// means another request is or was, and this one reads what it committed. Two
@@ -154,6 +188,11 @@ type Querier interface {
 	// transaction (see CopyMonthlyBudgetForward): a marker committed alone would be
 	// a Period that looks materialised and is empty.
 	InsertBudget(ctx context.Context, arg InsertBudgetParams) (string, error)
+	// ---- the default Pocket ----------------------------------------------------
+	// The Pocket capture offers first (#140 R3): that of the Household's most recent
+	// live Expense by captured_at whose Pocket is active and live. Derived on read;
+	// no row is no default. Served by (household_id, captured_at DESC) WHERE live.
+	LastUsedPocket(ctx context.Context, householdID pgtype.UUID) (pgtype.UUID, error)
 	// Categories (PRD S8). Tenant-scoped in SQL: every statement filters on the
 	// authenticated User's household_id, never anything the request supplied
 	// (BOOTSTRAP.md §4). A Category carries no allocation: that is the Budget's
@@ -162,6 +201,29 @@ type Querier interface {
 	// together. created_at then id: a rename or a deactivation must not reshuffle
 	// the list, and the order is independent of the database's collation.
 	ListCategories(ctx context.Context, householdID pgtype.UUID) ([]Category, error)
+	// ---- the list --------------------------------------------------------------
+	//
+	// Newest first, keyset-paged (#140 R7). The order is declared here and never
+	// left to the database: occurred_on DESC, then the effective time DESC, then
+	// captured_at DESC, then id DESC, so a page boundary is exact.
+	//
+	// The effective time (time_key) is computed on read and never stored or shown:
+	//   1. occurred_time, when the Expense has one;
+	//   2. else, when it was captured on that same Period Day, the time of day it
+	//      was captured at, in the caller's time zone;
+	//   3. else the start of the day.
+	// Every time is an offset into its Period Day, (t - day_starts_at) mod 24h, so
+	// with a 04:00 start 01:30 sorts after 23:00: time minus interval wraps. The
+	// Period Day of a capture is its wall clock less day_starts_at, the date part,
+	// which is period.Today's rule (wall clock, never elapsed time, so a DST jump
+	// cannot move where the day ends).
+	//
+	// The cursor is the last row's (occurred_on, time_key, captured_at, id). The
+	// occurred_on bound lets the index (household_id, occurred_on DESC, captured_at
+	// DESC, id DESC) serve the page: Postgres sorts within a day (incremental sort),
+	// since the key depends on mutable settings and is not indexed. page_size is
+	// the page plus one, so the caller can tell a last page from a full one.
+	ListExpenses(ctx context.Context, arg ListExpensesParams) ([]ListExpensesRow, error)
 	// Every version of the Period's Monthly Budget, oldest first. A Period holds at
 	// most one per day it was edited, so the list is short, and the as-of rule
 	// (budget.MonthlyBudgetAsOf) is one Go function over it rather than a second copy in SQL.
@@ -177,9 +239,10 @@ type Querier interface {
 	ListPockets(ctx context.Context, householdID pgtype.UUID) ([]Pocket, error)
 	// The first statement of a delete, in the delete's own transaction: it takes the
 	// Category's row lock (FOR UPDATE, which conflicts with the FOR SHARE every
-	// allocation write holds, and with the key-share an allocation insert takes) and
-	// answers whether the row is deleted already. The guard that follows
-	// (CategoryHeldElsewhere) must be a SEPARATE, LATER statement: under READ
+	// allocation write and every Expense create holds, and with the key-share an
+	// allocation or an Expense insert takes) and answers whether the row is deleted
+	// already. The guards that follow (CategoryHeldElsewhere, and CategoryHasExpenses
+	// in expense.sql) must be SEPARATE, LATER statements: under READ
 	// COMMITTED a statement's snapshot is taken when it starts, so a guard folded
 	// into the UPDATE's WHERE would have been evaluated before the lock wait ended
 	// and would not see the allocation committed during it (BOOTSTRAP.md §4, #130
@@ -198,7 +261,31 @@ type Querier interface {
 	// a removal waiting on that Pocket. NO KEY UPDATE still conflicts with FOR SHARE
 	// and with itself, and not with KEY SHARE. No row is a Household that is gone,
 	// which a live session cannot have.
+	//
+	// It is also the lock of CURRENCY_LOCKED (PATCH /household, #140 R12), which
+	// conflicts with the FOR SHARE every Expense create takes on this row while it
+	// stamps the Household's currency (LockHouseholdShared). The lock order, for every
+	// writer, is Household, then Pocket, then Category.
 	LockHousehold(ctx context.Context, householdID pgtype.UUID) (pgtype.UUID, error)
+	// FOR SHARE, so that the reporting_currency read here is the one the Expense is
+	// stamped with and the Household's currency cannot change under it: the
+	// currency change takes this row FOR NO KEY UPDATE (LockHousehold), which
+	// conflicts with FOR SHARE, and counts the Expenses in a later statement.
+	// Shared locks do not conflict with each other, so concurrent creates in one
+	// Household never wait on one another. FOR SHARE and not FOR KEY SHARE, on
+	// purpose: only the stronger one conflicts with FOR NO KEY UPDATE.
+	LockHouseholdShared(ctx context.Context, householdID pgtype.UUID) (string, error)
+	// The same for a Category, against LockCategory's FOR UPDATE.
+	LockLiveCategoryShared(ctx context.Context, arg LockLiveCategorySharedParams) (bool, error)
+	// The Pocket an Expense names, locked FOR SHARE in the statement that checks it
+	// is the caller's own and live (BOOTSTRAP.md §4). active says whether it is
+	// still offered for new capture. No row is unknown, another Household's or
+	// deleted: one answer. FOR SHARE conflicts with the FOR NO KEY UPDATE a Pocket's
+	// delete holds (LockPocket), so a create after the delete finds the Pocket
+	// deleted, and one before it is seen by PocketHasExpenses.
+	LockLivePocketShared(ctx context.Context, arg LockLivePocketSharedParams) (bool, error)
+	// The same for the User an Expense is attributed to (ownership).
+	LockLiveUserShared(ctx context.Context, arg LockLiveUserSharedParams) (pgtype.UUID, error)
 	// The Pocket's own row lock, after LockHousehold, and what the writer decides
 	// on: deleted or live, active or not. FOR NO KEY UPDATE for the reason given on
 	// LockHousehold. Another Household's or an unknown id is
@@ -215,6 +302,16 @@ type Querier interface {
 	// which is the path every real query takes. A pool that is exhausted or pointed
 	// at a database the role cannot read fails here and passes a bare Ping.
 	Ping(ctx context.Context) (int32, error)
+	// ---- the guards ------------------------------------------------------------
+	//
+	// Each is a SEPARATE statement, run after the protected row's lock was granted
+	// and never folded into a write's WHERE (BOOTSTRAP.md §4: under READ COMMITTED
+	// an UPDATE that waited for a lock does not re-run its subquery). Deleted rows
+	// count: the Recycle Bin never empties, and a deleted Expense still labels its
+	// Pocket and Category and is in the currency it was recorded in.
+	// Does any Expense, live or deleted, reference the Pocket? POCKET_IN_USE.
+	// Served by (household_id, pocket_id).
+	PocketHasExpenses(ctx context.Context, arg PocketHasExpensesParams) (bool, error)
 	RecordLoginFailure(ctx context.Context, arg RecordLoginFailureParams) error
 	// The Undo of SoftDeleteCategory, as RestorePocket: clears deleted_at and
 	// returns the row, active as it was. Idempotent (a live Category is a row and
@@ -251,12 +348,14 @@ type Querier interface {
 	// The guards are NOT here, and none may be folded in as a NOT EXISTS in the
 	// WHERE: under READ COMMITTED an UPDATE that waits for a lock proceeds on the
 	// row's new version without re-running its subquery, so a row committed during
-	// the wait is never seen. The handler calls this last, in a transaction that
-	// has locked the Household (LockHousehold), counted the other active Pockets
-	// in a SEPARATE later statement (OtherActivePocketExists) and locked the row
-	// (LockPocket). The in-use guard (PRD R1, #121: 409 POCKET_IN_USE while any
-	// Expense references the Pocket) arrives with the Expenses table and takes
-	// the same shape.
+	// the wait is never seen. The handler calls this last, in one transaction of
+	// statements in this order (BOOTSTRAP.md §4): LockHousehold, LockPocket, then the
+	// guards as SEPARATE later statements, whose snapshots are taken only after the
+	// locks were granted: OtherActivePocketExists (409 LAST_POCKET) and
+	// PocketHasExpenses (409 POCKET_IN_USE, any Expense, live or deleted), then this
+	// write. Every Expense create share-locks the Household and then the Pocket
+	// first (expense.sql), so an Expense that committed before the delete's guard is
+	// seen by it, and one that comes after finds the Pocket deleted and is refused.
 	SoftDeletePocket(ctx context.Context, arg SoftDeletePocketParams) (int64, error)
 	// Compare-and-swap, for a password change: the new hash is written only if the
 	// stored one is still the hash the current password was verified against. Zero

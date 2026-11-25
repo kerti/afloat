@@ -9,6 +9,7 @@ package household
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 
 	"github.com/jackc/pgx/v5"
@@ -22,15 +23,20 @@ import (
 
 // Handlers implements the Household half of api.StrictServerInterface.
 type Handlers struct {
-	q db.Querier
+	q  db.Querier
+	tx auth.Beginner
 }
 
+// Deps. Beginner is for the one write that is guarded, a change of
+// reporting_currency, which runs in a transaction under the Household's row
+// lock (CURRENCY_LOCKED).
 type Deps struct {
-	Querier db.Querier
+	Querier  db.Querier
+	Beginner auth.Beginner
 }
 
 func New(d Deps) *Handlers {
-	return &Handlers{q: d.Querier}
+	return &Handlers{q: d.Querier, tx: d.Beginner}
 }
 
 // UpdateHousehold changes the caller's own Household. Merge semantics, one
@@ -39,6 +45,17 @@ func New(d Deps) *Handlers {
 //
 // The Household is the authenticated User's, taken from the context and never
 // from the request, and the UPDATE filters on it in SQL.
+//
+// CURRENCY_LOCKED (#113 D2, #140 R12): a reporting_currency that differs from
+// the stored one is refused, with nothing applied, once the Household holds any
+// Expense, live or deleted. Sending the stored currency is a no-op. It is the
+// same recipe as every guard (BOOTSTRAP.md §4): lock the Household's row
+// (LockHousehold, FOR NO KEY UPDATE, which conflicts with the FOR SHARE every
+// Expense create holds while it stamps the currency), ask HouseholdHasExpenses
+// as a separate later statement, then write. Not an `UPDATE ... WHERE NOT
+// EXISTS`: under READ COMMITTED an UPDATE that waited on a lock does not re-run
+// its subquery, so an Expense committed during the wait would never be seen. A
+// request that does not name a currency is the one statement it always was.
 func (h *Handlers) UpdateHousehold(ctx context.Context, request api.UpdateHouseholdRequestObject) (api.UpdateHouseholdResponseObject, error) {
 	user, ok := auth.UserFromContext(ctx)
 	if !ok {
@@ -110,7 +127,18 @@ func (h *Handlers) UpdateHousehold(ctx context.Context, request api.UpdateHouseh
 		return invalidField(first), nil
 	}
 
-	row, err := h.q.UpdateHousehold(ctx, params)
+	var row db.Household
+	var err error
+	if body.ReportingCurrency == nil {
+		row, err = h.q.UpdateHousehold(ctx, params)
+	} else {
+		row, err = h.updateGuardingTheCurrency(ctx, params, *body.ReportingCurrency)
+	}
+	if errors.Is(err, errCurrencyLocked) {
+		return api.UpdateHousehold409JSONResponse{
+			ConflictJSONResponse: api.ConflictJSONResponse{Code: api.CURRENCYLOCKED},
+		}, nil
+	}
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			// A User whose Household is gone cannot be served coherently, as in
@@ -124,6 +152,52 @@ func (h *Handlers) UpdateHousehold(ctx context.Context, request api.UpdateHouseh
 		return internalError(), nil
 	}
 	return api.UpdateHousehold200JSONResponse(auth.HouseholdResponse(row)), nil
+}
+
+// errCurrencyLocked is the guard's refusal, carried out of the transaction so it
+// rolls back with nothing written.
+var errCurrencyLocked = errors.New("the Household holds an Expense: its currency is locked")
+
+// updateGuardingTheCurrency is the UPDATE of a request that names a currency, in
+// the transaction that keeps CURRENCY_LOCKED race-free: lock the Household's row,
+// read its currency, and, only when the request changes it, ask whether any
+// Expense exists, before the write.
+func (h *Handlers) updateGuardingTheCurrency(ctx context.Context, params db.UpdateHouseholdParams, currency string) (db.Household, error) {
+	tx, err := h.tx.Begin(ctx)
+	if err != nil {
+		return db.Household{}, fmt.Errorf("begin: %w", err)
+	}
+	// A no-op after Commit. Every other return rolls back. Detached from ctx so
+	// a cancelled request still releases the connection.
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	q := db.New(tx)
+
+	if _, err := q.LockHousehold(ctx, params.HouseholdID); err != nil {
+		return db.Household{}, fmt.Errorf("lock the household: %w", err)
+	}
+	// Read after the lock, so it is the currency the write replaces and no
+	// concurrent change can slip between the two.
+	current, err := q.GetHouseholdByID(ctx, params.HouseholdID)
+	if err != nil {
+		return db.Household{}, fmt.Errorf("read the household: %w", err)
+	}
+	if current.ReportingCurrency != currency {
+		held, err := q.HouseholdHasExpenses(ctx, params.HouseholdID)
+		if err != nil {
+			return db.Household{}, fmt.Errorf("check the expenses: %w", err)
+		}
+		if held {
+			return db.Household{}, errCurrencyLocked
+		}
+	}
+	row, err := q.UpdateHousehold(ctx, params)
+	if err != nil {
+		return db.Household{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return db.Household{}, fmt.Errorf("commit: %w", err)
+	}
+	return row, nil
 }
 
 // iso4217 is go-playground/validator's tag for a currency code, and the rule

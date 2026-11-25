@@ -267,10 +267,12 @@ func (h *Handlers) UpdateCategory(ctx context.Context, request api.UpdateCategor
 // authenticated User's, taken from the context and never from the request, and
 // every statement filters on it in SQL.
 //
-// CATEGORY_IN_USE (#130 C8, R9) is refused while the Category holds an
+// CATEGORY_IN_USE (#130 C8, R9; #140 R12) is refused while the Category holds an
 // allocation, a non-null amount, in a Budget Period other than the one the
-// caller is in. Three statements, in this order, in one transaction: lock the
-// row (FOR UPDATE), ask whether another Period holds an allocation, delete. The
+// caller is in, or while any Expense, live or deleted, references it. One code
+// for both, and the allocations are asked first. Three steps, in this order,
+// in one transaction: lock the row (FOR UPDATE), ask whether another Period holds
+// an allocation or any Expense references it, delete. The
 // guard is NOT folded into the UPDATE's WHERE, and that is the point: under
 // READ COMMITTED an UPDATE that waits for a lock does not re-run its subquery
 // against what committed while it waited, so a single `UPDATE ... WHERE NOT
@@ -326,6 +328,18 @@ func (h *Handlers) DeleteCategory(ctx context.Context, request api.DeleteCategor
 			return opaque("check the allocations", err)
 		}
 		if held {
+			return errInUse
+		}
+		// An Expense, live or in the Recycle Bin, is part of the Household's
+		// records too (#140 R12). Like the allocations, it is a SEPARATE
+		// statement after the lock: every Expense create share-locks the
+		// Category, so one that committed first is seen here and one that comes
+		// after finds the Category deleted and is refused.
+		used, err := q.CategoryHasExpenses(ctx, db.CategoryHasExpensesParams{HouseholdID: user.HouseholdID, CategoryID: id})
+		if err != nil {
+			return opaque("check the expenses", err)
+		}
+		if used {
 			return errInUse
 		}
 		n, err := q.SoftDeleteCategory(ctx, db.SoftDeleteCategoryParams{ID: id, HouseholdID: user.HouseholdID})
@@ -448,9 +462,10 @@ func (h *Handlers) RestoreCategory(ctx context.Context, request api.RestoreCateg
 	}
 }
 
-// errInUse is the guard's refusal, carried out of the delete's transaction so it
-// rolls back (nothing was written before it, and the lock is released).
-var errInUse = errors.New("the Category holds an allocation in another Budget Period")
+// errInUse is the guard's refusal (either reason), carried out of the delete's
+// transaction so it rolls back (nothing was written before it, and the lock is
+// released).
+var errInUse = errors.New("the Category holds an allocation in another Budget Period, or an Expense references it")
 
 // errNotFound is LockCategory finding no row.
 var errNotFound = errors.New("no such Category in the Household")

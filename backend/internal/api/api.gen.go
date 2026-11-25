@@ -7,8 +7,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/oapi-codegen/nullable"
@@ -77,6 +79,7 @@ func (e Bucket) Valid() bool {
 const (
 	CATEGORYINUSE           ErrorCode = "CATEGORY_IN_USE"
 	CROSSSITEREQUESTBLOCKED ErrorCode = "CROSS_SITE_REQUEST_BLOCKED"
+	CURRENCYLOCKED          ErrorCode = "CURRENCY_LOCKED"
 	EMAILTAKEN              ErrorCode = "EMAIL_TAKEN"
 	FOUNDINGDISABLED        ErrorCode = "FOUNDING_DISABLED"
 	IDTAKEN                 ErrorCode = "ID_TAKEN"
@@ -87,6 +90,7 @@ const (
 	LASTPOCKET              ErrorCode = "LAST_POCKET"
 	NAMETAKEN               ErrorCode = "NAME_TAKEN"
 	NOTFOUND                ErrorCode = "NOT_FOUND"
+	POCKETINUSE             ErrorCode = "POCKET_IN_USE"
 	TOOMANYATTEMPTS         ErrorCode = "TOO_MANY_ATTEMPTS"
 	UNAUTHORIZED            ErrorCode = "UNAUTHORIZED"
 	VALIDATION              ErrorCode = "VALIDATION"
@@ -99,6 +103,8 @@ func (e ErrorCode) Valid() bool {
 	case CATEGORYINUSE:
 		return true
 	case CROSSSITEREQUESTBLOCKED:
+		return true
+	case CURRENCYLOCKED:
 		return true
 	case EMAILTAKEN:
 		return true
@@ -119,6 +125,8 @@ func (e ErrorCode) Valid() bool {
 	case NAMETAKEN:
 		return true
 	case NOTFOUND:
+		return true
+	case POCKETINUSE:
 		return true
 	case TOOMANYATTEMPTS:
 		return true
@@ -169,6 +177,24 @@ func (e Locale) Valid() bool {
 	}
 }
 
+// Defines values for Ownership.
+const (
+	Joint     Ownership = "joint"
+	SoleOwner Ownership = "sole_owner"
+)
+
+// Valid indicates whether the value is a known member of the Ownership enum.
+func (e Ownership) Valid() bool {
+	switch e {
+	case Joint:
+		return true
+	case SoleOwner:
+		return true
+	default:
+		return false
+	}
+}
+
 // Allocation A Category's planned amount in the Budget's Period (PRD S8), in force
 // as of Today.
 type Allocation struct {
@@ -176,7 +202,8 @@ type Allocation struct {
 	// N2, BOOTSTRAP.md §4): `"9000000.0000"`, never a JSON number, never
 	// trimmed, never exponent notation. In the Household's
 	// `reporting_currency`; a Budget's money carries no `currency` of its own
-	// (PRD N3). May be negative where it is a difference (`unallocated`).
+	// (PRD N3), an Expense's has one. May be negative where it is a difference
+	// (`unallocated`) or a refund (an Expense's `amount`).
 	//
 	//
 	// Example: 9000000.0000
@@ -254,7 +281,8 @@ type Budget struct {
 	// N2, BOOTSTRAP.md §4): `"9000000.0000"`, never a JSON number, never
 	// trimmed, never exponent notation. In the Household's
 	// `reporting_currency`; a Budget's money carries no `currency` of its own
-	// (PRD N3). May be negative where it is a difference (`unallocated`).
+	// (PRD N3), an Expense's has one. May be negative where it is a difference
+	// (`unallocated`) or a refund (an Expense's `amount`).
 	//
 	//
 	// Example: 9000000.0000
@@ -264,7 +292,8 @@ type Budget struct {
 	// N2, BOOTSTRAP.md §4): `"9000000.0000"`, never a JSON number, never
 	// trimmed, never exponent notation. In the Household's
 	// `reporting_currency`; a Budget's money carries no `currency` of its own
-	// (PRD N3). May be negative where it is a difference (`unallocated`).
+	// (PRD N3), an Expense's has one. May be negative where it is a difference
+	// (`unallocated`) or a refund (an Expense's `amount`).
 	//
 	//
 	// Example: 9000000.0000
@@ -274,7 +303,8 @@ type Budget struct {
 	// N2, BOOTSTRAP.md §4): `"9000000.0000"`, never a JSON number, never
 	// trimmed, never exponent notation. In the Household's
 	// `reporting_currency`; a Budget's money carries no `currency` of its own
-	// (PRD N3). May be negative where it is a difference (`unallocated`).
+	// (PRD N3), an Expense's has one. May be negative where it is a difference
+	// (`unallocated`) or a refund (an Expense's `amount`).
 	//
 	//
 	// Example: 9000000.0000
@@ -290,7 +320,8 @@ type Budget struct {
 	// N2, BOOTSTRAP.md §4): `"9000000.0000"`, never a JSON number, never
 	// trimmed, never exponent notation. In the Household's
 	// `reporting_currency`; a Budget's money carries no `currency` of its own
-	// (PRD N3). May be negative where it is a difference (`unallocated`).
+	// (PRD N3), an Expense's has one. May be negative where it is a difference
+	// (`unallocated`) or a refund (an Expense's `amount`).
 	//
 	//
 	// Example: 9000000.0000
@@ -382,6 +413,44 @@ type CreateCategoryRequest struct {
 	Id openapi_types.UUID `json:"id"`
 }
 
+// CreateExpenseRequest defines model for CreateExpenseRequest.
+type CreateExpenseRequest struct {
+	// Amount A `MoneyInput` with an optional leading minus: a decimal sent as a
+	// string, at most 16 integer digits and at most 4 decimals, no exponent, no
+	// separator and no whitespace. More than four decimals is refused and never
+	// rounded; a JSON number is `INVALID_JSON_BODY`. A negative amount is a
+	// refund. **The pattern cannot say "not zero"** (the regexp engine has no
+	// lookahead), so `"0"`, `"0.0000"` and `"-0"` pass it and the handler
+	// refuses them: `VALIDATION {rule: nonzero}`. The answer carries the amount
+	// as a `Money`.
+	//
+	//
+	// Example: -25000
+	Amount      SignedMoneyInput    `json:"amount"`
+	CategoryId  *openapi_types.UUID `json:"category_id,omitempty"`
+	Description *string             `json:"description,omitempty"`
+
+	// Id UUIDv7, generated by the client. The idempotency key.
+	Id openapi_types.UUID `json:"id"`
+
+	// OccurredOn `YYYY-MM-DD`, a Period Day the person chose. Absent means the
+	// writer's Today, resolved by the server. Future dates are accepted.
+	//
+	//
+	// Example: 2026-11-23
+	OccurredOn *string `json:"occurred_on,omitempty"`
+
+	// OccurredTime An optional wall-clock time, `HH:MM`.
+	OccurredTime *string             `json:"occurred_time,omitempty"`
+	OwnerUserId  *openapi_types.UUID `json:"owner_user_id,omitempty"`
+
+	// Ownership Whose an Expense is (CONTEXT.md): `joint`, the Household's, or
+	// `sole_owner`, attributed to one User (`owner_user_id`). Stored and on the
+	// wire; no control sets it until a second member exists.
+	Ownership *Ownership         `json:"ownership,omitempty"`
+	PocketId  openapi_types.UUID `json:"pocket_id"`
+}
+
 // CreatePocketRequest defines model for CreatePocketRequest.
 type CreatePocketRequest struct {
 	// Id UUIDv7, generated by the client. The idempotency key.
@@ -409,9 +478,12 @@ type Error struct {
 	// property, so a Household's name (`household_display_name`), a User's
 	// (`user_display_name`), a Pocket's (`pocket_display_name`) and a
 	// Category's (`category_display_name`) are never confused; a Pocket's
-	// or a Category's `id` is `id`; a Category's bucket is `bucket` and what
-	// it is planned at is `allocation`; a Budget's Monthly Budget is
-	// `monthly_budget`. `WEAK_PASSWORD` carries
+	// or a Category's `id` is `id`; an Expense's amount is `amount`, its date
+	// `occurred_on`, its time `occurred_time`, its Pocket and Category
+	// `pocket_id` and `category_id`, its owner `owner_user_id`, its text
+	// `description`, and a list's cursor and page size `after` and `limit`; a
+	// Category's bucket is `bucket` and what it is planned at is `allocation`;
+	// a Budget's Monthly Budget is `monthly_budget`. `WEAK_PASSWORD` carries
 	// `{reason}`, `min` or `breached`, at registration and at a password
 	// change. `INVALID_CURRENT_PASSWORD` is the password change's and the
 	// email change's own: the current password sent with the request is not
@@ -425,12 +497,17 @@ type Error struct {
 	// caller's own Household: unknown, another Household's and deleted all
 	// answer it, with no `args`, so one cannot be told from another (delete
 	// and restore, which may act on a deleted row, answer it for unknown and
-	// foreign ids only). `CATEGORY_IN_USE` is a delete of a Category that
-	// holds an allocation, a non-null amount, in a Budget Period other than
-	// the current one; it carries no `args`, and nothing is changed.
-	// `LAST_POCKET` is a delete, or a deactivation, of the Household's last
-	// active Pocket (a Household always keeps one); it carries no `args`, and
-	// nothing is changed. A path that matches no route at all is not this: it
+	// foreign ids only). `CATEGORY_IN_USE` is a delete of a Category that is
+	// part of the Household's records: it holds an allocation, a non-null
+	// amount, in a Budget Period other than the current one, or any Expense,
+	// live or deleted, references it; it carries no `args`, and nothing is
+	// changed. `POCKET_IN_USE` is a delete of a Pocket that any Expense, live
+	// or deleted, references; no `args`, nothing is changed, and the answer is
+	// to deactivate it. `CURRENCY_LOCKED` is a change of the Household's
+	// `reporting_currency` to another one once it holds any Expense, live or
+	// deleted; no `args`, nothing is changed. `LAST_POCKET` is a delete, or a
+	// deactivation, of the Household's last active Pocket (a Household always
+	// keeps one); it carries no `args`, and nothing is changed. A path that matches no route at all is not this: it
 	// answers a bare `404`.
 	Code ErrorCode `json:"code"`
 }
@@ -444,9 +521,12 @@ type Error struct {
 // property, so a Household's name (`household_display_name`), a User's
 // (`user_display_name`), a Pocket's (`pocket_display_name`) and a
 // Category's (`category_display_name`) are never confused; a Pocket's
-// or a Category's `id` is `id`; a Category's bucket is `bucket` and what
-// it is planned at is `allocation`; a Budget's Monthly Budget is
-// `monthly_budget`. `WEAK_PASSWORD` carries
+// or a Category's `id` is `id`; an Expense's amount is `amount`, its date
+// `occurred_on`, its time `occurred_time`, its Pocket and Category
+// `pocket_id` and `category_id`, its owner `owner_user_id`, its text
+// `description`, and a list's cursor and page size `after` and `limit`; a
+// Category's bucket is `bucket` and what it is planned at is `allocation`;
+// a Budget's Monthly Budget is `monthly_budget`. `WEAK_PASSWORD` carries
 // `{reason}`, `min` or `breached`, at registration and at a password
 // change. `INVALID_CURRENT_PASSWORD` is the password change's and the
 // email change's own: the current password sent with the request is not
@@ -460,14 +540,83 @@ type Error struct {
 // caller's own Household: unknown, another Household's and deleted all
 // answer it, with no `args`, so one cannot be told from another (delete
 // and restore, which may act on a deleted row, answer it for unknown and
-// foreign ids only). `CATEGORY_IN_USE` is a delete of a Category that
-// holds an allocation, a non-null amount, in a Budget Period other than
-// the current one; it carries no `args`, and nothing is changed.
-// `LAST_POCKET` is a delete, or a deactivation, of the Household's last
-// active Pocket (a Household always keeps one); it carries no `args`, and
-// nothing is changed. A path that matches no route at all is not this: it
+// foreign ids only). `CATEGORY_IN_USE` is a delete of a Category that is
+// part of the Household's records: it holds an allocation, a non-null
+// amount, in a Budget Period other than the current one, or any Expense,
+// live or deleted, references it; it carries no `args`, and nothing is
+// changed. `POCKET_IN_USE` is a delete of a Pocket that any Expense, live
+// or deleted, references; no `args`, nothing is changed, and the answer is
+// to deactivate it. `CURRENCY_LOCKED` is a change of the Household's
+// `reporting_currency` to another one once it holds any Expense, live or
+// deleted; no `args`, nothing is changed. `LAST_POCKET` is a delete, or a
+// deactivation, of the Household's last active Pocket (a Household always
+// keeps one); it carries no `args`, and nothing is changed. A path that matches no route at all is not this: it
 // answers a bare `404`.
 type ErrorCode string
+
+// Expense What the Household spent (PRD E1 to E10). `amount` may be negative: a
+// refund. No embedded Pocket or Category: the client resolves `pocket_id`
+// and `category_id` from the lists it holds, which include inactive rows,
+// and a referenced row can never be deleted, so every id resolves.
+// Optional properties are omitted when empty, never `null`.
+type Expense struct {
+	// Amount A decimal serialised as a string at exactly four decimal places (PRD
+	// N2, BOOTSTRAP.md §4): `"9000000.0000"`, never a JSON number, never
+	// trimmed, never exponent notation. In the Household's
+	// `reporting_currency`; a Budget's money carries no `currency` of its own
+	// (PRD N3), an Expense's has one. May be negative where it is a difference
+	// (`unallocated`) or a refund (an Expense's `amount`).
+	//
+	//
+	// Example: 9000000.0000
+	Amount Money `json:"amount"`
+
+	// CapturedAt The instant the server recorded it, UTC. Never sent by a client.
+	CapturedAt time.Time `json:"captured_at"`
+
+	// CategoryId Omitted for an uncategorised Expense.
+	CategoryId *openapi_types.UUID `json:"category_id,omitempty"`
+
+	// Currency ISO 4217. The Household's `reporting_currency` when it was recorded,
+	// stamped by the server; never changed.
+	//
+	//
+	// Example: IDR
+	Currency string `json:"currency"`
+
+	// Description Omitted when none was given.
+	Description *string `json:"description,omitempty"`
+
+	// Id UUIDv7, supplied by the client at creation.
+	Id openapi_types.UUID `json:"id"`
+
+	// OccurredOn The Period Day the Expense belongs to, `YYYY-MM-DD`. It may be in
+	// the future (PRD E8). Never derived by the client.
+	OccurredOn openapi_types.Date `json:"occurred_on"`
+
+	// OccurredTime An optional wall-clock time, `HH:MM`, with no zone: what the person
+	// said it was. Omitted when none was given.
+	OccurredTime *string `json:"occurred_time,omitempty"`
+
+	// OwnerUserId Present only for a `sole_owner` Expense.
+	OwnerUserId *openapi_types.UUID `json:"owner_user_id,omitempty"`
+
+	// Ownership Whose an Expense is (CONTEXT.md): `joint`, the Household's, or
+	// `sole_owner`, attributed to one User (`owner_user_id`). Stored and on the
+	// wire; no control sets it until a second member exists.
+	Ownership Ownership          `json:"ownership"`
+	PocketId  openapi_types.UUID `json:"pocket_id"`
+}
+
+// ExpenseList One page of the Household's live Expenses, newest first. An object so it
+// can carry a cursor and, later, counts, without breaking a client.
+type ExpenseList struct {
+	Items []Expense `json:"items"`
+
+	// Next Opaque. Pass it as `after` to read the following page. Omitted on the
+	// last page, never `null`.
+	Next *string `json:"next,omitempty"`
+}
 
 // Health defines model for Health.
 type Health struct {
@@ -573,15 +722,27 @@ type Me struct {
 	// TimeZone IANA time zone identifier.
 	//
 	// Example: Asia/Jakarta
-	TimeZone        string `json:"time_zone"`
-	UserDisplayName string `json:"user_display_name"`
+	TimeZone string `json:"time_zone"`
+
+	// Today The caller's current Period Day, `YYYY-MM-DD`: the date on the wall
+	// clock of the User's `time_zone`, less one day while that clock still
+	// reads earlier than the Household's `day_starts_at`. Worked out on the
+	// server (BOOTSTRAP.md §4); the client derives none of it and only
+	// reads it, for a date picker's highlight and a day's heading. It is
+	// as old as the response, so a client that keeps it refetches on focus.
+	//
+	//
+	// Example: 2026-11-25
+	Today           openapi_types.Date `json:"today"`
+	UserDisplayName string             `json:"user_display_name"`
 }
 
 // Money A decimal serialised as a string at exactly four decimal places (PRD
 // N2, BOOTSTRAP.md §4): `"9000000.0000"`, never a JSON number, never
 // trimmed, never exponent notation. In the Household's
 // `reporting_currency`; a Budget's money carries no `currency` of its own
-// (PRD N3). May be negative where it is a difference (`unallocated`).
+// (PRD N3), an Expense's has one. May be negative where it is a difference
+// (`unallocated`) or a refund (an Expense's `amount`).
 //
 // Example: 9000000.0000
 type Money = string
@@ -645,6 +806,11 @@ type OnboardingOptions struct {
 	UserDisplayName string `json:"user_display_name"`
 }
 
+// Ownership Whose an Expense is (CONTEXT.md): `joint`, the Household's, or
+// `sole_owner`, attributed to one User (`owner_user_id`). Stored and on the
+// wire; no control sets it until a second member exists.
+type Ownership string
+
 // Pocket A practical container the Household spends from (PRD S10, CONTEXT.md):
 // a name, and no balance. A Pocket on the wire is never deleted, but it
 // may be inactive: kept for the history it labels, and not offered for
@@ -662,8 +828,24 @@ type Pocket struct {
 // PocketList The Household's Pockets in creation order. An object rather than a bare
 // array so it can grow without breaking a client.
 type PocketList struct {
-	Items []Pocket `json:"items"`
+	// DefaultPocketId The Pocket capture offers first (PRD E3): that of the Household's most
+	// recent live Expense by `captured_at` whose Pocket is active and
+	// live. Derived on read; omitted when there is none.
+	DefaultPocketId *openapi_types.UUID `json:"default_pocket_id,omitempty"`
+	Items           []Pocket            `json:"items"`
 }
+
+// SignedMoneyInput A `MoneyInput` with an optional leading minus: a decimal sent as a
+// string, at most 16 integer digits and at most 4 decimals, no exponent, no
+// separator and no whitespace. More than four decimals is refused and never
+// rounded; a JSON number is `INVALID_JSON_BODY`. A negative amount is a
+// refund. **The pattern cannot say "not zero"** (the regexp engine has no
+// lookahead), so `"0"`, `"0.0000"` and `"-0"` pass it and the handler
+// refuses them: `VALIDATION {rule: nonzero}`. The answer carries the amount
+// as a `Money`.
+//
+// Example: -25000
+type SignedMoneyInput = string
 
 // UpdateBudgetRequest What a Budget change may set, merge-style: a property left out is
 // unchanged and none is required. `null` is not accepted for either
@@ -812,6 +994,17 @@ type TooManyRequests = Error
 // copy drift between the two.
 type Unauthorized = Error
 
+// ListExpensesParams defines parameters for ListExpenses.
+type ListExpensesParams struct {
+	// Limit Page size, 1 to 100. Default 25.
+	Limit *int `form:"limit,omitempty" json:"limit,omitempty"`
+
+	// After The `next` of the previous page. Opaque: no length or alphabet is
+	// promised, and a value this operation did not produce is `VALIDATION
+	// {field: after, rule: invalid}`.
+	After *string `form:"after,omitempty" json:"after,omitempty"`
+}
+
 // ChangeLocalEmailJSONRequestBody defines body for ChangeLocalEmail for application/json ContentType.
 type ChangeLocalEmailJSONRequestBody = ChangeEmailRequest
 
@@ -832,6 +1025,9 @@ type CreateCategoryJSONRequestBody = CreateCategoryRequest
 
 // UpdateCategoryJSONRequestBody defines body for UpdateCategory for application/json ContentType.
 type UpdateCategoryJSONRequestBody = UpdateCategoryRequest
+
+// CreateExpenseJSONRequestBody defines body for CreateExpense for application/json ContentType.
+type CreateExpenseJSONRequestBody = CreateExpenseRequest
 
 // UpdateHouseholdJSONRequestBody defines body for UpdateHousehold for application/json ContentType.
 type UpdateHouseholdJSONRequestBody = UpdateHouseholdRequest
@@ -889,6 +1085,12 @@ type ServerInterface interface {
 	// RestoreCategory Restore a deleted Category.
 	// (POST /categories/{id}/restore)
 	RestoreCategory(w http.ResponseWriter, r *http.Request, id CategoryId)
+	// ListExpenses The caller's Household's live Expenses, newest first.
+	// (GET /expenses)
+	ListExpenses(w http.ResponseWriter, r *http.Request, params ListExpensesParams)
+	// CreateExpense Record an Expense.
+	// (POST /expenses)
+	CreateExpense(w http.ResponseWriter, r *http.Request)
 	// GetHealth Liveness and readiness of this instance.
 	// (GET /health)
 	GetHealth(w http.ResponseWriter, r *http.Request)
@@ -1003,6 +1205,18 @@ func (_ Unimplemented) UpdateCategory(w http.ResponseWriter, r *http.Request, id
 // RestoreCategory Restore a deleted Category.
 // (POST /categories/{id}/restore)
 func (_ Unimplemented) RestoreCategory(w http.ResponseWriter, r *http.Request, id CategoryId) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// ListExpenses The caller's Household's live Expenses, newest first.
+// (GET /expenses)
+func (_ Unimplemented) ListExpenses(w http.ResponseWriter, r *http.Request, params ListExpensesParams) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// CreateExpense Record an Expense.
+// (POST /expenses)
+func (_ Unimplemented) CreateExpense(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
@@ -1290,6 +1504,66 @@ func (siw *ServerInterfaceWrapper) RestoreCategory(w http.ResponseWriter, r *htt
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.RestoreCategory(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ListExpenses operation middleware
+func (siw *ServerInterfaceWrapper) ListExpenses(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListExpensesParams
+
+	// ------------- Optional query parameter "limit" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "limit", r.URL.Query(), &params.Limit, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "limit"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "limit", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "after" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "after", r.URL.Query(), &params.After, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "after"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "after", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListExpenses(w, r, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// CreateExpense operation middleware
+func (siw *ServerInterfaceWrapper) CreateExpense(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.CreateExpense(w, r)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -1667,6 +1941,12 @@ func HandlerWithOptions(si ServerInterface, options ChiServerOptions) http.Handl
 	})
 	r.Group(func(r chi.Router) {
 		r.Patch(options.BaseURL+"/budget", wrapper.UpdateBudget)
+	})
+	r.Group(func(r chi.Router) {
+		r.Get(options.BaseURL+"/expenses", wrapper.ListExpenses)
+	})
+	r.Group(func(r chi.Router) {
+		r.Post(options.BaseURL+"/expenses", wrapper.CreateExpense)
 	})
 	r.Group(func(r chi.Router) {
 		r.Get(options.BaseURL+"/onboarding/options", wrapper.GetOnboardingOptions)
@@ -2663,6 +2943,162 @@ func (response RestoreCategory500JSONResponse) VisitRestoreCategoryResponse(w ht
 	return err
 }
 
+type ListExpensesRequestObject struct {
+	Params ListExpensesParams
+}
+
+type ListExpensesResponseObject interface {
+	VisitListExpensesResponse(w http.ResponseWriter) error
+}
+
+type ListExpenses200JSONResponse ExpenseList
+
+func (response ListExpenses200JSONResponse) VisitListExpensesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListExpenses400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response ListExpenses400JSONResponse) VisitListExpensesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListExpenses401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response ListExpenses401JSONResponse) VisitListExpensesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListExpenses500JSONResponse struct{ InternalErrorJSONResponse }
+
+func (response ListExpenses500JSONResponse) VisitListExpensesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateExpenseRequestObject struct {
+	Body *CreateExpenseJSONRequestBody
+}
+
+type CreateExpenseResponseObject interface {
+	VisitCreateExpenseResponse(w http.ResponseWriter) error
+}
+
+type CreateExpense200JSONResponse Expense
+
+func (response CreateExpense200JSONResponse) VisitCreateExpenseResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateExpense201JSONResponse Expense
+
+func (response CreateExpense201JSONResponse) VisitCreateExpenseResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(201)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateExpense400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response CreateExpense400JSONResponse) VisitCreateExpenseResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateExpense401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response CreateExpense401JSONResponse) VisitCreateExpenseResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateExpense409JSONResponse struct{ ConflictJSONResponse }
+
+func (response CreateExpense409JSONResponse) VisitCreateExpenseResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateExpense500JSONResponse struct{ InternalErrorJSONResponse }
+
+func (response CreateExpense500JSONResponse) VisitCreateExpenseResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type GetHealthRequestObject struct {
 }
 
@@ -2744,6 +3180,20 @@ func (response UpdateHousehold401JSONResponse) VisitUpdateHouseholdResponse(w ht
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateHousehold409JSONResponse struct{ ConflictJSONResponse }
+
+func (response UpdateHousehold409JSONResponse) VisitUpdateHouseholdResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
 	_, err := buf.WriteTo(w)
 	return err
 }
@@ -3481,6 +3931,12 @@ type StrictServerInterface interface {
 	// RestoreCategory Restore a deleted Category.
 	// (POST /categories/{id}/restore)
 	RestoreCategory(ctx context.Context, request RestoreCategoryRequestObject) (RestoreCategoryResponseObject, error)
+	// ListExpenses The caller's Household's live Expenses, newest first.
+	// (GET /expenses)
+	ListExpenses(ctx context.Context, request ListExpensesRequestObject) (ListExpensesResponseObject, error)
+	// CreateExpense Record an Expense.
+	// (POST /expenses)
+	CreateExpense(ctx context.Context, request CreateExpenseRequestObject) (CreateExpenseResponseObject, error)
 	// GetHealth Liveness and readiness of this instance.
 	// (GET /health)
 	GetHealth(ctx context.Context, request GetHealthRequestObject) (GetHealthResponseObject, error)
@@ -3915,6 +4371,63 @@ func (sh *strictHandler) RestoreCategory(w http.ResponseWriter, r *http.Request,
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(RestoreCategoryResponseObject); ok {
 		if err := validResponse.VisitRestoreCategoryResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ListExpenses operation middleware
+func (sh *strictHandler) ListExpenses(w http.ResponseWriter, r *http.Request, params ListExpensesParams) {
+	var request ListExpensesRequestObject
+
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListExpenses(ctx, request.(ListExpensesRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListExpenses")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListExpensesResponseObject); ok {
+		if err := validResponse.VisitListExpensesResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// CreateExpense operation middleware
+func (sh *strictHandler) CreateExpense(w http.ResponseWriter, r *http.Request) {
+	var request CreateExpenseRequestObject
+
+	var body CreateExpenseJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.CreateExpense(ctx, request.(CreateExpenseRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "CreateExpense")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(CreateExpenseResponseObject); ok {
+		if err := validResponse.VisitCreateExpenseResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

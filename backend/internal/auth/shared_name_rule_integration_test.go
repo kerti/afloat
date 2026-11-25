@@ -30,7 +30,7 @@ func TestOneNameRuleAcrossFoundingHouseholdEditAndPocketCreate(t *testing.T) {
 		t.Fatalf("GetUserByID: %v", err)
 	}
 	member := auth.WithUser(context.Background(), user)
-	households := household.New(household.Deps{Querier: h.tdb.Queries})
+	households := household.New(household.Deps{Querier: h.tdb.Queries, Beginner: h.tdb.Pool})
 	pockets := pocket.New(pocket.Deps{Querier: h.tdb.Queries, Beginner: h.tdb.Pool})
 
 	sixty := strings.Repeat("\U0001F6F6", 60)

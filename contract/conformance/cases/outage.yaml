@@ -274,3 +274,41 @@
     rows:
       - sql: SELECT (SELECT count(*) FROM budgets)::int AS budgets, (SELECT count(*) FROM allocations)::int AS allocations
         rows: [{budgets: 0, allocations: 0}]
+
+# GET and POST /expenses: the session is unreadable, so the answer is 500, the cookie
+# is kept (#27) and nothing is written. The handlers' own failures are the backend's
+# suite's.
+
+- name: "outage - an expense list with a session is 500"
+  issue: "140"
+  given:
+    - sql: |
+        INSERT INTO pockets (id, household_id, pocket_display_name) VALUES ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO')
+    - request: {"method": "POST", "path": "/auth/local/login", "headers": {"Content-Type": "application/json"}, "body": "{\"email\":\"alice@example.com\",\"password\":\"conformance-correct-horse\"}"}
+      status: 204
+    - outage: true
+  request: {"method": "GET", "path": "/expenses"}
+  expect:
+    status: 500
+    body_json: {"code": "INTERNAL"}
+    cookies: {}
+    rows:
+      - sql: "SELECT count(*)::int AS n FROM expenses"
+        rows: [{"n": 0}]
+
+- name: "outage - an expense create with a session is 500 and writes nothing"
+  issue: "140"
+  given:
+    - sql: |
+        INSERT INTO pockets (id, household_id, pocket_display_name) VALUES ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO')
+    - request: {"method": "POST", "path": "/auth/local/login", "headers": {"Content-Type": "application/json"}, "body": "{\"email\":\"alice@example.com\",\"password\":\"conformance-correct-horse\"}"}
+      status: 204
+    - outage: true
+  request: {"method": "POST", "path": "/expenses", "headers": {"Content-Type": "application/json"}, "body": "{\"id\":\"0192f0a0-0000-7000-8004-000000000001\",\"amount\":\"1\",\"pocket_id\":\"0192f0a0-0000-7000-8001-000000000001\"}"}
+  expect:
+    status: 500
+    body_json: {"code": "INTERNAL"}
+    cookies: {}
+    rows:
+      - sql: "SELECT count(*)::int AS n FROM expenses"
+        rows: [{"n": 0}]

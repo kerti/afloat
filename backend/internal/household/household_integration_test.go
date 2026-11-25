@@ -46,7 +46,7 @@ func newFixtureWith(t *testing.T, wrap func(db.Querier) db.Querier) fixture {
 	}
 	return fixture{
 		tdb:      tdb,
-		handlers: household.New(household.Deps{Querier: q}),
+		handlers: household.New(household.Deps{Querier: q, Beginner: tdb.Pool}),
 		auth: auth.New(auth.Deps{
 			Querier:            tdb.Queries,
 			Beginner:           tdb.Pool,

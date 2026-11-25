@@ -134,7 +134,10 @@ must not be foreclosed.
   Any member may change them (S2). `PATCH /household` writes four: the settings screen writes
   `household_display_name`, `reporting_currency` and `period_start_day`, and the Budget screen writes
   `expected_monthly_income` (#130 PR 5, the first field `null` clears); the others follow with the
-  slices that consume them.
+  slices that consume them. **`reporting_currency` is locked once the Household holds any Expense**,
+  a deleted one included (the Recycle Bin never empties): a different value is
+  `409 CURRENCY_LOCKED`, sending the stored one is a no-op, and it is a refusal on a setting, never on
+  spending. Multi-currency stays out of the MVP (Q-16).
 - **S4.** User settings: `user_display_name`, `email`, `locale` (default `en-GB`; `en-GB` or `id-ID`),
   `time_zone` (default `Asia/Jakarta`; an IANA name), `appearance` (default `system`; `system`, `light`
   or `dark`) and the password. Each User changes only their own: S2's equal access is about the
@@ -204,7 +207,8 @@ number from thin air produces confident nonsense downstream. Onboarding must the
   latest state in the nearest earlier Period that holds an allocation for it, dated the current Period's
   first day, S12), so a Commitment always has one. A Daily Category whose latest allocation was "none",
   or that never had one, comes back with none. A Category that **any other Budget Period holds an
-  allocation for** cannot be deleted (`409 CATEGORY_IN_USE`): it is part of that Period's record, and
+  allocation for**, or that **any Expense, live or in the Recycle Bin, references**, cannot be deleted
+  (`409 CATEGORY_IN_USE`, one code for both): it is part of the Household's record, and
   **deactivating** it is the way to retire it. Only the current Period's own allocation never blocks a
   delete.
 - **S9.** Monthly Budget is authoritative. Category allocations are advisory and need not sum to it.
@@ -214,7 +218,8 @@ number from thin air produces confident nonsense downstream. Onboarding must the
   Household's Pockets that are not deleted, active or inactive, compared case-insensitively) and is
   active or inactive. Any member may change them (S2). A Pocket may be **deactivated** (kept in
   history, not offered at capture, reversible) or **deleted** (gone from the UI, undoable from a
-  toast, and refused while any Expense references it). Neither act touches an Expense. **A
+  toast, and refused while any Expense, live or in the Recycle Bin, references it: `409 POCKET_IN_USE`,
+  answered by deactivating it). Neither act touches an Expense. **A
   Household always keeps at least one active Pocket** (R1 of #140): founding creates the first, and a
   delete or a deactivation that would leave none is refused, `409 LAST_POCKET` (deleting an inactive
   Pocket, and a repeat delete of a deleted one, are unaffected).
@@ -245,8 +250,11 @@ The ten-second target (G2) is the constraint every decision here answers to.
 - **E2.** Required to save: **amount only**. Every Expense has a Pocket, and capture is never gated by
   it: a Household always keeps an active Pocket (S10, `409 LAST_POCKET`), so there is always one to
   default to. Category and description may be left empty, and the date has a default.
-- **E3.** Defaults: `occurred_on` = Today; Pocket = the Household's most-used Pocket, or last used;
-  Category = empty. Ownership = Joint.
+- **E3.** Defaults: `occurred_on` = Today, which the **server** resolves when it is left out (the
+  writer's own `time_zone` and the Household's `day_starts_at`; the client derives no Period Day, and
+  reads `today` from `GET /me` only to highlight a date picker); Pocket = the Pocket of the Household's
+  most recent live Expense whose Pocket is active, derived on read and offered as `default_pocket_id`
+  on `GET /pockets` (Q-21, #140 R3); Category = empty. Ownership = Joint.
 - **E4.** An uncategorised Expense is valid, counts toward the daily bucket, and is surfaced in a
   "needs a category" list for later. Capture first, organise later.
 - **E5.** Every field is editable after the fact, with no exception path and no confirmation friction.
@@ -325,16 +333,21 @@ The first screen answers the core question with no navigation.
 ### 8.3 Offline readiness
 
 The offline write queue is **out of MVP**. The contract that makes it cheap to add is **in MVP**,
-because retrofitting it is a contract change plus a migration, and adding it later on
-top of these four rules is a frontend-only change:
+because retrofitting it is a contract change plus a migration. On top of these four
+rules the queue is **not** a frontend-only change: `captured_at` is server-stamped and an absent
+`occurred_on` is the server's Today (N12, E3), so a queue also needs a client-sent `captured_at`
+and a cached server Today (`today` on `GET /me`), both additive:
 
 - **N9.** Client-generated UUIDv7 Expense ids (E9).
 - **N10.** `POST /expenses` is idempotent on the client-supplied id and safe to replay.
 - **N11.** The create payload is fully self-describing — no server round-trip is required to compute
   defaults before a write. Capture must never depend on the server telling the client the current
   allowance or a default Category.
-- **N12.** `captured_at` distinct from `occurred_on` (E10), so a queued Expense keeps its true capture
-  time when it lands hours later.
+- **N12.** `captured_at` distinct from `occurred_on` (E10), and **stamped by the server, never sent**
+  (#140 R5): a device's clock would skew the figures derived from it (G3). With writes online-only
+  there is no queued Expense that lands hours later, so nothing yet needs the client's capture time. A
+  future queue sends it, additively (the readiness contract is the id, the replay-safe `POST` and the
+  two dates being separate columns), and sends the date it chose, from a server-supplied Today.
 
 ### 8.3a Internationalisation
 
@@ -441,6 +454,7 @@ its due date by hand. Adding it back later is a non-breaking contract change plu
 
 | Date | Change |
 |---|---|
+| 2026-11-25 | Expenses on the wire (issue #140, PR 3a of 5: `POST` and `GET /expenses`, live list only). Rulings from the maintainer, as they bear on this PR: **R3**, the default Pocket is the last used (`default_pocket_id` on `GET /pockets`, E3 reworded); **R4**, money in is a `SignedMoneyInput` (a leading minus is a refund), out is a `Money`; zero in any spelling is refused by the handler as `VALIDATION {amount, nonzero}`, `CHECK (amount <> 0)` being the net, and the `currency` is stamped from `reporting_currency`, never sent; **R5**, an absent `occurred_on` is the writer's Today, resolved by the server, `captured_at` is the server's and never sent (N12 reworded, and the offline queue is no longer "a frontend-only change"); **R6**, `ownership` and `owner_user_id` are stored and on the wire as a pair, with no UI; **R7**, the list is newest first by `occurred_on`, the effective time (wrapping at `day_starts_at`), `captured_at` and `id`, keyset-paged, with all seven indexes in the baseline; **R10**, a new reference to an inactive Category is refused as an inactive Pocket is; **R12**, the three guards: `409 POCKET_IN_USE`, `409 CATEGORY_IN_USE` extended to any Expense, and `409 CURRENCY_LOCKED`, each a lock on the protected row, an `EXISTS` in a later statement, then the write, with every create share-locking the Household, then the Pocket and Category; **R15**, `today` on `GET /me`. The `expenses` table, `UNIQUE (household_id, id)` on `pockets` and `users`, in `00001_baseline.sql` in place, so everyone runs `make db-reset`. |
 | 2026-11-24 | Founding and the Pocket invariant (issue #140, PR 2 of 5). Rulings from the maintainer, as they bear on this PR: **R1**, a Household always keeps at least one active Pocket: `DELETE /pockets/{id}` and `PATCH /pockets/{id}` with `active: false` that would leave none are refused, `409 LAST_POCKET` (a new code, no `args`), by one transaction that locks the Household row, counts the other active live Pockets in a later statement and then writes, so two concurrent removals of the last two cannot both pass; deleting an inactive Pocket, deactivating an inactive one and a repeat delete of a deleted one are never refused, and `NOT_FOUND` is decided before `LAST_POCKET`. **R2**, `OnboardingChoiceRequest` gains `pocket_display_name` (required, a Pocket's name rules), and founding creates the Household, the User, the credential and one active Pocket, server-minted UUIDv7, in the one transaction. S1, S2b, S10 and E2 reworded to match. **The SPA founds silently**: register lands on `/onboarding`, which commits the choice itself with both names from i18n ("{{name}}'s Household", "Cash" / "Tunai") and is otherwise only the pending, retry and founding-closed screen; the gate's form and its "You're registering as" line go. Home then shows a one-time `NoticeCard` naming the Household, the Pocket and the currency, carried by router state and never stored (R2, R11; copy the maintainer's). **Pocket Delete and Deactivate follow the refusable-act rule** (#136): the dialog waits, undismissable, and a refusal or failure shows above its actions (ruled 24 Nov 2026). No schema change, no backfill: a Household without a Pocket exists only in a dev database (R19).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | 2026-11-24 | Navigation, ruled by the maintainer ahead of the Expenses slice, from Uruni's Shell (ADR-032, ADR-046, ADR-047). **Q-11 reversed:** the app opens on the dashboard, as Uruni's does, and capture is one tap away (E1 reworded); a capture returns to the dashboard after a save. A fixed bottom bar with five tabs, icon and label each: Home `/`, Expenses `/expenses`, Capture `/capture` (raised, centre, on a rounded square rather than Uruni's circle, the one verb tab, a full screen, never a dialog; no floating button), Budget `/budget`, Settings `/settings`. **Settings is one sectioned screen**, Household, Pockets and You, folding in `/settings/household`, `/settings/user` and `/pockets`; this sets aside #119's "no settings hub" (one screen, not a hub of links). Budget and its Categories stay a tab (an operation, not configuration). The Recycle Bin is a sub-screen at `/expenses/recycle-bin` with "← Expenses" and the Expenses tab lit. The top bar keeps the home link and Sign out; a screen that becomes a tab loses its "← Home". The bar ships with the first Expenses PR, never with tabs that lead nowhere. Recorded in `docs/agents/ui-conventions.md` § Layout and navigation. |
 | 2026-11-24 | Expected monthly income (issue #130, PR 5 of 5; #130 itself closed with PR 4, #136). `PATCH /household` writes `expected_monthly_income` (S7): a money string, at least 0, the same rule as `monthly_budget`; `null` clears it and an absent property leaves it alone. It is the first property that `null` clears, so BOOTSTRAP §4 now types a clearable field as `nullable` in the contract, `nullable.Nullable[T]` in Go (oapi-codegen `nullable-type`, which also retypes the two existing nullable `allocation` properties, with the same behaviour), and a set flag beside the value in SQL, still one `UPDATE`. S6 as ruled in R17: the toast of the save that makes the Monthly Budget exceed the income says so, compared exactly on the wire strings, never as floats; nothing persists or is stored. S5's share stays unbuilt (**Q-19**); onboarding is unchanged. The input sits under the Monthly Budget on `/budget`. UI rulings from the maintainer, recorded in `docs/agents/ui-conventions.md`: "(optional)" in the label, a hint under the field, a clearable `MoneySetting` saves a blank as `null`, a save's toast carries the sentence for what it made true, settings stack in one Section with a Save each, amounts compared exactly. `CONTEXT.md` gains the id-ID term (provisional, R16). |

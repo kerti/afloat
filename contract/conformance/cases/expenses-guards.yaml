@@ -1,0 +1,446 @@
+# The three guards (#140 R12, PR 3a): a Pocket or a Category that any Expense
+# references, live or in the Recycle Bin, is not deleted (409 POCKET_IN_USE,
+# 409 CATEGORY_IN_USE; the answer both offer is to deactivate it, which touches no
+# Expense), and the Household's reporting_currency does not change to another
+# once it holds any Expense (409 CURRENCY_LOCKED; the stored currency is a no-op).
+# Each is a lock on the protected row, an EXISTS in a separate later statement, then
+# the write; the races are proven in the backend's suite, which holds one
+# transaction at the interleaving (the harness has no concurrent callers).
+#
+# Order of the Pocket's refusals: NOT_FOUND, the idempotent 204 of one already
+# deleted, LAST_POCKET, then POCKET_IN_USE.
+#
+# Pockets: OVO (...01, active), Dana (...02, inactive), Keeper (...0a, active),
+# all Household 1, and Theirs (...09, Household 2). Categories: Food (...01),
+# Gym (...02, inactive), Spare (...03). `untouched` says updated_at still holds the
+# seeded instant.
+
+- name: "pocket in use - a Pocket a live Expense references is POCKET_IN_USE and nothing changes"
+  issue: "140"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO pockets (id, household_id, pocket_display_name, active, deleted_at, created_at, updated_at) VALUES
+          ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO', true, NULL, '2026-01-01T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Dana', false, NULL, '2026-01-01T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-00000000000a', '0192f0a0-0000-7000-8000-000000000001', 'Keeper', true, NULL, '2026-01-01T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', true, NULL, '2026-01-01T00:00:00Z', '2026-01-05T00:00:00Z');
+        INSERT INTO expenses (id, household_id, occurred_on, amount, currency, pocket_id, category_id, deleted_at, created_at, updated_at) VALUES
+          ('0192f0a0-0000-7000-8004-000000000001', '0192f0a0-0000-7000-8000-000000000001', '2026-11-20', 1, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL, NULL, '2026-01-06T00:00:00Z', '2026-01-06T00:00:00Z')
+    - request: {"method": "POST", "path": "/auth/local/login", "headers": {"Content-Type": "application/json"}, "body": "{\"email\":\"alice@example.com\",\"password\":\"conformance-correct-horse\"}"}
+      status: 204
+  request: {"method": "DELETE", "path": "/pockets/0192f0a0-0000-7000-8001-000000000001"}
+  expect:
+    status: 409
+    body_json: {"code": "POCKET_IN_USE"}
+    cookies: {}
+    rows:
+      - sql: "SELECT pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted, (updated_at = '2026-01-05T00:00:00Z') AS untouched FROM pockets WHERE household_id = '0192f0a0-0000-7000-8000-000000000001' ORDER BY id"
+        rows: [{"name": "OVO", "active": true, "deleted": false, "untouched": true}, {"name": "Dana", "active": false, "deleted": false, "untouched": true}, {"name": "Keeper", "active": true, "deleted": false, "untouched": true}]
+      - sql: "SELECT count(*)::int AS n FROM expenses"
+        rows: [{"n": 1}]
+
+- name: "pocket in use - a Pocket an Expense in the Recycle Bin references is still POCKET_IN_USE"
+  issue: "140"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO pockets (id, household_id, pocket_display_name, active, deleted_at, created_at, updated_at) VALUES
+          ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO', true, NULL, '2026-01-01T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Dana', false, NULL, '2026-01-01T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-00000000000a', '0192f0a0-0000-7000-8000-000000000001', 'Keeper', true, NULL, '2026-01-01T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', true, NULL, '2026-01-01T00:00:00Z', '2026-01-05T00:00:00Z');
+        INSERT INTO expenses (id, household_id, occurred_on, amount, currency, pocket_id, category_id, deleted_at, created_at, updated_at) VALUES
+          ('0192f0a0-0000-7000-8004-000000000001', '0192f0a0-0000-7000-8000-000000000001', '2026-11-20', 1, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL, now(), '2026-01-06T00:00:00Z', '2026-01-06T00:00:00Z')
+    - request: {"method": "POST", "path": "/auth/local/login", "headers": {"Content-Type": "application/json"}, "body": "{\"email\":\"alice@example.com\",\"password\":\"conformance-correct-horse\"}"}
+      status: 204
+  request: {"method": "DELETE", "path": "/pockets/0192f0a0-0000-7000-8001-000000000001"}
+  expect:
+    status: 409
+    body_json: {"code": "POCKET_IN_USE"}
+    cookies: {}
+    rows:
+      - sql: "SELECT pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted, (updated_at = '2026-01-05T00:00:00Z') AS untouched FROM pockets WHERE household_id = '0192f0a0-0000-7000-8000-000000000001' ORDER BY id"
+        rows: [{"name": "OVO", "active": true, "deleted": false, "untouched": true}, {"name": "Dana", "active": false, "deleted": false, "untouched": true}, {"name": "Keeper", "active": true, "deleted": false, "untouched": true}]
+
+- name: "pocket in use - an inactive Pocket an Expense references is POCKET_IN_USE too"
+  issue: "140"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO pockets (id, household_id, pocket_display_name, active, deleted_at, created_at, updated_at) VALUES
+          ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO', true, NULL, '2026-01-01T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Dana', false, NULL, '2026-01-01T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-00000000000a', '0192f0a0-0000-7000-8000-000000000001', 'Keeper', true, NULL, '2026-01-01T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', true, NULL, '2026-01-01T00:00:00Z', '2026-01-05T00:00:00Z');
+        INSERT INTO expenses (id, household_id, occurred_on, amount, currency, pocket_id, category_id, deleted_at, created_at, updated_at) VALUES
+          ('0192f0a0-0000-7000-8004-000000000001', '0192f0a0-0000-7000-8000-000000000001', '2026-11-20', 1, 'IDR', '0192f0a0-0000-7000-8001-000000000002', NULL, NULL, '2026-01-06T00:00:00Z', '2026-01-06T00:00:00Z')
+    - request: {"method": "POST", "path": "/auth/local/login", "headers": {"Content-Type": "application/json"}, "body": "{\"email\":\"alice@example.com\",\"password\":\"conformance-correct-horse\"}"}
+      status: 204
+  request: {"method": "DELETE", "path": "/pockets/0192f0a0-0000-7000-8001-000000000002"}
+  expect:
+    status: 409
+    body_json: {"code": "POCKET_IN_USE"}
+    cookies: {}
+    rows:
+      - sql: "SELECT pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted, (updated_at = '2026-01-05T00:00:00Z') AS untouched FROM pockets WHERE household_id = '0192f0a0-0000-7000-8000-000000000001' ORDER BY id"
+        rows: [{"name": "OVO", "active": true, "deleted": false, "untouched": true}, {"name": "Dana", "active": false, "deleted": false, "untouched": true}, {"name": "Keeper", "active": true, "deleted": false, "untouched": true}]
+
+- name: "pocket in use - a Pocket nothing references is deleted, whatever other Pockets and Households hold"
+  issue: "140"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO pockets (id, household_id, pocket_display_name, active, deleted_at, created_at, updated_at) VALUES
+          ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO', true, NULL, '2026-01-01T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Dana', false, NULL, '2026-01-01T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-00000000000a', '0192f0a0-0000-7000-8000-000000000001', 'Keeper', true, NULL, '2026-01-01T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', true, NULL, '2026-01-01T00:00:00Z', '2026-01-05T00:00:00Z');
+        INSERT INTO expenses (id, household_id, occurred_on, amount, currency, pocket_id, category_id, deleted_at, created_at, updated_at) VALUES
+          ('0192f0a0-0000-7000-8004-000000000001', '0192f0a0-0000-7000-8000-000000000001', '2026-11-20', 1, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL, NULL, '2026-01-06T00:00:00Z', '2026-01-06T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-00000000005a', '0192f0a0-0000-7000-8000-000000000002', '2026-11-20', 1, 'IDR', '0192f0a0-0000-7000-8001-000000000009', NULL, NULL, now(), now())
+    - request: {"method": "POST", "path": "/auth/local/login", "headers": {"Content-Type": "application/json"}, "body": "{\"email\":\"alice@example.com\",\"password\":\"conformance-correct-horse\"}"}
+      status: 204
+  request: {"method": "DELETE", "path": "/pockets/0192f0a0-0000-7000-8001-00000000000a"}
+  expect:
+    status: 204
+    body_empty: true
+    cookies: {}
+    rows:
+      - sql: "SELECT pocket_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted, (updated_at = '2026-01-05T00:00:00Z') AS untouched FROM pockets WHERE household_id = '0192f0a0-0000-7000-8000-000000000001' ORDER BY id"
+        rows: [{"name": "OVO", "active": true, "deleted": false, "untouched": true}, {"name": "Dana", "active": false, "deleted": false, "untouched": true}, {"name": "Keeper", "active": true, "deleted": true, "untouched": false}]
+
+- name: "pocket in use - deactivating is the answer it offers, and no Expense is touched"
+  issue: "140"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO pockets (id, household_id, pocket_display_name, active, deleted_at, created_at, updated_at) VALUES
+          ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO', true, NULL, '2026-01-01T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Dana', false, NULL, '2026-01-01T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-00000000000a', '0192f0a0-0000-7000-8000-000000000001', 'Keeper', true, NULL, '2026-01-01T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', true, NULL, '2026-01-01T00:00:00Z', '2026-01-05T00:00:00Z');
+        INSERT INTO expenses (id, household_id, occurred_on, amount, currency, pocket_id, category_id, deleted_at, created_at, updated_at) VALUES
+          ('0192f0a0-0000-7000-8004-000000000001', '0192f0a0-0000-7000-8000-000000000001', '2026-11-20', 1, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL, NULL, '2026-01-06T00:00:00Z', '2026-01-06T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-000000000002', '0192f0a0-0000-7000-8000-000000000001', '2026-11-20', 1, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL, now(), '2026-01-06T00:00:00Z', '2026-01-06T00:00:00Z')
+    - request: {"method": "POST", "path": "/auth/local/login", "headers": {"Content-Type": "application/json"}, "body": "{\"email\":\"alice@example.com\",\"password\":\"conformance-correct-horse\"}"}
+      status: 204
+  request: {"method": "PATCH", "path": "/pockets/0192f0a0-0000-7000-8001-000000000001", "headers": {"Content-Type": "application/json"}, "body": "{\"active\": false}"}
+  expect:
+    status: 200
+    body_json: {"id": "0192f0a0-0000-7000-8001-000000000001", "pocket_display_name": "OVO", "active": false}
+    cookies: {}
+    rows:
+      - sql: "SELECT id::text AS id, pocket_id::text AS pocket_id, category_id::text AS category_id, (deleted_at IS NOT NULL) AS deleted, (updated_at = created_at) AS untouched FROM expenses WHERE household_id = '0192f0a0-0000-7000-8000-000000000001' ORDER BY id"
+        rows: [{"id": "0192f0a0-0000-7000-8004-000000000001", "pocket_id": "0192f0a0-0000-7000-8001-000000000001", "category_id": null, "deleted": false, "untouched": true}, {"id": "0192f0a0-0000-7000-8004-000000000002", "pocket_id": "0192f0a0-0000-7000-8001-000000000001", "category_id": null, "deleted": true, "untouched": true}]
+
+- name: "pocket in use - the last active Pocket, in use, is LAST_POCKET: the Deactivate on offer would be refused too"
+  issue: "140"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO pockets (id, household_id, pocket_display_name, active, deleted_at, created_at, updated_at) VALUES
+          ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO', true, NULL, '2026-01-01T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Dana', false, NULL, '2026-01-01T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', true, NULL, '2026-01-01T00:00:00Z', '2026-01-05T00:00:00Z');
+        INSERT INTO expenses (id, household_id, occurred_on, amount, currency, pocket_id, category_id, deleted_at, created_at, updated_at) VALUES
+          ('0192f0a0-0000-7000-8004-000000000001', '0192f0a0-0000-7000-8000-000000000001', '2026-11-20', 1, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL, NULL, '2026-01-06T00:00:00Z', '2026-01-06T00:00:00Z')
+    - request: {"method": "POST", "path": "/auth/local/login", "headers": {"Content-Type": "application/json"}, "body": "{\"email\":\"alice@example.com\",\"password\":\"conformance-correct-horse\"}"}
+      status: 204
+  request: {"method": "DELETE", "path": "/pockets/0192f0a0-0000-7000-8001-000000000001"}
+  expect:
+    status: 409
+    body_json: {"code": "LAST_POCKET"}
+    cookies: {}
+
+- name: "pocket in use - another Household's Pocket in use is NOT_FOUND, as an unknown one"
+  issue: "140"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO pockets (id, household_id, pocket_display_name, active, deleted_at, created_at, updated_at) VALUES
+          ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO', true, NULL, '2026-01-01T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Dana', false, NULL, '2026-01-01T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-00000000000a', '0192f0a0-0000-7000-8000-000000000001', 'Keeper', true, NULL, '2026-01-01T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', true, NULL, '2026-01-01T00:00:00Z', '2026-01-05T00:00:00Z');
+        INSERT INTO expenses (id, household_id, occurred_on, amount, currency, pocket_id, category_id, deleted_at, created_at, updated_at) VALUES
+          ('0192f0a0-0000-7000-8004-00000000005a', '0192f0a0-0000-7000-8000-000000000002', '2026-11-20', 1, 'IDR', '0192f0a0-0000-7000-8001-000000000009', NULL, NULL, now(), now())
+    - request: {"method": "POST", "path": "/auth/local/login", "headers": {"Content-Type": "application/json"}, "body": "{\"email\":\"alice@example.com\",\"password\":\"conformance-correct-horse\"}"}
+      status: 204
+  request: {"method": "DELETE", "path": "/pockets/0192f0a0-0000-7000-8001-000000000009"}
+  expect:
+    status: 404
+    body_json: {"code": "NOT_FOUND"}
+    same_as: {"method": "DELETE", "path": "/pockets/0192f0a0-0000-7000-8001-0000000000ee"}
+    cookies: {}
+
+- name: "category in use - a Category a live Expense references is CATEGORY_IN_USE and nothing changes"
+  issue: "140"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO pockets (id, household_id, pocket_display_name) VALUES ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO'), ('0192f0a0-0000-7000-8001-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs');
+        INSERT INTO categories (id, household_id, category_display_name, bucket, active, created_at, updated_at) VALUES
+          ('0192f0a0-0000-7000-8003-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'Food', 'daily', true, '2026-01-01T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Gym', 'daily', false, '2026-01-02T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Spare', 'daily', true, '2026-01-03T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', 'daily', true, '2026-01-09T00:00:00Z', '2026-01-05T00:00:00Z');
+        INSERT INTO expenses (id, household_id, occurred_on, amount, currency, pocket_id, category_id, deleted_at, created_at, updated_at) VALUES
+          ('0192f0a0-0000-7000-8004-000000000001', '0192f0a0-0000-7000-8000-000000000001', '2026-11-20', 1, 'IDR', '0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8003-000000000001', NULL, '2026-01-06T00:00:00Z', '2026-01-06T00:00:00Z')
+    - request: {"method": "POST", "path": "/auth/local/login", "headers": {"Content-Type": "application/json"}, "body": "{\"email\":\"alice@example.com\",\"password\":\"conformance-correct-horse\"}"}
+      status: 204
+  request: {"method": "DELETE", "path": "/categories/0192f0a0-0000-7000-8003-000000000001"}
+  expect:
+    status: 409
+    body_json: {"code": "CATEGORY_IN_USE"}
+    cookies: {}
+    rows:
+      - sql: "SELECT category_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted, (updated_at = '2026-01-05T00:00:00Z') AS untouched FROM categories WHERE household_id = '0192f0a0-0000-7000-8000-000000000001' ORDER BY id"
+        rows: [{"name": "Food", "active": true, "deleted": false, "untouched": true}, {"name": "Gym", "active": false, "deleted": false, "untouched": true}, {"name": "Spare", "active": true, "deleted": false, "untouched": true}]
+
+- name: "category in use - a Category an Expense in the Recycle Bin references is still CATEGORY_IN_USE"
+  issue: "140"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO pockets (id, household_id, pocket_display_name) VALUES ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO'), ('0192f0a0-0000-7000-8001-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs');
+        INSERT INTO categories (id, household_id, category_display_name, bucket, active, created_at, updated_at) VALUES
+          ('0192f0a0-0000-7000-8003-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'Food', 'daily', true, '2026-01-01T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Gym', 'daily', false, '2026-01-02T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Spare', 'daily', true, '2026-01-03T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', 'daily', true, '2026-01-09T00:00:00Z', '2026-01-05T00:00:00Z');
+        INSERT INTO expenses (id, household_id, occurred_on, amount, currency, pocket_id, category_id, deleted_at, created_at, updated_at) VALUES
+          ('0192f0a0-0000-7000-8004-000000000001', '0192f0a0-0000-7000-8000-000000000001', '2026-11-20', 1, 'IDR', '0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8003-000000000001', now(), '2026-01-06T00:00:00Z', '2026-01-06T00:00:00Z')
+    - request: {"method": "POST", "path": "/auth/local/login", "headers": {"Content-Type": "application/json"}, "body": "{\"email\":\"alice@example.com\",\"password\":\"conformance-correct-horse\"}"}
+      status: 204
+  request: {"method": "DELETE", "path": "/categories/0192f0a0-0000-7000-8003-000000000001"}
+  expect:
+    status: 409
+    body_json: {"code": "CATEGORY_IN_USE"}
+    cookies: {}
+    rows:
+      - sql: "SELECT category_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted, (updated_at = '2026-01-05T00:00:00Z') AS untouched FROM categories WHERE household_id = '0192f0a0-0000-7000-8000-000000000001' ORDER BY id"
+        rows: [{"name": "Food", "active": true, "deleted": false, "untouched": true}, {"name": "Gym", "active": false, "deleted": false, "untouched": true}, {"name": "Spare", "active": true, "deleted": false, "untouched": true}]
+
+- name: "category in use - an inactive Category an Expense references is CATEGORY_IN_USE too"
+  issue: "140"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO pockets (id, household_id, pocket_display_name) VALUES ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO'), ('0192f0a0-0000-7000-8001-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs');
+        INSERT INTO categories (id, household_id, category_display_name, bucket, active, created_at, updated_at) VALUES
+          ('0192f0a0-0000-7000-8003-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'Food', 'daily', true, '2026-01-01T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Gym', 'daily', false, '2026-01-02T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Spare', 'daily', true, '2026-01-03T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', 'daily', true, '2026-01-09T00:00:00Z', '2026-01-05T00:00:00Z');
+        INSERT INTO expenses (id, household_id, occurred_on, amount, currency, pocket_id, category_id, deleted_at, created_at, updated_at) VALUES
+          ('0192f0a0-0000-7000-8004-000000000001', '0192f0a0-0000-7000-8000-000000000001', '2026-11-20', 1, 'IDR', '0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8003-000000000002', NULL, '2026-01-06T00:00:00Z', '2026-01-06T00:00:00Z')
+    - request: {"method": "POST", "path": "/auth/local/login", "headers": {"Content-Type": "application/json"}, "body": "{\"email\":\"alice@example.com\",\"password\":\"conformance-correct-horse\"}"}
+      status: 204
+  request: {"method": "DELETE", "path": "/categories/0192f0a0-0000-7000-8003-000000000002"}
+  expect:
+    status: 409
+    body_json: {"code": "CATEGORY_IN_USE"}
+    cookies: {}
+    rows:
+      - sql: "SELECT category_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted, (updated_at = '2026-01-05T00:00:00Z') AS untouched FROM categories WHERE household_id = '0192f0a0-0000-7000-8000-000000000001' ORDER BY id"
+        rows: [{"name": "Food", "active": true, "deleted": false, "untouched": true}, {"name": "Gym", "active": false, "deleted": false, "untouched": true}, {"name": "Spare", "active": true, "deleted": false, "untouched": true}]
+
+- name: "category in use - a Category only uncategorised and other Households' Expenses surround is deleted"
+  issue: "140"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO pockets (id, household_id, pocket_display_name) VALUES ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO'), ('0192f0a0-0000-7000-8001-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs');
+        INSERT INTO categories (id, household_id, category_display_name, bucket, active, created_at, updated_at) VALUES
+          ('0192f0a0-0000-7000-8003-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'Food', 'daily', true, '2026-01-01T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Gym', 'daily', false, '2026-01-02T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Spare', 'daily', true, '2026-01-03T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', 'daily', true, '2026-01-09T00:00:00Z', '2026-01-05T00:00:00Z');
+        INSERT INTO expenses (id, household_id, occurred_on, amount, currency, pocket_id, category_id, deleted_at, created_at, updated_at) VALUES
+          ('0192f0a0-0000-7000-8004-000000000001', '0192f0a0-0000-7000-8000-000000000001', '2026-11-20', 1, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL, NULL, '2026-01-06T00:00:00Z', '2026-01-06T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-000000000002', '0192f0a0-0000-7000-8000-000000000001', '2026-11-20', 1, 'IDR', '0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8003-000000000001', NULL, '2026-01-06T00:00:00Z', '2026-01-06T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-00000000005a', '0192f0a0-0000-7000-8000-000000000002', '2026-11-20', 1, 'IDR', '0192f0a0-0000-7000-8001-000000000009', '0192f0a0-0000-7000-8003-000000000009', NULL, now(), now())
+    - request: {"method": "POST", "path": "/auth/local/login", "headers": {"Content-Type": "application/json"}, "body": "{\"email\":\"alice@example.com\",\"password\":\"conformance-correct-horse\"}"}
+      status: 204
+  request: {"method": "DELETE", "path": "/categories/0192f0a0-0000-7000-8003-000000000003"}
+  expect:
+    status: 204
+    body_empty: true
+    cookies: {}
+    rows:
+      - sql: "SELECT category_display_name AS name, active, (deleted_at IS NOT NULL) AS deleted, (updated_at = '2026-01-05T00:00:00Z') AS untouched FROM categories WHERE household_id = '0192f0a0-0000-7000-8000-000000000001' ORDER BY id"
+        rows: [{"name": "Food", "active": true, "deleted": false, "untouched": true}, {"name": "Gym", "active": false, "deleted": false, "untouched": true}, {"name": "Spare", "active": true, "deleted": true, "untouched": false}]
+
+- name: "category in use - deactivating is the answer it offers, and no Expense is touched"
+  issue: "140"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO pockets (id, household_id, pocket_display_name) VALUES ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO'), ('0192f0a0-0000-7000-8001-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs');
+        INSERT INTO categories (id, household_id, category_display_name, bucket, active, created_at, updated_at) VALUES
+          ('0192f0a0-0000-7000-8003-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'Food', 'daily', true, '2026-01-01T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Gym', 'daily', false, '2026-01-02T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000003', '0192f0a0-0000-7000-8000-000000000001', 'Spare', 'daily', true, '2026-01-03T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', 'daily', true, '2026-01-09T00:00:00Z', '2026-01-05T00:00:00Z');
+        INSERT INTO expenses (id, household_id, occurred_on, amount, currency, pocket_id, category_id, deleted_at, created_at, updated_at) VALUES
+          ('0192f0a0-0000-7000-8004-000000000001', '0192f0a0-0000-7000-8000-000000000001', '2026-11-20', 1, 'IDR', '0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8003-000000000001', NULL, '2026-01-06T00:00:00Z', '2026-01-06T00:00:00Z')
+    - request: {"method": "POST", "path": "/auth/local/login", "headers": {"Content-Type": "application/json"}, "body": "{\"email\":\"alice@example.com\",\"password\":\"conformance-correct-horse\"}"}
+      status: 204
+  request: {"method": "PATCH", "path": "/categories/0192f0a0-0000-7000-8003-000000000001", "headers": {"Content-Type": "application/json"}, "body": "{\"active\": false}"}
+  expect:
+    status: 200
+    body_json: {"id": "0192f0a0-0000-7000-8003-000000000001", "category_display_name": "Food", "bucket": "daily", "active": false}
+    cookies: {}
+    rows:
+      - sql: "SELECT id::text AS id, pocket_id::text AS pocket_id, category_id::text AS category_id, (deleted_at IS NOT NULL) AS deleted, (updated_at = created_at) AS untouched FROM expenses WHERE household_id = '0192f0a0-0000-7000-8000-000000000001' ORDER BY id"
+        rows: [{"id": "0192f0a0-0000-7000-8004-000000000001", "pocket_id": "0192f0a0-0000-7000-8001-000000000001", "category_id": "0192f0a0-0000-7000-8003-000000000001", "deleted": false, "untouched": true}]
+
+- name: "currency lock - before the first Expense a different currency is accepted"
+  issue: "140"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO pockets (id, household_id, pocket_display_name) VALUES ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO'), ('0192f0a0-0000-7000-8001-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs')
+    - request: {"method": "POST", "path": "/auth/local/login", "headers": {"Content-Type": "application/json"}, "body": "{\"email\":\"alice@example.com\",\"password\":\"conformance-correct-horse\"}"}
+      status: 204
+  request: {"method": "PATCH", "path": "/household", "headers": {"Content-Type": "application/json"}, "body": "{\"reporting_currency\": \"USD\"}"}
+  expect:
+    status: 200
+    body_json: {"id": "0192f0a0-0000-7000-8000-000000000001", "household_display_name": "Conformance Household", "reporting_currency": "USD", "period_start_day": 1, "day_starts_at": "04:00", "allowance_mode": "adaptive"}
+    cookies: {}
+    rows:
+      - sql: "SELECT household_display_name AS name, reporting_currency AS currency, period_start_day AS day FROM households ORDER BY id"
+        rows: [{"name": "Conformance Household", "currency": "USD", "day": 1}, {"name": "Other Household", "currency": "IDR", "day": 1}]
+
+- name: "currency lock - a different currency is CURRENCY_LOCKED once a live Expense exists, and the rest of the body is not applied"
+  issue: "140"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO pockets (id, household_id, pocket_display_name) VALUES ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO'), ('0192f0a0-0000-7000-8001-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs');
+        INSERT INTO expenses (id, household_id, occurred_on, amount, currency, pocket_id, deleted_at) VALUES
+          ('0192f0a0-0000-7000-8004-000000000001', '0192f0a0-0000-7000-8000-000000000001', '2026-11-20', 1, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL)
+    - request: {"method": "POST", "path": "/auth/local/login", "headers": {"Content-Type": "application/json"}, "body": "{\"email\":\"alice@example.com\",\"password\":\"conformance-correct-horse\"}"}
+      status: 204
+  request: {"method": "PATCH", "path": "/household", "headers": {"Content-Type": "application/json"}, "body": "{\"reporting_currency\": \"USD\", \"household_display_name\": \"Renamed\", \"period_start_day\": 5}"}
+  expect:
+    status: 409
+    body_json: {"code": "CURRENCY_LOCKED"}
+    cookies: {}
+    rows:
+      - sql: "SELECT household_display_name AS name, reporting_currency AS currency, period_start_day AS day FROM households ORDER BY id"
+        rows: [{"name": "Conformance Household", "currency": "IDR", "day": 1}, {"name": "Other Household", "currency": "IDR", "day": 1}]
+
+- name: "currency lock - an Expense in the Recycle Bin locks it too"
+  issue: "140"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO pockets (id, household_id, pocket_display_name) VALUES ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO'), ('0192f0a0-0000-7000-8001-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs');
+        INSERT INTO expenses (id, household_id, occurred_on, amount, currency, pocket_id, deleted_at) VALUES
+          ('0192f0a0-0000-7000-8004-000000000001', '0192f0a0-0000-7000-8000-000000000001', '2026-11-20', 1, 'IDR', '0192f0a0-0000-7000-8001-000000000001', now())
+    - request: {"method": "POST", "path": "/auth/local/login", "headers": {"Content-Type": "application/json"}, "body": "{\"email\":\"alice@example.com\",\"password\":\"conformance-correct-horse\"}"}
+      status: 204
+  request: {"method": "PATCH", "path": "/household", "headers": {"Content-Type": "application/json"}, "body": "{\"reporting_currency\": \"USD\"}"}
+  expect:
+    status: 409
+    body_json: {"code": "CURRENCY_LOCKED"}
+    cookies: {}
+    rows:
+      - sql: "SELECT household_display_name AS name, reporting_currency AS currency, period_start_day AS day FROM households ORDER BY id"
+        rows: [{"name": "Conformance Household", "currency": "IDR", "day": 1}, {"name": "Other Household", "currency": "IDR", "day": 1}]
+
+- name: "currency lock - the stored currency is a no-op, not a refusal, and the rest of the body lands"
+  issue: "140"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO pockets (id, household_id, pocket_display_name) VALUES ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO'), ('0192f0a0-0000-7000-8001-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs');
+        INSERT INTO expenses (id, household_id, occurred_on, amount, currency, pocket_id, deleted_at) VALUES
+          ('0192f0a0-0000-7000-8004-000000000001', '0192f0a0-0000-7000-8000-000000000001', '2026-11-20', 1, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL)
+    - request: {"method": "POST", "path": "/auth/local/login", "headers": {"Content-Type": "application/json"}, "body": "{\"email\":\"alice@example.com\",\"password\":\"conformance-correct-horse\"}"}
+      status: 204
+  request: {"method": "PATCH", "path": "/household", "headers": {"Content-Type": "application/json"}, "body": "{\"reporting_currency\": \"IDR\", \"household_display_name\": \"Renamed\"}"}
+  expect:
+    status: 200
+    body_json: {"id": "0192f0a0-0000-7000-8000-000000000001", "household_display_name": "Renamed", "reporting_currency": "IDR", "period_start_day": 1, "day_starts_at": "04:00", "allowance_mode": "adaptive"}
+    cookies: {}
+    rows:
+      - sql: "SELECT household_display_name AS name, reporting_currency AS currency, period_start_day AS day FROM households ORDER BY id"
+        rows: [{"name": "Renamed", "currency": "IDR", "day": 1}, {"name": "Other Household", "currency": "IDR", "day": 1}]
+
+- name: "currency lock - a PATCH that leaves the currency out is never refused"
+  issue: "140"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO pockets (id, household_id, pocket_display_name) VALUES ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO'), ('0192f0a0-0000-7000-8001-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs');
+        INSERT INTO expenses (id, household_id, occurred_on, amount, currency, pocket_id, deleted_at) VALUES
+          ('0192f0a0-0000-7000-8004-000000000001', '0192f0a0-0000-7000-8000-000000000001', '2026-11-20', 1, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL)
+    - request: {"method": "POST", "path": "/auth/local/login", "headers": {"Content-Type": "application/json"}, "body": "{\"email\":\"alice@example.com\",\"password\":\"conformance-correct-horse\"}"}
+      status: 204
+  request: {"method": "PATCH", "path": "/household", "headers": {"Content-Type": "application/json"}, "body": "{\"period_start_day\": 5}"}
+  expect:
+    status: 200
+    body_json: {"id": "0192f0a0-0000-7000-8000-000000000001", "household_display_name": "Conformance Household", "reporting_currency": "IDR", "period_start_day": 5, "day_starts_at": "04:00", "allowance_mode": "adaptive"}
+    cookies: {}
+    rows:
+      - sql: "SELECT household_display_name AS name, reporting_currency AS currency, period_start_day AS day FROM households ORDER BY id"
+        rows: [{"name": "Conformance Household", "currency": "IDR", "day": 5}, {"name": "Other Household", "currency": "IDR", "day": 1}]
+
+- name: "currency lock - another Household's Expenses do not lock ours"
+  issue: "140"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO pockets (id, household_id, pocket_display_name) VALUES ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO'), ('0192f0a0-0000-7000-8001-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs');
+        INSERT INTO expenses (id, household_id, occurred_on, amount, currency, pocket_id, deleted_at) VALUES
+          ('0192f0a0-0000-7000-8004-00000000005a', '0192f0a0-0000-7000-8000-000000000002', '2026-11-20', 1, 'IDR', '0192f0a0-0000-7000-8001-000000000009', NULL)
+    - request: {"method": "POST", "path": "/auth/local/login", "headers": {"Content-Type": "application/json"}, "body": "{\"email\":\"alice@example.com\",\"password\":\"conformance-correct-horse\"}"}
+      status: 204
+  request: {"method": "PATCH", "path": "/household", "headers": {"Content-Type": "application/json"}, "body": "{\"reporting_currency\": \"USD\"}"}
+  expect:
+    status: 200
+    body_json: {"id": "0192f0a0-0000-7000-8000-000000000001", "household_display_name": "Conformance Household", "reporting_currency": "USD", "period_start_day": 1, "day_starts_at": "04:00", "allowance_mode": "adaptive"}
+    cookies: {}
+    rows:
+      - sql: "SELECT household_display_name AS name, reporting_currency AS currency, period_start_day AS day FROM households ORDER BY id"
+        rows: [{"name": "Conformance Household", "currency": "USD", "day": 1}, {"name": "Other Household", "currency": "IDR", "day": 1}]
+
+- name: "currency lock - a code that is not ISO 4217 is a validation failure before the lock"
+  issue: "140"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO pockets (id, household_id, pocket_display_name) VALUES ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO'), ('0192f0a0-0000-7000-8001-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs');
+        INSERT INTO expenses (id, household_id, occurred_on, amount, currency, pocket_id, deleted_at) VALUES
+          ('0192f0a0-0000-7000-8004-000000000001', '0192f0a0-0000-7000-8000-000000000001', '2026-11-20', 1, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL)
+    - request: {"method": "POST", "path": "/auth/local/login", "headers": {"Content-Type": "application/json"}, "body": "{\"email\":\"alice@example.com\",\"password\":\"conformance-correct-horse\"}"}
+      status: 204
+  request: {"method": "PATCH", "path": "/household", "headers": {"Content-Type": "application/json"}, "body": "{\"reporting_currency\": \"XXZ\"}"}
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "reporting_currency", "rule": "iso4217"}}
+    cookies: {}
+    rows:
+      - sql: "SELECT household_display_name AS name, reporting_currency AS currency, period_start_day AS day FROM households ORDER BY id"
+        rows: [{"name": "Conformance Household", "currency": "IDR", "day": 1}, {"name": "Other Household", "currency": "IDR", "day": 1}]
+
+- name: "currency lock - an Expense created after a currency change is stamped with the new one"
+  issue: "140"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO pockets (id, household_id, pocket_display_name) VALUES ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO'), ('0192f0a0-0000-7000-8001-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs');
+        UPDATE households SET reporting_currency = 'USD' WHERE id = '0192f0a0-0000-7000-8000-000000000001'
+    - request: {"method": "POST", "path": "/auth/local/login", "headers": {"Content-Type": "application/json"}, "body": "{\"email\":\"alice@example.com\",\"password\":\"conformance-correct-horse\"}"}
+      status: 204
+  request: {"method": "POST", "path": "/expenses", "headers": {"Content-Type": "application/json"}, "body": "{\"id\": \"0192f0a0-0000-7000-8004-000000000005\", \"amount\": \"1\", \"pocket_id\": \"0192f0a0-0000-7000-8001-000000000001\", \"occurred_on\": \"2026-11-20\"}"}
+  expect:
+    status: 201
+    body_json: {"id": "0192f0a0-0000-7000-8004-000000000005", "occurred_on": "2026-11-20", "captured_at": "<re:[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+Z>", "amount": "1.0000", "currency": "USD", "pocket_id": "0192f0a0-0000-7000-8001-000000000001", "ownership": "joint"}
+    cookies: {}
+    rows:
+      - sql: "SELECT currency FROM expenses"
+        rows: [{"currency": "USD"}]

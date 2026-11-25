@@ -284,6 +284,18 @@ export interface paths {
          *     Monthly Budget exceeds it (PRD S6) is the client's to say, from this
          *     answer and `GET /budget`.
          *
+         *     `reporting_currency` is locked once the Household has recorded an
+         *     Expense, a deleted one included (the Recycle Bin never empties): a
+         *     value that **differs** from the stored one is `409 CURRENCY_LOCKED` and
+         *     nothing in the request is applied, a `household_display_name` sent
+         *     beside it included. Sending the stored currency is a no-op, not a
+         *     refusal, and so is a request that leaves the currency out. The refusal
+         *     is on a setting, never on spending. The check and the write are made
+         *     under a lock on the Household's row, so an Expense created at the same
+         *     moment either is seen by the check or finds the currency already
+         *     changed and is stamped with the new one; never an Expense in a
+         *     currency the Household no longer has.
+         *
          *     There is no `GET`: `GET /me` carries the Household. There is no
          *     `DELETE`, and there never will be (BOOTSTRAP.md §4).
          */
@@ -306,6 +318,13 @@ export interface paths {
          *     a Household holds a handful. An empty Household answers
          *     `{"items": []}`. The Household is the caller's own, from the session;
          *     nothing in the request names one.
+         *
+         *     `default_pocket_id` is the Pocket capture offers first (PRD E3): the
+         *     Pocket of the Household's most recent live Expense by `captured_at`
+         *     **whose Pocket is active and live**, so a Pocket that was deactivated
+         *     since is passed over for the next most recent one that qualifies. It is
+         *     derived on read, Household-wide, and omitted while there is none (no
+         *     live Expense, or none on an active Pocket). It is one of `items`.
          */
         get: operations["listPockets"];
         put?: never;
@@ -371,9 +390,11 @@ export interface paths {
          *
          *     Deleting is not deactivating: a Pocket that history labels is retired
          *     with `PATCH {active: false}`, which keeps it listed, named and
-         *     labelling. A Pocket that any Expense references will be refused here
-         *     (`409 POCKET_IN_USE`) once Expenses exist; no Expense can reference a
-         *     Pocket yet, so that code is not in this contract.
+         *     labelling. A Pocket that any Expense references, **a deleted Expense
+         *     included** (the Recycle Bin never empties), is refused here: `409
+         *     POCKET_IN_USE`, and nothing is changed. The answer to it is to
+         *     deactivate the Pocket instead. Neither deactivating nor deleting a Pocket
+         *     ever touches an Expense.
          *
          *     A Household always keeps at least one active Pocket (PRD S10), so
          *     deleting its **last active** Pocket is `409 LAST_POCKET` and changes
@@ -383,6 +404,16 @@ export interface paths {
          *     about a Pocket of the caller's own Household. The count and the delete
          *     are made under a lock on the Household, so two concurrent removals of
          *     its last two active Pockets cannot both succeed: one is `409`.
+         *
+         *     The two refusals are decided in this order: `404`, then the idempotent
+         *     `204` for a Pocket already deleted, then `LAST_POCKET`, then
+         *     `POCKET_IN_USE`. A last active Pocket that is also referenced answers
+         *     `LAST_POCKET`, since deactivating it would be refused too. The in-use
+         *     check is made after the Pocket's own row is locked, and every Expense
+         *     that names a Pocket share-locks it first, so an Expense created at the
+         *     same moment either is seen by the check or is refused as `{pocket_id,
+         *     invalid}` because the Pocket is gone; never an Expense on a deleted
+         *     Pocket.
          */
         delete: operations["deletePocket"];
         options?: never;
@@ -549,19 +580,23 @@ export interface paths {
          *     confirmation: the act is immediate and `POST /categories/{id}/restore`
          *     is its Undo.
          *
-         *     `409 CATEGORY_IN_USE`: the Category holds an allocation, a non-null
-         *     amount, in a Budget Period **other than the current one** (the caller's,
-         *     by their Today). The Budget's history is a record the Household's past
-         *     figures are read from, so it is not deleted: retire the Category with
-         *     `PATCH {active: false}`, which keeps it listed and keeps its allocations.
+         *     `409 CATEGORY_IN_USE`: the Category is part of the Household's records,
+         *     so it is not deleted: **any Expense that references it, live or in the
+         *     Recycle Bin**, or an allocation, a non-null amount, in a Budget Period
+         *     **other than the current one** (the caller's, by their Today). Neither
+         *     reason is told from the other, since one code serves both. The Budget's
+         *     history and the Expenses are records the Household's past figures are read
+         *     from: retire the Category with `PATCH {active: false}`, which keeps it
+         *     listed, keeps its allocations and keeps labelling what it labels.
          *     The Category's allocation in the current Period alone never refuses a
          *     delete, so a Category made today and deleted today is a mistake that can
          *     be undone. A refused delete changes nothing. The check and the delete are
          *     one transaction that locks the Category's row, and every write of an
-         *     allocation share-locks it, so an allocation that is being written (or
+         *     allocation, and every Expense that names the Category, share-locks it, so
+         *     an allocation or an Expense that is being written (or an allocation
          *     carried into a following Period) while the delete runs is either seen by
-         *     the check or refused by the delete: no deleted Category is left holding
-         *     an allocation in another Period.
+         *     the check or refused by the writer: no deleted Category is left holding
+         *     an allocation in another Period or an Expense.
          *
          *     An id that is unknown or that belongs to another Household is `404
          *     NOT_FOUND`, the same answer in both cases, so no request confirms
@@ -753,6 +788,118 @@ export interface paths {
         patch: operations["updateBudget"];
         trace?: never;
     };
+    "/expenses": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The caller's Household's live Expenses, newest first.
+         * @description Every Expense of the caller's Household that is not deleted, **all
+         *     Periods together, newest first**, a page at a time. No filter of any
+         *     kind: nothing in the request names a Household, a Period, a Pocket or a
+         *     Category. An empty Household answers `{"items": []}`.
+         *
+         *     **Order, declared and never left to the database:** `occurred_on`
+         *     descending, then the **effective time** descending, then `captured_at`
+         *     descending, then `id` descending, so a page boundary is exact. The
+         *     effective time is worked out on the server for each read and is never
+         *     stored or shown: (1) the Expense's `occurred_time` when it has one;
+         *     (2) otherwise, when it was captured on that same Period Day, the time of
+         *     day it was captured at, in the caller's `time_zone`; (3) otherwise the
+         *     start of the day, so a back-dated Expense with no time sorts below the
+         *     day's others. Times wrap at the Household's `day_starts_at`: with a
+         *     04:00 start, 01:30 is the **end** of its Period Day, after 23:00. A
+         *     change of `day_starts_at` or of the caller's `time_zone` re-sorts the
+         *     rows it touches, as a change of `period_start_day` re-cuts every Period.
+         *
+         *     **Keyset paging, not offset.** `limit` is 1 to 100 (default 25). A full
+         *     page answers `next`, an opaque cursor that is the `after` of the following
+         *     request; **`next` is omitted on the last page**, never `null`. `after` is
+         *     an opaque value this operation produced: anything else is `VALIDATION
+         *     {field: after, rule: invalid}`. A cursor is for the caller's own
+         *     Household and the zone and `day_starts_at` it was issued under; used
+         *     after either changed, a page may repeat or skip a row. An Expense that
+         *     another member edits between two page reads may likewise repeat or be
+         *     skipped; no snapshot is held. A `limit` out of range is `VALIDATION
+         *     {field: limit, rule: min | max}`.
+         *
+         *     This is the one paginated list in the API (BOOTSTRAP.md §4,
+         *     *Collections*): a Household's Expenses are unbounded, where its Pockets
+         *     and Categories are a handful.
+         */
+        get: operations["listExpenses"];
+        put?: never;
+        /**
+         * Record an Expense.
+         * @description The client supplies the id (a UUIDv7) and it is the idempotency key
+         *     (BOOTSTRAP.md §4): the first write answers `201` with the Expense, and a
+         *     repeat of the same id answers `200` with the Expense **as it stands
+         *     now**, the rest of the repeated body neither compared nor applied, and
+         *     **its references are not looked at again**: a retry after the Pocket was
+         *     deactivated in the meantime is still a replay, never a refusal. An id held
+         *     by something other than a live Expense of the caller's own Household
+         *     (another Household's, or the caller's own deleted one) is `409
+         *     ID_TAKEN`. A body that is invalid is refused whatever the id holds.
+         *
+         *     **Required: `id`, `amount`, `pocket_id`.** Nothing else is needed to
+         *     capture (PRD E2). `household_id`, `currency`, `captured_at`, `active`
+         *     and `deleted_at` are not properties of this request (`INVALID_JSON_BODY`).
+         *
+         *     `amount` is a `SignedMoneyInput`: a negative one is a refund with no
+         *     recorded original (PRD E7). **Zero is refused**, `"0"`, `"0.0000"` and
+         *     `"-0"` alike: `VALIDATION {field: amount, rule: nonzero}`, which the
+         *     contract's pattern cannot say, so the handler does. More than four
+         *     decimals is refused and never rounded.
+         *
+         *     `currency` is **stamped by the server** from the Household's
+         *     `reporting_currency` at this moment and never sent, and `captured_at` is
+         *     the server's own clock, never sent (a device's clock would skew the
+         *     capture-time figures derived from it). Both are on the answer.
+         *
+         *     `occurred_on` is optional. **Absent means the writer's Today**, a Period
+         *     Day worked out on the server from the User's `time_zone` and the
+         *     Household's `day_starts_at` (the client derives none of it), and the
+         *     answer carries it. A date the person chose is stored as sent, **future
+         *     dates included** and with no cap; one that is not a real calendar date
+         *     (`2026-02-30`) or has no year (`0000-01-01`) is `VALIDATION {field:
+         *     occurred_on, rule: invalid}`. `occurred_time` is an optional `HH:MM`.
+         *
+         *     `description` is trimmed and at most 200 code points; blank after the
+         *     trim is `VALIDATION {field: description, rule: required}`, so a client
+         *     omits an empty one. It is user content and is never logged.
+         *
+         *     `ownership` and `owner_user_id` are a pair, both or neither (PRD §4;
+         *     no control sets them yet). `sole_owner` names a live User of the
+         *     caller's own Household; `joint` names none. A pair that does not hold, a
+         *     User who is not the Household's, or an owner with no ownership is
+         *     `VALIDATION {field: owner_user_id, rule: invalid}`. Absent means joint.
+         *
+         *     **References.** `pocket_id` that is unknown, another Household's or
+         *     deleted is `VALIDATION {field: pocket_id, rule: invalid}`, one answer for
+         *     the three, so a foreign id is never told from a missing one. One that is
+         *     the caller's own **inactive** Pocket is `{pocket_id, inactive}`: the
+         *     client can say it is no longer in use. `category_id` is judged the same
+         *     way (`invalid`, `inactive`). An Expense already in an inactive Pocket or
+         *     Category is untouched; only a new reference to one is refused. The
+         *     references are share-locked in one transaction with the insert, so a
+         *     Pocket or Category deleted at the same moment is either refused here or
+         *     found by the delete's own check (`POCKET_IN_USE`, `CATEGORY_IN_USE`).
+         *
+         *     Order of checks: the cross-site guard, the session, the contract's rules,
+         *     then the handler's (the amount's zero, the date, the description, the
+         *     pair), then the database. A foreign `pocket_id` beside an otherwise bad
+         *     body answers the bad body.
+         */
+        post: operations["createExpense"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/onboarding/options": {
         parameters: {
             query?: never;
@@ -916,6 +1063,17 @@ export interface components {
             time_zone: string;
             appearance: components["schemas"]["Appearance"];
             household: components["schemas"]["Household"];
+            /**
+             * Format: date
+             * @description The caller's current Period Day, `YYYY-MM-DD`: the date on the wall
+             *     clock of the User's `time_zone`, less one day while that clock still
+             *     reads earlier than the Household's `day_starts_at`. Worked out on the
+             *     server (BOOTSTRAP.md §4); the client derives none of it and only
+             *     reads it, for a date picker's highlight and a day's heading. It is
+             *     as old as the response, so a client that keeps it refetches on focus.
+             * @example 2026-11-25
+             */
+            today: string;
         };
         /**
          * @description A Household's settings (PRD S3): the whole set, read-only fields
@@ -994,6 +1152,13 @@ export interface components {
          */
         PocketList: {
             items: components["schemas"]["Pocket"][];
+            /**
+             * Format: uuid
+             * @description The Pocket capture offers first (PRD E3): that of the Household's most
+             *     recent live Expense by `captured_at` whose Pocket is active and
+             *     live. Derived on read; omitted when there is none.
+             */
+            default_pocket_id?: string;
         };
         CreatePocketRequest: {
             /**
@@ -1082,7 +1247,8 @@ export interface components {
          *     N2, BOOTSTRAP.md §4): `"9000000.0000"`, never a JSON number, never
          *     trimmed, never exponent notation. In the Household's
          *     `reporting_currency`; a Budget's money carries no `currency` of its own
-         *     (PRD N3). May be negative where it is a difference (`unallocated`).
+         *     (PRD N3), an Expense's has one. May be negative where it is a difference
+         *     (`unallocated`) or a refund (an Expense's `amount`).
          * @example 9000000.0000
          */
         Money: string;
@@ -1095,6 +1261,113 @@ export interface components {
          * @example 9000000
          */
         MoneyInput: string;
+        /**
+         * @description A `MoneyInput` with an optional leading minus: a decimal sent as a
+         *     string, at most 16 integer digits and at most 4 decimals, no exponent, no
+         *     separator and no whitespace. More than four decimals is refused and never
+         *     rounded; a JSON number is `INVALID_JSON_BODY`. A negative amount is a
+         *     refund. **The pattern cannot say "not zero"** (the regexp engine has no
+         *     lookahead), so `"0"`, `"0.0000"` and `"-0"` pass it and the handler
+         *     refuses them: `VALIDATION {rule: nonzero}`. The answer carries the amount
+         *     as a `Money`.
+         * @example -25000
+         */
+        SignedMoneyInput: string;
+        /**
+         * @description Whose an Expense is (CONTEXT.md): `joint`, the Household's, or
+         *     `sole_owner`, attributed to one User (`owner_user_id`). Stored and on the
+         *     wire; no control sets it until a second member exists.
+         * @enum {string}
+         */
+        Ownership: "joint" | "sole_owner";
+        /**
+         * @description What the Household spent (PRD E1 to E10). `amount` may be negative: a
+         *     refund. No embedded Pocket or Category: the client resolves `pocket_id`
+         *     and `category_id` from the lists it holds, which include inactive rows,
+         *     and a referenced row can never be deleted, so every id resolves.
+         *     Optional properties are omitted when empty, never `null`.
+         */
+        Expense: {
+            /**
+             * Format: uuid
+             * @description UUIDv7, supplied by the client at creation.
+             */
+            id: string;
+            /**
+             * Format: date
+             * @description The Period Day the Expense belongs to, `YYYY-MM-DD`. It may be in
+             *     the future (PRD E8). Never derived by the client.
+             */
+            occurred_on: string;
+            /**
+             * @description An optional wall-clock time, `HH:MM`, with no zone: what the person
+             *     said it was. Omitted when none was given.
+             */
+            occurred_time?: string;
+            /**
+             * Format: date-time
+             * @description The instant the server recorded it, UTC. Never sent by a client.
+             */
+            captured_at: string;
+            amount: components["schemas"]["Money"];
+            /**
+             * @description ISO 4217. The Household's `reporting_currency` when it was recorded,
+             *     stamped by the server; never changed.
+             * @example IDR
+             */
+            currency: string;
+            /** Format: uuid */
+            pocket_id: string;
+            /**
+             * Format: uuid
+             * @description Omitted for an uncategorised Expense.
+             */
+            category_id?: string;
+            /** @description Omitted when none was given. */
+            description?: string;
+            ownership: components["schemas"]["Ownership"];
+            /**
+             * Format: uuid
+             * @description Present only for a `sole_owner` Expense.
+             */
+            owner_user_id?: string;
+        };
+        /**
+         * @description One page of the Household's live Expenses, newest first. An object so it
+         *     can carry a cursor and, later, counts, without breaking a client.
+         */
+        ExpenseList: {
+            items: components["schemas"]["Expense"][];
+            /**
+             * @description Opaque. Pass it as `after` to read the following page. Omitted on the
+             *     last page, never `null`.
+             */
+            next?: string;
+        };
+        CreateExpenseRequest: {
+            /**
+             * Format: uuid
+             * @description UUIDv7, generated by the client. The idempotency key.
+             */
+            id: string;
+            amount: components["schemas"]["SignedMoneyInput"];
+            /** Format: uuid */
+            pocket_id: string;
+            /** Format: uuid */
+            category_id?: string;
+            /**
+             * @description `YYYY-MM-DD`, a Period Day the person chose. Absent means the
+             *     writer's Today, resolved by the server. Future dates are accepted.
+             * @example 2026-11-23
+             */
+            occurred_on?: string;
+            /** @description An optional wall-clock time, `HH:MM`. */
+            occurred_time?: string;
+            description?: string;
+            ownership?: components["schemas"]["Ownership"];
+            /** Format: uuid */
+            owner_user_id?: string;
+        };
         /**
          * @description A `MoneyInput`, or `null` where a write may say "none": what a Category
          *     is planned at when it is created or changed (a Commitment's `null` is the
@@ -1260,9 +1533,12 @@ export interface components {
          *     property, so a Household's name (`household_display_name`), a User's
          *     (`user_display_name`), a Pocket's (`pocket_display_name`) and a
          *     Category's (`category_display_name`) are never confused; a Pocket's
-         *     or a Category's `id` is `id`; a Category's bucket is `bucket` and what
-         *     it is planned at is `allocation`; a Budget's Monthly Budget is
-         *     `monthly_budget`. `WEAK_PASSWORD` carries
+         *     or a Category's `id` is `id`; an Expense's amount is `amount`, its date
+         *     `occurred_on`, its time `occurred_time`, its Pocket and Category
+         *     `pocket_id` and `category_id`, its owner `owner_user_id`, its text
+         *     `description`, and a list's cursor and page size `after` and `limit`; a
+         *     Category's bucket is `bucket` and what it is planned at is `allocation`;
+         *     a Budget's Monthly Budget is `monthly_budget`. `WEAK_PASSWORD` carries
          *     `{reason}`, `min` or `breached`, at registration and at a password
          *     change. `INVALID_CURRENT_PASSWORD` is the password change's and the
          *     email change's own: the current password sent with the request is not
@@ -1276,16 +1552,21 @@ export interface components {
          *     caller's own Household: unknown, another Household's and deleted all
          *     answer it, with no `args`, so one cannot be told from another (delete
          *     and restore, which may act on a deleted row, answer it for unknown and
-         *     foreign ids only). `CATEGORY_IN_USE` is a delete of a Category that
-         *     holds an allocation, a non-null amount, in a Budget Period other than
-         *     the current one; it carries no `args`, and nothing is changed.
-         *     `LAST_POCKET` is a delete, or a deactivation, of the Household's last
-         *     active Pocket (a Household always keeps one); it carries no `args`, and
-         *     nothing is changed. A path that matches no route at all is not this: it
+         *     foreign ids only). `CATEGORY_IN_USE` is a delete of a Category that is
+         *     part of the Household's records: it holds an allocation, a non-null
+         *     amount, in a Budget Period other than the current one, or any Expense,
+         *     live or deleted, references it; it carries no `args`, and nothing is
+         *     changed. `POCKET_IN_USE` is a delete of a Pocket that any Expense, live
+         *     or deleted, references; no `args`, nothing is changed, and the answer is
+         *     to deactivate it. `CURRENCY_LOCKED` is a change of the Household's
+         *     `reporting_currency` to another one once it holds any Expense, live or
+         *     deleted; no `args`, nothing is changed. `LAST_POCKET` is a delete, or a
+         *     deactivation, of the Household's last active Pocket (a Household always
+         *     keeps one); it carries no `args`, and nothing is changed. A path that matches no route at all is not this: it
          *     answers a bare `404`.
          * @enum {string}
          */
-        ErrorCode: "VALIDATION" | "INVALID_JSON_BODY" | "INVALID_CREDENTIALS" | "TOO_MANY_ATTEMPTS" | "UNAUTHORIZED" | "CROSS_SITE_REQUEST_BLOCKED" | "EMAIL_TAKEN" | "WEAK_PASSWORD" | "INVALID_CURRENT_PASSWORD" | "FOUNDING_DISABLED" | "ID_TAKEN" | "NAME_TAKEN" | "CATEGORY_IN_USE" | "LAST_POCKET" | "NOT_FOUND" | "INTERNAL";
+        ErrorCode: "VALIDATION" | "INVALID_JSON_BODY" | "INVALID_CREDENTIALS" | "TOO_MANY_ATTEMPTS" | "UNAUTHORIZED" | "CROSS_SITE_REQUEST_BLOCKED" | "EMAIL_TAKEN" | "WEAK_PASSWORD" | "INVALID_CURRENT_PASSWORD" | "FOUNDING_DISABLED" | "ID_TAKEN" | "NAME_TAKEN" | "CATEGORY_IN_USE" | "POCKET_IN_USE" | "CURRENCY_LOCKED" | "LAST_POCKET" | "NOT_FOUND" | "INTERNAL";
     };
     responses: {
         /**
@@ -1358,7 +1639,10 @@ export interface components {
          *     one. `NAME_TAKEN`: another row of the Household that is not deleted
          *     already holds the name, case-insensitively, at a create, a rename or a
          *     restore. `CATEGORY_IN_USE`: a delete of a Category that holds an
-         *     allocation in a Budget Period other than the current one.
+         *     allocation in a Budget Period other than the current one, or that any
+         *     Expense references. `POCKET_IN_USE`: a delete of a Pocket that any
+         *     Expense references. `CURRENCY_LOCKED`: a change of
+         *     `reporting_currency` once the Household holds an Expense.
          *     `LAST_POCKET`: a delete, or a deactivation, of the Household's last
          *     active Pocket.
          */
@@ -1679,6 +1963,7 @@ export interface operations {
             };
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
+            409: components["responses"]["Conflict"];
             500: components["responses"]["InternalError"];
         };
     };
@@ -2048,6 +2333,75 @@ export interface operations {
             };
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    listExpenses: {
+        parameters: {
+            query?: {
+                /** @description Page size, 1 to 100. Default 25. */
+                limit?: number;
+                /**
+                 * @description The `next` of the previous page. Opaque: no length or alphabet is
+                 *     promised, and a value this operation did not produce is `VALIDATION
+                 *     {field: after, rule: invalid}`.
+                 */
+                after?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of Expenses, newest first. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExpenseList"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    createExpense: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateExpenseRequest"];
+            };
+        };
+        responses: {
+            /** @description The id already names a live Expense of this Household, returned as stored. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Expense"];
+                };
+            };
+            /** @description The Expense was recorded. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Expense"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            409: components["responses"]["Conflict"];
             500: components["responses"]["InternalError"];
         };
     };

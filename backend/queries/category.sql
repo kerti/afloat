@@ -48,9 +48,10 @@ RETURNING *;
 
 -- The first statement of a delete, in the delete's own transaction: it takes the
 -- Category's row lock (FOR UPDATE, which conflicts with the FOR SHARE every
--- allocation write holds, and with the key-share an allocation insert takes) and
--- answers whether the row is deleted already. The guard that follows
--- (CategoryHeldElsewhere) must be a SEPARATE, LATER statement: under READ
+-- allocation write and every Expense create holds, and with the key-share an
+-- allocation or an Expense insert takes) and answers whether the row is deleted
+-- already. The guards that follow (CategoryHeldElsewhere, and CategoryHasExpenses
+-- in expense.sql) must be SEPARATE, LATER statements: under READ
 -- COMMITTED a statement's snapshot is taken when it starts, so a guard folded
 -- into the UPDATE's WHERE would have been evaluated before the lock wait ended
 -- and would not see the allocation committed during it (BOOTSTRAP.md §4, #130

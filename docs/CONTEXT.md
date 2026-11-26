@@ -189,6 +189,15 @@ displayed as such rather than clamped to zero.
 **Forward Daily Rate**: What each remaining day *after* Today is worth at the current position. A
 secondary figure, undefined on the last day of a Period (rendered "—").
 
+**Remaining Daily Pool**: `P' − S_settled`: what the Available Pool still holds after the spending that
+has settled before Today. In adaptive mode it is the number Today's Allowance is made of (`A × r` before the
+floor), so it reconciles with Days Remaining and the allowance beside it: a pool of 6.000.000 with 3.000.000
+settled and 15 days left reads 3.000.000, and the allowance is 200.000. In fixed mode the allowance is the
+baseline and the two no longer reconcile; the figure is the same. It is frozen through Today (Today's spending is
+no part of it), signed, and like every daily figure leaves out Commitments; zero or below is the Available
+Pool used up. D8's money figure, shown with Days Remaining. _Avoid_: Remaining Budget (a Budget is the whole
+plan), Remaining Daily Allowance.
+
 **Trajectory Variance** (`V`): `T(e) − settled daily-bucket spend`, where `T(e)` is the target line's
 cumulative target through the settled days (`B × e` while the Daily Pool has not changed in the Period).
 Positive means under pace. Computed on **settled days only** — it does not move during Today. This

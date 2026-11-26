@@ -2,19 +2,24 @@ package dashboard_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"maps"
 	"net/http/httptest"
+	"reflect"
+	"slices"
 	"testing"
 
 	"github.com/kerti/afloat/backend/internal/api"
 	"github.com/kerti/afloat/backend/internal/budget"
 	"github.com/kerti/afloat/backend/internal/dashboard"
+	"github.com/kerti/afloat/backend/internal/trajectory"
 )
 
 // contract/testdata/dashboard.json, read row by row through the real
 // statements: where Today and the Period land for an instant, what PeriodSpend
-// returns and what the daily bucket folds into, and what the wire carries at
-// this stage of #155. Every Household of the file is in the database for every
+// returns and what the daily bucket folds into, the Daily Pool through the
+// Period and the figures made of it, and what the wire carries at this stage of
+// #155. Every Household of the file is in the database for every
 // row, so another Household's rows are present throughout (tenancy).
 func TestTheFixtureRowsAreAnsweredAsPinned(t *testing.T) {
 	f := newFixture(t)
@@ -59,7 +64,30 @@ func TestTheFixtureRowsAreAnsweredAsPinned(t *testing.T) {
 					t.Errorf("S_future = %s, want %s", got, want.Spend.Future)
 				}
 
-				// The wire, as it is at this stage: the currency and nothing else.
+				// The Period is brought into being first, as a request does: a
+				// Period nobody has read carries the previous one's Budget forward
+				// when it is first read.
+				at, household, err := budget.LocateHousehold(h.ctx, f.tdb.Queries, f.clock.now, mustUser(t, h))
+				if err != nil {
+					t.Fatalf("LocateHousehold: %v", err)
+				}
+				if err := budget.EnsurePeriod(h.ctx, f.tdb.Queries, f.tdb.Pool, h.householdID, at.Period); err != nil {
+					t.Fatalf("EnsurePeriod: %v", err)
+				}
+				assembly, ok, err := dashboard.Assemble(h.ctx, f.tdb.Queries, h.householdID, at, trajectory.Mode(household.AllowanceMode))
+				if err != nil {
+					t.Fatalf("Assemble: %v", err)
+				}
+				if wantTrajectory := want.Wire["trajectory"] != nil; ok != wantTrajectory {
+					t.Fatalf("the Household has a trajectory = %v, want %v", ok, wantTrajectory)
+				}
+				if ok {
+					checkPool(t, assembly, want)
+					checkPace(t, assembly, want)
+					checkAgainstGetBudget(t, f, h, assembly)
+				}
+
+				// The wire, as it is at this stage.
 				resp, err := f.handlers.GetDashboard(h.ctx, api.GetDashboardRequestObject{})
 				if err != nil {
 					t.Fatalf("GetDashboard: %v", err)
@@ -68,14 +96,14 @@ func TestTheFixtureRowsAreAnsweredAsPinned(t *testing.T) {
 				if err := resp.VisitGetDashboardResponse(rec); err != nil || rec.Code != 200 {
 					t.Fatalf("GetDashboard = %d %v, want 200", rec.Code, err)
 				}
-				var wire map[string]json.RawMessage
-				if err := json.Unmarshal(rec.Body.Bytes(), &wire); err != nil {
+				var gotWire map[string]any
+				if err := json.Unmarshal(rec.Body.Bytes(), &gotWire); err != nil {
 					t.Fatalf("decode the answer: %v", err)
 				}
-				wantWire, _ := json.Marshal(map[string]string{"currency": want.Wire.Currency})
-				gotWire, _ := json.Marshal(wire)
-				if string(gotWire) != string(wantWire) {
-					t.Errorf("answer = %s, want %s", gotWire, wantWire)
+				if !reflect.DeepEqual(gotWire, want.Wire) {
+					gotJSON, _ := json.MarshalIndent(gotWire, "", " ")
+					wantJSON, _ := json.MarshalIndent(want.Wire, "", " ")
+					t.Errorf("answer = %s\nwant %s", gotJSON, wantJSON)
 				}
 			})
 		}
@@ -124,5 +152,73 @@ func TestEveryHouseholdSeesItsOwnCurrencyAndNeverAnothers(t *testing.T) {
 		if got := f.get(h.ctx, t).Currency; got != h.spec.ReportingCurrency {
 			t.Errorf("%s: currency = %s, want %s", h.spec.Name, got, h.spec.ReportingCurrency)
 		}
+	}
+}
+
+// checkPool pins the Daily Pool the target line is built from: the pool in force
+// Today, the pool the Period's first day is read as of, and the days it really
+// changed on.
+func checkPool(t *testing.T, got dashboard.Assembly, want fixtureExpected) {
+	t.Helper()
+	if want.Pool == nil {
+		t.Fatal("the row has a trajectory and no pool to pin")
+	}
+	if g := got.DailyPool.StringFixed(4); g != want.Pool.Today {
+		t.Errorf("the Daily Pool today = %s, want %s", g, want.Pool.Today)
+	}
+	if g := got.BasePool.StringFixed(4); g != want.Pool.Base {
+		t.Errorf("the base Daily Pool = %s, want %s", g, want.Pool.Base)
+	}
+	var gotChanges []string
+	for _, c := range got.Changes {
+		gotChanges = append(gotChanges, fmt.Sprintf("day %d: %s", c.EffectiveDay, c.DailyPool.StringFixed(4)))
+	}
+	var wantChanges []string
+	for _, c := range want.Pool.Changes {
+		wantChanges = append(wantChanges, fmt.Sprintf("day %d: %s", c.Day, c.Pool))
+	}
+	if !slices.Equal(gotChanges, wantChanges) {
+		t.Errorf("the pool's changes = %v, want %v", gotChanges, wantChanges)
+	}
+}
+
+// checkPace pins what the calculation reads against the line. The wire does not
+// carry it yet, so only this sees it.
+func checkPace(t *testing.T, got dashboard.Assembly, want fixtureExpected) {
+	t.Helper()
+	pace := got.Figures.Pace
+	switch {
+	case want.Pace == nil && pace != nil:
+		t.Errorf("pace = %+v, want none: the Household is fully committed", *pace)
+	case want.Pace != nil && pace == nil:
+		t.Errorf("no pace, want %+v", *want.Pace)
+	case want.Pace != nil:
+		if string(pace.State) != want.Pace.State {
+			t.Errorf("State = %s, want %s", pace.State, want.Pace.State)
+		}
+		if g := pace.TrajectoryVariance.StringFixed(4); g != want.Pace.TrajectoryVariance {
+			t.Errorf("Trajectory Variance = %s, want %s", g, want.Pace.TrajectoryVariance)
+		}
+		if g := pace.BufferDays.StringFixed(4); g != want.Pace.BufferDays {
+			t.Errorf("Buffer Days = %s, want %s", g, want.Pace.BufferDays)
+		}
+	}
+}
+
+// The dashboard's pool is GET /budget's daily_pool, asserted on one state: the
+// plan screen and Home can never state two Daily Pools for one Household.
+func checkAgainstGetBudget(t *testing.T, f fixture, h seeded, got dashboard.Assembly) {
+	t.Helper()
+	budgets := budget.New(budget.Deps{Querier: f.tdb.Queries, Beginner: f.tdb.Pool, Now: f.clock.now})
+	resp, err := budgets.GetBudget(h.ctx, api.GetBudgetRequestObject{})
+	if err != nil {
+		t.Fatalf("GetBudget: %v", err)
+	}
+	b, ok := resp.(api.GetBudget200JSONResponse)
+	if !ok || b.DailyPool == nil {
+		t.Fatalf("GetBudget = %#v, want 200 with a daily_pool", resp)
+	}
+	if *b.DailyPool != got.DailyPool.StringFixed(4) {
+		t.Errorf("GET /budget's daily_pool = %s, the dashboard's pool = %s", *b.DailyPool, got.DailyPool.StringFixed(4))
 	}
 }

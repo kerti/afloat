@@ -192,6 +192,7 @@ type fixtureHousehold struct {
 	ReportingCurrency string `json:"reporting_currency"`
 	TimeZone          string `json:"time_zone"`
 	DayStartsAt       string `json:"day_starts_at"`
+	AllowanceMode     string `json:"allowance_mode"`
 	Categories        []struct {
 		Key    string `json:"key"`
 		Name   string `json:"name"`
@@ -227,25 +228,44 @@ type fixtureHousehold struct {
 }
 
 type fixtureRead struct {
-	Name     string `json:"name"`
-	Now      string `json:"now"`
-	Expected struct {
-		Today  string `json:"today"`
-		Period struct {
-			YearMonth string `json:"year_month"`
-			StartsOn  string `json:"starts_on"`
-			EndsOn    string `json:"ends_on"`
-		} `json:"period"`
-		Spend struct {
-			ByDay   map[string]string `json:"by_day"`
-			Settled string            `json:"settled"`
-			Today   string            `json:"today"`
-			Future  string            `json:"future"`
-		} `json:"spend"`
-		Wire struct {
-			Currency string `json:"currency"`
-		} `json:"wire"`
-	} `json:"expected"`
+	Name     string          `json:"name"`
+	Now      string          `json:"now"`
+	Expected fixtureExpected `json:"expected"`
+}
+
+type fixtureExpected struct {
+	Today  string `json:"today"`
+	Period struct {
+		YearMonth string `json:"year_month"`
+		StartsOn  string `json:"starts_on"`
+		EndsOn    string `json:"ends_on"`
+	} `json:"period"`
+	Spend struct {
+		ByDay   map[string]string `json:"by_day"`
+		Settled string            `json:"settled"`
+		Today   string            `json:"today"`
+		Future  string            `json:"future"`
+	} `json:"spend"`
+	// Pool is the Daily Pool the target line is built from: absent while there
+	// is no Monthly Budget.
+	Pool *struct {
+		Today   string `json:"today"`
+		Base    string `json:"base"`
+		Changes []struct {
+			Day  int    `json:"day"`
+			Pool string `json:"pool"`
+		} `json:"changes"`
+	} `json:"pool"`
+	// Pace is what the calculation reads against the line (State, Trajectory
+	// Variance, Buffer Days): pinned here, on the wire from PR 6 of #155.
+	// Absent exactly where the Household is fully committed.
+	Pace *struct {
+		State              string `json:"state"`
+		TrajectoryVariance string `json:"trajectory_variance"`
+		BufferDays         string `json:"buffer_days"`
+	} `json:"pace"`
+	// Wire is what GET /dashboard answers, as the JSON object it is.
+	Wire map[string]any `json:"wire"`
 }
 
 func loadFixture(t *testing.T) fixtureFile {
@@ -284,9 +304,13 @@ func (f fixture) seed(t *testing.T, file fixtureFile) []seeded {
 	var out []seeded
 	for i, h := range file.Households {
 		householdID := testutil.NewUUID(t)
-		f.exec(t, `INSERT INTO households (id, household_display_name, reporting_currency, period_start_day, day_starts_at)
-			VALUES ($1, $2, $3, $4, $5::time)`,
-			householdID, h.Name, h.ReportingCurrency, h.PeriodStartDay, h.DayStartsAt)
+		mode := h.AllowanceMode
+		if mode == "" {
+			mode = "adaptive"
+		}
+		f.exec(t, `INSERT INTO households (id, household_display_name, reporting_currency, period_start_day, day_starts_at, allowance_mode)
+			VALUES ($1, $2, $3, $4, $5::time, $6)`,
+			householdID, h.Name, h.ReportingCurrency, h.PeriodStartDay, h.DayStartsAt, mode)
 		userID := testutil.NewUUID(t)
 		f.exec(t, `INSERT INTO users (id, household_id, email, user_display_name, time_zone) VALUES ($1, $2, $3, 'A', $4)`,
 			userID, householdID, "user"+string(rune('a'+i))+"@example.com", h.TimeZone)

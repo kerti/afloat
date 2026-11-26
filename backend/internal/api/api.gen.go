@@ -472,6 +472,35 @@ type Dashboard struct {
 	//
 	// Example: IDR
 	Currency string `json:"currency"`
+
+	// Trajectory The Period's daily-bucket spending read against its Daily Pool (CONTEXT.md
+	// §Trajectory), computed on the server from the Monthly Budget's and the
+	// Commitments' versions as they stand on the caller's Today and the
+	// Expenses dated in the Period. Present once the Household has a Monthly
+	// Budget, absent before, never `null`. Every `Money` is in the answer's
+	// `currency` and is exact at four decimals; a negative one is information
+	// and is never clamped.
+	//
+	// - `left_to_spend_today`: Today's Allowance less what is already spent
+	//   today (PRD D1). Negative once more is spent than the allowance.
+	// - `todays_allowance`: what the Daily Pool still allows for each of the
+	//   remaining days, Today included, or the baseline in `fixed` mode (PRD
+	//   D4). Floored at four decimals, so it never overstates.
+	// - `days_remaining`: PRD D8.
+	// - `remaining_daily_pool`: what is left of the Period's Available Pool
+	//   after the spending that has settled before Today (PRD D8). Today's
+	//   spending is not in it, so it stays still through the day. Negative
+	//   once the Pool is used up.
+	// - `baseline_daily_budget`: the slope of the target line on Today: the
+	//   Daily Pool's even share of one day until the pool changes in the
+	//   Period, then the slope set by the latest change (PRD D4). Absent while the Household is fully committed
+	//   (the baseline in force is zero), which is not the same as having no
+	//   money left.
+	//
+	// Only a Commitment's Expense is left out of these figures: an
+	// uncategorised Expense is Daily. Nothing here says what the Household
+	// should do, and no figure is better or worse than another.
+	Trajectory *Trajectory `json:"trajectory,omitempty"`
 }
 
 // Error The one error envelope the API emits (PRD N7), identical in shape
@@ -875,6 +904,86 @@ type PocketList struct {
 //
 // Example: -25000
 type SignedMoneyInput = string
+
+// Trajectory The Period's daily-bucket spending read against its Daily Pool (CONTEXT.md
+// §Trajectory), computed on the server from the Monthly Budget's and the
+// Commitments' versions as they stand on the caller's Today and the
+// Expenses dated in the Period. Present once the Household has a Monthly
+// Budget, absent before, never `null`. Every `Money` is in the answer's
+// `currency` and is exact at four decimals; a negative one is information
+// and is never clamped.
+//
+//   - `left_to_spend_today`: Today's Allowance less what is already spent
+//     today (PRD D1). Negative once more is spent than the allowance.
+//   - `todays_allowance`: what the Daily Pool still allows for each of the
+//     remaining days, Today included, or the baseline in `fixed` mode (PRD
+//     D4). Floored at four decimals, so it never overstates.
+//   - `days_remaining`: PRD D8.
+//   - `remaining_daily_pool`: what is left of the Period's Available Pool
+//     after the spending that has settled before Today (PRD D8). Today's
+//     spending is not in it, so it stays still through the day. Negative
+//     once the Pool is used up.
+//   - `baseline_daily_budget`: the slope of the target line on Today: the
+//     Daily Pool's even share of one day until the pool changes in the
+//     Period, then the slope set by the latest change (PRD D4). Absent while the Household is fully committed
+//     (the baseline in force is zero), which is not the same as having no
+//     money left.
+//
+// Only a Commitment's Expense is left out of these figures: an
+// uncategorised Expense is Daily. Nothing here says what the Household
+// should do, and no figure is better or worse than another.
+type Trajectory struct {
+	// BaselineDailyBudget A decimal serialised as a string at exactly four decimal places (PRD
+	// N2, BOOTSTRAP.md §4): `"9000000.0000"`, never a JSON number, never
+	// trimmed, never exponent notation. In the Household's
+	// `reporting_currency`; a Budget's money carries no `currency` of its own
+	// (PRD N3), an Expense's has one. May be negative where it is a difference
+	// (`unallocated`) or a refund (an Expense's `amount`).
+	//
+	//
+	// Example: 9000000.0000
+	BaselineDailyBudget *Money `json:"baseline_daily_budget,omitempty"`
+
+	// DaysRemaining The days left in the Budget Period counting Today, so the Period's
+	// last day reads 1.
+	//
+	//
+	// Example: 17
+	DaysRemaining int `json:"days_remaining"`
+
+	// LeftToSpendToday A decimal serialised as a string at exactly four decimal places (PRD
+	// N2, BOOTSTRAP.md §4): `"9000000.0000"`, never a JSON number, never
+	// trimmed, never exponent notation. In the Household's
+	// `reporting_currency`; a Budget's money carries no `currency` of its own
+	// (PRD N3), an Expense's has one. May be negative where it is a difference
+	// (`unallocated`) or a refund (an Expense's `amount`).
+	//
+	//
+	// Example: 9000000.0000
+	LeftToSpendToday Money `json:"left_to_spend_today"`
+
+	// RemainingDailyPool A decimal serialised as a string at exactly four decimal places (PRD
+	// N2, BOOTSTRAP.md §4): `"9000000.0000"`, never a JSON number, never
+	// trimmed, never exponent notation. In the Household's
+	// `reporting_currency`; a Budget's money carries no `currency` of its own
+	// (PRD N3), an Expense's has one. May be negative where it is a difference
+	// (`unallocated`) or a refund (an Expense's `amount`).
+	//
+	//
+	// Example: 9000000.0000
+	RemainingDailyPool Money `json:"remaining_daily_pool"`
+
+	// TodaysAllowance A decimal serialised as a string at exactly four decimal places (PRD
+	// N2, BOOTSTRAP.md §4): `"9000000.0000"`, never a JSON number, never
+	// trimmed, never exponent notation. In the Household's
+	// `reporting_currency`; a Budget's money carries no `currency` of its own
+	// (PRD N3), an Expense's has one. May be negative where it is a difference
+	// (`unallocated`) or a refund (an Expense's `amount`).
+	//
+	//
+	// Example: 9000000.0000
+	TodaysAllowance Money `json:"todays_allowance"`
+}
 
 // UpdateBudgetRequest What a Budget change may set, merge-style: a property left out is
 // unchanged and none is required. `null` is not accepted for either

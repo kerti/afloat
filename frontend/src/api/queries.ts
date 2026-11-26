@@ -1,4 +1,10 @@
-import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  useInfiniteQuery,
+  useMutation,
+  useQuery,
+  useQueryClient,
+  type QueryClient,
+} from "@tanstack/react-query";
 import {
   ApiError,
   changeEmail,
@@ -14,6 +20,7 @@ import {
   deletePocket,
   getAuthMethods,
   getBudget,
+  getDashboard,
   getExpense,
   getMe,
   getOnboardingOptions,
@@ -30,6 +37,7 @@ import {
   updateMe,
   type Budget,
   type Category,
+  type Dashboard,
   type CategoryList,
   type CreateCategoryRequest,
   type ChangeEmailRequest,
@@ -55,6 +63,23 @@ import {
 import { clearSession, meKey } from "./queryClient";
 
 export { meKey };
+
+export const dashboardKey = ["dashboard"] as const;
+
+// Home's figures, one read (#155). Never patched by hand: every write that can
+// move a figure invalidates dashboardKey (R5), and a refetch keeps the previous
+// answer in place, so returning from Capture never flashes a spinner. The
+// default staleTime of zero is what refetches it when the app regains focus
+// (`Me.today`'s rule): the day rolls over while the app is open, and nothing
+// else would tell a stale Home.
+export function useDashboard() {
+  return useQuery<Dashboard, ApiError>({ queryKey: dashboardKey, queryFn: getDashboard });
+}
+
+// The dashboard is made of the Budget, the Categories' allocations, the
+// Expenses and the Household's and the User's settings (the Period's window,
+// Today), so a write to any of them can move a figure and invalidates it.
+const invalidateDashboard = (qc: QueryClient) => qc.invalidateQueries({ queryKey: dashboardKey });
 
 // The session probe (contract: "A 401 means show the login screen"). A 401 is
 // an answer, not a failure, so it resolves to null instead of throwing.
@@ -125,19 +150,23 @@ export function useUpdateHousehold() {
   return useMutation<Household, ApiError, UpdateHouseholdRequest>({
     mutationFn: updateHousehold,
     // /me carries the Household and is the one read path: invalidate, don't
-    // patch the cache by hand.
-    onSuccess: () => qc.invalidateQueries({ queryKey: meKey }),
+    // patch the cache by hand. Its period_start_day and allowance_mode move the
+    // dashboard's figures.
+    onSuccess: () =>
+      Promise.all([qc.invalidateQueries({ queryKey: meKey }), invalidateDashboard(qc)]),
   });
 }
 
 // The answer is a Me, but /me is the one read path: invalidate rather than
 // patch the cache. A locale change flips the language when RequireSession
-// sees the refetched locale.
+// sees the refetched locale. A time_zone change moves Today, and with it every
+// figure of the dashboard (R5).
 export function useUpdateMe() {
   const qc = useQueryClient();
   return useMutation<Me, ApiError, UpdateMeRequest>({
     mutationFn: updateMe,
-    onSuccess: () => qc.invalidateQueries({ queryKey: meKey }),
+    onSuccess: () =>
+      Promise.all([qc.invalidateQueries({ queryKey: meKey }), invalidateDashboard(qc)]),
   });
 }
 
@@ -223,7 +252,8 @@ export function useUpdateBudget() {
   const qc = useQueryClient();
   return useMutation<Budget, ApiError, UpdateBudgetRequest>({
     mutationFn: updateBudget,
-    onSuccess: () => qc.invalidateQueries({ queryKey: budgetKey }),
+    onSuccess: () =>
+      Promise.all([qc.invalidateQueries({ queryKey: budgetKey }), invalidateDashboard(qc)]),
   });
 }
 
@@ -243,6 +273,7 @@ export function useCreateCategory() {
       Promise.all([
         qc.invalidateQueries({ queryKey: categoriesKey }),
         qc.invalidateQueries({ queryKey: budgetKey }),
+        invalidateDashboard(qc),
       ]),
   });
 }
@@ -255,6 +286,7 @@ export function useUpdateCategory() {
     Promise.all([
       qc.invalidateQueries({ queryKey: categoriesKey }),
       qc.invalidateQueries({ queryKey: budgetKey }),
+      invalidateDashboard(qc),
     ]);
   return useMutation<Category, ApiError, { id: string; body: UpdateCategoryRequest }>({
     mutationFn: ({ id, body }) => updateCategory(id, body),
@@ -273,6 +305,7 @@ export function useDeleteCategory() {
     Promise.all([
       qc.invalidateQueries({ queryKey: categoriesKey }),
       qc.invalidateQueries({ queryKey: budgetKey }),
+      invalidateDashboard(qc),
     ]);
   return useMutation<void, ApiError, string>({
     mutationFn: deleteCategory,
@@ -339,6 +372,7 @@ export function useUpdateExpense() {
       Promise.all([
         qc.invalidateQueries({ queryKey: expensesKey }),
         qc.invalidateQueries({ queryKey: pocketsKey }),
+        invalidateDashboard(qc),
       ]),
   });
 }
@@ -353,6 +387,7 @@ export function useCreateExpense() {
       Promise.all([
         qc.invalidateQueries({ queryKey: expensesKey }),
         qc.invalidateQueries({ queryKey: pocketsKey }),
+        invalidateDashboard(qc),
       ]),
   });
 }
@@ -366,6 +401,7 @@ function useExpenseMove<V>(fn: (v: V) => Promise<unknown>) {
     Promise.all([
       qc.invalidateQueries({ queryKey: expensesKey }),
       qc.invalidateQueries({ queryKey: pocketsKey }),
+      invalidateDashboard(qc),
     ]);
   return useMutation<unknown, ApiError, V>({
     mutationFn: fn,

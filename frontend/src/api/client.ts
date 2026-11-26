@@ -22,6 +22,8 @@ export type UpdateExpenseRequest = components["schemas"]["UpdateExpenseRequest"]
 export type Bucket = components["schemas"]["Bucket"];
 export type Budget = components["schemas"]["Budget"];
 export type UpdateBudgetRequest = components["schemas"]["UpdateBudgetRequest"];
+export type Dashboard = components["schemas"]["Dashboard"];
+export type Trajectory = components["schemas"]["Trajectory"];
 export type AuthMethods = components["schemas"]["AuthMethods"];
 export type LocalLoginRequest = components["schemas"]["LocalLoginRequest"];
 export type LocalRegisterRequest = components["schemas"]["LocalRegisterRequest"];
@@ -247,6 +249,14 @@ export async function updateBudget(body: UpdateBudgetRequest): Promise<Budget> {
       body: JSON.stringify(body),
     })
   ).json() as Promise<Budget>;
+}
+
+// The Household's figures for the Budget Period it is in, as one answer. Every
+// figure is computed there, and the client derives none; `trajectory` is absent
+// while there is no Monthly Budget. Like the Budget's, the first read of a
+// Period may write it (the server carries the last Period forward).
+export async function getDashboard(): Promise<Dashboard> {
+  return (await request("/dashboard")).json() as Promise<Dashboard>;
 }
 
 export async function listCategories(): Promise<CategoryList> {

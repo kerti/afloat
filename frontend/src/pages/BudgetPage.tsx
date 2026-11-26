@@ -11,6 +11,7 @@ import {
 import {
   budgetKey,
   categoriesKey,
+  dashboardKey,
   useBudget,
   useCategories,
   useDeleteCategory,
@@ -98,7 +99,10 @@ export function BudgetPage({ me }: { me: Me }) {
           message: t(c.active ? "toast.deactivated" : "toast.reactivated", { name }),
           undo: () =>
             updateCategory(c.id, { active: c.active }).then((r) =>
-              qc.invalidateQueries({ queryKey: budgetKey }).then(() => r),
+              Promise.all([
+                qc.invalidateQueries({ queryKey: budgetKey }),
+                qc.invalidateQueries({ queryKey: dashboardKey }),
+              ]).then(() => r),
             ),
           qc,
           invalidate: categoriesKey,
@@ -120,7 +124,10 @@ export function BudgetPage({ me }: { me: Me }) {
       message: t("toast.deleted", { name }),
       undo: () =>
         restoreCategory(c.id).then((r) =>
-          qc.invalidateQueries({ queryKey: budgetKey }).then(() => r),
+          Promise.all([
+            qc.invalidateQueries({ queryKey: budgetKey }),
+            qc.invalidateQueries({ queryKey: dashboardKey }),
+          ]).then(() => r),
         ),
       qc,
       invalidate: categoriesKey,

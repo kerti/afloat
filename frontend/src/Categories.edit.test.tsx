@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { toast } from "sonner";
 import { alice, defaultHandlers, emptyBudget, server, type State } from "@/test/server";
 import { renderApp } from "@/test/render";
+import { dashboardKey } from "@/api/queries";
 import enGB from "@/locales/en-GB.json";
 
 vi.mock("sonner", async () => (await import("@/test/sonnerMock")).sonnerMock());
@@ -360,6 +361,27 @@ describe("deactivating and reactivating a Category", () => {
     (opts as unknown as { action: { onClick: () => void } }).action.onClick();
     await waitFor(() => expect(state.categories![0]!.active).toBe(true));
     expect(await screen.findByRole("button", { name: /^Edit Groceries, / })).toBeInTheDocument();
+  });
+
+  it("the Undo of a deactivate invalidates the dashboard, as the write it reverses did (#155 R5)", async () => {
+    const state = rentAndGroceries({
+      categories: [cat("b", "Groceries", "daily")],
+      budget: { ...planned, allocations: [] },
+    });
+    server.use(...defaultHandlers(state));
+    const user = userEvent.setup();
+    const { client } = renderApp("/budget");
+    await openEdit(user, "Groceries");
+    await user.click(screen.getByRole("button", { name: c.deactivate }));
+    await waitFor(() => expect(toastMock).toHaveBeenCalledTimes(1));
+    // A fresh entry, so only the Undo can mark it stale.
+    client.setQueryData(dashboardKey, { currency: "IDR" });
+
+    (
+      toastMock.mock.calls[0]![1] as unknown as { action: { onClick: () => void } }
+    ).action.onClick();
+
+    await waitFor(() => expect(client.getQueryState(dashboardKey)?.isInvalidated).toBe(true));
   });
 
   it("reactivates an inactive Category that holds an allocation, with its own Undo toast", async () => {

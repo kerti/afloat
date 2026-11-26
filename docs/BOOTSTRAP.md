@@ -480,7 +480,7 @@ with zoneinfo answers from it, so a case-insensitive filesystem (a Mac) also acc
   figure is stated in is read with the figures, not before the Period was ensured. The Position
   is worked out before it, outside it: `budget.LocateHousehold` (`Locate` plus the Household row it read)
   gives Today and the Period, and the settings that row carries for the arithmetic (`period_start_day`,
-  `day_starts_at`, later `allowance_mode`) come from that same read. Every figure is keyed by that one
+  `day_starts_at`, `allowance_mode`) come from that same read. Every figure is keyed by that one
   Position, so a concurrent settings change yields an answer as of a moment earlier, never a mix; a setting
   the snapshot reads never enters the Period Day arithmetic. A
   failure of either step is `500` and the next read retries. The Expenses are read by **one statement**
@@ -1102,9 +1102,17 @@ are seeded together, so another Household's rows are present in every row, and e
 instant, the Today and the Period it lands in, the daily bucket's spend by day with its `settled`, `today`
 and `future` parts (a Commitment's Expense in none, an uncategorised one Daily, a deleted one out, an
 inactive Category's counted, a refund negative, an Expense outside the window in no figure, `captured_at`
-never read) and the wire's answer at that stage of the slice. Each PR of #155 adds the figures it puts on
-the wire to the rows already there. The dashboard's tests read it through the real statements
-(`internal/dashboard`).
+never read), the Daily Pool through the Period (`pool`: today's, the base as of the first day, and the days
+it really changed on) and the figures made of it (`pace`: State, Trajectory Variance and Buffer Days, which
+the wire does not carry yet; `wire`: what `GET /dashboard` answers at that stage of the slice). The Budget's
+history is in the rows: a Monthly Budget and a Commitment's allocation each kink, a Daily Category's does not,
+versions are dated before, inside and after a re-cut window, one is dated after the viewer's Today, a Period
+nobody wrote carries the previous one forward, and the allowance mode, a negative pool and a future-dated
+refund each have a Household. **The expected figures were worked out in exact rationals by a script that reads
+the rows and `CONTEXT.md`'s spec and not the backend**, so a row is an independent check; a change to the
+assembly or the calculation changes this file and `trajectory.json` together. Each PR of #155 adds the figures
+it puts on the wire to the rows already there. The dashboard's tests read it through the real statements
+(`internal/dashboard`), and assert the pool equal to `GET /budget`'s `daily_pool` on the same state.
 
 **`contract/testdata/periods.json`'s `days` rows pin a Period's day counts** (#155): D, the window's length,
 e, the days before Today inside it, and r = D - e, which counts Today (the last day reads 1), for start

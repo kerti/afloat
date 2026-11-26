@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import { alice, defaultHandlers, envelope, server, type State } from "@/test/server";
 import { renderApp } from "@/test/render";
 import { UNDO_TOAST_MS } from "@/lib/undoToast";
+import { dashboardKey } from "@/api/queries";
 import { PLAIN_TOAST_MS } from "@/lib/plainToast";
 import enGB from "@/locales/en-GB.json";
 import idID from "@/locales/id-ID.json";
@@ -101,6 +102,20 @@ describe("Delete on the edit route", () => {
       await main().findByRole("link", { name: e.needsCategory.replace("{{count}}", "2") }),
     ).toBeInTheDocument();
     await waitFor(() => expect(state.pocketReads).toBeGreaterThan(before));
+  });
+
+  it("Undo invalidates the dashboard, since the restored Expense moves its figures (#155 R5)", async () => {
+    server.use(...defaultHandlers(signedIn({ expenses: [expense("e1")] })));
+    const user = userEvent.setup();
+    const { client } = renderApp("/expenses/e1");
+
+    await user.click(await screen.findByRole("button", { name: e.delete }));
+    await waitFor(() => expect(path()).toBe("/expenses"));
+    // A fresh entry, so only the Undo can mark it stale.
+    client.setQueryData(dashboardKey, { currency: "IDR" });
+    action(0);
+
+    await waitFor(() => expect(client.getQueryState(dashboardKey)?.isInvalidated).toBe(true));
   });
 
   it("Undo restores it and the list gets it back", async () => {

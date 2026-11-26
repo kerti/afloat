@@ -19,6 +19,7 @@ type Expense = components["schemas"]["Expense"];
 type CreateExpenseBody = components["schemas"]["CreateExpenseRequest"];
 type UpdateExpenseBody = components["schemas"]["UpdateExpenseRequest"];
 type Budget = components["schemas"]["Budget"];
+type Dashboard = components["schemas"]["Dashboard"];
 type UpdateBudgetBody = components["schemas"]["UpdateBudgetRequest"];
 type ChoiceBody = components["schemas"]["OnboardingChoiceRequest"];
 
@@ -94,6 +95,11 @@ export type State = {
   // answers an empty one), and every PATCH /budget body, in order.
   budget?: Budget;
   budgetPatches?: UpdateBudgetBody[];
+  // What GET /dashboard answers (absent: the currency alone, a Household with no
+  // Monthly Budget), and how many reads the app made: a write that can move a
+  // figure must refetch it.
+  dashboard?: Dashboard;
+  dashboardReads?: number;
   // The one password the fake server accepts as "current". Defaults to the
   // login fixture's.
   password?: string;
@@ -640,6 +646,13 @@ export function defaultHandlers(state: State = { signedIn: false, me: alice }) {
       );
       state.deletedAllocations = state.deletedAllocations?.filter((a) => a.category_id !== gone.id);
       return HttpResponse.json(gone);
+    }),
+    http.get("/api/dashboard", () => {
+      if (!state.signedIn) return HttpResponse.json(envelope("UNAUTHORIZED"), { status: 401 });
+      state.dashboardReads = (state.dashboardReads ?? 0) + 1;
+      return HttpResponse.json(
+        state.dashboard ?? { currency: state.me.household.reporting_currency },
+      );
     }),
     http.get("/api/budget", () => {
       if (!state.signedIn) return HttpResponse.json(envelope("UNAUTHORIZED"), { status: 401 });

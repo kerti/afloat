@@ -34,6 +34,15 @@ whole scaffold sheet. If the two ever disagree, `BOOTSTRAP.md` wins and this fil
   cannot deadlock, each upsert checking tenancy and share-locking the row. An answer built from several
   statements is read from one `REPEATABLE READ`, `READ ONLY` snapshot (`GET /budget`, and `PATCH /budget` after its
   write commits: a failed read then is a `500` with the change saved).
+- **A read of derived figures** (`GET /dashboard`, #155): `budget.EnsurePeriod` first (it may write once
+  per Period, `HEAD` included, committed on its own), then everything the answer holds from one
+  `REPEATABLE READ`, `READ ONLY` snapshot, the Household row too (the currency a figure is stated in is read
+  with the figures). The Position and the settings it is computed from (`period_start_day`, `day_starts_at`,
+  later `allowance_mode`) come from `budget.LocateHousehold`'s one read before it, and a setting the snapshot
+  reads never enters the Period Day arithmetic. One statement reads the Period's Expenses (`PeriodSpend`) and Go folds it, so no two
+  figures disagree about one Expense; `captured_at` is never read. A property joins the wire in the PR that
+  renders it: only optional properties are added, omitted when empty and never `null`, so each answer is a
+  superset of the last. Money in it is stated in `Dashboard.currency`.
 - **Collections:** `{"items": [...]}`, empty is `{"items": []}` never `null`, ordered by `created_at, id`.
   The exception is the unbounded Expense list: keyset-paged (`limit` 1 to 100, opaque `after` and
   `next`, `next` omitted on the last page), an order ending in `id`, any computed sort key in the

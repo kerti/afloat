@@ -788,6 +788,50 @@ export interface paths {
         patch: operations["updateBudget"];
         trace?: never;
     };
+    "/dashboard": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The Household's dashboard for the current Budget Period.
+         * @description The one read behind Home: every figure the dashboard shows, computed on
+         *     the server and answered together, so the screen cannot say two things
+         *     about one Expense. There are no parameters. The Budget Period is the one
+         *     that contains the caller's Today, worked out on the server from the
+         *     User's `time_zone` and the Household's `day_starts_at` as for
+         *     `GET /budget` (BOOTSTRAP.md §4): the client never names a date, and no
+         *     other Period can be named.
+         *
+         *     Like `GET /budget`, **this operation may write once per Period**, and
+         *     `HEAD` does too: Home is the first read of every Period, and a read that
+         *     did not bring the Period into being would tell a Household that carried
+         *     a Budget forward that it has none (PRD S13). The Period is brought into
+         *     being, and that is committed, before anything is read. A request that
+         *     finds the Period already there writes nothing, and what is returned
+         *     never differs from what a read that did not write would have returned.
+         *     Nothing else is written: no Expense, no Budget, no record of the read.
+         *
+         *     What the answer holds is read afterwards from one snapshot, so a
+         *     concurrent change is in it whole or not at all. A failure of that read,
+         *     or of the Period's bringing into being, is `500`.
+         *
+         *     `currency` is the Household's `reporting_currency`, read in that
+         *     snapshot. It states the currency of every `Money` this answer carries,
+         *     which has no `currency` of its own (PRD N3). Every other property is
+         *     optional and omitted when empty, never `null`.
+         */
+        get: operations["getDashboard"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/expenses": {
         parameters: {
             query?: never;
@@ -1665,6 +1709,23 @@ export interface components {
             commitments_budget: components["schemas"]["Money"];
             daily_pool?: components["schemas"]["Money"];
             unallocated?: components["schemas"]["Money"];
+        };
+        /**
+         * @description What the Household's Budget and Expenses add up to for the Budget Period
+         *     it is in now, every figure computed on the server (PRD N5a). The client
+         *     formats a figure with `currency` and derives none.
+         *
+         *     `currency` is the one required property. Every other is optional,
+         *     omitted when it has nothing to say and never `null`.
+         */
+        Dashboard: {
+            /**
+             * @description ISO 4217. The Household's `reporting_currency` as it stands in the
+             *     snapshot this answer was read from: the currency of every `Money`
+             *     the answer carries, now and in later properties.
+             * @example IDR
+             */
+            currency: string;
         };
         /**
          * @description One Category's allocation in the current Budget Period, set to an
@@ -2570,6 +2631,28 @@ export interface operations {
                 };
             };
             400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getDashboard: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The dashboard, as it stands now. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Dashboard"];
+                };
+            };
             401: components["responses"]["Unauthorized"];
             500: components["responses"]["InternalError"];
         };

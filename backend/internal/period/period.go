@@ -59,6 +59,13 @@ func (d Date) Before(o Date) bool {
 	return d.Time().Before(o.Time())
 }
 
+// Sub is the number of calendar days from o to d: positive when d is the later
+// day. Both are dates with no zone, so the answer is exact whatever a clock
+// did in between (a daylight-saving night is not a 23-hour day here).
+func (d Date) Sub(o Date) int {
+	return int(d.Time().Sub(o.Time()) / (24 * time.Hour))
+}
+
 // ParseDayStartsAt reads a Household's `day_starts_at`, `HH:MM`, as the time
 // after local midnight at which a Period Day begins.
 func ParseDayStartsAt(s string) (time.Duration, error) {
@@ -99,6 +106,13 @@ type Period struct {
 	YearMonth string
 	StartsOn  Date
 	EndsOn    Date
+}
+
+// Days is D, the window's length in days, both ends counted. The trajectory's
+// figures are made of it (CONTEXT.md): e is the days before Today inside the
+// window, Today.Sub(StartsOn), and r = D - e counts Today, so the last day reads 1.
+func (p Period) Days() int {
+	return p.EndsOn.Sub(p.StartsOn) + 1
 }
 
 // Contains reports whether the Period Day d falls inside the window.

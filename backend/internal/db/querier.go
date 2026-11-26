@@ -233,6 +233,14 @@ type Querier interface {
 	// live Expense by captured_at whose Pocket is active and live. Derived on read;
 	// no row is no default. Served by (household_id, captured_at DESC) WHERE live.
 	LastUsedPocket(ctx context.Context, householdID pgtype.UUID) (pgtype.UUID, error)
+	// The days of the Period on which some allocation took effect: the primary
+	// key's prefix (household_id, year_month, effective_on), read as a distinct
+	// scan. The dashboard keeps those after the Period's first day and on or before
+	// Today, asks AllocationsAsOf once for each, and lets equal neighbouring pools
+	// merge, so a Daily Category's change (the pool is unchanged) is no kink. A
+	// deleted Category's days are listed too and are harmless for the same reason:
+	// AllocationsAsOf leaves its allocation out, so the pool does not move.
+	ListAllocationChangeDays(ctx context.Context, arg ListAllocationChangeDaysParams) ([]pgtype.Date, error)
 	// Categories (PRD S8). Tenant-scoped in SQL: every statement filters on the
 	// authenticated User's household_id, never anything the request supplied
 	// (BOOTSTRAP.md §4). A Category carries no allocation: that is the Budget's
@@ -367,6 +375,29 @@ type Querier interface {
 	// on SoftDeletePocket). False means removing this Pocket would leave none:
 	// 409 LAST_POCKET.
 	OtherActivePocketExists(ctx context.Context, arg OtherActivePocketExistsParams) (bool, error)
+	// The dashboard's reads (#155). Tenant-scoped in SQL, as every statement is:
+	// household_id from the authenticated User, never anything the request
+	// supplied (BOOTSTRAP.md §4). Both run inside the dashboard's one snapshot.
+	// The Period's spend, one statement (#155 T2.4): every live Expense whose
+	// occurred_on is in the window, grouped by Period Day, Category and Pocket, so
+	// Go can fold one result into every figure that reads Expenses and they cannot
+	// disagree about one Expense. Only occurred_on decides the day and the Period;
+	// captured_at is never read (CLAUDE.md rule 5). The window is inclusive at both
+	// ends, so an Expense dated after the Period's last day is in no figure of it.
+	//
+	// A refund is a negative amount and sums as one. No currency is read or
+	// converted: every Expense is stamped with the Household's reporting_currency
+	// and the currency lock keeps it so (an invariant the lock provides, not one this
+	// statement checks).
+	//
+	// bucket is 'daily' for an Expense with no Category (CONTEXT: an uncategorised
+	// Expense is Daily), hence the LEFT JOIN. Neither join filters deleted_at on
+	// the Category or Pocket: a delete is refused while an Expense references one
+	// (CATEGORY_IN_USE, POCKET_IN_USE), so there is none to drop, and a filter that
+	// ever did drop one would turn a Commitment's Expense into a Daily one without
+	// a sound. Inactive Categories and Pockets count; active rides along for the
+	// breakdowns. Both joins are on the composite key the foreign keys use.
+	PeriodSpend(ctx context.Context, arg PeriodSpendParams) ([]PeriodSpendRow, error)
 	// Readiness probe for GET /health. A round-trip through the pool proves more
 	// than pgx's own Ping: it takes a connection from the pool, executes, and scans,
 	// which is the path every real query takes. A pool that is exhausted or pointed

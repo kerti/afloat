@@ -21,6 +21,7 @@ import (
 	"github.com/kerti/afloat/backend/internal/auth"
 	"github.com/kerti/afloat/backend/internal/budget"
 	"github.com/kerti/afloat/backend/internal/db"
+	"github.com/kerti/afloat/backend/internal/period"
 	"github.com/kerti/afloat/backend/internal/testutil"
 )
 
@@ -1241,4 +1242,82 @@ func TestNewWithoutAClockUsesTheRealOne(t *testing.T) {
 	if !ok {
 		t.Errorf("Period = %s, want the month around %s", got.Period.YearMonth, now.Format("2006-01-02"))
 	}
+}
+
+// LocateHousehold is Locate plus the Household row it read, and the two never
+// disagree about where Today is.
+func TestLocateHouseholdAnswersLocatesPositionAndTheHouseholdRowItRead(t *testing.T) {
+	f := newFixture(t)
+	householdID, userID, _ := f.member(t, "Home", "a@example.com")
+	f.exec(t, `UPDATE households SET reporting_currency = 'USD', allowance_mode = 'fixed', period_start_day = 25 WHERE id = $1`, householdID)
+	user, ok := auth.UserFromContext(f.ctxOf(t, userID))
+	if !ok {
+		t.Fatal("no User in the context")
+	}
+
+	plain, err := budget.Locate(context.Background(), f.tdb.Queries, f.clock.now, user)
+	if err != nil {
+		t.Fatalf("Locate: %v", err)
+	}
+	at, household, err := budget.LocateHousehold(context.Background(), f.tdb.Queries, f.clock.now, user)
+	if err != nil {
+		t.Fatalf("LocateHousehold: %v", err)
+	}
+
+	if at != plain {
+		t.Errorf("LocateHousehold position = %+v, Locate = %+v", at, plain)
+	}
+	if at.Period.YearMonth != "2026-10" || at.Today.String() != "2026-11-14" {
+		t.Errorf("position = %s on %s, want the 2026-10 Period (it opens on the 25th) on 2026-11-14", at.Period.YearMonth, at.Today)
+	}
+	if household.ID != householdID || household.ReportingCurrency != "USD" || household.AllowanceMode != "fixed" {
+		t.Errorf("household = %+v, want this Household's own row as it stands", household)
+	}
+}
+
+// EnsurePeriod is GetBudget's own first step, exported: it brings the Period
+// into being once, opens a write transaction only when it must, and a second
+// call finds it and writes nothing.
+func TestEnsurePeriodMaterialisesOnceAndThenFindsIt(t *testing.T) {
+	f := newFixture(t)
+	householdID, userID, _ := f.member(t, "Home", "a@example.com")
+	user, _ := auth.UserFromContext(f.ctxOf(t, userID))
+	at, err := budget.Locate(context.Background(), f.tdb.Queries, f.clock.now, user)
+	if err != nil {
+		t.Fatalf("Locate: %v", err)
+	}
+
+	for i := range 2 {
+		if err := budget.EnsurePeriod(context.Background(), f.tdb.Queries, f.begins, householdID, at.Period); err != nil {
+			t.Fatalf("EnsurePeriod #%d: %v", i+1, err)
+		}
+		if want := 1; f.begins.count() != want {
+			t.Fatalf("after call %d: %d write transactions opened, want %d in all (the second finds the Period)", i+1, f.begins.count(), want)
+		}
+	}
+	if labels := f.markerLabels(t, householdID); labels != "2026-11" {
+		t.Errorf("budgets = %q, want the one marker", labels)
+	}
+
+	if err := budget.EnsurePeriod(context.Background(), f.tdb.Queries, breakingBeginner{Beginner: f.tdb.Pool, failBegin: true}, householdID, mustWindow(t, "2026-12")); !errors.Is(err, errBoom) {
+		t.Errorf("EnsurePeriod with a failing transaction = %v, want it wrapping the failure", err)
+	}
+	if err := budget.EnsurePeriod(context.Background(), failingExists{f.tdb.Queries}, f.tdb.Pool, householdID, at.Period); !errors.Is(err, errBoom) {
+		t.Errorf("EnsurePeriod with a failing look-up = %v, want it wrapping the failure", err)
+	}
+}
+
+type failingExists struct{ db.Querier }
+
+func (failingExists) BudgetExists(context.Context, db.BudgetExistsParams) (bool, error) {
+	return false, errBoom
+}
+
+func mustWindow(t *testing.T, label string) period.Period {
+	t.Helper()
+	p, err := period.Window(label, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return p
 }

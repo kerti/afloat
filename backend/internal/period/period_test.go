@@ -34,6 +34,14 @@ type fixture struct {
 		StartsOn       string `json:"starts_on"`
 		EndsOn         string `json:"ends_on"`
 	} `json:"windows"`
+	Days []struct {
+		Name           string `json:"name"`
+		Today          string `json:"today"`
+		PeriodStartDay int    `json:"period_start_day"`
+		Days           int    `json:"days"`
+		Elapsed        int    `json:"elapsed"`
+		Remaining      int    `json:"remaining"`
+	} `json:"days"`
 	InvalidLabels         []string `json:"invalid_labels"`
 	InvalidPeriodStartDay []int    `json:"invalid_period_start_days"`
 }
@@ -48,7 +56,7 @@ func load(t *testing.T) fixture {
 	if err := json.Unmarshal(raw, &f); err != nil {
 		t.Fatalf("decode fixture: %v", err)
 	}
-	if len(f.Today) == 0 || len(f.Periods) == 0 || len(f.Windows) == 0 {
+	if len(f.Today) == 0 || len(f.Periods) == 0 || len(f.Windows) == 0 || len(f.Days) == 0 {
 		t.Fatal("fixture has an empty section: this suite would check nothing")
 	}
 	return f
@@ -113,6 +121,59 @@ func TestWindowMatchesTheFixture(t *testing.T) {
 				t.Errorf("Window = %s..%s, want %s..%s", got.StartsOn, got.EndsOn, row.StartsOn, row.EndsOn)
 			}
 		})
+	}
+}
+
+// D, e and r (#155): the Period's length, the days before Today inside it and
+// the days left counting Today.
+func TestDayCountsMatchTheFixture(t *testing.T) {
+	for _, row := range load(t).Days {
+		t.Run(row.Name, func(t *testing.T) {
+			today := date(t, row.Today)
+			p, err := period.Of(today, row.PeriodStartDay)
+			if err != nil {
+				t.Fatalf("Of: %v", err)
+			}
+			d := p.Days()
+			e := today.Sub(p.StartsOn)
+			r := d - e
+			if d != row.Days || e != row.Elapsed || r != row.Remaining {
+				t.Errorf("D, e, r = %d, %d, %d; want %d, %d, %d", d, e, r, row.Days, row.Elapsed, row.Remaining)
+			}
+		})
+	}
+}
+
+// The fixture pins boundaries; this is the property that makes them
+// sufficient: on every day of every Period, 0 <= e < D and r counts Today.
+func TestEveryDayOfTwoYearsHasConsistentDayCountsForEveryStartDay(t *testing.T) {
+	for startDay := 1; startDay <= 28; startDay++ {
+		for d := date(t, "2027-01-01"); d.Before(date(t, "2029-01-01")); d = d.AddDays(1) {
+			p, err := period.Of(d, startDay)
+			if err != nil {
+				t.Fatalf("start day %d, %s: %v", startDay, d, err)
+			}
+			days, e := p.Days(), d.Sub(p.StartsOn)
+			if e < 0 || e >= days || days-e < 1 {
+				t.Fatalf("start day %d, %s: D=%d e=%d r=%d", startDay, d, days, e, days-e)
+			}
+			if days < 28 || days > 31 {
+				t.Fatalf("start day %d, %s: a Period of %d days", startDay, d, days)
+			}
+		}
+	}
+}
+
+func TestSubIsTheSignedDayDifference(t *testing.T) {
+	a, b := date(t, "2028-02-28"), date(t, "2028-03-01")
+	if got := b.Sub(a); got != 2 {
+		t.Errorf("2028-03-01 - 2028-02-28 = %d, want 2 (a leap February)", got)
+	}
+	if got := a.Sub(b); got != -2 {
+		t.Errorf("2028-02-28 - 2028-03-01 = %d, want -2", got)
+	}
+	if got := a.Sub(a); got != 0 {
+		t.Errorf("a day less itself = %d, want 0", got)
 	}
 }
 

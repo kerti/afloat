@@ -27,7 +27,8 @@ info:
     and reactivate), the Budget of the current Budget Period (PRD S9, S12,
     S13: the Monthly Budget and the allocations, read, and both changed) and
     the Household's Expenses (PRD E1 to E10: create, correct, delete, restore, the
-    live list and the Recycle Bin). Invitation
+    live list and the Recycle Bin) and its dashboard (PRD D1 to D9: the figures
+    derived from the Budget and the Expenses, read as one answer). Invitation
     acceptance and the remaining domain resources land in step 9 and are
     deliberately absent here.
   license:
@@ -61,6 +62,12 @@ tags:
       The Household's Expenses (PRD E1 to E10): what was spent, when, from which
       Pocket and for which Category, and the Recycle Bin a deleted one goes to.
       Money in and out is a signed string.
+  - name: dashboard
+    description: |
+      What the Household's Budget and Expenses add up to for the Budget Period
+      it is in now (PRD D1 to D9): derived figures, computed on the server and
+      read as one answer from one snapshot. Nothing here is written by a
+      caller.
   - name: onboarding
     description: |
       The gate between a registered credential and an account: a person who has
@@ -1082,6 +1089,49 @@ paths:
                 $ref: '#/components/schemas/Budget'
         '400':
           $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /dashboard:
+    get:
+      tags: [dashboard]
+      operationId: getDashboard
+      summary: The Household's dashboard for the current Budget Period.
+      description: |
+        The one read behind Home: every figure the dashboard shows, computed on
+        the server and answered together, so the screen cannot say two things
+        about one Expense. There are no parameters. The Budget Period is the one
+        that contains the caller's Today, worked out on the server from the
+        User's `time_zone` and the Household's `day_starts_at` as for
+        `GET /budget` (BOOTSTRAP.md §4): the client never names a date, and no
+        other Period can be named.
+
+        Like `GET /budget`, **this operation may write once per Period**, and
+        `HEAD` does too: Home is the first read of every Period, and a read that
+        did not bring the Period into being would tell a Household that carried
+        a Budget forward that it has none (PRD S13). The Period is brought into
+        being, and that is committed, before anything is read. A request that
+        finds the Period already there writes nothing, and what is returned
+        never differs from what a read that did not write would have returned.
+        Nothing else is written: no Expense, no Budget, no record of the read.
+
+        What the answer holds is read afterwards from one snapshot, so a
+        concurrent change is in it whole or not at all. A failure of that read,
+        or of the Period's bringing into being, is `500`.
+
+        `currency` is the Household's `reporting_currency`, read in that
+        snapshot. It states the currency of every `Money` this answer carries,
+        which has no `currency` of its own (PRD N3). Every other property is
+        optional and omitted when empty, never `null`.
+      responses:
+        '200':
+          description: The dashboard, as it stands now.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Dashboard'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '500':
@@ -2422,6 +2472,28 @@ components:
           $ref: '#/components/schemas/Money'
         unallocated:
           $ref: '#/components/schemas/Money'
+      additionalProperties: false
+
+    Dashboard:
+      type: object
+      description: |
+        What the Household's Budget and Expenses add up to for the Budget Period
+        it is in now, every figure computed on the server (PRD N5a). The client
+        formats a figure with `currency` and derives none.
+
+        `currency` is the one required property. Every other is optional,
+        omitted when it has nothing to say and never `null`.
+      required: [currency]
+      properties:
+        currency:
+          type: string
+          description: |
+            ISO 4217. The Household's `reporting_currency` as it stands in the
+            snapshot this answer was read from: the currency of every `Money`
+            the answer carries, now and in later properties.
+          minLength: 3
+          maxLength: 3
+          example: IDR
       additionalProperties: false
 
     AllocationChange:

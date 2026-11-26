@@ -83,21 +83,9 @@ func (h *Handlers) GetBudget(ctx context.Context, _ api.GetBudgetRequestObject) 
 		return getInternalError(), nil
 	}
 
-	exists, err := h.q.BudgetExists(ctx, db.BudgetExistsParams{HouseholdID: user.HouseholdID, YearMonth: where.Period.YearMonth})
-	if err != nil {
-		slog.Error("get budget: look up the period", "err", err)
+	if err := EnsurePeriod(ctx, h.q, h.tx, user.HouseholdID, where.Period); err != nil {
+		slog.Error("get budget: ensure the period", "err", err)
 		return getInternalError(), nil
-	}
-	if !exists {
-		// Only the marker and its copy, committed together. The answer is read
-		// afterwards, below, as every answer is.
-		err = h.inTx(ctx, func(q *db.Queries) error {
-			return Materialise(ctx, q, user.HouseholdID, where.Period)
-		})
-		if err != nil {
-			slog.Error("get budget: materialise the period", "err", err)
-			return getInternalError(), nil
-		}
 	}
 	out, err := h.readSnapshot(ctx, user.HouseholdID, where)
 	if err != nil {
@@ -318,30 +306,44 @@ func (h *Handlers) where(ctx context.Context, user db.User) (Position, error) {
 // period_start_day. The only place a request's date is derived (BOOTSTRAP.md
 // §4): the client never sends one and never computes one.
 func Locate(ctx context.Context, q db.Querier, now func() time.Time, user db.User) (Position, error) {
+	at, _, err := LocateHousehold(ctx, q, now, user)
+	return at, err
+}
+
+// LocateHousehold is Locate and also hands back the Household row it read, so a
+// caller that needs a setting of it (the reporting_currency, the
+// allowance_mode) takes it from the same read as the Position rather than
+// asking twice and finding two Households.
+func LocateHousehold(ctx context.Context, q db.Querier, now func() time.Time, user db.User) (Position, db.Household, error) {
 	household, err := q.GetHouseholdByID(ctx, user.HouseholdID)
 	if err != nil {
-		return Position{}, fmt.Errorf("look up household: %w", err)
+		return Position{}, db.Household{}, fmt.Errorf("look up household: %w", err)
 	}
 	loc, err := time.LoadLocation(user.TimeZone)
 	if err != nil {
-		return Position{}, fmt.Errorf("load time zone: %w", err)
+		return Position{}, db.Household{}, fmt.Errorf("load time zone: %w", err)
 	}
 	if !household.DayStartsAt.Valid {
-		return Position{}, errors.New("household has no day_starts_at")
+		return Position{}, db.Household{}, errors.New("household has no day_starts_at")
 	}
 	dayStartsAt := time.Duration(household.DayStartsAt.Microseconds) * time.Microsecond
 
 	today := period.Today(now(), loc, dayStartsAt)
 	p, err := period.Of(today, int(household.PeriodStartDay))
 	if err != nil {
-		return Position{}, err
+		return Position{}, db.Household{}, err
 	}
-	return Position{Today: today, Period: p}, nil
+	return Position{Today: today, Period: p}, household, nil
 }
 
-// inTx runs fn in a transaction, committed only if fn returns nil.
+// inTx is inTxOn the handlers' own Beginner.
 func (h *Handlers) inTx(ctx context.Context, fn func(q *db.Queries) error) error {
-	tx, err := h.tx.Begin(ctx)
+	return inTxOn(ctx, h.tx, fn)
+}
+
+// inTxOn runs fn in a transaction, committed only if fn returns nil.
+func inTxOn(ctx context.Context, b Beginner, fn func(q *db.Queries) error) error {
+	tx, err := b.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("begin: %w", err)
 	}
@@ -353,6 +355,32 @@ func (h *Handlers) inTx(ctx context.Context, fn func(q *db.Queries) error) error
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("commit: %w", err)
+	}
+	return nil
+}
+
+// EnsurePeriod brings the Household's Budget Period into being if no read has
+// yet (PRD S13): a look-up, and only when the marker is missing, Materialise in
+// a transaction of its own that commits before it returns. A caller that finds
+// the Period already there writes nothing and opens no transaction. It is what
+// GET /budget does first and what any other read of a Period's figures does
+// (the dashboard's), so a Household that carried a Budget forward is never told
+// by one screen that it has none. The caller reads what it answers afterwards,
+// from a snapshot of its own.
+func EnsurePeriod(ctx context.Context, q db.Querier, b Beginner, householdID pgtype.UUID, p period.Period) error {
+	exists, err := q.BudgetExists(ctx, db.BudgetExistsParams{HouseholdID: householdID, YearMonth: p.YearMonth})
+	if err != nil {
+		return fmt.Errorf("look up the period: %w", err)
+	}
+	if exists {
+		return nil
+	}
+	// Only the marker and its copy, committed together.
+	err = inTxOn(ctx, b, func(q *db.Queries) error {
+		return Materialise(ctx, q, householdID, p)
+	})
+	if err != nil {
+		return fmt.Errorf("materialise the period: %w", err)
 	}
 	return nil
 }

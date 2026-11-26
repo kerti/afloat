@@ -458,6 +458,22 @@ type CreatePocketRequest struct {
 	PocketDisplayName string             `json:"pocket_display_name"`
 }
 
+// Dashboard What the Household's Budget and Expenses add up to for the Budget Period
+// it is in now, every figure computed on the server (PRD N5a). The client
+// formats a figure with `currency` and derives none.
+//
+// `currency` is the one required property. Every other is optional,
+// omitted when it has nothing to say and never `null`.
+type Dashboard struct {
+	// Currency ISO 4217. The Household's `reporting_currency` as it stands in the
+	// snapshot this answer was read from: the currency of every `Money`
+	// the answer carries, now and in later properties.
+	//
+	//
+	// Example: IDR
+	Currency string `json:"currency"`
+}
+
 // Error The one error envelope the API emits (PRD N7), identical in shape
 // to Balances ADR-0027. It carries **codes, not messages** — the frontend
 // looks `code` up in its i18n catalogue and interpolates `args`. There is
@@ -1156,6 +1172,9 @@ type ServerInterface interface {
 	// RestoreCategory Restore a deleted Category.
 	// (POST /categories/{id}/restore)
 	RestoreCategory(w http.ResponseWriter, r *http.Request, id CategoryId)
+	// GetDashboard The Household's dashboard for the current Budget Period.
+	// (GET /dashboard)
+	GetDashboard(w http.ResponseWriter, r *http.Request)
 	// ListExpenses The caller's Household's live Expenses, newest first, or its Recycle Bin.
 	// (GET /expenses)
 	ListExpenses(w http.ResponseWriter, r *http.Request, params ListExpensesParams)
@@ -1288,6 +1307,12 @@ func (_ Unimplemented) UpdateCategory(w http.ResponseWriter, r *http.Request, id
 // RestoreCategory Restore a deleted Category.
 // (POST /categories/{id}/restore)
 func (_ Unimplemented) RestoreCategory(w http.ResponseWriter, r *http.Request, id CategoryId) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// GetDashboard The Household's dashboard for the current Budget Period.
+// (GET /dashboard)
+func (_ Unimplemented) GetDashboard(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
@@ -1611,6 +1636,20 @@ func (siw *ServerInterfaceWrapper) RestoreCategory(w http.ResponseWriter, r *htt
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.RestoreCategory(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetDashboard operation middleware
+func (siw *ServerInterfaceWrapper) GetDashboard(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetDashboard(w, r)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -2178,6 +2217,9 @@ func HandlerWithOptions(si ServerInterface, options ChiServerOptions) http.Handl
 	})
 	r.Group(func(r chi.Router) {
 		r.Patch(options.BaseURL+"/budget", wrapper.UpdateBudget)
+	})
+	r.Group(func(r chi.Router) {
+		r.Get(options.BaseURL+"/dashboard", wrapper.GetDashboard)
 	})
 	r.Group(func(r chi.Router) {
 		r.Get(options.BaseURL+"/expenses", wrapper.ListExpenses)
@@ -3181,6 +3223,55 @@ func (response RestoreCategory409JSONResponse) VisitRestoreCategoryResponse(w ht
 type RestoreCategory500JSONResponse struct{ InternalErrorJSONResponse }
 
 func (response RestoreCategory500JSONResponse) VisitRestoreCategoryResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetDashboardRequestObject struct {
+}
+
+type GetDashboardResponseObject interface {
+	VisitGetDashboardResponse(w http.ResponseWriter) error
+}
+
+type GetDashboard200JSONResponse Dashboard
+
+func (response GetDashboard200JSONResponse) VisitGetDashboardResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetDashboard401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response GetDashboard401JSONResponse) VisitGetDashboardResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetDashboard500JSONResponse struct{ InternalErrorJSONResponse }
+
+func (response GetDashboard500JSONResponse) VisitGetDashboardResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response); err != nil {
@@ -4487,6 +4578,9 @@ type StrictServerInterface interface {
 	// RestoreCategory Restore a deleted Category.
 	// (POST /categories/{id}/restore)
 	RestoreCategory(ctx context.Context, request RestoreCategoryRequestObject) (RestoreCategoryResponseObject, error)
+	// GetDashboard The Household's dashboard for the current Budget Period.
+	// (GET /dashboard)
+	GetDashboard(ctx context.Context, request GetDashboardRequestObject) (GetDashboardResponseObject, error)
 	// ListExpenses The caller's Household's live Expenses, newest first, or its Recycle Bin.
 	// (GET /expenses)
 	ListExpenses(ctx context.Context, request ListExpensesRequestObject) (ListExpensesResponseObject, error)
@@ -4939,6 +5033,30 @@ func (sh *strictHandler) RestoreCategory(w http.ResponseWriter, r *http.Request,
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(RestoreCategoryResponseObject); ok {
 		if err := validResponse.VisitRestoreCategoryResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetDashboard operation middleware
+func (sh *strictHandler) GetDashboard(w http.ResponseWriter, r *http.Request) {
+	var request GetDashboardRequestObject
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetDashboard(ctx, request.(GetDashboardRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetDashboard")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetDashboardResponseObject); ok {
+		if err := validResponse.VisitGetDashboardResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

@@ -86,6 +86,7 @@ afloat/
 │       ├── budget/                 # the Budget of the current Period, its materialisation and its changes (#130)
 │       ├── category/               # Categories: list, create (with the allocation one starts with), rename, deactivate or reactivate (#130)
 │       ├── expense/                # Expenses: create, get, edit, delete, restore and the live and Recycle Bin keyset-paged lists (#140)
+│       ├── dashboard/              # the dashboard read: the figures the Budget and the Expenses add up to, one snapshot (#155)
 │       ├── migrations/             # CANONICAL goose migrations, hand-written, //go:embed — §7
 │       └── auth/common_passwords.txt  # the password denylist — §5.1
 ├── frontend/                       # React app
@@ -470,6 +471,25 @@ with zoneinfo answers from it, so a case-insensitive filesystem (a Mac) also acc
   committing between the read's statements would show through and the answer could be a Budget that never
   existed. The cost, accepted: a failure of that read answers `500` although the change is saved. A `PATCH`
   of absolute values is idempotent, so repeating it is the recovery.
+- **A read of derived figures ensures the Period, then reads one snapshot** (#155, PR 1; `GET /dashboard`).
+  The figures are made of the Budget and the Expenses, so the read is the first of every Period and may
+  write once: `budget.EnsurePeriod` (the look-up, then `Materialise` in a transaction of its own that
+  commits, the step `GET /budget` always took, now exported) runs first, `HEAD` included, and a Household
+  that carried a Budget forward is never told by one screen that it has none. Everything the answer holds is
+  then read in one `REPEATABLE READ`, `READ ONLY` transaction, **the Household row included**: the currency a
+  figure is stated in is read with the figures, not before the Period was ensured. The Position
+  is worked out before it, outside it: `budget.LocateHousehold` (`Locate` plus the Household row it read)
+  gives Today and the Period, and the settings that row carries for the arithmetic (`period_start_day`,
+  `day_starts_at`, later `allowance_mode`) come from that same read. Every figure is keyed by that one
+  Position, so a concurrent settings change yields an answer as of a moment earlier, never a mix; a setting
+  the snapshot reads never enters the Period Day arithmetic. A
+  failure of either step is `500` and the next read retries. The Expenses are read by **one statement**
+  (`PeriodSpend`: live, `occurred_on` inside the Period's window, grouped by day, Category and Pocket), and
+  Go folds that one result into every figure that reads them, so the figures cannot disagree about one
+  Expense; `captured_at` is never read. **A property joins the wire in the PR that renders it** (#155 R5): the
+  contract's `Dashboard` grows only by optional properties, each omitted when it has nothing to say and never
+  `null`, so no PR removes what an earlier one added and each answer is a superset of the last. The currency of
+  every `Money` in it is `Dashboard.currency`, the Household's `reporting_currency` as the snapshot saw it.
 - **Tenancy on a path id** (#121, the first `{id}` route): an id that is **unknown, another
   Household's, or soft-deleted** answers one `404 NOT_FOUND`, a code with no `args`, the same bytes in
   every case and for every body, `{}` included (a no-op must not confirm another Household's id).
@@ -1072,6 +1092,21 @@ over-allocation, Commitments above the Budget, a zero allocation, an inactive Ca
 deleted one not, no Monthly Budget yet). The backend's budget tests read it row by row through
 `GET /budget` and keep no copy of the numbers. `trajectory.json` is untouched: `Calculate` takes the
 Daily Pool as an input, and these rows are where that pool comes from.
+
+**`contract/testdata/dashboard.json` pins the dashboard's assembly** (#155): what the Period's stored rows
+add up to for a Household on an instant, which `trajectory.json` (it takes aggregates) cannot. Households
+are seeded together, so another Household's rows are present in every row, and each `reads` row names an
+instant, the Today and the Period it lands in, the daily bucket's spend by day with its `settled`, `today`
+and `future` parts (a Commitment's Expense in none, an uncategorised one Daily, a deleted one out, an
+inactive Category's counted, a refund negative, an Expense outside the window in no figure, `captured_at`
+never read) and the wire's answer at that stage of the slice. Each PR of #155 adds the figures it puts on
+the wire to the rows already there. The dashboard's tests read it through the real statements
+(`internal/dashboard`).
+
+**`contract/testdata/periods.json`'s `days` rows pin a Period's day counts** (#155): D, the window's length,
+e, the days before Today inside it, and r = D - e, which counts Today (the last day reads 1), for start
+days 1, 25 and 28, a leap and a non-leap February, December into January, and the first and last day. The
+`period` package computes them (`Period.Days`, `Date.Sub`); nothing else does.
 
 **`contract/testdata/expense_order.json` pins the order of `GET /expenses`** (#140, R7) and where a
 keyset page may end: date, the effective time (an offset into the Period Day, so with a 04:00 start

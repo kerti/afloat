@@ -381,6 +381,69 @@ func TestFixedAllowanceModeRoundTrips(t *testing.T) {
 	}
 }
 
+// allowance_mode is set to fixed, set back to adaptive, and left alone by a
+// request that does not name it. The answer is the whole Household, /me agrees,
+// and the column holds the word.
+func TestAllowanceModeIsSetAndSetBack(t *testing.T) {
+	f := newFixture(t)
+	id, ctx := f.member(t, "Home", "a@example.com")
+	stored := func() string {
+		t.Helper()
+		var mode string
+		if err := f.tdb.Pool.QueryRow(context.Background(),
+			`SELECT allowance_mode FROM households WHERE id = $1`, id).Scan(&mode); err != nil {
+			t.Fatal(err)
+		}
+		return mode
+	}
+	if got := f.me(ctx, t).Household.AllowanceMode; got != api.Adaptive {
+		t.Fatalf("a new Household's allowance_mode = %q, want adaptive", got)
+	}
+
+	for _, step := range []struct {
+		name string
+		body api.UpdateHouseholdRequest
+		want api.AllowanceMode
+	}{
+		{"to fixed", api.UpdateHouseholdRequest{AllowanceMode: ptr(api.Fixed)}, api.Fixed},
+		{"fixed again is a no-op", api.UpdateHouseholdRequest{AllowanceMode: ptr(api.Fixed)}, api.Fixed},
+		{"a request that leaves it out", api.UpdateHouseholdRequest{HouseholdDisplayName: ptr("Renamed")}, api.Fixed},
+		{"an empty request", api.UpdateHouseholdRequest{}, api.Fixed},
+		{"back to adaptive", api.UpdateHouseholdRequest{AllowanceMode: ptr(api.Adaptive)}, api.Adaptive},
+		{"a request that leaves it out, again", api.UpdateHouseholdRequest{PeriodStartDay: ptr(5)}, api.Adaptive},
+	} {
+		got := f.ok(ctx, t, step.body)
+		if got.AllowanceMode != step.want {
+			t.Errorf("%s: answered allowance_mode = %q, want %q", step.name, got.AllowanceMode, step.want)
+		}
+		if me := f.me(ctx, t).Household; me != got {
+			t.Errorf("%s: /me household = %+v, want what the PATCH answered, %+v", step.name, me, got)
+		}
+		if s := stored(); s != string(step.want) {
+			t.Errorf("%s: column = %q, want %q", step.name, s, step.want)
+		}
+	}
+}
+
+// The mode moves beside other settings in one statement, and changes nothing else.
+func TestAllowanceModeBesideOtherFieldsChangesOnlyWhatWasSent(t *testing.T) {
+	f := newFixture(t)
+	_, ctx := f.member(t, "Home", "a@example.com")
+	f.ok(ctx, t, api.UpdateHouseholdRequest{ExpectedMonthlyIncome: income("1234.56")})
+
+	got := f.ok(ctx, t, api.UpdateHouseholdRequest{AllowanceMode: ptr(api.Fixed), PeriodStartDay: ptr(9)})
+
+	if got.AllowanceMode != api.Fixed || got.PeriodStartDay != 9 {
+		t.Errorf("answer = %+v, want fixed and day 9", got)
+	}
+	if got.HouseholdDisplayName != "Home" || got.ReportingCurrency != "IDR" {
+		t.Errorf("answer = %+v, want the name and currency as they were", got)
+	}
+	if got.ExpectedMonthlyIncome == nil || *got.ExpectedMonthlyIncome != "1234.5600" {
+		t.Errorf("expected_monthly_income = %v, want 1234.5600 untouched", got.ExpectedMonthlyIncome)
+	}
+}
+
 // `{}` is a valid no-op: 200, the Household as it is.
 func TestAnEmptyBodyChangesNothing(t *testing.T) {
 	f := newFixture(t)
@@ -651,6 +714,8 @@ func TestAPatchNeverTouchesAnotherHousehold(t *testing.T) {
 		{HouseholdDisplayName: ptr("All"), ReportingCurrency: ptr("EUR"), PeriodStartDay: ptr(2)},
 		{ExpectedMonthlyIncome: income("1")},
 		{ExpectedMonthlyIncome: clearIncome()},
+		{AllowanceMode: ptr(api.Adaptive)},
+		{AllowanceMode: ptr(api.Fixed)},
 		{},
 	} {
 		f.ok(ours, t, body)

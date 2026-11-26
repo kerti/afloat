@@ -1060,6 +1060,9 @@ type UpdateExpenseRequest struct {
 // `expected_monthly_income` alone, where it clears the figure; for any
 // other property it is `INVALID_JSON_BODY`.
 type UpdateHouseholdRequest struct {
+	// AllowanceMode How the daily allowance is read. Default `adaptive`.
+	AllowanceMode *AllowanceMode `json:"allowance_mode,omitempty"`
+
 	// ExpectedMonthlyIncome A `MoneyInput`, or `null` where a write may say "none": what a Category
 	// is planned at when it is created or changed (a Commitment's `null` is the
 	// required-allocation rule, a Daily Category's is none), and the

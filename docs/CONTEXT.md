@@ -257,6 +257,9 @@ JSON. Blank means not yet in the UI.
 | `expected_monthly_income` (as a user reads it: **Expected monthly income**) | penghasilan bulanan yang diharapkan | Budget (#130 PR 5), provisional (R16) |
 | Recycle Bin | tempat sampah | Recycle Bin (#140 PR 5), provisional |
 | Restore | pulihkan | Recycle Bin (#140 PR 5), provisional |
+| `allowance_mode` (as a user reads it: **Allowance**) | jatah harian | approved 26 Nov 2026 (#155 PR 4) |
+| Adaptive / Fixed (the allowance modes) | adaptif / tetap | approved 26 Nov 2026 (#155 PR 4) |
+| Baseline Daily Budget (as a user reads it: **Baseline**) | jatah dasar | approved 26 Nov 2026 (#155 PR 4, in the Allowance hint) |
 | State names, *ahead of pace*, Buffer Days | | **[OPEN Q-10]** |
 
 ---
@@ -334,7 +337,7 @@ the future never raises Today's Allowance (#155 R3). A refund dated before Today
 
 ### Adaptive vs fixed
 
-Adaptive is the default. Fixed (`A = B` always) is available as an advanced Household setting. The
+Adaptive is the default. Fixed (`A = B` always) is a Household setting (the Allowance choice in Settings). The
 setting changes only `A`; `V`, Buffer Days and State are read against the same target line in both
 modes. After a mid-Period change, a fixed allowance is `B_now`, the slope in force Today; while fully
 committed it is 0, never a negative raw `P / D`.

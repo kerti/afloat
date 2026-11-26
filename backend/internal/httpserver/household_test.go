@@ -117,6 +117,38 @@ func TestPatchHouseholdThroughTheRouter(t *testing.T) {
 	}
 }
 
+// allowance_mode is written through the router, answered as the whole Household,
+// and left alone by a request that does not name it.
+func TestPatchHouseholdAllowanceMode(t *testing.T) {
+	f := newHouseholdFixture(t)
+	mode := func(rec *httptest.ResponseRecorder) any {
+		t.Helper()
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+		}
+		var got map[string]any
+		if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+			t.Fatalf("body: %v", err)
+		}
+		if got["household_display_name"] != "Home" || got["id"] == nil {
+			t.Errorf("answer %s is not the whole Household", rec.Body.String())
+		}
+		return got["allowance_mode"]
+	}
+
+	for _, step := range []struct{ body, want string }{
+		{`{"allowance_mode":"fixed"}`, "fixed"},
+		{`{"period_start_day":3}`, "fixed"},
+		{`{}`, "fixed"},
+		{`{"allowance_mode":"adaptive"}`, "adaptive"},
+		{`{"allowance_mode":"fixed","period_start_day":4}`, "fixed"},
+	} {
+		if got := mode(f.patch(step.body)); got != step.want {
+			t.Errorf("after %s allowance_mode = %v, want %s", step.body, got, step.want)
+		}
+	}
+}
+
 // Every refusal answers 400 and writes nothing, including a body whose other
 // fields were fine: one UPDATE, all or nothing.
 func TestPatchHouseholdRefusals(t *testing.T) {
@@ -192,9 +224,21 @@ func TestPatchHouseholdRefusals(t *testing.T) {
 		{"valid income beside a bad currency writes neither", `{"expected_monthly_income":"5","reporting_currency":"ABC"}`, "VALIDATION", map[string]any{"field": "reporting_currency", "rule": "iso4217"}},
 		{"clearing the income beside a bad name writes neither", `{"expected_monthly_income":null,"household_display_name":""}`, "VALIDATION", map[string]any{"field": "household_display_name", "rule": "required"}},
 		{"spec failure on the income beats a handler failure", `{"expected_monthly_income":"-1","household_display_name":""}`, "VALIDATION", map[string]any{"field": "expected_monthly_income", "rule": "pattern"}},
+		// allowance_mode is an enum of the contract: a word outside it, in
+		// another case or of another type, and null, are not an instance of the
+		// declared shape, as for the User's locale.
+		{"allowance_mode outside the enum", `{"allowance_mode":"strict"}`, "INVALID_JSON_BODY", nil},
+		{"allowance_mode in the wrong case", `{"allowance_mode":"Fixed"}`, "INVALID_JSON_BODY", nil},
+		{"allowance_mode padded", `{"allowance_mode":"fixed "}`, "INVALID_JSON_BODY", nil},
+		{"allowance_mode empty", `{"allowance_mode":""}`, "INVALID_JSON_BODY", nil},
+		{"null allowance_mode", `{"allowance_mode":null}`, "INVALID_JSON_BODY", nil},
+		{"allowance_mode as a number", `{"allowance_mode":1}`, "INVALID_JSON_BODY", nil},
+		{"allowance_mode as a boolean", `{"allowance_mode":true}`, "INVALID_JSON_BODY", nil},
+		{"allowance_mode as an object", `{"allowance_mode":{}}`, "INVALID_JSON_BODY", nil},
+		{"a valid allowance_mode beside a bad currency writes neither", `{"allowance_mode":"fixed","reporting_currency":"ABC"}`, "VALIDATION", map[string]any{"field": "reporting_currency", "rule": "iso4217"}},
+		{"a valid allowance_mode beside an unknown one is refused whole", `{"allowance_mode":"fixed","nickname":"x"}`, "INVALID_JSON_BODY", nil},
 		// Settings a later slice writes (D4): not accepted yet.
 		{"day_starts_at", `{"day_starts_at":"05:00"}`, "INVALID_JSON_BODY", nil},
-		{"allowance_mode", `{"allowance_mode":"fixed"}`, "INVALID_JSON_BODY", nil},
 		{"id", `{"id":"0192f0a0-0000-7000-8000-000000000001"}`, "INVALID_JSON_BODY", nil},
 		{"the old name for the Household's name", `{"display_name":"x"}`, "INVALID_JSON_BODY", nil},
 		{"malformed JSON", `{"period_start_day":`, "INVALID_JSON_BODY", nil},

@@ -85,6 +85,12 @@ func (h *Handlers) UpdateHousehold(ctx context.Context, request api.UpdateHouseh
 		params.PeriodStartDay = &day
 	}
 
+	if body.AllowanceMode != nil {
+		// The contract's enum has admitted only a known mode by now.
+		mode := string(*body.AllowanceMode)
+		params.AllowanceMode = &mode
+	}
+
 	// expected_monthly_income is the one property null clears, so it carries a
 	// set flag beside its value (queries/household.sql): sent as null is
 	// "set, to nothing", left out is "not set".

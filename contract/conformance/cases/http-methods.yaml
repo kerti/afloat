@@ -878,7 +878,7 @@
         rows: [{name: Rent, active: true, deleted: true}]
 
 # /expenses serves GET (and HEAD, which answers like it) and POST (#140). The verbs
-# that act on one Expense arrive with their slices; a collection never replaces,
+# that act on one Expense are served at /expenses/{id}; a collection never replaces,
 # patches or deletes, so every other verb is a 405 and writes nothing.
 
 - name: "http methods - PUT on the Expenses collection is method not allowed and writes nothing"
@@ -926,10 +926,10 @@
       - sql: "SELECT count(*)::int AS n FROM expenses"
         rows: [{"n": 0}]
 
-# /expenses/{id} serves GET (#140, PR 4) and PATCH (PR 3b); DELETE and the restore
-# arrive with their slice. A verb the router does not serve there is a 405 that writes
-# nothing, PUT (a replacement) and POST (an id is the client's, and a create is
-# the collection's) among them.
+# /expenses/{id} serves GET (#140, PR 4), PATCH (PR 3b) and DELETE (PR 5; the soft
+# delete is expenses-delete.yaml). A verb the router does not serve there is a 405
+# that writes nothing, PUT (a replacement) and POST (an id is the client's, and a
+# create is the collection's) among them.
 
 - name: "http methods - PUT on one Expense is method not allowed and writes nothing"
   issue: "140"
@@ -962,3 +962,74 @@
     rows:
       - sql: "SELECT amount::text AS amount, (updated_at = '2026-01-01T00:00:00Z') AS untouched FROM expenses"
         rows: [{"amount": "25000.0000", "untouched": true}]
+
+# /expenses/{id}/restore serves POST alone (#140, PR 5; expenses-restore.yaml): the
+# Undo of a delete is an act, never a read, a replacement, an edit or another delete.
+
+- name: "http methods - GET on the restore path is method not allowed and writes nothing"
+  issue: "140"
+  given:
+    - sql: |
+        INSERT INTO pockets (id, household_id, pocket_display_name) VALUES ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO');
+        INSERT INTO expenses (id, household_id, occurred_on, amount, currency, pocket_id, deleted_at, updated_at) VALUES ('0192f0a0-0000-7000-8004-000000000001', '0192f0a0-0000-7000-8000-000000000001', '2026-11-20', 25000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', '2026-01-02T00:00:00Z', '2026-01-01T00:00:00Z')
+    - request: {"method": "POST", "path": "/auth/local/login", "headers": {"Content-Type": "application/json"}, "body": "{\"email\":\"alice@example.com\",\"password\":\"conformance-correct-horse\"}"}
+      status: 204
+  request: {"method": "GET", "path": "/expenses/0192f0a0-0000-7000-8004-000000000001/restore", "headers": {"Content-Type": "application/json"}, "body": "{}"}
+  expect:
+    status: 405
+    body_empty: true
+    cookies: {}
+    rows:
+      - sql: "SELECT (deleted_at IS NOT NULL) AS deleted, (updated_at = '2026-01-01T00:00:00Z') AS untouched FROM expenses"
+        rows: [{"deleted": true, "untouched": true}]
+
+- name: "http methods - PUT on the restore path is method not allowed and writes nothing"
+  issue: "140"
+  given:
+    - sql: |
+        INSERT INTO pockets (id, household_id, pocket_display_name) VALUES ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO');
+        INSERT INTO expenses (id, household_id, occurred_on, amount, currency, pocket_id, deleted_at, updated_at) VALUES ('0192f0a0-0000-7000-8004-000000000001', '0192f0a0-0000-7000-8000-000000000001', '2026-11-20', 25000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', '2026-01-02T00:00:00Z', '2026-01-01T00:00:00Z')
+    - request: {"method": "POST", "path": "/auth/local/login", "headers": {"Content-Type": "application/json"}, "body": "{\"email\":\"alice@example.com\",\"password\":\"conformance-correct-horse\"}"}
+      status: 204
+  request: {"method": "PUT", "path": "/expenses/0192f0a0-0000-7000-8004-000000000001/restore", "headers": {"Content-Type": "application/json"}, "body": "{}"}
+  expect:
+    status: 405
+    body_empty: true
+    cookies: {}
+    rows:
+      - sql: "SELECT (deleted_at IS NOT NULL) AS deleted, (updated_at = '2026-01-01T00:00:00Z') AS untouched FROM expenses"
+        rows: [{"deleted": true, "untouched": true}]
+
+- name: "http methods - PATCH on the restore path is method not allowed and writes nothing"
+  issue: "140"
+  given:
+    - sql: |
+        INSERT INTO pockets (id, household_id, pocket_display_name) VALUES ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO');
+        INSERT INTO expenses (id, household_id, occurred_on, amount, currency, pocket_id, deleted_at, updated_at) VALUES ('0192f0a0-0000-7000-8004-000000000001', '0192f0a0-0000-7000-8000-000000000001', '2026-11-20', 25000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', '2026-01-02T00:00:00Z', '2026-01-01T00:00:00Z')
+    - request: {"method": "POST", "path": "/auth/local/login", "headers": {"Content-Type": "application/json"}, "body": "{\"email\":\"alice@example.com\",\"password\":\"conformance-correct-horse\"}"}
+      status: 204
+  request: {"method": "PATCH", "path": "/expenses/0192f0a0-0000-7000-8004-000000000001/restore", "headers": {"Content-Type": "application/json"}, "body": "{}"}
+  expect:
+    status: 405
+    body_empty: true
+    cookies: {}
+    rows:
+      - sql: "SELECT (deleted_at IS NOT NULL) AS deleted, (updated_at = '2026-01-01T00:00:00Z') AS untouched FROM expenses"
+        rows: [{"deleted": true, "untouched": true}]
+
+- name: "http methods - DELETE on the restore path is method not allowed and writes nothing"
+  issue: "140"
+  given:
+    - sql: |
+        INSERT INTO pockets (id, household_id, pocket_display_name) VALUES ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO');
+        INSERT INTO expenses (id, household_id, occurred_on, amount, currency, pocket_id, deleted_at, updated_at) VALUES ('0192f0a0-0000-7000-8004-000000000001', '0192f0a0-0000-7000-8000-000000000001', '2026-11-20', 25000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', '2026-01-02T00:00:00Z', '2026-01-01T00:00:00Z')
+    - request: {"method": "POST", "path": "/auth/local/login", "headers": {"Content-Type": "application/json"}, "body": "{\"email\":\"alice@example.com\",\"password\":\"conformance-correct-horse\"}"}
+      status: 204
+  request: {"method": "DELETE", "path": "/expenses/0192f0a0-0000-7000-8004-000000000001/restore", "headers": {"Content-Type": "application/json"}, "body": "{}"}
+  expect:
+    status: 405
+    body_empty: true
+    cookies: {}
+    rows:
+      - sql: "SELECT (deleted_at IS NOT NULL) AS deleted, (updated_at = '2026-01-01T00:00:00Z') AS untouched FROM expenses"
+        rows: [{"deleted": true, "untouched": true}]

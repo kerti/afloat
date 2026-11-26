@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from "react";
+import { useState, type FormEvent, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import type { ApiError, CategoryList, Expense, Me, PocketList } from "@/api/client";
 import { errorMessage } from "@/api/errors";
@@ -34,6 +34,7 @@ export function ExpenseForm({
   error,
   onClearError,
   onSubmit,
+  recordActions,
 }: {
   me: Me;
   mode: "create" | "edit";
@@ -45,6 +46,9 @@ export function ExpenseForm({
   error: ApiError | null;
   onClearError: () => void;
   onSubmit: (values: ExpenseValues) => void;
+  /** Edit only: the record-level acts (DetailActions), placed between the
+   * fields and Save, as an edit dialog places them above its footer. */
+  recordActions?: ReactNode;
 }) {
   const { t } = useTranslation();
   const dayHeading = useDayHeading(me.today);
@@ -272,6 +276,7 @@ export function ExpenseForm({
         {dateMessage && <FieldError id="expense-date-error">{dateMessage}</FieldError>}
       </Field>
       {formMessage && <FieldError>{formMessage}</FieldError>}
+      {recordActions}
       <Button type="submit" className="w-full" disabled={pending}>
         {mode === "create"
           ? pending

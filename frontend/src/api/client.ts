@@ -294,10 +294,16 @@ export async function restoreCategory(id: string): Promise<Category> {
 
 // One page of the Household's Expenses, newest first. `after` is the previous
 // page's opaque `next`; a page without `next` is the last.
-export async function listExpenses(after?: string, uncategorised?: boolean): Promise<ExpenseList> {
+export async function listExpenses(
+  after?: string,
+  uncategorised?: boolean,
+  deleted?: boolean,
+): Promise<ExpenseList> {
   const params = new URLSearchParams();
   if (after !== undefined) params.set("after", after);
   if (uncategorised) params.set("uncategorised", "true");
+  // The Recycle Bin: only deleted Expenses, the last deleted first.
+  if (deleted) params.set("deleted", "true");
   const query = params.size > 0 ? `?${params.toString()}` : "";
   return (await request(`/expenses${query}`)).json() as Promise<ExpenseList>;
 }
@@ -305,6 +311,19 @@ export async function listExpenses(after?: string, uncategorised?: boolean): Pro
 // One live Expense. 404 NOT_FOUND covers unknown, another Household's and deleted.
 export async function getExpense(id: string): Promise<Expense> {
   return (await request(`/expenses/${encodeURIComponent(id)}`)).json() as Promise<Expense>;
+}
+
+// A soft delete: 204, and the Expense is in the Recycle Bin. Repeat is 204 too.
+export async function deleteExpense(id: string): Promise<void> {
+  await request(`/expenses/${encodeURIComponent(id)}`, { method: "DELETE" });
+}
+
+// Takes an Expense out of the Recycle Bin: 200 with the Expense as it was. 404
+// NOT_FOUND when it is unknown or another Household's.
+export async function restoreExpense(id: string): Promise<Expense> {
+  return (
+    await request(`/expenses/${encodeURIComponent(id)}/restore`, { method: "POST" })
+  ).json() as Promise<Expense>;
 }
 
 // Idempotent on the client's id: 201 the first time, 200 with the Expense as it

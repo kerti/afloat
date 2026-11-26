@@ -153,7 +153,9 @@ Close, Disable (each leaves it unclear whether history survives).
 **Recycle Bin**: Where a deleted Expense goes. Deleting an Expense is a soft delete: it leaves every
 list and figure, and can be restored from the Recycle Bin at any time. The Recycle Bin never empties;
 nothing in it is ever erased. It holds Expenses only. A deleted Expense still counts as using its
-Pocket and Category, so neither can be deleted (only deactivated) once it has labelled one. _Avoid_:
+Pocket and Category, so neither can be deleted (only deactivated) once it has labelled one. Restoring
+an Expense never changes what it was: it comes back in the Pocket and Category it had, even one
+deactivated since. _Avoid_:
 Trash, Archive.
 
 > **A Pocket is not a Balances Asset.** The same real-world OVO account may be a bank-account Asset in
@@ -219,6 +221,8 @@ JSON. Blank means not yet in the UI.
 | Daily Pool | dana harian | Budget (#130 PR 1), provisional (R16) |
 | Unallocated | belum dialokasikan | Budget (#130 PR 1), provisional (R16) |
 | `expected_monthly_income` (as a user reads it: **Expected monthly income**) | penghasilan bulanan yang diharapkan | Budget (#130 PR 5), provisional (R16) |
+| Recycle Bin | tempat sampah | Recycle Bin (#140 PR 5), provisional |
+| Restore | pulihkan | Recycle Bin (#140 PR 5), provisional |
 | State names, *ahead of pace*, Buffer Days | | **[OPEN Q-10]** |
 
 ---

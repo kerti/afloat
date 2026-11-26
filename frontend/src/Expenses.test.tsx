@@ -89,7 +89,8 @@ describe("Expenses", () => {
     await shown();
 
     // The "Needs a category" row leads the list while an Expense has none.
-    const [, ...rows] = await list().findAllByRole("listitem");
+    const items = await list().findAllByRole("listitem");
+    const rows = items.slice(1);
     expect(rows).toHaveLength(3);
     // description: the Category and the time join the Pocket on the detail line
     expect(rows[0]).toHaveTextContent("Nasi padang");

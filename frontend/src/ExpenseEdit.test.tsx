@@ -89,7 +89,8 @@ describe("Edit an Expense", () => {
     expect(screen.getByRole("button", { name: "Time, 12:30" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: enGB.dates.clearTime })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Cancel" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: enGB.pockets.delete })).not.toBeInTheDocument();
+    // The record-level act below the form: Delete, alone.
+    expect(screen.getByRole("button", { name: e.delete })).toBeInTheDocument();
     // Expenses stays lit.
     expect(
       screen.getAllByRole("link", { name: enGB.shell.tabs.expenses }).map((a) => a.ariaCurrent),

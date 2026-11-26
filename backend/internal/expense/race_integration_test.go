@@ -42,8 +42,8 @@ import (
 // too. Stripping only one layer therefore stays green, which the last tests here
 // state (TestThePocketGuardHoldsOnEitherLayerAlone); only stripping both is red.
 // The Pocket lock is kept anyway because it is the lock the recipe names for the
-// protected row, and a writer that does not take the Household first (a restore,
-// in a slice that follows) relies on it alone.
+// protected row, and a writer that does not take the Household first (the Expense
+// restore, restore_race_integration_test.go) relies on it alone.
 //
 // An edit that re-points an Expense (PATCH /expenses/{id}) is the second writer
 // of the recipe, and every test below that is about "the Expense side" runs for

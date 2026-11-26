@@ -6,6 +6,8 @@ import {
   commitOnboardingChoice,
   createCategory,
   createExpense,
+  deleteExpense,
+  restoreExpense,
   updateExpense,
   createPocket,
   deleteCategory,
@@ -288,7 +290,7 @@ export const expensesKey = ["expenses"] as const;
 // Keyset paging: each page's `next` is the following request's `after`, and a
 // page without one is the last. Pages are only ever appended on demand, never
 // fetched ahead.
-export function useExpenses(uncategorised = false) {
+export function useExpenses(uncategorised = false, deleted = false) {
   return useInfiniteQuery<
     ExpenseList,
     ApiError,
@@ -297,8 +299,8 @@ export function useExpenses(uncategorised = false) {
     string | undefined
   >({
     // Under expensesKey, so one invalidation moves every filtered view too.
-    queryKey: [...expensesKey, { uncategorised }],
-    queryFn: ({ pageParam }) => listExpenses(pageParam, uncategorised),
+    queryKey: [...expensesKey, { uncategorised, deleted }],
+    queryFn: ({ pageParam }) => listExpenses(pageParam, uncategorised, deleted),
     initialPageParam: undefined,
     getNextPageParam: (last) => last.next,
   });
@@ -353,4 +355,33 @@ export function useCreateExpense() {
         qc.invalidateQueries({ queryKey: pocketsKey }),
       ]),
   });
+}
+
+// Deleting and restoring an Expense move the live list, its uncategorised count,
+// the Recycle Bin and the default Pocket, so all are invalidated (expensesKey
+// covers the lists and the bin). A NOT_FOUND means the lists are stale.
+function useExpenseMove<V>(fn: (v: V) => Promise<unknown>) {
+  const qc = useQueryClient();
+  const refetch = () =>
+    Promise.all([
+      qc.invalidateQueries({ queryKey: expensesKey }),
+      qc.invalidateQueries({ queryKey: pocketsKey }),
+    ]);
+  return useMutation<unknown, ApiError, V>({
+    mutationFn: fn,
+    // Not awaited: the caller closes its dialog or leaves its screen on the
+    // answer, before the refetched list drops the row under it.
+    onSuccess: () => void refetch(),
+    onError: (err) => {
+      if (err.code === "NOT_FOUND") void refetch();
+    },
+  });
+}
+
+export function useDeleteExpense() {
+  return useExpenseMove<string>(deleteExpense);
+}
+
+export function useRestoreExpense() {
+  return useExpenseMove<string>(restoreExpense);
 }

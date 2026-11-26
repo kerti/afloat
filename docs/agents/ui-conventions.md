@@ -63,7 +63,10 @@ tag each, so it has components only. A missing element is proposed first (see Ho
 - `MutedText`: a muted body sentence: an intro, a status message (`role="status"`), a note.
 - `EmptyState`: what a list says when it has nothing, naming what will appear.
 - `TextLink` (`components/TextLink.tsx`): the body link, small and underlined, standalone (the Home
-  links) or inside a sentence.
+  links) or inside a sentence. **A title row with a trailing link**: `PageTitle` and a `TextLink`
+  baseline-aligned, the link on the right, for a screen's one secondary destination (the Recycle
+  Bin on `/expenses`). An arrangement of two catalogue elements, not a new one. (Confirmed by the
+  maintainer, 26 Nov 2026, #140 PR 5.)
 
 **Layout and forms**
 
@@ -250,7 +253,14 @@ role table follows Uruni `docs/Design-System.md` § Typography.)
     `/settings/user` and `/pockets` redirect there, keeping the query string
     (`legacyRedirects` in `lib/routes.ts`).
   - **The Recycle Bin** is a sub-screen of Expenses (`/expenses/recycle-bin`, "← Expenses", Expenses
-    lit). Neither Uruni nor Balances has one; the shape is Afloat's own.
+    lit). Neither Uruni nor Balances has one; the shape is Afloat's own. **Its entry point** is a
+    `TextLink` on the right of the `/expenses` title row, with no count, so Load more never moves
+    it; it is absent on the uncategorised view. The bin is a flat list in served order with no day
+    headings; a row's detail line opens with its date in day-heading words. **A bin row** is a
+    button (no chevron) that opens a **read-only dialog** ("Deleted Expense", `FigureRow`s, URL
+    `?expense=<id>`) with one act, Restore, in `DetailActions`; an outside tap closes it. Restore
+    ends in one plain toast, no Undo; a refusal follows the refusable-act rule. (Ruled by the
+    maintainer, 26 Nov 2026, #140 R11, PR 5.)
   - A screen that becomes a tab loses its "← Home"; a sub-screen keeps its back link.
   - The top bar is 3.5rem plus the top safe-area inset, in `header-glass` (Catalogue, `Shell`).
     It holds the "Afloat" link home on the left and Sign out on the right; a failed sign-out is an
@@ -288,7 +298,11 @@ role table follows Uruni `docs/Design-System.md` § Typography.)
   the Refund box ticked, the time is pre-filled, and the date row reads in the list's day-heading
   words. An inactive Pocket or Category the Expense already holds stays in its picker as the
   selected option, worded "{name} (inactive)", while other inactive ones stay hidden (#140 R10); it is
-  not sent unless changed. A record gone at Save, or already gone when the route opens (NOT_FOUND
+  not sent unless changed. **Delete** on the edit route sits as a dialog's does: fields, hairline,
+  `DetailActions` [Delete], then [Save] last; never on Save's row. It is immediate, with no confirm:
+  it replaces the route with `/expenses` and raises "Deleted Rp25.000." with an 8 s Undo that
+  restores it. A record already gone at Delete follows the gone-record rule below. (Ruled by the
+  maintainer, 26 Nov 2026, #140 R11, PR 5.) A record gone at Save, or already gone when the route opens (NOT_FOUND
   on its read), follows the gone-record rule below and lands on `/expenses`; any other failed read
   keeps `ErrorState` with "Try again". (#140 R17; the "(inactive)" wording and gone on opening confirmed by the
   maintainer, 25 Nov 2026.)

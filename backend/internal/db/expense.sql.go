@@ -119,6 +119,58 @@ func (q *Queries) CreateExpense(ctx context.Context, arg CreateExpenseParams) (E
 	return i, err
 }
 
+const getExpenseForUpdate = `-- name: GetExpenseForUpdate :one
+
+SELECT id, household_id, occurred_on, occurred_time, captured_at, amount, currency, pocket_id, category_id, description, ownership, owner_user_id, created_at, updated_at, deleted_at FROM expenses
+WHERE id = $1 AND household_id = $2
+FOR NO KEY UPDATE
+`
+
+type GetExpenseForUpdateParams struct {
+	ID          pgtype.UUID
+	HouseholdID pgtype.UUID
+}
+
+// A restore is one transaction of statements in this order (#140 X10, X11):
+// GetExpenseForUpdate, then, only when the Expense is deleted,
+// LockLivePocketShared and LockLiveCategoryShared (the create's own
+// statements, the Pocket first), then RestoreExpense. There is no Household
+// lock: a restore reads no currency (the Expense already carries its own) and
+// changes no Pocket or Category, and the Household's row is only taken by a
+// writer that needs what it protects (the currency, the active-Pocket count).
+//
+// The Expense row is locked first, as an edit's is, and nothing a removal holds
+// ever waits on an Expense row (a Pocket's or Category's delete only READS
+// expenses, in its EXISTS), so the order adds no cycle.
+// The Expense in ANY state, row-locked for the transaction, scoped by
+// household_id. This is the one read of a deleted Expense besides the bin, on
+// purpose: restoring a live one is the idempotent success and a deleted one is
+// what is being restored. No row is unknown or another Household's. FOR NO KEY
+// UPDATE conflicts with an edit's lock and another restore's, and with nothing
+// else an Expense row is read by (it has no foreign keys pointing at it).
+func (q *Queries) GetExpenseForUpdate(ctx context.Context, arg GetExpenseForUpdateParams) (Expense, error) {
+	row := q.db.QueryRow(ctx, getExpenseForUpdate, arg.ID, arg.HouseholdID)
+	var i Expense
+	err := row.Scan(
+		&i.ID,
+		&i.HouseholdID,
+		&i.OccurredOn,
+		&i.OccurredTime,
+		&i.CapturedAt,
+		&i.Amount,
+		&i.Currency,
+		&i.PocketID,
+		&i.CategoryID,
+		&i.Description,
+		&i.Ownership,
+		&i.OwnerUserID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.DeletedAt,
+	)
+	return i, err
+}
+
 const getLiveExpense = `-- name: GetLiveExpense :one
 
 
@@ -262,6 +314,83 @@ func (q *Queries) LastUsedPocket(ctx context.Context, householdID pgtype.UUID) (
 	var pocket_id pgtype.UUID
 	err := row.Scan(&pocket_id)
 	return pocket_id, err
+}
+
+const listDeletedExpenses = `-- name: ListDeletedExpenses :many
+SELECT id, household_id, occurred_on, occurred_time, captured_at, amount, currency, pocket_id, category_id, description, ownership, owner_user_id, created_at, updated_at, deleted_at FROM expenses
+WHERE household_id = $1
+  AND deleted_at IS NOT NULL
+  AND (deleted_at, id) < (
+        coalesce($2::timestamptz, 'infinity'::timestamptz),
+        coalesce($3::uuid, 'ffffffff-ffff-ffff-ffff-ffffffffffff'::uuid)
+  )
+ORDER BY deleted_at DESC, id DESC
+LIMIT $4
+`
+
+type ListDeletedExpensesParams struct {
+	HouseholdID    pgtype.UUID
+	AfterDeletedAt pgtype.Timestamptz
+	AfterID        pgtype.UUID
+	PageSize       int32
+}
+
+// The Recycle Bin (GET /expenses?deleted=true): only the Household's deleted
+// Expenses, deleted_at DESC then id DESC, keyset-paged. The order is declared,
+// and ends in id so a page boundary is exact over rows deleted in one instant.
+// deleted_at is a timestamptz and Postgres keeps microseconds, which is all the
+// cursor carries.
+//
+// The keyset is one row comparison, (deleted_at, id) < (cursor), with an absent
+// cursor standing for the top of the order (infinity and the greatest uuid). It is
+// NOT written as `deleted_at < x OR id < y`, which looks equivalent and is not
+// cheap: the planner turns that OR into a BitmapOr that includes a scan of the
+// primary key on `id < y` alone, and reads every deleted row below the cursor
+// before it sorts them, a cost that grows with a bin that never empties. As a row
+// comparison the planner takes the bound on deleted_at from it, walks
+// expenses_household_bin_idx (household_id, deleted_at DESC) WHERE deleted_at IS
+// NOT NULL in order, and sorts only the ties on id (incremental sort); the plans
+// are in the PR. `deleted_at IS NOT NULL` is a literal in the text, so the planner
+// can prove the partial index's predicate. page_size is the page plus one.
+func (q *Queries) ListDeletedExpenses(ctx context.Context, arg ListDeletedExpensesParams) ([]Expense, error) {
+	rows, err := q.db.Query(ctx, listDeletedExpenses,
+		arg.HouseholdID,
+		arg.AfterDeletedAt,
+		arg.AfterID,
+		arg.PageSize,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Expense{}
+	for rows.Next() {
+		var i Expense
+		if err := rows.Scan(
+			&i.ID,
+			&i.HouseholdID,
+			&i.OccurredOn,
+			&i.OccurredTime,
+			&i.CapturedAt,
+			&i.Amount,
+			&i.Currency,
+			&i.PocketID,
+			&i.CategoryID,
+			&i.Description,
+			&i.Ownership,
+			&i.OwnerUserID,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.DeletedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listExpenses = `-- name: ListExpenses :many
@@ -580,6 +709,82 @@ func (q *Queries) PocketHasExpenses(ctx context.Context, arg PocketHasExpensesPa
 	var exists bool
 	err := row.Scan(&exists)
 	return exists, err
+}
+
+const restoreExpense = `-- name: RestoreExpense :one
+UPDATE expenses SET
+    deleted_at = NULL,
+    updated_at = now()
+WHERE id = $1 AND household_id = $2 AND deleted_at IS NOT NULL
+RETURNING id, household_id, occurred_on, occurred_time, captured_at, amount, currency, pocket_id, category_id, description, ownership, owner_user_id, created_at, updated_at, deleted_at
+`
+
+type RestoreExpenseParams struct {
+	ID          pgtype.UUID
+	HouseholdID pgtype.UUID
+}
+
+// The Undo of SoftDeleteExpense: clears deleted_at and returns the row, every
+// other column as it was. Called only for a row GetExpenseForUpdate found
+// deleted, with its references locked, so no row here would be a statement that
+// disagrees with its own lock. updated_at is the database's clock and moves
+// because this statement did the work.
+func (q *Queries) RestoreExpense(ctx context.Context, arg RestoreExpenseParams) (Expense, error) {
+	row := q.db.QueryRow(ctx, restoreExpense, arg.ID, arg.HouseholdID)
+	var i Expense
+	err := row.Scan(
+		&i.ID,
+		&i.HouseholdID,
+		&i.OccurredOn,
+		&i.OccurredTime,
+		&i.CapturedAt,
+		&i.Amount,
+		&i.Currency,
+		&i.PocketID,
+		&i.CategoryID,
+		&i.Description,
+		&i.Ownership,
+		&i.OwnerUserID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.DeletedAt,
+	)
+	return i, err
+}
+
+const softDeleteExpense = `-- name: SoftDeleteExpense :execrows
+
+UPDATE expenses SET
+    deleted_at = coalesce(deleted_at, now()),
+    updated_at = CASE WHEN deleted_at IS NULL THEN now() ELSE updated_at END
+WHERE id = $1 AND household_id = $2
+`
+
+type SoftDeleteExpenseParams struct {
+	ID          pgtype.UUID
+	HouseholdID pgtype.UUID
+}
+
+// ---- delete, the Recycle Bin and restore ----------------------------------
+//
+// A soft delete: the row stays and the bin never empties (#140 R11). No
+// statement in this file hard-deletes, on purpose.
+// The delete is ONE statement, no transaction and no lock: nothing references
+// an Expense, so no guard applies and nothing needs protecting. Idempotent on
+// the caller's own Expense and keeping the FIRST deletion instant, as a
+// Pocket's: coalesce leaves an existing deleted_at alone, and updated_at moves
+// only when this statement is the one that deleted (a repeat changes no
+// column). A row that is another Household's or unknown is no row (0 rows
+// affected), and the caller answers NOT_FOUND; a deleted one of the caller's own
+// is a row, which is what makes a repeat a success. A concurrent PATCH holds
+// the row FOR NO KEY UPDATE; this UPDATE waits for it and then runs on the
+// row's new version, which is the delete the caller asked for.
+func (q *Queries) SoftDeleteExpense(ctx context.Context, arg SoftDeleteExpenseParams) (int64, error) {
+	result, err := q.db.Exec(ctx, softDeleteExpense, arg.ID, arg.HouseholdID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const updateExpense = `-- name: UpdateExpense :one

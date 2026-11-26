@@ -105,8 +105,7 @@ func TestGetOfAnIdThatIsNotTheCallersLiveExpenseIsOne404(t *testing.T) {
 	assertStatus(t, f.get(theirCtx, t, theirs), "200")
 }
 
-// A deleted Expense is gone to GET and back once it is restored; PR 5 adds the
-// restore, so this soft-deletes by SQL, as the bin's tests will.
+// A deleted Expense is gone to GET and back once it is restored.
 func TestGetSeesAnEditAndNotASoftDelete(t *testing.T) {
 	f := newFixture(t)
 	_, pocket, ctx := f.member(t, "Home", "a@example.com")
@@ -118,9 +117,9 @@ func TestGetSeesAnEditAndNotASoftDelete(t *testing.T) {
 		t.Errorf("GET after an edit = %s", wire(t, got))
 	}
 
-	f.exec(t, `UPDATE expenses SET deleted_at = now() WHERE id = $1`, id)
+	assertStatus(t, f.del(ctx, t, id), "204")
 	assertStatus(t, f.get(ctx, t, id), "NOT_FOUND")
-	f.exec(t, `UPDATE expenses SET deleted_at = NULL WHERE id = $1`, id)
+	assertStatus(t, f.restore(ctx, t, id), "200")
 	assertStatus(t, f.get(ctx, t, id), "200")
 }
 

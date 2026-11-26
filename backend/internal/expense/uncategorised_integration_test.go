@@ -108,16 +108,16 @@ func TestTheCountIsIndependentOfTheFilterAndThePage(t *testing.T) {
 		"filter false, a short page": {3, ptr(false)},
 	} {
 		page := f.listFiltered(ctx, t, &tc.limit, nil, tc.filter)
-		if page.UncategorisedCount != 6 {
-			t.Errorf("%s: uncategorised_count = %d, want 6", name, page.UncategorisedCount)
+		if uncount(page) != 6 {
+			t.Errorf("%s: uncategorised_count = %d, want 6", name, uncount(page))
 		}
 	}
 
 	// Later pages of a walk carry it too, and a page past the filter's last row.
 	first := f.listFiltered(ctx, t, ptr(4), nil, ptr(true))
 	second := f.listFiltered(ctx, t, ptr(4), first.Next, ptr(true))
-	if first.UncategorisedCount != 6 || second.UncategorisedCount != 6 {
-		t.Errorf("counts across pages = %d, %d; want 6, 6", first.UncategorisedCount, second.UncategorisedCount)
+	if uncount(first) != 6 || uncount(second) != 6 {
+		t.Errorf("counts across pages = %d, %d; want 6, 6", uncount(first), uncount(second))
 	}
 }
 
@@ -207,44 +207,44 @@ func TestAnEditMovesAnExpenseInAndOutOfTheFilterAndTheCount(t *testing.T) {
 	id, _ := f.stored(ctx, t, pocket, food)
 
 	page := f.listFiltered(ctx, t, nil, nil, ptr(true))
-	if len(page.Items) != 0 || page.UncategorisedCount != 0 {
+	if len(page.Items) != 0 || uncount(page) != 0 {
 		t.Fatalf("a categorised Expense is in the filter: %s", wire(t, page))
 	}
 
 	assertUpdated(t, f.update(ctx, t, id, api.UpdateExpenseRequest{CategoryId: nullOf[uuid.UUID]()}))
 	page = f.listFiltered(ctx, t, nil, nil, ptr(true))
-	if got := ids(page); !slices.Equal(got, []uuid.UUID{id.Bytes}) || page.UncategorisedCount != 1 {
+	if got := ids(page); !slices.Equal(got, []uuid.UUID{id.Bytes}) || uncount(page) != 1 {
 		t.Errorf("after category_id: null: %s, want the Expense and a count of 1", wire(t, page))
 	}
-	if whole := f.list(ctx, t, nil, nil); whole.UncategorisedCount != 1 {
-		t.Errorf("the whole list says %d, want 1", whole.UncategorisedCount)
+	if whole := f.list(ctx, t, nil, nil); uncount(whole) != 1 {
+		t.Errorf("the whole list says %d, want 1", uncount(whole))
 	}
 
 	assertUpdated(t, f.update(ctx, t, id, api.UpdateExpenseRequest{CategoryId: valueOf(uuid.UUID(food.Bytes))}))
 	page = f.listFiltered(ctx, t, nil, nil, ptr(true))
-	if len(page.Items) != 0 || page.UncategorisedCount != 0 {
+	if len(page.Items) != 0 || uncount(page) != 0 {
 		t.Errorf("after a Category was set: %s, want nothing and a count of 0", wire(t, page))
 	}
-	if whole := f.list(ctx, t, nil, nil); len(whole.Items) != 1 || whole.UncategorisedCount != 0 {
+	if whole := f.list(ctx, t, nil, nil); len(whole.Items) != 1 || uncount(whole) != 0 {
 		t.Errorf("the whole list = %s, want the row and a count of 0", wire(t, whole))
 	}
 }
 
 // A soft-deleted uncategorised Expense is not counted and not listed, and counts
-// again when it is restored (PR 5 adds the restore: SQL stands in for it here).
+// again when it is restored.
 func TestADeletedExpenseIsNeitherListedNorCounted(t *testing.T) {
 	f := newFixture(t)
 	household, pocket, ctx := f.member(t, "Home", "a@example.com")
 	f.insert(t, household, pocket, seed{id: sid(1), occurredOn: "2026-11-23", capturedAt: "2026-11-23T05:00:00Z"})
 	f.insert(t, household, pocket, seed{id: sid(2), occurredOn: "2026-11-23", capturedAt: "2026-11-23T06:00:00Z"})
 
-	f.exec(t, `UPDATE expenses SET deleted_at = now() WHERE id = $1`, sid(2))
+	assertStatus(t, f.del(ctx, t, pgtype.UUID{Bytes: sid(2), Valid: true}), "204")
 	page := f.listFiltered(ctx, t, nil, nil, ptr(true))
-	if got := ids(page); !slices.Equal(got, []uuid.UUID{sid(1)}) || page.UncategorisedCount != 1 {
+	if got := ids(page); !slices.Equal(got, []uuid.UUID{sid(1)}) || uncount(page) != 1 {
 		t.Errorf("with one deleted: %s", wire(t, page))
 	}
-	f.exec(t, `UPDATE expenses SET deleted_at = NULL WHERE id = $1`, sid(2))
-	if page := f.listFiltered(ctx, t, nil, nil, ptr(true)); len(page.Items) != 2 || page.UncategorisedCount != 2 {
+	assertStatus(t, f.restore(ctx, t, pgtype.UUID{Bytes: sid(2), Valid: true}), "200")
+	if page := f.listFiltered(ctx, t, nil, nil, ptr(true)); len(page.Items) != 2 || uncount(page) != 2 {
 		t.Errorf("restored: %s", wire(t, page))
 	}
 }
@@ -264,10 +264,19 @@ func TestTheCountAndTheFilterStayInTheCallersHousehold(t *testing.T) {
 
 	mine := f.listFiltered(ctx, t, nil, nil, ptr(true))
 	their := f.listFiltered(theirs, t, nil, nil, ptr(true))
-	if got := ids(mine); !slices.Equal(got, []uuid.UUID{sid(1)}) || mine.UncategorisedCount != 1 {
+	if got := ids(mine); !slices.Equal(got, []uuid.UUID{sid(1)}) || uncount(mine) != 1 {
 		t.Errorf("mine = %s", wire(t, mine))
 	}
-	if len(their.Items) != 3 || their.UncategorisedCount != 3 {
+	if len(their.Items) != 3 || uncount(their) != 3 {
 		t.Errorf("theirs = %s", wire(t, their))
 	}
+}
+
+// uncount is a live page's uncategorised_count, or -1 when the page omitted it,
+// which a live read never does (it is omitted only from the Recycle Bin's).
+func uncount(p api.ExpenseList) int {
+	if p.UncategorisedCount == nil {
+		return -1
+	}
+	return *p.UncategorisedCount
 }

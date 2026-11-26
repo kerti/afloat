@@ -33,39 +33,53 @@ export function DayGroup({ heading, children }: { heading: string; children: Rea
   );
 }
 
-/** Opens the Expense's edit route. Its accessible name is `label`: the title
- * and the amount ("Edit Rent, Rp3,000,000"). */
+/** Opens the Expense's edit route (`to`), with a chevron, or, with `onOpen`, a
+ * dialog (the Recycle Bin's read-only one), without. Its accessible name is
+ * `label`: the title and the amount ("Edit Rent, Rp3,000,000"). */
 export function ExpenseRow({
   to,
+  onOpen,
   label,
   title,
   detail,
   amount,
   muted,
 }: {
-  to: string;
+  to?: string;
+  onOpen?: () => void;
   label: string;
   title: string;
   detail: string;
   amount: string;
   muted?: boolean;
 }) {
+  const body = (
+    <>
+      <span className="flex min-w-0 flex-1 flex-col">
+        <span className={muted ? "truncate text-muted-foreground" : "truncate"}>{title}</span>
+        <span className="truncate text-sm text-muted-foreground">{detail}</span>
+      </span>
+      <span className="shrink-0 font-medium tabular-nums">{amount}</span>
+    </>
+  );
   return (
     <li>
-      <Link to={to} aria-label={label} className={rowLink}>
-        <span className="flex min-w-0 flex-1 flex-col">
-          <span className={muted ? "truncate text-muted-foreground" : "truncate"}>{title}</span>
-          <span className="truncate text-sm text-muted-foreground">{detail}</span>
-        </span>
-        <span className="shrink-0 font-medium tabular-nums">{amount}</span>
-        <Chevron />
-      </Link>
+      {to !== undefined ? (
+        <Link to={to} aria-label={label} className={rowLink}>
+          {body}
+          <Chevron />
+        </Link>
+      ) : (
+        <button type="button" aria-label={label} onClick={onOpen} className={rowLink}>
+          {body}
+        </button>
+      )}
     </li>
   );
 }
 
-/** The one row above the list that narrows it ("Needs a category (3)"): a
- * bordered link ending in a chevron. No badge, no colour (#140 R8). */
+/** A bordered link row ending in a chevron, above the list: the one that
+ * narrows it ("Needs a category (3)"; no badge, no colour, #140 R8). */
 export function FilterRow({ to, children }: { to: string; children: ReactNode }) {
   return (
     <ul className="flex flex-col rounded-md border">

@@ -171,6 +171,26 @@ func status(resp any) string {
 		code = r.Code
 	case api.GetExpense500JSONResponse:
 		return "500"
+	case api.DeleteExpense204Response:
+		return "204"
+	case api.DeleteExpense400JSONResponse:
+		code, args = r.Code, r.Args
+	case api.DeleteExpense401JSONResponse:
+		return "401"
+	case api.DeleteExpense404JSONResponse:
+		code = r.Code
+	case api.DeleteExpense500JSONResponse:
+		return "500"
+	case api.RestoreExpense200JSONResponse:
+		return "200"
+	case api.RestoreExpense400JSONResponse:
+		code, args = r.Code, r.Args
+	case api.RestoreExpense401JSONResponse:
+		return "401"
+	case api.RestoreExpense404JSONResponse:
+		code = r.Code
+	case api.RestoreExpense500JSONResponse:
+		return "500"
 	case api.ListExpenses200JSONResponse:
 		return "200"
 	case api.ListExpenses400JSONResponse:

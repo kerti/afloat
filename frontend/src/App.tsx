@@ -9,6 +9,7 @@ import { BudgetPage } from "@/pages/BudgetPage";
 import { CapturePage } from "@/pages/CapturePage";
 import { EditExpensePage } from "@/pages/EditExpensePage";
 import { ExpensesPage } from "@/pages/ExpensesPage";
+import { RecycleBinPage } from "@/pages/RecycleBinPage";
 import { HomePage } from "@/pages/HomePage";
 import { LoginPage } from "@/pages/LoginPage";
 import { OnboardingPage } from "@/pages/OnboardingPage";
@@ -44,6 +45,10 @@ export function App() {
         <Route
           path={routes.expenses}
           element={<RequireSession>{(me) => <ExpensesPage me={me} />}</RequireSession>}
+        />
+        <Route
+          path={routes.recycleBin}
+          element={<RequireSession>{(me) => <RecycleBinPage me={me} />}</RequireSession>}
         />
         <Route
           path={routes.expensePattern}

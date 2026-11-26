@@ -1,0 +1,788 @@
+# DELETE /expenses/{id} (#140 PR 5, X10, R11): a soft delete. The row stays with
+# deleted_at set, in the Recycle Bin, which never empties; it is gone from the live
+# list, from GET and from PATCH (404), and still counts as using its Pocket. Idempotent
+# on the caller's own Expense, keeping the FIRST deleted_at. An id that is unknown or
+# another Household's is one 404 NOT_FOUND, byte for byte (`same_as` pins the relation);
+# the id's shape is checked before the lookup, and with no session the session answers
+# first. There is no 409: nothing references an Expense.
+#
+# Under an outage the session itself cannot be read, which the session middleware
+# answers 500 with the cookie left alone (#27); it never reaches the handler.
+#
+# The rows a case starts with (Household 1 is the signed-in one). Every updated_at is
+# the same fixed instant and every seeded deletion a fixed one, so `untouched` and
+# the `deleted` column ('MM-DD' for the seed's instant, 'now' for this request's)
+# say whether a request moved either:
+#   (Pockets: OVO active, Keeper active so OVO is never the last active one, Dana INACTIVE; Household 2 has Theirs)
+#   0192f0a0-0000-7000-8004-000000000001  H1 live, 25000 on OVO, Food, 19:05, "Lunch"
+#   0192f0a0-0000-7000-8004-000000000002  H1 live, a refund of 450000, bare
+#   0192f0a0-0000-7000-8004-000000000003  H1 DELETED 01-06, 30000 on OVO, "Taxi"
+#   0192f0a0-0000-7000-8004-000000000004  H1 DELETED 01-07, a refund of 12000.5 on Dana (INACTIVE) in Gym (INACTIVE)
+#   0192f0a0-0000-7000-8004-000000000005  H1 DELETED 01-08 (the same instant as 006: id DESC breaks the tie)
+#   0192f0a0-0000-7000-8004-000000000006  H1 DELETED 01-08
+#   0192f0a0-0000-7000-8004-000000000007  H1 live, 7000 on Dana (INACTIVE) in Gym (INACTIVE)
+#   0192f0a0-0000-7000-8004-00000000005a  Household 2, live
+#   0192f0a0-0000-7000-8004-00000000005b  Household 2, DELETED 01-09
+#
+# Generated rows are written out in full on purpose: a hand-written case file's
+# likeliest defect is an assertion that passes against any answer.
+
+- name: "expense delete - a live Expense is soft-deleted: 204, no body, the row stays with deleted_at set"
+  issue: "140"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO users (id, household_id, email, user_display_name) VALUES ('0192f0a0-0000-7000-8000-0000000000d1', '0192f0a0-0000-7000-8000-000000000002', 'dave@example.com', 'Dave');
+        INSERT INTO pockets (id, household_id, pocket_display_name, active, created_at) VALUES
+          ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO',    true,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-00000000000a', '0192f0a0-0000-7000-8000-000000000001', 'Keeper', true, '2026-01-10T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Dana',   false, '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', true,  '2026-01-04T00:00:00Z');
+        INSERT INTO categories (id, household_id, category_display_name, bucket, active, created_at) VALUES
+          ('0192f0a0-0000-7000-8003-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'Food',   'daily', true,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Gym',    'daily', false, '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', 'daily', true,  '2026-01-04T00:00:00Z');
+        INSERT INTO expenses (id, household_id, occurred_on, occurred_time, captured_at, amount, currency, pocket_id, category_id, description, deleted_at, updated_at) VALUES
+          ('0192f0a0-0000-7000-8004-000000000001', '0192f0a0-0000-7000-8000-000000000001', '2026-11-20', '19:05', '2026-11-20T12:05:00Z',   25000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8003-000000000001', 'Lunch',  NULL,                   '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-000000000002', '0192f0a0-0000-7000-8000-000000000001', '2026-11-21', NULL,    '2026-11-21T05:00:00Z',  -450000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL,   NULL,     NULL,                   '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-000000000003', '0192f0a0-0000-7000-8000-000000000001', '2026-11-22', NULL,    '2026-11-22T05:00:00Z',    30000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL,   'Taxi',   '2026-01-06T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-000000000004', '0192f0a0-0000-7000-8000-000000000001', '2026-11-18', NULL,    '2026-11-18T05:00:00Z', -12000.5, 'IDR', '0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8003-000000000002', 'Refund', '2026-01-07T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-000000000005', '0192f0a0-0000-7000-8000-000000000001', '2026-11-17', NULL,    '2026-11-17T05:00:00Z',     5000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL,   NULL,     '2026-01-08T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-000000000006', '0192f0a0-0000-7000-8000-000000000001', '2026-11-16', NULL,    '2026-11-16T05:00:00Z',     6000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL,   NULL,     '2026-01-08T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-000000000007', '0192f0a0-0000-7000-8000-000000000001', '2026-11-19', NULL,    '2026-11-19T05:00:00Z',     7000, 'IDR', '0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8003-000000000002', NULL,     NULL,                   '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-00000000005a', '0192f0a0-0000-7000-8000-000000000002', '2026-11-25', NULL,   '2026-11-25T06:00:00Z',    25000, 'IDR', '0192f0a0-0000-7000-8001-000000000009', NULL,   NULL,     NULL,                   '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-00000000005b', '0192f0a0-0000-7000-8000-000000000002', '2026-11-24', NULL,   '2026-11-24T06:00:00Z',    26000, 'IDR', '0192f0a0-0000-7000-8001-000000000009', NULL,   NULL,     '2026-01-09T00:00:00Z', '2026-01-05T00:00:00Z')
+    - request: {"method": "POST", "path": "/auth/local/login", "headers": {"Content-Type": "application/json"}, "body": "{\"email\":\"alice@example.com\",\"password\":\"conformance-correct-horse\"}"}
+      status: 204
+  request: {"method": "DELETE", "path": "/expenses/0192f0a0-0000-7000-8004-000000000001"}
+  expect:
+    status: 204
+    body_empty: true
+    cookies: {}
+    rows:
+      - sql: "SELECT right(id::text, 3) AS n, CASE WHEN deleted_at IS NULL THEN '-' WHEN deleted_at >= '2026-02-01' THEN 'now' ELSE to_char(deleted_at AT TIME ZONE 'UTC', 'MM-DD') END AS deleted, (updated_at = '2026-01-05T00:00:00Z') AS untouched FROM expenses ORDER BY id"
+        rows:
+          - {"n": "001", "deleted": "now", "untouched": false}
+          - {"n": "002", "deleted": "-", "untouched": true}
+          - {"n": "003", "deleted": "01-06", "untouched": true}
+          - {"n": "004", "deleted": "01-07", "untouched": true}
+          - {"n": "005", "deleted": "01-08", "untouched": true}
+          - {"n": "006", "deleted": "01-08", "untouched": true}
+          - {"n": "007", "deleted": "-", "untouched": true}
+          - {"n": "05a", "deleted": "-", "untouched": true}
+          - {"n": "05b", "deleted": "01-09", "untouched": true}
+
+- name: "expense delete - a refund in an inactive Pocket and Category is deleted too"
+  issue: "140"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO users (id, household_id, email, user_display_name) VALUES ('0192f0a0-0000-7000-8000-0000000000d1', '0192f0a0-0000-7000-8000-000000000002', 'dave@example.com', 'Dave');
+        INSERT INTO pockets (id, household_id, pocket_display_name, active, created_at) VALUES
+          ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO',    true,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-00000000000a', '0192f0a0-0000-7000-8000-000000000001', 'Keeper', true, '2026-01-10T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Dana',   false, '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', true,  '2026-01-04T00:00:00Z');
+        INSERT INTO categories (id, household_id, category_display_name, bucket, active, created_at) VALUES
+          ('0192f0a0-0000-7000-8003-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'Food',   'daily', true,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Gym',    'daily', false, '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', 'daily', true,  '2026-01-04T00:00:00Z');
+        INSERT INTO expenses (id, household_id, occurred_on, occurred_time, captured_at, amount, currency, pocket_id, category_id, description, deleted_at, updated_at) VALUES
+          ('0192f0a0-0000-7000-8004-000000000001', '0192f0a0-0000-7000-8000-000000000001', '2026-11-20', '19:05', '2026-11-20T12:05:00Z',   25000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8003-000000000001', 'Lunch',  NULL,                   '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-000000000002', '0192f0a0-0000-7000-8000-000000000001', '2026-11-21', NULL,    '2026-11-21T05:00:00Z',  -450000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL,   NULL,     NULL,                   '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-000000000003', '0192f0a0-0000-7000-8000-000000000001', '2026-11-22', NULL,    '2026-11-22T05:00:00Z',    30000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL,   'Taxi',   '2026-01-06T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-000000000004', '0192f0a0-0000-7000-8000-000000000001', '2026-11-18', NULL,    '2026-11-18T05:00:00Z', -12000.5, 'IDR', '0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8003-000000000002', 'Refund', '2026-01-07T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-000000000005', '0192f0a0-0000-7000-8000-000000000001', '2026-11-17', NULL,    '2026-11-17T05:00:00Z',     5000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL,   NULL,     '2026-01-08T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-000000000006', '0192f0a0-0000-7000-8000-000000000001', '2026-11-16', NULL,    '2026-11-16T05:00:00Z',     6000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL,   NULL,     '2026-01-08T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-000000000007', '0192f0a0-0000-7000-8000-000000000001', '2026-11-19', NULL,    '2026-11-19T05:00:00Z',     7000, 'IDR', '0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8003-000000000002', NULL,     NULL,                   '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-00000000005a', '0192f0a0-0000-7000-8000-000000000002', '2026-11-25', NULL,   '2026-11-25T06:00:00Z',    25000, 'IDR', '0192f0a0-0000-7000-8001-000000000009', NULL,   NULL,     NULL,                   '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-00000000005b', '0192f0a0-0000-7000-8000-000000000002', '2026-11-24', NULL,   '2026-11-24T06:00:00Z',    26000, 'IDR', '0192f0a0-0000-7000-8001-000000000009', NULL,   NULL,     '2026-01-09T00:00:00Z', '2026-01-05T00:00:00Z')
+    - request: {"method": "POST", "path": "/auth/local/login", "headers": {"Content-Type": "application/json"}, "body": "{\"email\":\"alice@example.com\",\"password\":\"conformance-correct-horse\"}"}
+      status: 204
+  request: {"method": "DELETE", "path": "/expenses/0192f0a0-0000-7000-8004-000000000007"}
+  expect:
+    status: 204
+    body_empty: true
+    cookies: {}
+    rows:
+      - sql: "SELECT right(id::text, 3) AS n, CASE WHEN deleted_at IS NULL THEN '-' WHEN deleted_at >= '2026-02-01' THEN 'now' ELSE to_char(deleted_at AT TIME ZONE 'UTC', 'MM-DD') END AS deleted, (updated_at = '2026-01-05T00:00:00Z') AS untouched FROM expenses ORDER BY id"
+        rows:
+          - {"n": "001", "deleted": "-", "untouched": true}
+          - {"n": "002", "deleted": "-", "untouched": true}
+          - {"n": "003", "deleted": "01-06", "untouched": true}
+          - {"n": "004", "deleted": "01-07", "untouched": true}
+          - {"n": "005", "deleted": "01-08", "untouched": true}
+          - {"n": "006", "deleted": "01-08", "untouched": true}
+          - {"n": "007", "deleted": "now", "untouched": false}
+          - {"n": "05a", "deleted": "-", "untouched": true}
+          - {"n": "05b", "deleted": "01-09", "untouched": true}
+
+- name: "expense delete - a deleted Expense is 204 again and keeps the first deleted_at, changing no column"
+  issue: "140"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO users (id, household_id, email, user_display_name) VALUES ('0192f0a0-0000-7000-8000-0000000000d1', '0192f0a0-0000-7000-8000-000000000002', 'dave@example.com', 'Dave');
+        INSERT INTO pockets (id, household_id, pocket_display_name, active, created_at) VALUES
+          ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO',    true,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-00000000000a', '0192f0a0-0000-7000-8000-000000000001', 'Keeper', true, '2026-01-10T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Dana',   false, '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', true,  '2026-01-04T00:00:00Z');
+        INSERT INTO categories (id, household_id, category_display_name, bucket, active, created_at) VALUES
+          ('0192f0a0-0000-7000-8003-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'Food',   'daily', true,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Gym',    'daily', false, '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', 'daily', true,  '2026-01-04T00:00:00Z');
+        INSERT INTO expenses (id, household_id, occurred_on, occurred_time, captured_at, amount, currency, pocket_id, category_id, description, deleted_at, updated_at) VALUES
+          ('0192f0a0-0000-7000-8004-000000000001', '0192f0a0-0000-7000-8000-000000000001', '2026-11-20', '19:05', '2026-11-20T12:05:00Z',   25000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8003-000000000001', 'Lunch',  NULL,                   '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-000000000002', '0192f0a0-0000-7000-8000-000000000001', '2026-11-21', NULL,    '2026-11-21T05:00:00Z',  -450000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL,   NULL,     NULL,                   '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-000000000003', '0192f0a0-0000-7000-8000-000000000001', '2026-11-22', NULL,    '2026-11-22T05:00:00Z',    30000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL,   'Taxi',   '2026-01-06T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-000000000004', '0192f0a0-0000-7000-8000-000000000001', '2026-11-18', NULL,    '2026-11-18T05:00:00Z', -12000.5, 'IDR', '0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8003-000000000002', 'Refund', '2026-01-07T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-000000000005', '0192f0a0-0000-7000-8000-000000000001', '2026-11-17', NULL,    '2026-11-17T05:00:00Z',     5000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL,   NULL,     '2026-01-08T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-000000000006', '0192f0a0-0000-7000-8000-000000000001', '2026-11-16', NULL,    '2026-11-16T05:00:00Z',     6000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL,   NULL,     '2026-01-08T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-000000000007', '0192f0a0-0000-7000-8000-000000000001', '2026-11-19', NULL,    '2026-11-19T05:00:00Z',     7000, 'IDR', '0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8003-000000000002', NULL,     NULL,                   '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-00000000005a', '0192f0a0-0000-7000-8000-000000000002', '2026-11-25', NULL,   '2026-11-25T06:00:00Z',    25000, 'IDR', '0192f0a0-0000-7000-8001-000000000009', NULL,   NULL,     NULL,                   '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-00000000005b', '0192f0a0-0000-7000-8000-000000000002', '2026-11-24', NULL,   '2026-11-24T06:00:00Z',    26000, 'IDR', '0192f0a0-0000-7000-8001-000000000009', NULL,   NULL,     '2026-01-09T00:00:00Z', '2026-01-05T00:00:00Z')
+    - request: {"method": "POST", "path": "/auth/local/login", "headers": {"Content-Type": "application/json"}, "body": "{\"email\":\"alice@example.com\",\"password\":\"conformance-correct-horse\"}"}
+      status: 204
+  request: {"method": "DELETE", "path": "/expenses/0192f0a0-0000-7000-8004-000000000003"}
+  expect:
+    status: 204
+    body_empty: true
+    cookies: {}
+    rows:
+      - sql: "SELECT right(id::text, 3) AS n, CASE WHEN deleted_at IS NULL THEN '-' WHEN deleted_at >= '2026-02-01' THEN 'now' ELSE to_char(deleted_at AT TIME ZONE 'UTC', 'MM-DD') END AS deleted, (updated_at = '2026-01-05T00:00:00Z') AS untouched FROM expenses ORDER BY id"
+        rows:
+          - {"n": "001", "deleted": "-", "untouched": true}
+          - {"n": "002", "deleted": "-", "untouched": true}
+          - {"n": "003", "deleted": "01-06", "untouched": true}
+          - {"n": "004", "deleted": "01-07", "untouched": true}
+          - {"n": "005", "deleted": "01-08", "untouched": true}
+          - {"n": "006", "deleted": "01-08", "untouched": true}
+          - {"n": "007", "deleted": "-", "untouched": true}
+          - {"n": "05a", "deleted": "-", "untouched": true}
+          - {"n": "05b", "deleted": "01-09", "untouched": true}
+
+- name: "expense delete - deleting twice in a row is 204 twice and the first instant stands"
+  issue: "140"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO users (id, household_id, email, user_display_name) VALUES ('0192f0a0-0000-7000-8000-0000000000d1', '0192f0a0-0000-7000-8000-000000000002', 'dave@example.com', 'Dave');
+        INSERT INTO pockets (id, household_id, pocket_display_name, active, created_at) VALUES
+          ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO',    true,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-00000000000a', '0192f0a0-0000-7000-8000-000000000001', 'Keeper', true, '2026-01-10T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Dana',   false, '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', true,  '2026-01-04T00:00:00Z');
+        INSERT INTO categories (id, household_id, category_display_name, bucket, active, created_at) VALUES
+          ('0192f0a0-0000-7000-8003-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'Food',   'daily', true,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Gym',    'daily', false, '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', 'daily', true,  '2026-01-04T00:00:00Z');
+        INSERT INTO expenses (id, household_id, occurred_on, occurred_time, captured_at, amount, currency, pocket_id, category_id, description, deleted_at, updated_at) VALUES
+          ('0192f0a0-0000-7000-8004-000000000001', '0192f0a0-0000-7000-8000-000000000001', '2026-11-20', '19:05', '2026-11-20T12:05:00Z',   25000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8003-000000000001', 'Lunch',  NULL,                   '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-000000000002', '0192f0a0-0000-7000-8000-000000000001', '2026-11-21', NULL,    '2026-11-21T05:00:00Z',  -450000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL,   NULL,     NULL,                   '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-000000000003', '0192f0a0-0000-7000-8000-000000000001', '2026-11-22', NULL,    '2026-11-22T05:00:00Z',    30000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL,   'Taxi',   '2026-01-06T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-000000000004', '0192f0a0-0000-7000-8000-000000000001', '2026-11-18', NULL,    '2026-11-18T05:00:00Z', -12000.5, 'IDR', '0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8003-000000000002', 'Refund', '2026-01-07T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-000000000005', '0192f0a0-0000-7000-8000-000000000001', '2026-11-17', NULL,    '2026-11-17T05:00:00Z',     5000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL,   NULL,     '2026-01-08T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-000000000006', '0192f0a0-0000-7000-8000-000000000001', '2026-11-16', NULL,    '2026-11-16T05:00:00Z',     6000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL,   NULL,     '2026-01-08T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-000000000007', '0192f0a0-0000-7000-8000-000000000001', '2026-11-19', NULL,    '2026-11-19T05:00:00Z',     7000, 'IDR', '0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8003-000000000002', NULL,     NULL,                   '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-00000000005a', '0192f0a0-0000-7000-8000-000000000002', '2026-11-25', NULL,   '2026-11-25T06:00:00Z',    25000, 'IDR', '0192f0a0-0000-7000-8001-000000000009', NULL,   NULL,     NULL,                   '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-00000000005b', '0192f0a0-0000-7000-8000-000000000002', '2026-11-24', NULL,   '2026-11-24T06:00:00Z',    26000, 'IDR', '0192f0a0-0000-7000-8001-000000000009', NULL,   NULL,     '2026-01-09T00:00:00Z', '2026-01-05T00:00:00Z')
+    - request: {"method": "POST", "path": "/auth/local/login", "headers": {"Content-Type": "application/json"}, "body": "{\"email\":\"alice@example.com\",\"password\":\"conformance-correct-horse\"}"}
+      status: 204
+    - request: {"method": "DELETE", "path": "/expenses/0192f0a0-0000-7000-8004-000000000001"}
+      status: 204
+  request: {"method": "DELETE", "path": "/expenses/0192f0a0-0000-7000-8004-000000000001"}
+  expect:
+    status: 204
+    body_empty: true
+    cookies: {}
+    rows:
+      - sql: "SELECT right(id::text, 3) AS n, CASE WHEN deleted_at IS NULL THEN '-' WHEN deleted_at >= '2026-02-01' THEN 'now' ELSE to_char(deleted_at AT TIME ZONE 'UTC', 'MM-DD') END AS deleted, (updated_at = '2026-01-05T00:00:00Z') AS untouched FROM expenses ORDER BY id"
+        rows:
+          - {"n": "001", "deleted": "now", "untouched": false}
+          - {"n": "002", "deleted": "-", "untouched": true}
+          - {"n": "003", "deleted": "01-06", "untouched": true}
+          - {"n": "004", "deleted": "01-07", "untouched": true}
+          - {"n": "005", "deleted": "01-08", "untouched": true}
+          - {"n": "006", "deleted": "01-08", "untouched": true}
+          - {"n": "007", "deleted": "-", "untouched": true}
+          - {"n": "05a", "deleted": "-", "untouched": true}
+          - {"n": "05b", "deleted": "01-09", "untouched": true}
+
+- name: "expense delete - the deleted Expense leaves the live list, which keeps its uncategorised_count and carries no deleted_at"
+  issue: "140"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO users (id, household_id, email, user_display_name) VALUES ('0192f0a0-0000-7000-8000-0000000000d1', '0192f0a0-0000-7000-8000-000000000002', 'dave@example.com', 'Dave');
+        INSERT INTO pockets (id, household_id, pocket_display_name, active, created_at) VALUES
+          ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO',    true,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-00000000000a', '0192f0a0-0000-7000-8000-000000000001', 'Keeper', true, '2026-01-10T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Dana',   false, '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', true,  '2026-01-04T00:00:00Z');
+        INSERT INTO categories (id, household_id, category_display_name, bucket, active, created_at) VALUES
+          ('0192f0a0-0000-7000-8003-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'Food',   'daily', true,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Gym',    'daily', false, '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', 'daily', true,  '2026-01-04T00:00:00Z');
+        INSERT INTO expenses (id, household_id, occurred_on, occurred_time, captured_at, amount, currency, pocket_id, category_id, description, deleted_at, updated_at) VALUES
+          ('0192f0a0-0000-7000-8004-000000000001', '0192f0a0-0000-7000-8000-000000000001', '2026-11-20', '19:05', '2026-11-20T12:05:00Z',   25000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8003-000000000001', 'Lunch',  NULL,                   '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-000000000002', '0192f0a0-0000-7000-8000-000000000001', '2026-11-21', NULL,    '2026-11-21T05:00:00Z',  -450000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL,   NULL,     NULL,                   '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-000000000003', '0192f0a0-0000-7000-8000-000000000001', '2026-11-22', NULL,    '2026-11-22T05:00:00Z',    30000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL,   'Taxi',   '2026-01-06T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-000000000004', '0192f0a0-0000-7000-8000-000000000001', '2026-11-18', NULL,    '2026-11-18T05:00:00Z', -12000.5, 'IDR', '0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8003-000000000002', 'Refund', '2026-01-07T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-000000000005', '0192f0a0-0000-7000-8000-000000000001', '2026-11-17', NULL,    '2026-11-17T05:00:00Z',     5000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL,   NULL,     '2026-01-08T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-000000000006', '0192f0a0-0000-7000-8000-000000000001', '2026-11-16', NULL,    '2026-11-16T05:00:00Z',     6000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL,   NULL,     '2026-01-08T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-000000000007', '0192f0a0-0000-7000-8000-000000000001', '2026-11-19', NULL,    '2026-11-19T05:00:00Z',     7000, 'IDR', '0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8003-000000000002', NULL,     NULL,                   '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-00000000005a', '0192f0a0-0000-7000-8000-000000000002', '2026-11-25', NULL,   '2026-11-25T06:00:00Z',    25000, 'IDR', '0192f0a0-0000-7000-8001-000000000009', NULL,   NULL,     NULL,                   '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-00000000005b', '0192f0a0-0000-7000-8000-000000000002', '2026-11-24', NULL,   '2026-11-24T06:00:00Z',    26000, 'IDR', '0192f0a0-0000-7000-8001-000000000009', NULL,   NULL,     '2026-01-09T00:00:00Z', '2026-01-05T00:00:00Z')
+    - request: {"method": "POST", "path": "/auth/local/login", "headers": {"Content-Type": "application/json"}, "body": "{\"email\":\"alice@example.com\",\"password\":\"conformance-correct-horse\"}"}
+      status: 204
+    - request: {"method": "DELETE", "path": "/expenses/0192f0a0-0000-7000-8004-000000000001"}
+      status: 204
+  request: {"method": "GET", "path": "/expenses"}
+  expect:
+    status: 200
+    body_json: {"items": [{"id": "0192f0a0-0000-7000-8004-000000000002", "occurred_on": "2026-11-21", "captured_at": "2026-11-21T05:00:00Z", "amount": "-450000.0000", "currency": "IDR", "pocket_id": "0192f0a0-0000-7000-8001-000000000001", "ownership": "joint"}, {"id": "0192f0a0-0000-7000-8004-000000000007", "occurred_on": "2026-11-19", "captured_at": "2026-11-19T05:00:00Z", "amount": "7000.0000", "currency": "IDR", "pocket_id": "0192f0a0-0000-7000-8001-000000000002", "ownership": "joint", "category_id": "0192f0a0-0000-7000-8003-000000000002"}], "uncategorised_count": 1}
+    cookies: {}
+    rows:
+      - sql: "SELECT right(id::text, 3) AS n, CASE WHEN deleted_at IS NULL THEN '-' WHEN deleted_at >= '2026-02-01' THEN 'now' ELSE to_char(deleted_at AT TIME ZONE 'UTC', 'MM-DD') END AS deleted, (updated_at = '2026-01-05T00:00:00Z') AS untouched FROM expenses ORDER BY id"
+        rows:
+          - {"n": "001", "deleted": "now", "untouched": false}
+          - {"n": "002", "deleted": "-", "untouched": true}
+          - {"n": "003", "deleted": "01-06", "untouched": true}
+          - {"n": "004", "deleted": "01-07", "untouched": true}
+          - {"n": "005", "deleted": "01-08", "untouched": true}
+          - {"n": "006", "deleted": "01-08", "untouched": true}
+          - {"n": "007", "deleted": "-", "untouched": true}
+          - {"n": "05a", "deleted": "-", "untouched": true}
+          - {"n": "05b", "deleted": "01-09", "untouched": true}
+
+- name: "expense delete - the deleted Expense answers 404 to GET by id"
+  issue: "140"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO users (id, household_id, email, user_display_name) VALUES ('0192f0a0-0000-7000-8000-0000000000d1', '0192f0a0-0000-7000-8000-000000000002', 'dave@example.com', 'Dave');
+        INSERT INTO pockets (id, household_id, pocket_display_name, active, created_at) VALUES
+          ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO',    true,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-00000000000a', '0192f0a0-0000-7000-8000-000000000001', 'Keeper', true, '2026-01-10T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Dana',   false, '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', true,  '2026-01-04T00:00:00Z');
+        INSERT INTO categories (id, household_id, category_display_name, bucket, active, created_at) VALUES
+          ('0192f0a0-0000-7000-8003-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'Food',   'daily', true,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Gym',    'daily', false, '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', 'daily', true,  '2026-01-04T00:00:00Z');
+        INSERT INTO expenses (id, household_id, occurred_on, occurred_time, captured_at, amount, currency, pocket_id, category_id, description, deleted_at, updated_at) VALUES
+          ('0192f0a0-0000-7000-8004-000000000001', '0192f0a0-0000-7000-8000-000000000001', '2026-11-20', '19:05', '2026-11-20T12:05:00Z',   25000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8003-000000000001', 'Lunch',  NULL,                   '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-000000000002', '0192f0a0-0000-7000-8000-000000000001', '2026-11-21', NULL,    '2026-11-21T05:00:00Z',  -450000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL,   NULL,     NULL,                   '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-000000000003', '0192f0a0-0000-7000-8000-000000000001', '2026-11-22', NULL,    '2026-11-22T05:00:00Z',    30000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL,   'Taxi',   '2026-01-06T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-000000000004', '0192f0a0-0000-7000-8000-000000000001', '2026-11-18', NULL,    '2026-11-18T05:00:00Z', -12000.5, 'IDR', '0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8003-000000000002', 'Refund', '2026-01-07T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-000000000005', '0192f0a0-0000-7000-8000-000000000001', '2026-11-17', NULL,    '2026-11-17T05:00:00Z',     5000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL,   NULL,     '2026-01-08T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-000000000006', '0192f0a0-0000-7000-8000-000000000001', '2026-11-16', NULL,    '2026-11-16T05:00:00Z',     6000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL,   NULL,     '2026-01-08T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-000000000007', '0192f0a0-0000-7000-8000-000000000001', '2026-11-19', NULL,    '2026-11-19T05:00:00Z',     7000, 'IDR', '0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8003-000000000002', NULL,     NULL,                   '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-00000000005a', '0192f0a0-0000-7000-8000-000000000002', '2026-11-25', NULL,   '2026-11-25T06:00:00Z',    25000, 'IDR', '0192f0a0-0000-7000-8001-000000000009', NULL,   NULL,     NULL,                   '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-00000000005b', '0192f0a0-0000-7000-8000-000000000002', '2026-11-24', NULL,   '2026-11-24T06:00:00Z',    26000, 'IDR', '0192f0a0-0000-7000-8001-000000000009', NULL,   NULL,     '2026-01-09T00:00:00Z', '2026-01-05T00:00:00Z')
+    - request: {"method": "POST", "path": "/auth/local/login", "headers": {"Content-Type": "application/json"}, "body": "{\"email\":\"alice@example.com\",\"password\":\"conformance-correct-horse\"}"}
+      status: 204
+    - request: {"method": "DELETE", "path": "/expenses/0192f0a0-0000-7000-8004-000000000001"}
+      status: 204
+  request: {"method": "GET", "path": "/expenses/0192f0a0-0000-7000-8004-000000000001"}
+  expect:
+    status: 404
+    body_json: {"code": "NOT_FOUND"}
+    same_as: {"method": "GET", "path": "/expenses/0192f0a0-0000-7000-8004-0000000000ff"}
+    cookies: {}
+
+- name: "expense delete - the deleted Expense answers 404 to PATCH, even for {}, and is not edited"
+  issue: "140"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO users (id, household_id, email, user_display_name) VALUES ('0192f0a0-0000-7000-8000-0000000000d1', '0192f0a0-0000-7000-8000-000000000002', 'dave@example.com', 'Dave');
+        INSERT INTO pockets (id, household_id, pocket_display_name, active, created_at) VALUES
+          ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO',    true,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-00000000000a', '0192f0a0-0000-7000-8000-000000000001', 'Keeper', true, '2026-01-10T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Dana',   false, '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', true,  '2026-01-04T00:00:00Z');
+        INSERT INTO categories (id, household_id, category_display_name, bucket, active, created_at) VALUES
+          ('0192f0a0-0000-7000-8003-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'Food',   'daily', true,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Gym',    'daily', false, '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', 'daily', true,  '2026-01-04T00:00:00Z');
+        INSERT INTO expenses (id, household_id, occurred_on, occurred_time, captured_at, amount, currency, pocket_id, category_id, description, deleted_at, updated_at) VALUES
+          ('0192f0a0-0000-7000-8004-000000000001', '0192f0a0-0000-7000-8000-000000000001', '2026-11-20', '19:05', '2026-11-20T12:05:00Z',   25000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8003-000000000001', 'Lunch',  NULL,                   '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-000000000002', '0192f0a0-0000-7000-8000-000000000001', '2026-11-21', NULL,    '2026-11-21T05:00:00Z',  -450000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL,   NULL,     NULL,                   '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-000000000003', '0192f0a0-0000-7000-8000-000000000001', '2026-11-22', NULL,    '2026-11-22T05:00:00Z',    30000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL,   'Taxi',   '2026-01-06T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-000000000004', '0192f0a0-0000-7000-8000-000000000001', '2026-11-18', NULL,    '2026-11-18T05:00:00Z', -12000.5, 'IDR', '0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8003-000000000002', 'Refund', '2026-01-07T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-000000000005', '0192f0a0-0000-7000-8000-000000000001', '2026-11-17', NULL,    '2026-11-17T05:00:00Z',     5000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL,   NULL,     '2026-01-08T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-000000000006', '0192f0a0-0000-7000-8000-000000000001', '2026-11-16', NULL,    '2026-11-16T05:00:00Z',     6000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL,   NULL,     '2026-01-08T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-000000000007', '0192f0a0-0000-7000-8000-000000000001', '2026-11-19', NULL,    '2026-11-19T05:00:00Z',     7000, 'IDR', '0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8003-000000000002', NULL,     NULL,                   '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-00000000005a', '0192f0a0-0000-7000-8000-000000000002', '2026-11-25', NULL,   '2026-11-25T06:00:00Z',    25000, 'IDR', '0192f0a0-0000-7000-8001-000000000009', NULL,   NULL,     NULL,                   '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-00000000005b', '0192f0a0-0000-7000-8000-000000000002', '2026-11-24', NULL,   '2026-11-24T06:00:00Z',    26000, 'IDR', '0192f0a0-0000-7000-8001-000000000009', NULL,   NULL,     '2026-01-09T00:00:00Z', '2026-01-05T00:00:00Z')
+    - request: {"method": "POST", "path": "/auth/local/login", "headers": {"Content-Type": "application/json"}, "body": "{\"email\":\"alice@example.com\",\"password\":\"conformance-correct-horse\"}"}
+      status: 204
+    - request: {"method": "DELETE", "path": "/expenses/0192f0a0-0000-7000-8004-000000000001"}
+      status: 204
+  request: {"method": "PATCH", "path": "/expenses/0192f0a0-0000-7000-8004-000000000001", "headers": {"Content-Type": "application/json"}, "body": "{\"amount\":\"1\"}"}
+  expect:
+    status: 404
+    body_json: {"code": "NOT_FOUND"}
+    same_as: {"method": "PATCH", "path": "/expenses/0192f0a0-0000-7000-8004-0000000000ff", "headers": {"Content-Type": "application/json"}, "body": "{\"amount\":\"1\"}"}
+    cookies: {}
+    rows:
+      - sql: "SELECT right(id::text, 3) AS n, CASE WHEN deleted_at IS NULL THEN '-' WHEN deleted_at >= '2026-02-01' THEN 'now' ELSE to_char(deleted_at AT TIME ZONE 'UTC', 'MM-DD') END AS deleted, (updated_at = '2026-01-05T00:00:00Z') AS untouched FROM expenses ORDER BY id"
+        rows:
+          - {"n": "001", "deleted": "now", "untouched": false}
+          - {"n": "002", "deleted": "-", "untouched": true}
+          - {"n": "003", "deleted": "01-06", "untouched": true}
+          - {"n": "004", "deleted": "01-07", "untouched": true}
+          - {"n": "005", "deleted": "01-08", "untouched": true}
+          - {"n": "006", "deleted": "01-08", "untouched": true}
+          - {"n": "007", "deleted": "-", "untouched": true}
+          - {"n": "05a", "deleted": "-", "untouched": true}
+          - {"n": "05b", "deleted": "01-09", "untouched": true}
+      - sql: "SELECT amount::text AS amount FROM expenses WHERE right(id::text, 3) = '001'"
+        rows:
+          - {"amount": "25000.0000"}
+
+- name: "expense delete - the deleted Expense is in the Recycle Bin with its deleted_at"
+  issue: "140"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO users (id, household_id, email, user_display_name) VALUES ('0192f0a0-0000-7000-8000-0000000000d1', '0192f0a0-0000-7000-8000-000000000002', 'dave@example.com', 'Dave');
+        INSERT INTO pockets (id, household_id, pocket_display_name, active, created_at) VALUES
+          ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO',    true,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-00000000000a', '0192f0a0-0000-7000-8000-000000000001', 'Keeper', true, '2026-01-10T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Dana',   false, '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', true,  '2026-01-04T00:00:00Z');
+        INSERT INTO categories (id, household_id, category_display_name, bucket, active, created_at) VALUES
+          ('0192f0a0-0000-7000-8003-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'Food',   'daily', true,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Gym',    'daily', false, '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', 'daily', true,  '2026-01-04T00:00:00Z');
+        INSERT INTO expenses (id, household_id, occurred_on, occurred_time, captured_at, amount, currency, pocket_id, category_id, description, deleted_at, updated_at) VALUES
+          ('0192f0a0-0000-7000-8004-000000000001', '0192f0a0-0000-7000-8000-000000000001', '2026-11-20', '19:05', '2026-11-20T12:05:00Z',   25000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8003-000000000001', 'Lunch',  NULL,                   '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-000000000002', '0192f0a0-0000-7000-8000-000000000001', '2026-11-21', NULL,    '2026-11-21T05:00:00Z',  -450000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL,   NULL,     NULL,                   '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-000000000003', '0192f0a0-0000-7000-8000-000000000001', '2026-11-22', NULL,    '2026-11-22T05:00:00Z',    30000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL,   'Taxi',   '2026-01-06T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-000000000004', '0192f0a0-0000-7000-8000-000000000001', '2026-11-18', NULL,    '2026-11-18T05:00:00Z', -12000.5, 'IDR', '0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8003-000000000002', 'Refund', '2026-01-07T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-000000000005', '0192f0a0-0000-7000-8000-000000000001', '2026-11-17', NULL,    '2026-11-17T05:00:00Z',     5000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL,   NULL,     '2026-01-08T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-000000000006', '0192f0a0-0000-7000-8000-000000000001', '2026-11-16', NULL,    '2026-11-16T05:00:00Z',     6000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL,   NULL,     '2026-01-08T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-000000000007', '0192f0a0-0000-7000-8000-000000000001', '2026-11-19', NULL,    '2026-11-19T05:00:00Z',     7000, 'IDR', '0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8003-000000000002', NULL,     NULL,                   '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-00000000005a', '0192f0a0-0000-7000-8000-000000000002', '2026-11-25', NULL,   '2026-11-25T06:00:00Z',    25000, 'IDR', '0192f0a0-0000-7000-8001-000000000009', NULL,   NULL,     NULL,                   '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-00000000005b', '0192f0a0-0000-7000-8000-000000000002', '2026-11-24', NULL,   '2026-11-24T06:00:00Z',    26000, 'IDR', '0192f0a0-0000-7000-8001-000000000009', NULL,   NULL,     '2026-01-09T00:00:00Z', '2026-01-05T00:00:00Z')
+    - request: {"method": "POST", "path": "/auth/local/login", "headers": {"Content-Type": "application/json"}, "body": "{\"email\":\"alice@example.com\",\"password\":\"conformance-correct-horse\"}"}
+      status: 204
+    - request: {"method": "DELETE", "path": "/expenses/0192f0a0-0000-7000-8004-000000000001"}
+      status: 204
+    - sql: |
+        UPDATE expenses SET deleted_at = '2026-06-01T00:00:00Z' WHERE right(id::text, 3) = '001'
+  request: {"method": "GET", "path": "/expenses?deleted=true&limit=1"}
+  expect:
+    status: 200
+    body_json: {"items": [{"id": "0192f0a0-0000-7000-8004-000000000001", "occurred_on": "2026-11-20", "captured_at": "2026-11-20T12:05:00Z", "amount": "25000.0000", "currency": "IDR", "pocket_id": "0192f0a0-0000-7000-8001-000000000001", "ownership": "joint", "occurred_time": "19:05", "category_id": "0192f0a0-0000-7000-8003-000000000001", "description": "Lunch", "deleted_at": "2026-06-01T00:00:00Z"}], "next": "eyJkIjoxNzgwMjcyMDAwMDAwMDAwLCJpIjoiMDE5MmYwYTAtMDAwMC03MDAwLTgwMDQtMDAwMDAwMDAwMDAxIn0"}
+    cookies: {}
+
+- name: "expense delete - another Household's live id is NOT_FOUND exactly as an unknown id is, and their Expense is untouched"
+  issue: "140"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO users (id, household_id, email, user_display_name) VALUES ('0192f0a0-0000-7000-8000-0000000000d1', '0192f0a0-0000-7000-8000-000000000002', 'dave@example.com', 'Dave');
+        INSERT INTO pockets (id, household_id, pocket_display_name, active, created_at) VALUES
+          ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO',    true,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-00000000000a', '0192f0a0-0000-7000-8000-000000000001', 'Keeper', true, '2026-01-10T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Dana',   false, '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', true,  '2026-01-04T00:00:00Z');
+        INSERT INTO categories (id, household_id, category_display_name, bucket, active, created_at) VALUES
+          ('0192f0a0-0000-7000-8003-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'Food',   'daily', true,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Gym',    'daily', false, '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', 'daily', true,  '2026-01-04T00:00:00Z');
+        INSERT INTO expenses (id, household_id, occurred_on, occurred_time, captured_at, amount, currency, pocket_id, category_id, description, deleted_at, updated_at) VALUES
+          ('0192f0a0-0000-7000-8004-000000000001', '0192f0a0-0000-7000-8000-000000000001', '2026-11-20', '19:05', '2026-11-20T12:05:00Z',   25000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8003-000000000001', 'Lunch',  NULL,                   '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-000000000002', '0192f0a0-0000-7000-8000-000000000001', '2026-11-21', NULL,    '2026-11-21T05:00:00Z',  -450000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL,   NULL,     NULL,                   '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-000000000003', '0192f0a0-0000-7000-8000-000000000001', '2026-11-22', NULL,    '2026-11-22T05:00:00Z',    30000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL,   'Taxi',   '2026-01-06T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-000000000004', '0192f0a0-0000-7000-8000-000000000001', '2026-11-18', NULL,    '2026-11-18T05:00:00Z', -12000.5, 'IDR', '0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8003-000000000002', 'Refund', '2026-01-07T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-000000000005', '0192f0a0-0000-7000-8000-000000000001', '2026-11-17', NULL,    '2026-11-17T05:00:00Z',     5000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL,   NULL,     '2026-01-08T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-000000000006', '0192f0a0-0000-7000-8000-000000000001', '2026-11-16', NULL,    '2026-11-16T05:00:00Z',     6000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL,   NULL,     '2026-01-08T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-000000000007', '0192f0a0-0000-7000-8000-000000000001', '2026-11-19', NULL,    '2026-11-19T05:00:00Z',     7000, 'IDR', '0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8003-000000000002', NULL,     NULL,                   '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-00000000005a', '0192f0a0-0000-7000-8000-000000000002', '2026-11-25', NULL,   '2026-11-25T06:00:00Z',    25000, 'IDR', '0192f0a0-0000-7000-8001-000000000009', NULL,   NULL,     NULL,                   '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-00000000005b', '0192f0a0-0000-7000-8000-000000000002', '2026-11-24', NULL,   '2026-11-24T06:00:00Z',    26000, 'IDR', '0192f0a0-0000-7000-8001-000000000009', NULL,   NULL,     '2026-01-09T00:00:00Z', '2026-01-05T00:00:00Z')
+    - request: {"method": "POST", "path": "/auth/local/login", "headers": {"Content-Type": "application/json"}, "body": "{\"email\":\"alice@example.com\",\"password\":\"conformance-correct-horse\"}"}
+      status: 204
+  request: {"method": "DELETE", "path": "/expenses/0192f0a0-0000-7000-8004-00000000005a"}
+  expect:
+    status: 404
+    body_json: {"code": "NOT_FOUND"}
+    same_as: {"method": "DELETE", "path": "/expenses/0192f0a0-0000-7000-8004-0000000000ff"}
+    cookies: {}
+    rows:
+      - sql: "SELECT right(id::text, 3) AS n, CASE WHEN deleted_at IS NULL THEN '-' WHEN deleted_at >= '2026-02-01' THEN 'now' ELSE to_char(deleted_at AT TIME ZONE 'UTC', 'MM-DD') END AS deleted, (updated_at = '2026-01-05T00:00:00Z') AS untouched FROM expenses ORDER BY id"
+        rows:
+          - {"n": "001", "deleted": "-", "untouched": true}
+          - {"n": "002", "deleted": "-", "untouched": true}
+          - {"n": "003", "deleted": "01-06", "untouched": true}
+          - {"n": "004", "deleted": "01-07", "untouched": true}
+          - {"n": "005", "deleted": "01-08", "untouched": true}
+          - {"n": "006", "deleted": "01-08", "untouched": true}
+          - {"n": "007", "deleted": "-", "untouched": true}
+          - {"n": "05a", "deleted": "-", "untouched": true}
+          - {"n": "05b", "deleted": "01-09", "untouched": true}
+
+- name: "expense delete - another Household's deleted id is NOT_FOUND exactly as an unknown id is, and their Expense is untouched"
+  issue: "140"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO users (id, household_id, email, user_display_name) VALUES ('0192f0a0-0000-7000-8000-0000000000d1', '0192f0a0-0000-7000-8000-000000000002', 'dave@example.com', 'Dave');
+        INSERT INTO pockets (id, household_id, pocket_display_name, active, created_at) VALUES
+          ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO',    true,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-00000000000a', '0192f0a0-0000-7000-8000-000000000001', 'Keeper', true, '2026-01-10T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Dana',   false, '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', true,  '2026-01-04T00:00:00Z');
+        INSERT INTO categories (id, household_id, category_display_name, bucket, active, created_at) VALUES
+          ('0192f0a0-0000-7000-8003-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'Food',   'daily', true,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Gym',    'daily', false, '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', 'daily', true,  '2026-01-04T00:00:00Z');
+        INSERT INTO expenses (id, household_id, occurred_on, occurred_time, captured_at, amount, currency, pocket_id, category_id, description, deleted_at, updated_at) VALUES
+          ('0192f0a0-0000-7000-8004-000000000001', '0192f0a0-0000-7000-8000-000000000001', '2026-11-20', '19:05', '2026-11-20T12:05:00Z',   25000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8003-000000000001', 'Lunch',  NULL,                   '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-000000000002', '0192f0a0-0000-7000-8000-000000000001', '2026-11-21', NULL,    '2026-11-21T05:00:00Z',  -450000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL,   NULL,     NULL,                   '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-000000000003', '0192f0a0-0000-7000-8000-000000000001', '2026-11-22', NULL,    '2026-11-22T05:00:00Z',    30000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL,   'Taxi',   '2026-01-06T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-000000000004', '0192f0a0-0000-7000-8000-000000000001', '2026-11-18', NULL,    '2026-11-18T05:00:00Z', -12000.5, 'IDR', '0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8003-000000000002', 'Refund', '2026-01-07T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-000000000005', '0192f0a0-0000-7000-8000-000000000001', '2026-11-17', NULL,    '2026-11-17T05:00:00Z',     5000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL,   NULL,     '2026-01-08T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-000000000006', '0192f0a0-0000-7000-8000-000000000001', '2026-11-16', NULL,    '2026-11-16T05:00:00Z',     6000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL,   NULL,     '2026-01-08T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-000000000007', '0192f0a0-0000-7000-8000-000000000001', '2026-11-19', NULL,    '2026-11-19T05:00:00Z',     7000, 'IDR', '0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8003-000000000002', NULL,     NULL,                   '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-00000000005a', '0192f0a0-0000-7000-8000-000000000002', '2026-11-25', NULL,   '2026-11-25T06:00:00Z',    25000, 'IDR', '0192f0a0-0000-7000-8001-000000000009', NULL,   NULL,     NULL,                   '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-00000000005b', '0192f0a0-0000-7000-8000-000000000002', '2026-11-24', NULL,   '2026-11-24T06:00:00Z',    26000, 'IDR', '0192f0a0-0000-7000-8001-000000000009', NULL,   NULL,     '2026-01-09T00:00:00Z', '2026-01-05T00:00:00Z')
+    - request: {"method": "POST", "path": "/auth/local/login", "headers": {"Content-Type": "application/json"}, "body": "{\"email\":\"alice@example.com\",\"password\":\"conformance-correct-horse\"}"}
+      status: 204
+  request: {"method": "DELETE", "path": "/expenses/0192f0a0-0000-7000-8004-00000000005b"}
+  expect:
+    status: 404
+    body_json: {"code": "NOT_FOUND"}
+    same_as: {"method": "DELETE", "path": "/expenses/0192f0a0-0000-7000-8004-0000000000ff"}
+    cookies: {}
+    rows:
+      - sql: "SELECT right(id::text, 3) AS n, CASE WHEN deleted_at IS NULL THEN '-' WHEN deleted_at >= '2026-02-01' THEN 'now' ELSE to_char(deleted_at AT TIME ZONE 'UTC', 'MM-DD') END AS deleted, (updated_at = '2026-01-05T00:00:00Z') AS untouched FROM expenses ORDER BY id"
+        rows:
+          - {"n": "001", "deleted": "-", "untouched": true}
+          - {"n": "002", "deleted": "-", "untouched": true}
+          - {"n": "003", "deleted": "01-06", "untouched": true}
+          - {"n": "004", "deleted": "01-07", "untouched": true}
+          - {"n": "005", "deleted": "01-08", "untouched": true}
+          - {"n": "006", "deleted": "01-08", "untouched": true}
+          - {"n": "007", "deleted": "-", "untouched": true}
+          - {"n": "05a", "deleted": "-", "untouched": true}
+          - {"n": "05b", "deleted": "01-09", "untouched": true}
+
+- name: "expense delete - an unknown id is NOT_FOUND with no args"
+  issue: "140"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO users (id, household_id, email, user_display_name) VALUES ('0192f0a0-0000-7000-8000-0000000000d1', '0192f0a0-0000-7000-8000-000000000002', 'dave@example.com', 'Dave');
+        INSERT INTO pockets (id, household_id, pocket_display_name, active, created_at) VALUES
+          ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO',    true,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-00000000000a', '0192f0a0-0000-7000-8000-000000000001', 'Keeper', true, '2026-01-10T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Dana',   false, '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', true,  '2026-01-04T00:00:00Z');
+        INSERT INTO categories (id, household_id, category_display_name, bucket, active, created_at) VALUES
+          ('0192f0a0-0000-7000-8003-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'Food',   'daily', true,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Gym',    'daily', false, '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', 'daily', true,  '2026-01-04T00:00:00Z');
+        INSERT INTO expenses (id, household_id, occurred_on, occurred_time, captured_at, amount, currency, pocket_id, category_id, description, deleted_at, updated_at) VALUES
+          ('0192f0a0-0000-7000-8004-000000000001', '0192f0a0-0000-7000-8000-000000000001', '2026-11-20', '19:05', '2026-11-20T12:05:00Z',   25000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8003-000000000001', 'Lunch',  NULL,                   '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-000000000002', '0192f0a0-0000-7000-8000-000000000001', '2026-11-21', NULL,    '2026-11-21T05:00:00Z',  -450000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL,   NULL,     NULL,                   '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-000000000003', '0192f0a0-0000-7000-8000-000000000001', '2026-11-22', NULL,    '2026-11-22T05:00:00Z',    30000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL,   'Taxi',   '2026-01-06T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-000000000004', '0192f0a0-0000-7000-8000-000000000001', '2026-11-18', NULL,    '2026-11-18T05:00:00Z', -12000.5, 'IDR', '0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8003-000000000002', 'Refund', '2026-01-07T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-000000000005', '0192f0a0-0000-7000-8000-000000000001', '2026-11-17', NULL,    '2026-11-17T05:00:00Z',     5000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL,   NULL,     '2026-01-08T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-000000000006', '0192f0a0-0000-7000-8000-000000000001', '2026-11-16', NULL,    '2026-11-16T05:00:00Z',     6000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL,   NULL,     '2026-01-08T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-000000000007', '0192f0a0-0000-7000-8000-000000000001', '2026-11-19', NULL,    '2026-11-19T05:00:00Z',     7000, 'IDR', '0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8003-000000000002', NULL,     NULL,                   '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-00000000005a', '0192f0a0-0000-7000-8000-000000000002', '2026-11-25', NULL,   '2026-11-25T06:00:00Z',    25000, 'IDR', '0192f0a0-0000-7000-8001-000000000009', NULL,   NULL,     NULL,                   '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-00000000005b', '0192f0a0-0000-7000-8000-000000000002', '2026-11-24', NULL,   '2026-11-24T06:00:00Z',    26000, 'IDR', '0192f0a0-0000-7000-8001-000000000009', NULL,   NULL,     '2026-01-09T00:00:00Z', '2026-01-05T00:00:00Z')
+    - request: {"method": "POST", "path": "/auth/local/login", "headers": {"Content-Type": "application/json"}, "body": "{\"email\":\"alice@example.com\",\"password\":\"conformance-correct-horse\"}"}
+      status: 204
+  request: {"method": "DELETE", "path": "/expenses/0192f0a0-0000-7000-8004-0000000000ff"}
+  expect:
+    status: 404
+    body_json: {"code": "NOT_FOUND"}
+    cookies: {}
+    rows:
+      - sql: "SELECT right(id::text, 3) AS n, CASE WHEN deleted_at IS NULL THEN '-' WHEN deleted_at >= '2026-02-01' THEN 'now' ELSE to_char(deleted_at AT TIME ZONE 'UTC', 'MM-DD') END AS deleted, (updated_at = '2026-01-05T00:00:00Z') AS untouched FROM expenses ORDER BY id"
+        rows:
+          - {"n": "001", "deleted": "-", "untouched": true}
+          - {"n": "002", "deleted": "-", "untouched": true}
+          - {"n": "003", "deleted": "01-06", "untouched": true}
+          - {"n": "004", "deleted": "01-07", "untouched": true}
+          - {"n": "005", "deleted": "01-08", "untouched": true}
+          - {"n": "006", "deleted": "01-08", "untouched": true}
+          - {"n": "007", "deleted": "-", "untouched": true}
+          - {"n": "05a", "deleted": "-", "untouched": true}
+          - {"n": "05b", "deleted": "01-09", "untouched": true}
+
+- name: "expense delete - NOT_FOUND is the same answer as restore gives for a foreign id"
+  issue: "140"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO users (id, household_id, email, user_display_name) VALUES ('0192f0a0-0000-7000-8000-0000000000d1', '0192f0a0-0000-7000-8000-000000000002', 'dave@example.com', 'Dave');
+        INSERT INTO pockets (id, household_id, pocket_display_name, active, created_at) VALUES
+          ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO',    true,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-00000000000a', '0192f0a0-0000-7000-8000-000000000001', 'Keeper', true, '2026-01-10T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Dana',   false, '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', true,  '2026-01-04T00:00:00Z');
+        INSERT INTO categories (id, household_id, category_display_name, bucket, active, created_at) VALUES
+          ('0192f0a0-0000-7000-8003-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'Food',   'daily', true,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Gym',    'daily', false, '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', 'daily', true,  '2026-01-04T00:00:00Z');
+        INSERT INTO expenses (id, household_id, occurred_on, occurred_time, captured_at, amount, currency, pocket_id, category_id, description, deleted_at, updated_at) VALUES
+          ('0192f0a0-0000-7000-8004-000000000001', '0192f0a0-0000-7000-8000-000000000001', '2026-11-20', '19:05', '2026-11-20T12:05:00Z',   25000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8003-000000000001', 'Lunch',  NULL,                   '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-000000000002', '0192f0a0-0000-7000-8000-000000000001', '2026-11-21', NULL,    '2026-11-21T05:00:00Z',  -450000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL,   NULL,     NULL,                   '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-000000000003', '0192f0a0-0000-7000-8000-000000000001', '2026-11-22', NULL,    '2026-11-22T05:00:00Z',    30000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL,   'Taxi',   '2026-01-06T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-000000000004', '0192f0a0-0000-7000-8000-000000000001', '2026-11-18', NULL,    '2026-11-18T05:00:00Z', -12000.5, 'IDR', '0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8003-000000000002', 'Refund', '2026-01-07T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-000000000005', '0192f0a0-0000-7000-8000-000000000001', '2026-11-17', NULL,    '2026-11-17T05:00:00Z',     5000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL,   NULL,     '2026-01-08T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-000000000006', '0192f0a0-0000-7000-8000-000000000001', '2026-11-16', NULL,    '2026-11-16T05:00:00Z',     6000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL,   NULL,     '2026-01-08T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-000000000007', '0192f0a0-0000-7000-8000-000000000001', '2026-11-19', NULL,    '2026-11-19T05:00:00Z',     7000, 'IDR', '0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8003-000000000002', NULL,     NULL,                   '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-00000000005a', '0192f0a0-0000-7000-8000-000000000002', '2026-11-25', NULL,   '2026-11-25T06:00:00Z',    25000, 'IDR', '0192f0a0-0000-7000-8001-000000000009', NULL,   NULL,     NULL,                   '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-00000000005b', '0192f0a0-0000-7000-8000-000000000002', '2026-11-24', NULL,   '2026-11-24T06:00:00Z',    26000, 'IDR', '0192f0a0-0000-7000-8001-000000000009', NULL,   NULL,     '2026-01-09T00:00:00Z', '2026-01-05T00:00:00Z')
+    - request: {"method": "POST", "path": "/auth/local/login", "headers": {"Content-Type": "application/json"}, "body": "{\"email\":\"alice@example.com\",\"password\":\"conformance-correct-horse\"}"}
+      status: 204
+  request: {"method": "DELETE", "path": "/expenses/0192f0a0-0000-7000-8004-00000000005a"}
+  expect:
+    status: 404
+    body_json: {"code": "NOT_FOUND"}
+    same_as: {"method": "POST", "path": "/expenses/0192f0a0-0000-7000-8004-00000000005a/restore"}
+    cookies: {}
+    rows:
+      - sql: "SELECT right(id::text, 3) AS n, CASE WHEN deleted_at IS NULL THEN '-' WHEN deleted_at >= '2026-02-01' THEN 'now' ELSE to_char(deleted_at AT TIME ZONE 'UTC', 'MM-DD') END AS deleted, (updated_at = '2026-01-05T00:00:00Z') AS untouched FROM expenses ORDER BY id"
+        rows:
+          - {"n": "001", "deleted": "-", "untouched": true}
+          - {"n": "002", "deleted": "-", "untouched": true}
+          - {"n": "003", "deleted": "01-06", "untouched": true}
+          - {"n": "004", "deleted": "01-07", "untouched": true}
+          - {"n": "005", "deleted": "01-08", "untouched": true}
+          - {"n": "006", "deleted": "01-08", "untouched": true}
+          - {"n": "007", "deleted": "-", "untouched": true}
+          - {"n": "05a", "deleted": "-", "untouched": true}
+          - {"n": "05b", "deleted": "01-09", "untouched": true}
+
+- name: "expense delete - a malformed id is a 400 and changes nothing"
+  issue: "140"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO users (id, household_id, email, user_display_name) VALUES ('0192f0a0-0000-7000-8000-0000000000d1', '0192f0a0-0000-7000-8000-000000000002', 'dave@example.com', 'Dave');
+        INSERT INTO pockets (id, household_id, pocket_display_name, active, created_at) VALUES
+          ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO',    true,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-00000000000a', '0192f0a0-0000-7000-8000-000000000001', 'Keeper', true, '2026-01-10T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Dana',   false, '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', true,  '2026-01-04T00:00:00Z');
+        INSERT INTO categories (id, household_id, category_display_name, bucket, active, created_at) VALUES
+          ('0192f0a0-0000-7000-8003-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'Food',   'daily', true,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Gym',    'daily', false, '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', 'daily', true,  '2026-01-04T00:00:00Z');
+        INSERT INTO expenses (id, household_id, occurred_on, occurred_time, captured_at, amount, currency, pocket_id, category_id, description, deleted_at, updated_at) VALUES
+          ('0192f0a0-0000-7000-8004-000000000001', '0192f0a0-0000-7000-8000-000000000001', '2026-11-20', '19:05', '2026-11-20T12:05:00Z',   25000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8003-000000000001', 'Lunch',  NULL,                   '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-000000000002', '0192f0a0-0000-7000-8000-000000000001', '2026-11-21', NULL,    '2026-11-21T05:00:00Z',  -450000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL,   NULL,     NULL,                   '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-000000000003', '0192f0a0-0000-7000-8000-000000000001', '2026-11-22', NULL,    '2026-11-22T05:00:00Z',    30000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL,   'Taxi',   '2026-01-06T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-000000000004', '0192f0a0-0000-7000-8000-000000000001', '2026-11-18', NULL,    '2026-11-18T05:00:00Z', -12000.5, 'IDR', '0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8003-000000000002', 'Refund', '2026-01-07T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-000000000005', '0192f0a0-0000-7000-8000-000000000001', '2026-11-17', NULL,    '2026-11-17T05:00:00Z',     5000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL,   NULL,     '2026-01-08T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-000000000006', '0192f0a0-0000-7000-8000-000000000001', '2026-11-16', NULL,    '2026-11-16T05:00:00Z',     6000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL,   NULL,     '2026-01-08T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-000000000007', '0192f0a0-0000-7000-8000-000000000001', '2026-11-19', NULL,    '2026-11-19T05:00:00Z',     7000, 'IDR', '0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8003-000000000002', NULL,     NULL,                   '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-00000000005a', '0192f0a0-0000-7000-8000-000000000002', '2026-11-25', NULL,   '2026-11-25T06:00:00Z',    25000, 'IDR', '0192f0a0-0000-7000-8001-000000000009', NULL,   NULL,     NULL,                   '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-00000000005b', '0192f0a0-0000-7000-8000-000000000002', '2026-11-24', NULL,   '2026-11-24T06:00:00Z',    26000, 'IDR', '0192f0a0-0000-7000-8001-000000000009', NULL,   NULL,     '2026-01-09T00:00:00Z', '2026-01-05T00:00:00Z')
+    - request: {"method": "POST", "path": "/auth/local/login", "headers": {"Content-Type": "application/json"}, "body": "{\"email\":\"alice@example.com\",\"password\":\"conformance-correct-horse\"}"}
+      status: 204
+  request: {"method": "DELETE", "path": "/expenses/not-a-uuid"}
+  expect:
+    status: 400
+    body_json: {"code": "VALIDATION", "args": {"field": "id", "rule": "invalid"}}
+    cookies: {}
+    rows:
+      - sql: "SELECT right(id::text, 3) AS n, CASE WHEN deleted_at IS NULL THEN '-' WHEN deleted_at >= '2026-02-01' THEN 'now' ELSE to_char(deleted_at AT TIME ZONE 'UTC', 'MM-DD') END AS deleted, (updated_at = '2026-01-05T00:00:00Z') AS untouched FROM expenses ORDER BY id"
+        rows:
+          - {"n": "001", "deleted": "-", "untouched": true}
+          - {"n": "002", "deleted": "-", "untouched": true}
+          - {"n": "003", "deleted": "01-06", "untouched": true}
+          - {"n": "004", "deleted": "01-07", "untouched": true}
+          - {"n": "005", "deleted": "01-08", "untouched": true}
+          - {"n": "006", "deleted": "01-08", "untouched": true}
+          - {"n": "007", "deleted": "-", "untouched": true}
+          - {"n": "05a", "deleted": "-", "untouched": true}
+          - {"n": "05b", "deleted": "01-09", "untouched": true}
+
+- name: "expense delete - a delete does not touch the Pocket or the Category, which now cannot themselves be deleted"
+  issue: "140"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO users (id, household_id, email, user_display_name) VALUES ('0192f0a0-0000-7000-8000-0000000000d1', '0192f0a0-0000-7000-8000-000000000002', 'dave@example.com', 'Dave');
+        INSERT INTO pockets (id, household_id, pocket_display_name, active, created_at) VALUES
+          ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO',    true,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-00000000000a', '0192f0a0-0000-7000-8000-000000000001', 'Keeper', true, '2026-01-10T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Dana',   false, '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', true,  '2026-01-04T00:00:00Z');
+        INSERT INTO categories (id, household_id, category_display_name, bucket, active, created_at) VALUES
+          ('0192f0a0-0000-7000-8003-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'Food',   'daily', true,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Gym',    'daily', false, '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', 'daily', true,  '2026-01-04T00:00:00Z');
+        INSERT INTO expenses (id, household_id, occurred_on, occurred_time, captured_at, amount, currency, pocket_id, category_id, description, deleted_at, updated_at) VALUES
+          ('0192f0a0-0000-7000-8004-000000000001', '0192f0a0-0000-7000-8000-000000000001', '2026-11-20', '19:05', '2026-11-20T12:05:00Z',   25000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8003-000000000001', 'Lunch',  NULL,                   '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-000000000002', '0192f0a0-0000-7000-8000-000000000001', '2026-11-21', NULL,    '2026-11-21T05:00:00Z',  -450000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL,   NULL,     NULL,                   '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-000000000003', '0192f0a0-0000-7000-8000-000000000001', '2026-11-22', NULL,    '2026-11-22T05:00:00Z',    30000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL,   'Taxi',   '2026-01-06T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-000000000004', '0192f0a0-0000-7000-8000-000000000001', '2026-11-18', NULL,    '2026-11-18T05:00:00Z', -12000.5, 'IDR', '0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8003-000000000002', 'Refund', '2026-01-07T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-000000000005', '0192f0a0-0000-7000-8000-000000000001', '2026-11-17', NULL,    '2026-11-17T05:00:00Z',     5000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL,   NULL,     '2026-01-08T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-000000000006', '0192f0a0-0000-7000-8000-000000000001', '2026-11-16', NULL,    '2026-11-16T05:00:00Z',     6000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL,   NULL,     '2026-01-08T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-000000000007', '0192f0a0-0000-7000-8000-000000000001', '2026-11-19', NULL,    '2026-11-19T05:00:00Z',     7000, 'IDR', '0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8003-000000000002', NULL,     NULL,                   '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-00000000005a', '0192f0a0-0000-7000-8000-000000000002', '2026-11-25', NULL,   '2026-11-25T06:00:00Z',    25000, 'IDR', '0192f0a0-0000-7000-8001-000000000009', NULL,   NULL,     NULL,                   '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-00000000005b', '0192f0a0-0000-7000-8000-000000000002', '2026-11-24', NULL,   '2026-11-24T06:00:00Z',    26000, 'IDR', '0192f0a0-0000-7000-8001-000000000009', NULL,   NULL,     '2026-01-09T00:00:00Z', '2026-01-05T00:00:00Z')
+    - request: {"method": "POST", "path": "/auth/local/login", "headers": {"Content-Type": "application/json"}, "body": "{\"email\":\"alice@example.com\",\"password\":\"conformance-correct-horse\"}"}
+      status: 204
+    - request: {"method": "DELETE", "path": "/expenses/0192f0a0-0000-7000-8004-000000000001"}
+      status: 204
+  request: {"method": "DELETE", "path": "/pockets/0192f0a0-0000-7000-8001-000000000001"}
+  expect:
+    status: 409
+    body_json: {"code": "POCKET_IN_USE"}
+    cookies: {}
+    rows:
+      - sql: "SELECT right(id::text, 3) AS n, CASE WHEN deleted_at IS NULL THEN '-' WHEN deleted_at >= '2026-02-01' THEN 'now' ELSE to_char(deleted_at AT TIME ZONE 'UTC', 'MM-DD') END AS deleted, (updated_at = '2026-01-05T00:00:00Z') AS untouched FROM expenses ORDER BY id"
+        rows:
+          - {"n": "001", "deleted": "now", "untouched": false}
+          - {"n": "002", "deleted": "-", "untouched": true}
+          - {"n": "003", "deleted": "01-06", "untouched": true}
+          - {"n": "004", "deleted": "01-07", "untouched": true}
+          - {"n": "005", "deleted": "01-08", "untouched": true}
+          - {"n": "006", "deleted": "01-08", "untouched": true}
+          - {"n": "007", "deleted": "-", "untouched": true}
+          - {"n": "05a", "deleted": "-", "untouched": true}
+          - {"n": "05b", "deleted": "01-09", "untouched": true}
+
+- name: "expense delete - no session is 401 and deletes nothing"
+  issue: "140"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO users (id, household_id, email, user_display_name) VALUES ('0192f0a0-0000-7000-8000-0000000000d1', '0192f0a0-0000-7000-8000-000000000002', 'dave@example.com', 'Dave');
+        INSERT INTO pockets (id, household_id, pocket_display_name, active, created_at) VALUES
+          ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO',    true,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-00000000000a', '0192f0a0-0000-7000-8000-000000000001', 'Keeper', true, '2026-01-10T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Dana',   false, '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', true,  '2026-01-04T00:00:00Z');
+        INSERT INTO categories (id, household_id, category_display_name, bucket, active, created_at) VALUES
+          ('0192f0a0-0000-7000-8003-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'Food',   'daily', true,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Gym',    'daily', false, '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', 'daily', true,  '2026-01-04T00:00:00Z');
+        INSERT INTO expenses (id, household_id, occurred_on, occurred_time, captured_at, amount, currency, pocket_id, category_id, description, deleted_at, updated_at) VALUES
+          ('0192f0a0-0000-7000-8004-000000000001', '0192f0a0-0000-7000-8000-000000000001', '2026-11-20', '19:05', '2026-11-20T12:05:00Z',   25000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8003-000000000001', 'Lunch',  NULL,                   '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-000000000002', '0192f0a0-0000-7000-8000-000000000001', '2026-11-21', NULL,    '2026-11-21T05:00:00Z',  -450000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL,   NULL,     NULL,                   '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-000000000003', '0192f0a0-0000-7000-8000-000000000001', '2026-11-22', NULL,    '2026-11-22T05:00:00Z',    30000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL,   'Taxi',   '2026-01-06T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-000000000004', '0192f0a0-0000-7000-8000-000000000001', '2026-11-18', NULL,    '2026-11-18T05:00:00Z', -12000.5, 'IDR', '0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8003-000000000002', 'Refund', '2026-01-07T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-000000000005', '0192f0a0-0000-7000-8000-000000000001', '2026-11-17', NULL,    '2026-11-17T05:00:00Z',     5000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL,   NULL,     '2026-01-08T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-000000000006', '0192f0a0-0000-7000-8000-000000000001', '2026-11-16', NULL,    '2026-11-16T05:00:00Z',     6000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL,   NULL,     '2026-01-08T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-000000000007', '0192f0a0-0000-7000-8000-000000000001', '2026-11-19', NULL,    '2026-11-19T05:00:00Z',     7000, 'IDR', '0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8003-000000000002', NULL,     NULL,                   '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-00000000005a', '0192f0a0-0000-7000-8000-000000000002', '2026-11-25', NULL,   '2026-11-25T06:00:00Z',    25000, 'IDR', '0192f0a0-0000-7000-8001-000000000009', NULL,   NULL,     NULL,                   '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-00000000005b', '0192f0a0-0000-7000-8000-000000000002', '2026-11-24', NULL,   '2026-11-24T06:00:00Z',    26000, 'IDR', '0192f0a0-0000-7000-8001-000000000009', NULL,   NULL,     '2026-01-09T00:00:00Z', '2026-01-05T00:00:00Z')
+  request: {"method": "DELETE", "path": "/expenses/0192f0a0-0000-7000-8004-000000000001"}
+  expect:
+    status: 401
+    body_json: {"code": "UNAUTHORIZED"}
+    cookies: {}
+    rows:
+      - sql: "SELECT right(id::text, 3) AS n, CASE WHEN deleted_at IS NULL THEN '-' WHEN deleted_at >= '2026-02-01' THEN 'now' ELSE to_char(deleted_at AT TIME ZONE 'UTC', 'MM-DD') END AS deleted, (updated_at = '2026-01-05T00:00:00Z') AS untouched FROM expenses ORDER BY id"
+        rows:
+          - {"n": "001", "deleted": "-", "untouched": true}
+          - {"n": "002", "deleted": "-", "untouched": true}
+          - {"n": "003", "deleted": "01-06", "untouched": true}
+          - {"n": "004", "deleted": "01-07", "untouched": true}
+          - {"n": "005", "deleted": "01-08", "untouched": true}
+          - {"n": "006", "deleted": "01-08", "untouched": true}
+          - {"n": "007", "deleted": "-", "untouched": true}
+          - {"n": "05a", "deleted": "-", "untouched": true}
+          - {"n": "05b", "deleted": "01-09", "untouched": true}
+
+- name: "expense delete - no session is 401 first, even for a malformed id"
+  issue: "140"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO users (id, household_id, email, user_display_name) VALUES ('0192f0a0-0000-7000-8000-0000000000d1', '0192f0a0-0000-7000-8000-000000000002', 'dave@example.com', 'Dave');
+        INSERT INTO pockets (id, household_id, pocket_display_name, active, created_at) VALUES
+          ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO',    true,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-00000000000a', '0192f0a0-0000-7000-8000-000000000001', 'Keeper', true, '2026-01-10T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Dana',   false, '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', true,  '2026-01-04T00:00:00Z');
+        INSERT INTO categories (id, household_id, category_display_name, bucket, active, created_at) VALUES
+          ('0192f0a0-0000-7000-8003-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'Food',   'daily', true,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Gym',    'daily', false, '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', 'daily', true,  '2026-01-04T00:00:00Z');
+        INSERT INTO expenses (id, household_id, occurred_on, occurred_time, captured_at, amount, currency, pocket_id, category_id, description, deleted_at, updated_at) VALUES
+          ('0192f0a0-0000-7000-8004-000000000001', '0192f0a0-0000-7000-8000-000000000001', '2026-11-20', '19:05', '2026-11-20T12:05:00Z',   25000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8003-000000000001', 'Lunch',  NULL,                   '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-000000000002', '0192f0a0-0000-7000-8000-000000000001', '2026-11-21', NULL,    '2026-11-21T05:00:00Z',  -450000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL,   NULL,     NULL,                   '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-000000000003', '0192f0a0-0000-7000-8000-000000000001', '2026-11-22', NULL,    '2026-11-22T05:00:00Z',    30000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL,   'Taxi',   '2026-01-06T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-000000000004', '0192f0a0-0000-7000-8000-000000000001', '2026-11-18', NULL,    '2026-11-18T05:00:00Z', -12000.5, 'IDR', '0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8003-000000000002', 'Refund', '2026-01-07T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-000000000005', '0192f0a0-0000-7000-8000-000000000001', '2026-11-17', NULL,    '2026-11-17T05:00:00Z',     5000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL,   NULL,     '2026-01-08T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-000000000006', '0192f0a0-0000-7000-8000-000000000001', '2026-11-16', NULL,    '2026-11-16T05:00:00Z',     6000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL,   NULL,     '2026-01-08T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-000000000007', '0192f0a0-0000-7000-8000-000000000001', '2026-11-19', NULL,    '2026-11-19T05:00:00Z',     7000, 'IDR', '0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8003-000000000002', NULL,     NULL,                   '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-00000000005a', '0192f0a0-0000-7000-8000-000000000002', '2026-11-25', NULL,   '2026-11-25T06:00:00Z',    25000, 'IDR', '0192f0a0-0000-7000-8001-000000000009', NULL,   NULL,     NULL,                   '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-00000000005b', '0192f0a0-0000-7000-8000-000000000002', '2026-11-24', NULL,   '2026-11-24T06:00:00Z',    26000, 'IDR', '0192f0a0-0000-7000-8001-000000000009', NULL,   NULL,     '2026-01-09T00:00:00Z', '2026-01-05T00:00:00Z')
+  request: {"method": "DELETE", "path": "/expenses/not-a-uuid"}
+  expect:
+    status: 401
+    body_json: {"code": "UNAUTHORIZED"}
+    cookies: {}
+    rows:
+      - sql: "SELECT right(id::text, 3) AS n, CASE WHEN deleted_at IS NULL THEN '-' WHEN deleted_at >= '2026-02-01' THEN 'now' ELSE to_char(deleted_at AT TIME ZONE 'UTC', 'MM-DD') END AS deleted, (updated_at = '2026-01-05T00:00:00Z') AS untouched FROM expenses ORDER BY id"
+        rows:
+          - {"n": "001", "deleted": "-", "untouched": true}
+          - {"n": "002", "deleted": "-", "untouched": true}
+          - {"n": "003", "deleted": "01-06", "untouched": true}
+          - {"n": "004", "deleted": "01-07", "untouched": true}
+          - {"n": "005", "deleted": "01-08", "untouched": true}
+          - {"n": "006", "deleted": "01-08", "untouched": true}
+          - {"n": "007", "deleted": "-", "untouched": true}
+          - {"n": "05a", "deleted": "-", "untouched": true}
+          - {"n": "05b", "deleted": "01-09", "untouched": true}
+
+- name: "expense delete - under an outage is 500 and keeps the cookie, deleting nothing"
+  issue: "140"
+  given:
+    - sql: |
+        INSERT INTO households (id, household_display_name) VALUES ('0192f0a0-0000-7000-8000-000000000002', 'Other Household');
+        INSERT INTO users (id, household_id, email, user_display_name) VALUES ('0192f0a0-0000-7000-8000-0000000000d1', '0192f0a0-0000-7000-8000-000000000002', 'dave@example.com', 'Dave');
+        INSERT INTO pockets (id, household_id, pocket_display_name, active, created_at) VALUES
+          ('0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'OVO',    true,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-00000000000a', '0192f0a0-0000-7000-8000-000000000001', 'Keeper', true, '2026-01-10T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Dana',   false, '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8001-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', true,  '2026-01-04T00:00:00Z');
+        INSERT INTO categories (id, household_id, category_display_name, bucket, active, created_at) VALUES
+          ('0192f0a0-0000-7000-8003-000000000001', '0192f0a0-0000-7000-8000-000000000001', 'Food',   'daily', true,  '2026-01-01T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000002', '0192f0a0-0000-7000-8000-000000000001', 'Gym',    'daily', false, '2026-01-02T00:00:00Z'),
+          ('0192f0a0-0000-7000-8003-000000000009', '0192f0a0-0000-7000-8000-000000000002', 'Theirs', 'daily', true,  '2026-01-04T00:00:00Z');
+        INSERT INTO expenses (id, household_id, occurred_on, occurred_time, captured_at, amount, currency, pocket_id, category_id, description, deleted_at, updated_at) VALUES
+          ('0192f0a0-0000-7000-8004-000000000001', '0192f0a0-0000-7000-8000-000000000001', '2026-11-20', '19:05', '2026-11-20T12:05:00Z',   25000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', '0192f0a0-0000-7000-8003-000000000001', 'Lunch',  NULL,                   '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-000000000002', '0192f0a0-0000-7000-8000-000000000001', '2026-11-21', NULL,    '2026-11-21T05:00:00Z',  -450000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL,   NULL,     NULL,                   '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-000000000003', '0192f0a0-0000-7000-8000-000000000001', '2026-11-22', NULL,    '2026-11-22T05:00:00Z',    30000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL,   'Taxi',   '2026-01-06T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-000000000004', '0192f0a0-0000-7000-8000-000000000001', '2026-11-18', NULL,    '2026-11-18T05:00:00Z', -12000.5, 'IDR', '0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8003-000000000002', 'Refund', '2026-01-07T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-000000000005', '0192f0a0-0000-7000-8000-000000000001', '2026-11-17', NULL,    '2026-11-17T05:00:00Z',     5000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL,   NULL,     '2026-01-08T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-000000000006', '0192f0a0-0000-7000-8000-000000000001', '2026-11-16', NULL,    '2026-11-16T05:00:00Z',     6000, 'IDR', '0192f0a0-0000-7000-8001-000000000001', NULL,   NULL,     '2026-01-08T00:00:00Z', '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-000000000007', '0192f0a0-0000-7000-8000-000000000001', '2026-11-19', NULL,    '2026-11-19T05:00:00Z',     7000, 'IDR', '0192f0a0-0000-7000-8001-000000000002', '0192f0a0-0000-7000-8003-000000000002', NULL,     NULL,                   '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-00000000005a', '0192f0a0-0000-7000-8000-000000000002', '2026-11-25', NULL,   '2026-11-25T06:00:00Z',    25000, 'IDR', '0192f0a0-0000-7000-8001-000000000009', NULL,   NULL,     NULL,                   '2026-01-05T00:00:00Z'),
+          ('0192f0a0-0000-7000-8004-00000000005b', '0192f0a0-0000-7000-8000-000000000002', '2026-11-24', NULL,   '2026-11-24T06:00:00Z',    26000, 'IDR', '0192f0a0-0000-7000-8001-000000000009', NULL,   NULL,     '2026-01-09T00:00:00Z', '2026-01-05T00:00:00Z')
+    - request: {"method": "POST", "path": "/auth/local/login", "headers": {"Content-Type": "application/json"}, "body": "{\"email\":\"alice@example.com\",\"password\":\"conformance-correct-horse\"}"}
+      status: 204
+    - outage: true
+  request: {"method": "DELETE", "path": "/expenses/0192f0a0-0000-7000-8004-000000000001"}
+  expect:
+    status: 500
+    body_json: {"code": "INTERNAL"}
+    cookies: {}
+    rows:
+      - sql: "SELECT right(id::text, 3) AS n, CASE WHEN deleted_at IS NULL THEN '-' WHEN deleted_at >= '2026-02-01' THEN 'now' ELSE to_char(deleted_at AT TIME ZONE 'UTC', 'MM-DD') END AS deleted, (updated_at = '2026-01-05T00:00:00Z') AS untouched FROM expenses ORDER BY id"
+        rows:
+          - {"n": "001", "deleted": "-", "untouched": true}
+          - {"n": "002", "deleted": "-", "untouched": true}
+          - {"n": "003", "deleted": "01-06", "untouched": true}
+          - {"n": "004", "deleted": "01-07", "untouched": true}
+          - {"n": "005", "deleted": "01-08", "untouched": true}
+          - {"n": "006", "deleted": "01-08", "untouched": true}
+          - {"n": "007", "deleted": "-", "untouched": true}
+          - {"n": "05a", "deleted": "-", "untouched": true}
+          - {"n": "05b", "deleted": "01-09", "untouched": true}

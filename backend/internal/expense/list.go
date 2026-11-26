@@ -37,8 +37,10 @@ var (
 
 // ListExpenses answers one page of the caller's Household's live Expenses,
 // newest first (#140 R7), or of those with no Category with ?uncategorised=true
-// (R8), and the Household's count of them either way. The Household is the authenticated User's, taken from
-// the context and never from the request, and the SELECT filters on it in SQL.
+// (R8), and the Household's count of them either way; or, with ?deleted=true,
+// one page of its Recycle Bin (R11) and no count. The Household is the
+// authenticated User's, taken from the context and never from the request, and
+// every SELECT filters on it in SQL.
 //
 // The order is declared in the statement (queries/expense.sql), with id as its
 // last key so a page boundary is exact over rows equal in every other. It is
@@ -72,6 +74,10 @@ func (h *Handlers) ListExpenses(ctx context.Context, request api.ListExpensesReq
 		return listValidation("limit", "max"), nil
 	}
 
+	if request.Params.Deleted != nil && *request.Params.Deleted {
+		return h.listBin(ctx, user, request.Params, limit)
+	}
+
 	params := db.ListExpensesParams{
 		TimeZone:    user.TimeZone,
 		HouseholdID: user.HouseholdID,
@@ -100,7 +106,7 @@ func (h *Handlers) ListExpenses(ctx context.Context, request api.ListExpensesReq
 	// The count is its own statement, after the page and outside any
 	// transaction: a write landing between the two can leave it one off from the
 	// rows beside it, which the next read corrects and nothing is decided on.
-	// Not carried by the Recycle Bin read (#140 R8, PR 5), which will skip this.
+	// The Recycle Bin read does not carry it (listBin).
 	count, err := h.q.CountUncategorisedExpenses(ctx, user.HouseholdID)
 	if err != nil {
 		logFailure("count uncategorised expenses", err)
@@ -109,9 +115,10 @@ func (h *Handlers) ListExpenses(ctx context.Context, request api.ListExpensesReq
 		}, nil
 	}
 
+	n := int(count)
 	out := api.ExpenseList{
 		Items:              make([]api.Expense, 0, min(len(rows), limit)),
-		UncategorisedCount: int(count),
+		UncategorisedCount: &n,
 	}
 	for i, row := range rows {
 		if i == limit {
@@ -121,6 +128,51 @@ func (h *Handlers) ListExpenses(ctx context.Context, request api.ListExpensesReq
 			break
 		}
 		out.Items = append(out.Items, response(row.expense))
+	}
+	return api.ListExpenses200JSONResponse(out), nil
+}
+
+// listBin is the Recycle Bin read (#140 R11): the Household's deleted Expenses,
+// deleted_at then id descending, keyset-paged by its own cursor, and no
+// uncategorised_count (it counts live rows, and the bin lists none).
+//
+// The bin has no filter, so ?uncategorised=true beside it is refused as
+// {uncategorised, invalid} and never answered as an unfiltered bin. A bad
+// `after` is judged first: the failures that compete are reported least
+// (field, rule), and `after` sorts before `uncategorised` (BOOTSTRAP.md §5.2).
+func (h *Handlers) listBin(ctx context.Context, user db.User, p api.ListExpensesParams, limit int) (api.ListExpensesResponseObject, error) {
+	params := db.ListDeletedExpensesParams{
+		HouseholdID: user.HouseholdID,
+		PageSize:    int32(limit + 1),
+	}
+	if p.After != nil {
+		c, err := decodeBinCursor(*p.After)
+		if err != nil {
+			return listValidation("after", "invalid"), nil
+		}
+		params.AfterDeletedAt = pgtype.Timestamptz{Time: time.UnixMicro(c.deletedAt).UTC(), Valid: true}
+		params.AfterID = pgtype.UUID{Bytes: c.id, Valid: true}
+	}
+	if p.Uncategorised != nil && *p.Uncategorised {
+		return listValidation("uncategorised", "invalid"), nil
+	}
+
+	rows, err := h.q.ListDeletedExpenses(ctx, params)
+	if err != nil {
+		logFailure("list deleted expenses", err)
+		return api.ListExpenses500JSONResponse{
+			InternalErrorJSONResponse: api.InternalErrorJSONResponse{Code: api.INTERNAL},
+		}, nil
+	}
+
+	out := api.ExpenseList{Items: make([]api.Expense, 0, min(len(rows), limit))}
+	for i, row := range rows {
+		if i == limit {
+			next := encodeBinCursor(rows[limit-1])
+			out.Next = &next
+			break
+		}
+		out.Items = append(out.Items, response(row))
 	}
 	return api.ListExpenses200JSONResponse(out), nil
 }
@@ -245,4 +297,63 @@ func decodeCursor(s string) (cursor, error) {
 		return cursor{}, errCursor
 	}
 	return cursor{occurredOn: date, timeKey: *w.TimeKey, capturedAt: *w.CapturedAt, id: id}, nil
+}
+
+// binCursor is the last row of a Recycle Bin page's sort key: when it was
+// deleted, then its id. A different shape from the live list's, on purpose: a
+// cursor names a position in ONE order, so each decoder refuses the other's.
+type binCursor struct {
+	deletedAt int64 // microseconds since the Unix epoch, as Postgres holds it
+	id        uuid.UUID
+}
+
+type wireBinCursor struct {
+	DeletedAt *int64  `json:"d"`
+	ID        *string `json:"i"`
+}
+
+func encodeBinCursor(row db.Expense) string {
+	deleted := row.DeletedAt.Time.UnixMicro()
+	id := uuid.UUID(row.ID.Bytes).String()
+	raw, err := json.Marshal(wireBinCursor{DeletedAt: &deleted, ID: &id})
+	if err != nil {
+		// A struct of a string and an integer cannot fail to marshal.
+		panic(err)
+	}
+	return base64.RawURLEncoding.EncodeToString(raw)
+}
+
+// decodeBinCursor accepts exactly what encodeBinCursor writes, under the rules
+// decodeCursor holds the live one to: the alphabet, one JSON object with the two
+// keys and no others, no trailing data, an instant a timestamptz round-trips,
+// and a canonical UUID. Anything else, the live list's cursor included, is
+// `after` / `invalid`.
+func decodeBinCursor(s string) (binCursor, error) {
+	if len(s) > maxCursorBytes {
+		return binCursor{}, errCursor
+	}
+	raw, err := base64.RawURLEncoding.Strict().DecodeString(s)
+	if err != nil {
+		return binCursor{}, errCursor
+	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	var w wireBinCursor
+	if err := dec.Decode(&w); err != nil {
+		return binCursor{}, errCursor
+	}
+	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
+		return binCursor{}, errCursor
+	}
+	if w.DeletedAt == nil || w.ID == nil {
+		return binCursor{}, errCursor
+	}
+	if *w.DeletedAt < minCapturedAtMicros || *w.DeletedAt > maxCapturedAtMicros {
+		return binCursor{}, errCursor
+	}
+	id, err := uuid.Parse(*w.ID)
+	if err != nil || id.String() != *w.ID {
+		return binCursor{}, errCursor
+	}
+	return binCursor{deletedAt: *w.DeletedAt, id: id}, nil
 }

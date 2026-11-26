@@ -6,6 +6,7 @@ import { BackLink } from "@/components/BackLink";
 import { DayGroup, ExpenseRow, FilterRow, LoadMore } from "@/components/ExpenseList";
 import { ErrorState, Loading } from "@/components/states";
 import { EmptyState, MutedText, PageTitle } from "@/components/Text";
+import { TextLink } from "@/components/TextLink";
 import { formatMoney } from "@/lib/money";
 import { routes } from "@/lib/routes";
 import { useDayHeading } from "@/lib/useDayHeading";
@@ -27,7 +28,14 @@ export function ExpensesPage({ me }: { me: Me }) {
   const head = (
     <>
       {uncategorised && <BackLink to={routes.expenses} label={t("expenses.allExpenses")} />}
-      <PageTitle>{t("expenses.title")}</PageTitle>
+      {uncategorised ? (
+        <PageTitle>{t("expenses.title")}</PageTitle>
+      ) : (
+        <div className="flex items-baseline justify-between gap-4">
+          <PageTitle>{t("expenses.title")}</PageTitle>
+          <TextLink to={routes.recycleBin}>{t("expenses.recycleBin")}</TextLink>
+        </div>
+      )}
     </>
   );
 
@@ -77,9 +85,9 @@ export function ExpensesPage({ me }: { me: Me }) {
     <>
       {head}
       {uncategorised && <MutedText>{t("expenses.uncategorisedFilter")}</MutedText>}
-      {!uncategorised && expenses.data.pages[0]!.uncategorised_count > 0 && (
+      {!uncategorised && (expenses.data.pages[0]!.uncategorised_count ?? 0) > 0 && (
         <FilterRow to={routes.uncategorisedExpenses}>
-          {t("expenses.needsCategory", { count: expenses.data.pages[0]!.uncategorised_count })}
+          {t("expenses.needsCategory", { count: expenses.data.pages[0]!.uncategorised_count ?? 0 })}
         </FilterRow>
       )}
       {items.length === 0 && (

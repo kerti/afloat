@@ -85,7 +85,7 @@ afloat/
 │       ├── period/                 # Period Day and Budget Period arithmetic, pure — §6 (#130)
 │       ├── budget/                 # the Budget of the current Period, its materialisation and its changes (#130)
 │       ├── category/               # Categories: list, create (with the allocation one starts with), rename, deactivate or reactivate (#130)
-│       ├── expense/                # Expenses: create, get, edit and the live, keyset-paged list; delete and restore follow (#140)
+│       ├── expense/                # Expenses: create, get, edit, delete, restore and the live and Recycle Bin keyset-paged lists (#140)
 │       ├── migrations/             # CANONICAL goose migrations, hand-written, //go:embed — §7
 │       └── auth/common_passwords.txt  # the password denylist — §5.1
 ├── frontend/                       # React app
@@ -207,7 +207,21 @@ with zoneinfo answers from it, so a case-insensitive filesystem (a Mac) also acc
   own when its predicate must be a literal for a partial index** (`?uncategorised=true`, R8, is
   `category_id IS NULL` in its own `ListUncategorisedExpenses`, since a flag parameter on the one
   statement lets a generic plan fall back to the live index and filter), and a cursor names a position
-  in the one order, so it resumes in the filtered list or the whole one alike. **A count that rides
+  in the one order, so it resumes in the filtered list or the whole one alike. **The Recycle Bin is the
+  same list with `?deleted=true`** (#140, R11, PR 5): the same `{items, next}` wrapper and paging, only
+  `deleted_at IS NOT NULL` rows, ordered `deleted_at DESC, id DESC`, each item carrying `deleted_at` (an
+  optional `Expense` property, present only there), and **no `uncategorised_count`** (it counts live
+  rows and the bin lists none, so `ExpenseList` requires `items` alone and the live read still always
+  carries the count). It is a statement of its own (`ListDeletedExpenses`, the partial index's
+  predicate a literal) with a cursor of its own, `{d, i}`: a cursor names a position in one order, so
+  each list refuses the other's as `after` / `invalid`. **The bin has no filter**, so `?uncategorised=true`
+  beside `?deleted=true` is `VALIDATION {uncategorised, invalid}`, never an unfiltered bin (a bad
+  `after` beside it is reported first: `after` sorts before `uncategorised`), and `deleted` that is
+  not a boolean is `{deleted, invalid}`. **A keyset predicate over a key the index does not carry in
+  full is one row comparison, `(deleted_at, id) < (cursor)`, not `deleted_at < x OR id < y`**: the OR
+  becomes a `BitmapOr` that scans the primary key on `id < y` alone and reads every row below the
+  cursor, which the plan in PR 5 showed (1,070 buffers against 13) and which grows with a bin that never
+  empties. **A count that rides
   beside a page** (`uncategorised_count`, the Household's live uncategorised rows, whatever the filter
   and the page) is its own statement after the page's, derived on every read and never stored; a write
   between the two can leave it one off from the rows beside it, which the next read corrects. **Every query on a table that
@@ -263,6 +277,25 @@ with zoneinfo answers from it, so a case-insensitive filesystem (a Mac) also acc
   - **A restore into a held name is `409 NAME_TAKEN`** and the row stays deleted. The partial unique
     index decides it, mapped by constraint name as a create's is, never a lookup before the
     `UPDATE`: two concurrent restores into one name answer one `200` and one `409`, never a `500`.
+  - **An Expense is deleted and restored by the same wire, with no guard** (#140, X10, R11, PR 5):
+    nothing references an Expense, so `DELETE /expenses/{id}` is the one `UPDATE` above with no
+    transaction and no lock (`coalesce(deleted_at, now())`, `204`, a repeat changes no column), `409` is
+    not among its answers, and the bin never empties (no purge job, no "Empty bin"). The restore is a
+    transaction because it brings back a row that **references** a Pocket and a Category: (1) the
+    Expense `FOR NO KEY UPDATE` in any state (no row is the one `404`; a live one is answered as it
+    stands, `200`, with nothing written); (2) the Pocket, then the Category, `FOR SHARE` with the liveness
+    predicate in the locking statement, the create's own statements and order; (3) the `UPDATE`. **There is
+    no restore refusal on what it references** (R11: no live-only lock and no new restore refusal): a
+    Pocket or Category deactivated since is restored into, still labelling, because only a *new*
+    reference is judged `inactive`; and one that was **deleted** cannot be, since the guards count
+    deleted Expenses. The locks are a belt for the day a guard counts live rows only, and the
+    unreachable branch (a referenced row found deleted) answers `500` with nothing written, never a
+    quiet resurrection. There is **no Household lock**: a restore reads no currency and changes neither
+    the active-Pocket count nor the Household's currency lock. A deleted Expense is `404` to `GET` and
+    `PATCH` like any deleted row. Proven in `internal/expense/restore_race_integration_test.go`:
+    against the shipped guards the locks change what waits and never what is stored, so the two orders
+    are shown to leave nothing wrong; the red proofs run against a delete written as the live-only
+    guard, with the restore's locks off (a live Expense on a deleted Pocket or Category).
   - **An entity that history references cannot be deleted while it is referenced (#121, R1):**
     `409 POCKET_IN_USE` for a Pocket, soft-deleted Expenses included (#140), and `409 CATEGORY_IN_USE`
     for a Category (#130, PR 4), which means an allocation, a non-null amount, in a Budget Period
@@ -300,8 +333,8 @@ with zoneinfo answers from it, so a case-insensitive filesystem (a Mac) also acc
     pair (`FOR NO KEY UPDATE` of a removal against the create's `FOR SHARE`) already serialises a Pocket
     delete against a create, so stripping only the Pocket lock, or only the Household lock, stays green,
     and the test says so. The Pocket lock is kept because it is the one the recipe names for the protected
-    row, and a writer that does not take the Household first (a restore, in the slice that follows)
-    will rely on it alone.
+    row, and a writer that does not take the Household first (the Expense restore, PR 5 of #140, which
+    takes no Household lock) relies on it alone.
   - **A Household always keeps one active, live Pocket (#140, R1): `409 LAST_POCKET`**, a code with no
     `args`, refuses a `DELETE /pockets/{id}` or a `PATCH` with `active: false` that would leave none.
     It is the same recipe with the **Household's** row as the lock, because the invariant is a count over
@@ -890,8 +923,9 @@ collection's `/pockets/` with a trailing slash, for one.
   `period_start_day` (`min`). Registration and every later write behave the same (#113).
 - `rule` uses go-playground/validator's tag names (`required`, `min`, `max`, `email`), plus `pattern`,
   and, for a handler's own rules, `unique` (a repeated `category_id`) and `invalid` (a path `{id}` that is
-  not a uuid, a `category_id` that names no live Category of the Household, or an Expense's
-  `owner_user_id` that is half a pair or no live User of the Household), **`inactive`** (a
+  not a uuid, a `category_id` that names no live Category of the Household, an Expense's
+  `owner_user_id` that is half a pair or no live User of the Household, or `uncategorised=true`
+  beside `deleted=true`, a combination the Recycle Bin has no meaning for), **`inactive`** (a
   `pocket_id` or `category_id` naming the caller's own Pocket or Category that is no longer offered for
   new capture; unknown, another Household's and deleted are `invalid`, one answer) and **`nonzero`**
   (#140: an Expense's amount of zero in any spelling, `"0"`, `"0.0000"` or `"-0"`; go-playground's own

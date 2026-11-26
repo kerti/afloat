@@ -198,7 +198,8 @@
     "reactivated": "Reactivated {{name}}.",
     "deleted": "Deleted {{name}}.",
     "undo": "Undo",
-    "edit": "Edit"
+    "edit": "Edit",
+    "restored": "Restored {{name}}."
   },
   "dialog": {
     "close": "Close"
@@ -283,7 +284,15 @@
     "needsCategory": "Needs a category ({{count}})",
     "allExpenses": "All Expenses",
     "uncategorisedFilter": "Expenses with no Category.",
-    "uncategorisedEmpty": "No Expenses are missing a Category."
+    "uncategorisedEmpty": "No Expenses are missing a Category.",
+    "recycleBin": "Recycle Bin",
+    "binEmpty": "Deleted Expenses will appear here.",
+    "binRow": "View {{name}}, {{amount}}",
+    "binDialogTitle": "Deleted Expense",
+    "categoryLabel": "Category",
+    "descriptionLabel": "Description",
+    "restore": "Restore",
+    "delete": "Delete"
   },
   "dates": {
     "today": "Today",

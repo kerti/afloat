@@ -12,6 +12,7 @@ export const routes = {
   expenses: "/expenses",
   capture: "/capture",
   uncategorisedExpenses: "/expenses?uncategorised=true",
+  recycleBin: "/expenses/recycle-bin",
   // The edit route's pattern, for <Route path>; `expense(id)` builds a link.
   expensePattern: "/expenses/:id",
   expense: (id: string) => `/expenses/${encodeURIComponent(id)}`,

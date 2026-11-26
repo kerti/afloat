@@ -584,6 +584,11 @@ type Expense struct {
 	// Example: IDR
 	Currency string `json:"currency"`
 
+	// DeletedAt When it was deleted, UTC. Present **only** on a Recycle Bin read
+	// (`GET /expenses?deleted=true`): every other operation answers a live
+	// Expense and omits it.
+	DeletedAt *time.Time `json:"deleted_at,omitempty"`
+
 	// Description Omitted when none was given.
 	Description *string `json:"description,omitempty"`
 
@@ -609,7 +614,9 @@ type Expense struct {
 }
 
 // ExpenseList One page of the Household's live Expenses, newest first, with a cursor
-// and the count of those still without a Category.
+// and the count of those still without a Category; or, on a Recycle Bin
+// read, one page of its deleted ones, newest deletion first, with a
+// cursor and no count.
 type ExpenseList struct {
 	Items []Expense `json:"items"`
 
@@ -619,8 +626,9 @@ type ExpenseList struct {
 
 	// UncategorisedCount How many live Expenses in the whole Household have no Category,
 	// independent of the page and of the `uncategorised` filter. Derived on
-	// each read, never stored.
-	UncategorisedCount int `json:"uncategorised_count"`
+	// each read, never stored. **Always present on a read of the live
+	// list; omitted from the Recycle Bin's**, which lists no live row.
+	UncategorisedCount *int `json:"uncategorised_count,omitempty"`
 }
 
 // Health defines model for Health.
@@ -1054,8 +1062,15 @@ type ListExpensesParams struct {
 	// Uncategorised `true` lists only the live Expenses with no Category. `false` or
 	// absent lists them all. Only those two spellings are promised: a value
 	// that cannot be read as a boolean at all is `VALIDATION {field:
-	// uncategorised, rule: invalid}`.
+	// uncategorised, rule: invalid}`, and so is `true` beside
+	// `deleted=true`.
 	Uncategorised *bool `form:"uncategorised,omitempty" json:"uncategorised,omitempty"`
+
+	// Deleted `true` lists the Recycle Bin: only the Household's deleted Expenses,
+	// newest deletion first. `false` or absent lists the live ones. A value
+	// that cannot be read as a boolean at all is `VALIDATION {field:
+	// deleted, rule: invalid}`.
+	Deleted *bool `form:"deleted,omitempty" json:"deleted,omitempty"`
 }
 
 // ChangeLocalEmailJSONRequestBody defines body for ChangeLocalEmail for application/json ContentType.
@@ -1141,18 +1156,24 @@ type ServerInterface interface {
 	// RestoreCategory Restore a deleted Category.
 	// (POST /categories/{id}/restore)
 	RestoreCategory(w http.ResponseWriter, r *http.Request, id CategoryId)
-	// ListExpenses The caller's Household's live Expenses, newest first.
+	// ListExpenses The caller's Household's live Expenses, newest first, or its Recycle Bin.
 	// (GET /expenses)
 	ListExpenses(w http.ResponseWriter, r *http.Request, params ListExpensesParams)
 	// CreateExpense Record an Expense.
 	// (POST /expenses)
 	CreateExpense(w http.ResponseWriter, r *http.Request)
+	// DeleteExpense Delete an Expense.
+	// (DELETE /expenses/{id})
+	DeleteExpense(w http.ResponseWriter, r *http.Request, id ExpenseId)
 	// GetExpense One Expense.
 	// (GET /expenses/{id})
 	GetExpense(w http.ResponseWriter, r *http.Request, id ExpenseId)
 	// UpdateExpense Correct an Expense.
 	// (PATCH /expenses/{id})
 	UpdateExpense(w http.ResponseWriter, r *http.Request, id ExpenseId)
+	// RestoreExpense Restore a deleted Expense.
+	// (POST /expenses/{id}/restore)
+	RestoreExpense(w http.ResponseWriter, r *http.Request, id ExpenseId)
 	// GetHealth Liveness and readiness of this instance.
 	// (GET /health)
 	GetHealth(w http.ResponseWriter, r *http.Request)
@@ -1270,7 +1291,7 @@ func (_ Unimplemented) RestoreCategory(w http.ResponseWriter, r *http.Request, i
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
-// ListExpenses The caller's Household's live Expenses, newest first.
+// ListExpenses The caller's Household's live Expenses, newest first, or its Recycle Bin.
 // (GET /expenses)
 func (_ Unimplemented) ListExpenses(w http.ResponseWriter, r *http.Request, params ListExpensesParams) {
 	w.WriteHeader(http.StatusNotImplemented)
@@ -1279,6 +1300,12 @@ func (_ Unimplemented) ListExpenses(w http.ResponseWriter, r *http.Request, para
 // CreateExpense Record an Expense.
 // (POST /expenses)
 func (_ Unimplemented) CreateExpense(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// DeleteExpense Delete an Expense.
+// (DELETE /expenses/{id})
+func (_ Unimplemented) DeleteExpense(w http.ResponseWriter, r *http.Request, id ExpenseId) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
@@ -1291,6 +1318,12 @@ func (_ Unimplemented) GetExpense(w http.ResponseWriter, r *http.Request, id Exp
 // UpdateExpense Correct an Expense.
 // (PATCH /expenses/{id})
 func (_ Unimplemented) UpdateExpense(w http.ResponseWriter, r *http.Request, id ExpenseId) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// RestoreExpense Restore a deleted Expense.
+// (POST /expenses/{id}/restore)
+func (_ Unimplemented) RestoreExpense(w http.ResponseWriter, r *http.Request, id ExpenseId) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
@@ -1635,6 +1668,19 @@ func (siw *ServerInterfaceWrapper) ListExpenses(w http.ResponseWriter, r *http.R
 		return
 	}
 
+	// ------------- Optional query parameter "deleted" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "deleted", r.URL.Query(), &params.Deleted, runtime.BindQueryParameterOptions{Type: "boolean", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "deleted"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "deleted", Err: err})
+		}
+		return
+	}
+
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.ListExpenses(w, r, params)
 	}))
@@ -1651,6 +1697,32 @@ func (siw *ServerInterfaceWrapper) CreateExpense(w http.ResponseWriter, r *http.
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.CreateExpense(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// DeleteExpense operation middleware
+func (siw *ServerInterfaceWrapper) DeleteExpense(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id ExpenseId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", chi.URLParam(r, "id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: r.URL.RawPath == ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.DeleteExpense(w, r, id)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -1703,6 +1775,32 @@ func (siw *ServerInterfaceWrapper) UpdateExpense(w http.ResponseWriter, r *http.
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.UpdateExpense(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// RestoreExpense operation middleware
+func (siw *ServerInterfaceWrapper) RestoreExpense(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id ExpenseId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", chi.URLParam(r, "id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: r.URL.RawPath == ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.RestoreExpense(w, r, id)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -2088,10 +2186,16 @@ func HandlerWithOptions(si ServerInterface, options ChiServerOptions) http.Handl
 		r.Post(options.BaseURL+"/expenses", wrapper.CreateExpense)
 	})
 	r.Group(func(r chi.Router) {
+		r.Delete(options.BaseURL+"/expenses/{id}", wrapper.DeleteExpense)
+	})
+	r.Group(func(r chi.Router) {
 		r.Get(options.BaseURL+"/expenses/{id}", wrapper.GetExpense)
 	})
 	r.Group(func(r chi.Router) {
 		r.Patch(options.BaseURL+"/expenses/{id}", wrapper.UpdateExpense)
+	})
+	r.Group(func(r chi.Router) {
+		r.Post(options.BaseURL+"/expenses/{id}/restore", wrapper.RestoreExpense)
 	})
 	r.Group(func(r chi.Router) {
 		r.Get(options.BaseURL+"/onboarding/options", wrapper.GetOnboardingOptions)
@@ -3244,6 +3348,78 @@ func (response CreateExpense500JSONResponse) VisitCreateExpenseResponse(w http.R
 	return err
 }
 
+type DeleteExpenseRequestObject struct {
+	Id ExpenseId `json:"id"`
+}
+
+type DeleteExpenseResponseObject interface {
+	VisitDeleteExpenseResponse(w http.ResponseWriter) error
+}
+
+type DeleteExpense204Response struct {
+}
+
+func (response DeleteExpense204Response) VisitDeleteExpenseResponse(w http.ResponseWriter) error {
+	w.WriteHeader(204)
+	return nil
+}
+
+type DeleteExpense400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response DeleteExpense400JSONResponse) VisitDeleteExpenseResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteExpense401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response DeleteExpense401JSONResponse) VisitDeleteExpenseResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteExpense404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response DeleteExpense404JSONResponse) VisitDeleteExpenseResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteExpense500JSONResponse struct{ InternalErrorJSONResponse }
+
+func (response DeleteExpense500JSONResponse) VisitDeleteExpenseResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type GetExpenseRequestObject struct {
 	Id ExpenseId `json:"id"`
 }
@@ -3390,6 +3566,84 @@ func (response UpdateExpense404JSONResponse) VisitUpdateExpenseResponse(w http.R
 type UpdateExpense500JSONResponse struct{ InternalErrorJSONResponse }
 
 func (response UpdateExpense500JSONResponse) VisitUpdateExpenseResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RestoreExpenseRequestObject struct {
+	Id ExpenseId `json:"id"`
+}
+
+type RestoreExpenseResponseObject interface {
+	VisitRestoreExpenseResponse(w http.ResponseWriter) error
+}
+
+type RestoreExpense200JSONResponse Expense
+
+func (response RestoreExpense200JSONResponse) VisitRestoreExpenseResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RestoreExpense400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response RestoreExpense400JSONResponse) VisitRestoreExpenseResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RestoreExpense401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response RestoreExpense401JSONResponse) VisitRestoreExpenseResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RestoreExpense404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response RestoreExpense404JSONResponse) VisitRestoreExpenseResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RestoreExpense500JSONResponse struct{ InternalErrorJSONResponse }
+
+func (response RestoreExpense500JSONResponse) VisitRestoreExpenseResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response); err != nil {
@@ -4233,18 +4487,24 @@ type StrictServerInterface interface {
 	// RestoreCategory Restore a deleted Category.
 	// (POST /categories/{id}/restore)
 	RestoreCategory(ctx context.Context, request RestoreCategoryRequestObject) (RestoreCategoryResponseObject, error)
-	// ListExpenses The caller's Household's live Expenses, newest first.
+	// ListExpenses The caller's Household's live Expenses, newest first, or its Recycle Bin.
 	// (GET /expenses)
 	ListExpenses(ctx context.Context, request ListExpensesRequestObject) (ListExpensesResponseObject, error)
 	// CreateExpense Record an Expense.
 	// (POST /expenses)
 	CreateExpense(ctx context.Context, request CreateExpenseRequestObject) (CreateExpenseResponseObject, error)
+	// DeleteExpense Delete an Expense.
+	// (DELETE /expenses/{id})
+	DeleteExpense(ctx context.Context, request DeleteExpenseRequestObject) (DeleteExpenseResponseObject, error)
 	// GetExpense One Expense.
 	// (GET /expenses/{id})
 	GetExpense(ctx context.Context, request GetExpenseRequestObject) (GetExpenseResponseObject, error)
 	// UpdateExpense Correct an Expense.
 	// (PATCH /expenses/{id})
 	UpdateExpense(ctx context.Context, request UpdateExpenseRequestObject) (UpdateExpenseResponseObject, error)
+	// RestoreExpense Restore a deleted Expense.
+	// (POST /expenses/{id}/restore)
+	RestoreExpense(ctx context.Context, request RestoreExpenseRequestObject) (RestoreExpenseResponseObject, error)
 	// GetHealth Liveness and readiness of this instance.
 	// (GET /health)
 	GetHealth(ctx context.Context, request GetHealthRequestObject) (GetHealthResponseObject, error)
@@ -4743,6 +5003,32 @@ func (sh *strictHandler) CreateExpense(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// DeleteExpense operation middleware
+func (sh *strictHandler) DeleteExpense(w http.ResponseWriter, r *http.Request, id ExpenseId) {
+	var request DeleteExpenseRequestObject
+
+	request.Id = id
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.DeleteExpense(ctx, request.(DeleteExpenseRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "DeleteExpense")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(DeleteExpenseResponseObject); ok {
+		if err := validResponse.VisitDeleteExpenseResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
 // GetExpense operation middleware
 func (sh *strictHandler) GetExpense(w http.ResponseWriter, r *http.Request, id ExpenseId) {
 	var request GetExpenseRequestObject
@@ -4795,6 +5081,32 @@ func (sh *strictHandler) UpdateExpense(w http.ResponseWriter, r *http.Request, i
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(UpdateExpenseResponseObject); ok {
 		if err := validResponse.VisitUpdateExpenseResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// RestoreExpense operation middleware
+func (sh *strictHandler) RestoreExpense(w http.ResponseWriter, r *http.Request, id ExpenseId) {
+	var request RestoreExpenseRequestObject
+
+	request.Id = id
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.RestoreExpense(ctx, request.(RestoreExpenseRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "RestoreExpense")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(RestoreExpenseResponseObject); ok {
+		if err := validResponse.VisitRestoreExpenseResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

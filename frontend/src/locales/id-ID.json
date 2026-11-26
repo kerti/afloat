@@ -196,7 +196,8 @@
     "reactivated": "{{name}} diaktifkan kembali.",
     "deleted": "{{name}} dihapus.",
     "undo": "Urungkan",
-    "edit": "Ubah"
+    "edit": "Ubah",
+    "restored": "{{name}} dipulihkan."
   },
   "dialog": {
     "close": "Tutup"
@@ -281,7 +282,15 @@
     "needsCategory": "Perlu kategori ({{count}})",
     "allExpenses": "Semua pengeluaran",
     "uncategorisedFilter": "Pengeluaran tanpa kategori.",
-    "uncategorisedEmpty": "Semua pengeluaran sudah punya kategori."
+    "uncategorisedEmpty": "Semua pengeluaran sudah punya kategori.",
+    "recycleBin": "Tempat sampah",
+    "binEmpty": "Pengeluaran yang dihapus akan tampil di sini.",
+    "binRow": "Lihat {{name}}, {{amount}}",
+    "binDialogTitle": "Pengeluaran yang dihapus",
+    "categoryLabel": "Kategori",
+    "descriptionLabel": "Deskripsi",
+    "restore": "Pulihkan",
+    "delete": "Hapus"
   },
   "dates": {
     "today": "Hari ini",

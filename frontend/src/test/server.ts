@@ -52,6 +52,9 @@ export type State = {
   pocketRestores?: string[];
   // The Pocket capture offers first (GET /pockets `default_pocket_id`).
   defaultPocketId?: string;
+  // How many GET /pockets the app made: a delete or restore moves the default
+  // Pocket, so it must refetch the list.
+  pocketReads?: number;
   // The fake server's Expenses, newest first, every POST /expenses body it was
   // sent, and how many a GET /expenses page holds (default 25).
   expenses?: Expense[];
@@ -62,6 +65,11 @@ export type State = {
   // The query string of every GET /expenses, and the id of every GET /expenses/{id}.
   expenseListQueries?: string[];
   expenseGets?: string[];
+  // The Recycle Bin, last deleted first (GET /expenses?deleted=true), and the
+  // ids of every DELETE and restore of an Expense, in order.
+  deletedExpenses?: Expense[];
+  expenseDeletes?: string[];
+  expenseRestores?: string[];
   // Ids of Pockets an Expense references: DELETE answers 409 POCKET_IN_USE.
   pocketsInUse?: string[];
   // The fake server's Categories in creation order, and every POST /categories
@@ -264,6 +272,7 @@ export function defaultHandlers(state: State = { signedIn: false, me: alice }) {
     }),
     http.get("/api/pockets", () => {
       if (!state.signedIn) return HttpResponse.json(envelope("UNAUTHORIZED"), { status: 401 });
+      state.pocketReads = (state.pocketReads ?? 0) + 1;
       return HttpResponse.json({
         items: state.pockets ?? [],
         ...(state.defaultPocketId !== undefined && { default_pocket_id: state.defaultPocketId }),
@@ -277,6 +286,14 @@ export function defaultHandlers(state: State = { signedIn: false, me: alice }) {
       const size = state.expensePageSize ?? 25;
       const live = state.expenses ?? [];
       (state.expenseListQueries ??= []).push(request.url.split("?")[1] ?? "");
+      if (params.get("deleted") === "true") {
+        const bin = state.deletedExpenses ?? [];
+        const binItems = bin.slice(offset, offset + size);
+        return HttpResponse.json({
+          items: binItems,
+          ...(offset + size < bin.length && { next: String(offset + size) }),
+        });
+      }
       // `uncategorised_count` is of the whole live list, whatever the filter.
       const uncategorised_count = live.filter((e) => e.category_id === undefined).length;
       const all =
@@ -372,6 +389,27 @@ export function defaultHandlers(state: State = { signedIn: false, me: alice }) {
       };
       list[at] = next;
       return HttpResponse.json(next, { status: 200 });
+    }),
+    http.delete("/api/expenses/:id", ({ params }) => {
+      if (!state.signedIn) return HttpResponse.json(envelope("UNAUTHORIZED"), { status: 401 });
+      const list = (state.expenses ??= []);
+      const held = list.find((e) => e.id === params.id);
+      if (!held) return HttpResponse.json(envelope("NOT_FOUND"), { status: 404 });
+      (state.expenseDeletes ??= []).push(held.id);
+      state.expenses = list.filter((e) => e !== held);
+      (state.deletedExpenses ??= []).unshift({ ...held, deleted_at: "2026-11-25T05:00:00Z" });
+      return new HttpResponse(null, { status: 204 });
+    }),
+    http.post("/api/expenses/:id/restore", ({ params }) => {
+      if (!state.signedIn) return HttpResponse.json(envelope("UNAUTHORIZED"), { status: 401 });
+      const gone = state.deletedExpenses?.find((e) => e.id === params.id);
+      if (!gone) return HttpResponse.json(envelope("NOT_FOUND"), { status: 404 });
+      (state.expenseRestores ??= []).push(gone.id);
+      state.deletedExpenses = state.deletedExpenses!.filter((e) => e !== gone);
+      const live: Expense = { ...gone };
+      delete live.deleted_at;
+      (state.expenses ??= []).unshift(live);
+      return HttpResponse.json(live);
     }),
     http.post("/api/pockets", async ({ request }) => {
       if (!state.signedIn) return HttpResponse.json(envelope("UNAUTHORIZED"), { status: 401 });

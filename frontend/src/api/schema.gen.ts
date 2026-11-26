@@ -796,12 +796,32 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * The caller's Household's live Expenses, newest first.
+         * The caller's Household's live Expenses, newest first, or its Recycle Bin.
          * @description Every Expense of the caller's Household that is not deleted, **all
          *     Periods together, newest first**, a page at a time. The one filter is
          *     `uncategorised` (below): nothing in the request names a Household, a
          *     Period, a Pocket or a Category. An empty Household answers
          *     `{"items": [], "uncategorised_count": 0}`.
+         *
+         *     **`deleted=true` reads the Recycle Bin instead** (PRD E6): the same
+         *     wrapper and the same paging, but **only** the Household's deleted
+         *     Expenses, ordered **`deleted_at` descending, then `id` descending**
+         *     (what was deleted last is what a person wants back), each carrying its
+         *     `deleted_at`. The bin never empties, so this is every Expense ever
+         *     deleted and not restored. **`uncategorised_count` is omitted** from the
+         *     bin: it counts live rows and the bin lists none. `deleted=false` and an
+         *     absent parameter are the same, the live list; a value that is not a
+         *     boolean is `VALIDATION {field: deleted, rule: invalid}`. The bin has no
+         *     filter, so `deleted=true` with `uncategorised=true` is `VALIDATION
+         *     {field: uncategorised, rule: invalid}`, never a silently unfiltered bin.
+         *     A cursor of the live list is not a cursor of the bin and the other way
+         *     round (each names a position in its own order): one used on the other
+         *     is `VALIDATION {field: after, rule: invalid}`. No snapshot is held, as
+         *     for the live list: a deletion that lands after the first page sits above
+         *     the cursor and is seen by a fresh read from the top, and a row restored
+         *     between two page reads is simply no longer there. Everything below
+         *     about the live list's order and `uncategorised` applies to the live list
+         *     only.
          *
          *     **`uncategorised=true`** narrows the same list to the live Expenses that
          *     have no Category: any date, the same order and the same paging, so
@@ -813,7 +833,8 @@ export interface paths {
          *     position: nothing repeats and nothing is skipped on account of the
          *     switch.
          *
-         *     **`uncategorised_count`** is on every read of the live list: the number
+         *     **`uncategorised_count`** is on every read of the live list (and absent
+         *     from the Recycle Bin's): the number
          *     of live Expenses in the caller's whole Household that have no Category,
          *     **whatever the filter and whatever the page**. It is worked out for each
          *     read and never stored. It is read in its own statement just after the
@@ -939,7 +960,31 @@ export interface paths {
         get: operations["getExpense"];
         put?: never;
         post?: never;
-        delete?: never;
+        /**
+         * Delete an Expense.
+         * @description A **soft** delete: the verb is `DELETE` and the effect is not. The row
+         *     stays, with `deleted_at` set, in the **Recycle Bin**
+         *     (`GET /expenses?deleted=true`), which never empties; nothing is ever
+         *     removed from the database by this API. A deleted Expense is gone from
+         *     the live list and from `GET /expenses/{id}`, and answers `404` to
+         *     `PATCH`. Only this operation, `POST /expenses/{id}/restore` and the
+         *     bin can still see it. It still counts as using its Pocket and its
+         *     Category, so neither can be deleted while it exists.
+         *
+         *     Idempotent on the caller's own Expense: deleting one that is already
+         *     deleted is `204` again and keeps the **first** deletion instant, and a
+         *     repeat changes no column. No body and no confirmation: the act is
+         *     immediate and `POST /expenses/{id}/restore` is its Undo.
+         *
+         *     An id that is unknown or that belongs to another Household is `404
+         *     NOT_FOUND`, the same answer in both cases, so no request confirms
+         *     another Household's id. (A deleted Expense of the caller's own is not
+         *     `404` here: deleting it again is the idempotent `204`.) The Household is
+         *     the caller's own, from the session, never from the request. The id's
+         *     shape is checked before the lookup. There is no `409`: nothing
+         *     references an Expense, so nothing can be in use.
+         */
+        delete: operations["deleteExpense"];
         options?: never;
         head?: never;
         /**
@@ -948,8 +993,7 @@ export interface paths {
          *     unchanged, none is required, and `{}` is a no-op that answers the
          *     Expense as it stands. Two writers of different properties both land,
          *     and the last write to one property wins (no `If-Match`). The answer is
-         *     the whole Expense. `DELETE` and the restore of one Expense are later
-         *     slices.
+         *     the whole Expense.
          *
          *     **Editable:** `amount`, `occurred_on`, `occurred_time`, `pocket_id`,
          *     `category_id`, `description`, and `ownership` with `owner_user_id`.
@@ -1003,6 +1047,47 @@ export interface paths {
          *     answers the body.
          */
         patch: operations["updateExpense"];
+        trace?: never;
+    };
+    "/expenses/{id}/restore": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Restore a deleted Expense.
+         * @description Undoes `DELETE /expenses/{id}`: clears `deleted_at` and answers `200`
+         *     with the Expense, every other property exactly as it was. No body.
+         *     Idempotent: restoring an Expense that is not deleted is `200` with the
+         *     Expense as it stands, and changes nothing (`updated_at` moves only for
+         *     the request that restored).
+         *
+         *     **There is no refusal on the Expense's references.** An Expense whose
+         *     Pocket or Category has been deactivated since it was deleted is
+         *     restored all the same, still labelled by it: history keeps its label,
+         *     and only a *new* reference is judged for being inactive. A Pocket or
+         *     Category that an Expense references cannot be deleted, deleted
+         *     Expenses included, so the row it points at is always still there; the
+         *     restore nonetheless share-locks both rows before it writes, so it can
+         *     never bring back a reference to one that is deleted (were one found
+         *     deleted, which the guards make impossible, the answer would be `500`
+         *     and nothing would change). There is no `NAME_TAKEN`: an Expense has no
+         *     name to hold.
+         *
+         *     An id that is unknown or that belongs to another Household is `404
+         *     NOT_FOUND`, the same answer in both cases. The Household is the
+         *     caller's own, from the session, never from the request. The id's shape
+         *     is checked before the lookup.
+         */
+        post: operations["restoreExpense"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/onboarding/options": {
@@ -1436,10 +1521,19 @@ export interface components {
              * @description Present only for a `sole_owner` Expense.
              */
             owner_user_id?: string;
+            /**
+             * Format: date-time
+             * @description When it was deleted, UTC. Present **only** on a Recycle Bin read
+             *     (`GET /expenses?deleted=true`): every other operation answers a live
+             *     Expense and omits it.
+             */
+            deleted_at?: string;
         };
         /**
          * @description One page of the Household's live Expenses, newest first, with a cursor
-         *     and the count of those still without a Category.
+         *     and the count of those still without a Category; or, on a Recycle Bin
+         *     read, one page of its deleted ones, newest deletion first, with a
+         *     cursor and no count.
          */
         ExpenseList: {
             items: components["schemas"]["Expense"][];
@@ -1451,9 +1545,10 @@ export interface components {
             /**
              * @description How many live Expenses in the whole Household have no Category,
              *     independent of the page and of the `uncategorised` filter. Derived on
-             *     each read, never stored.
+             *     each read, never stored. **Always present on a read of the live
+             *     list; omitted from the Recycle Bin's**, which lists no live row.
              */
-            uncategorised_count: number;
+            uncategorised_count?: number;
         };
         CreateExpenseRequest: {
             /**
@@ -2494,9 +2589,17 @@ export interface operations {
                  * @description `true` lists only the live Expenses with no Category. `false` or
                  *     absent lists them all. Only those two spellings are promised: a value
                  *     that cannot be read as a boolean at all is `VALIDATION {field:
-                 *     uncategorised, rule: invalid}`.
+                 *     uncategorised, rule: invalid}`, and so is `true` beside
+                 *     `deleted=true`.
                  */
                 uncategorised?: boolean;
+                /**
+                 * @description `true` lists the Recycle Bin: only the Household's deleted Expenses,
+                 *     newest deletion first. `false` or absent lists the live ones. A value
+                 *     that cannot be read as a boolean at all is `VALIDATION {field:
+                 *     deleted, rule: invalid}`.
+                 */
+                deleted?: boolean;
             };
             header?: never;
             path?: never;
@@ -2586,6 +2689,35 @@ export interface operations {
             500: components["responses"]["InternalError"];
         };
     };
+    deleteExpense: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description An Expense's id. Deliberately no `pattern` and no `maxLength`, for the
+                 *     reason `PocketId` gives (#106). A value that is not a UUID is
+                 *     `400 VALIDATION {field: id, rule: invalid}`, from the binder.
+                 */
+                id: components["parameters"]["ExpenseId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The Expense is deleted, as it already was or as of this request. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+            500: components["responses"]["InternalError"];
+        };
+    };
     updateExpense: {
         parameters: {
             query?: never;
@@ -2607,6 +2739,37 @@ export interface operations {
         };
         responses: {
             /** @description The Expense as it now stands. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Expense"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    restoreExpense: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description An Expense's id. Deliberately no `pattern` and no `maxLength`, for the
+                 *     reason `PocketId` gives (#106). A value that is not a UUID is
+                 *     `400 VALIDATION {field: id, rule: invalid}`, from the binder.
+                 */
+                id: components["parameters"]["ExpenseId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The Expense, live again (or as it already was). */
             200: {
                 headers: {
                     [name: string]: unknown;

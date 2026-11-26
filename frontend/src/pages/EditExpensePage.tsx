@@ -1,30 +1,35 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useLocation, useNavigate, useParams } from "react-router";
 import { useQueryClient } from "@tanstack/react-query";
-import { ApiError, type Me } from "@/api/client";
+import { ApiError, restoreExpense, type Me } from "@/api/client";
 import {
   expensesKey,
+  pocketsKey,
   useCategories,
+  useDeleteExpense,
   useExpense,
   usePockets,
   useUpdateExpense,
 } from "@/api/queries";
 import { errorMessage } from "@/api/errors";
 import { BackLink } from "@/components/BackLink";
+import { DetailActions } from "@/components/DetailActions";
 import { ExpenseForm } from "@/components/ExpenseForm";
 import { amountUntouched, expenseDiff, type ExpenseValues } from "@/lib/expenseValues";
 import { ErrorState, Loading } from "@/components/states";
-import { PageTitle } from "@/components/Text";
+import { FieldError, PageTitle } from "@/components/Text";
+import { formatMoney } from "@/lib/money";
 import { toastError, toastSaved } from "@/lib/plainToast";
 import { routes } from "@/lib/routes";
+import { toastUndoable } from "@/lib/undoToast";
 
 // An Expense is edited on a route, the Capture form in edit mode (#140 R17).
 // Save sends only the fields that differ from the stored Expense, then goes back
 // to where the person came from; a direct link has no in-app history behind it,
 // so it lands on the list.
 export function EditExpensePage({ me }: { me: Me }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const { id = "" } = useParams();
   const navigate = useNavigate();
   const location = useLocation();
@@ -33,6 +38,8 @@ export function EditExpensePage({ me }: { me: Me }) {
   const pockets = usePockets();
   const categories = useCategories();
   const update = useUpdateExpense();
+  const remove = useDeleteExpense();
+  const [deleteErr, setDeleteErr] = useState<ApiError | null>(null);
   const mounted = useRef(true);
   useEffect(() => {
     mounted.current = true;
@@ -123,6 +130,36 @@ export function EditExpensePage({ me }: { me: Me }) {
       });
   }
 
+  // Delete is immediate, with no confirm: the Expense goes to the Recycle Bin
+  // and an 8 s Undo restores it (#140 R11). The toast outlives this screen.
+  function onDelete() {
+    if (remove.isPending) return;
+    setDeleteErr(null);
+    remove
+      .mutateAsync(stored.id)
+      .then(() => {
+        const amount = formatMoney(stored.amount, stored.currency, i18n.language);
+        if (mounted.current) void navigate(routes.expenses, { replace: true });
+        toastUndoable({
+          message: t("toast.deleted", { name: amount }),
+          undo: () =>
+            restoreExpense(stored.id).then(() => qc.invalidateQueries({ queryKey: pocketsKey })),
+          qc,
+          invalidate: expensesKey,
+        });
+      })
+      .catch((e: unknown) => {
+        const err = e instanceof ApiError ? e : new ApiError(0, "UNKNOWN");
+        // Already gone (another member deleted it): as a Save that finds it so.
+        if (err.code === "NOT_FOUND") {
+          toastError(errorMessage(t, err));
+          if (mounted.current) void navigate(routes.expenses, { replace: true });
+        } else if (mounted.current) {
+          setDeleteErr(err);
+        }
+      });
+  }
+
   return (
     <>
       {head}
@@ -133,12 +170,28 @@ export function EditExpensePage({ me }: { me: Me }) {
         expense={stored}
         pockets={pockets.data}
         categories={categories.data}
-        pending={update.isPending}
+        pending={update.isPending || remove.isPending}
         error={update.error}
         onClearError={() => {
           if (update.error) update.reset();
         }}
         onSubmit={onSubmit}
+        recordActions={
+          <>
+            {deleteErr && <FieldError>{errorMessage(t, deleteErr)}</FieldError>}
+            <DetailActions
+              actions={[
+                {
+                  key: "delete",
+                  label: t("expenses.delete"),
+                  tone: "destructive",
+                  disabled: remove.isPending || update.isPending,
+                  onClick: onDelete,
+                },
+              ]}
+            />
+          </>
+        }
       />
     </>
   );

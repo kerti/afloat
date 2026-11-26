@@ -169,6 +169,14 @@ func (s *Server) UpdateExpense(ctx context.Context, r api.UpdateExpenseRequestOb
 	return s.expense.UpdateExpense(ctx, r)
 }
 
+func (s *Server) DeleteExpense(ctx context.Context, r api.DeleteExpenseRequestObject) (api.DeleteExpenseResponseObject, error) {
+	return s.expense.DeleteExpense(ctx, r)
+}
+
+func (s *Server) RestoreExpense(ctx context.Context, r api.RestoreExpenseRequestObject) (api.RestoreExpenseResponseObject, error) {
+	return s.expense.RestoreExpense(ctx, r)
+}
+
 // New builds the router: the API under the contract's base path (basePath,
 // /api today), with the middleware every request passes through.
 //

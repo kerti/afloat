@@ -1,6 +1,6 @@
 // Package expense owns the Household's Expenses (PRD E1 to E10): recording one,
-// listing them, reading one and correcting one. Deleting and restoring are a later
-// slice of #140. Handlers live with their domain (docs/adr/go/0001).
+// listing them, reading one, correcting one, deleting one and restoring it from
+// the Recycle Bin. Handlers live with their domain (docs/adr/go/0001).
 //
 // The dependency runs one way: this package imports auth, for the User in the
 // request context and the shared text rule, and budget, for the one place a
@@ -472,6 +472,12 @@ func response(row db.Expense) api.Expense {
 	if row.OwnerUserID.Valid {
 		id := openapi_types.UUID(row.OwnerUserID.Bytes)
 		out.OwnerUserId = &id
+	}
+	// Only a Recycle Bin read answers a deleted row; every other operation
+	// answers a live one, so this is absent there.
+	if row.DeletedAt.Valid {
+		at := row.DeletedAt.Time.UTC()
+		out.DeletedAt = &at
 	}
 	return out
 }

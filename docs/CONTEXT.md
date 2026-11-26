@@ -168,13 +168,19 @@ double-counts and is the single most likely way for a Household to corrupt its o
 
 ### Trajectory
 
-**Baseline Daily Budget** (`B`): `Daily Pool ÷ Total Period Days`. The flat, non-adaptive rate —
-*"if spending were even, this is the daily number."* Used for the target line and for expressing
-variance in days.
+**Baseline Daily Budget** (`B`, or `B_now` where it matters which day is meant): The slope of the target
+line on the day it is read: *"if spending were even from here, this is the daily number."* It is
+`Daily Pool ÷ Total Period Days` while the Daily Pool has not changed in the Period; after a change it
+is the slope that carries the line from where it stood to the new pool by the Period's last day, and
+never below zero (see Mid-period Budget changes). It is zero when the Household is **fully committed**.
+Used for the target line and for reading the State.
 
-**Today's Allowance** (`A`): The adaptive per-day figure for Today, **computed once at the start of
-Today and frozen for its duration**. Freezing matters: a rate that fell every time you bought coffee
-would punish in real time, which §3 of `VISION.md` forbids.
+**Today's Allowance** (`A`): The adaptive per-day figure for Today. It is **frozen against today's
+spending**: it is made from settled days only, so buying a coffee does not move it. A rate that fell
+every time you bought coffee would punish in real time, which §3 of `VISION.md` forbids. It is not
+frozen against recomputation: nothing is stored (Recalculation, below), so it still moves inside the
+day when something else it is made from changes: a future-dated Expense, an edit of a past Expense, or a
+change of the Budget.
 
 **Left to Spend Today**: `Today's Allowance − today's daily-bucket spend`. **This is the hero figure.**
 It ticks down through the day, which is correct — it is a wallet, not a grade. May go negative, and is
@@ -183,16 +189,35 @@ displayed as such rather than clamped to zero.
 **Forward Daily Rate**: What each remaining day *after* Today is worth at the current position. A
 secondary figure, undefined on the last day of a Period (rendered "—").
 
-**Trajectory Variance** (`V`): `(Baseline Daily Budget × Days Elapsed) − settled daily-bucket spend`.
+**Trajectory Variance** (`V`): `T(e) − settled daily-bucket spend`, where `T(e)` is the target line's
+cumulative target through the settled days (`B × e` while the Daily Pool has not changed in the Period).
 Positive means under pace. Computed on **settled days only** — it does not move during Today. This
 keeps the live wallet figure and the trend signal from restating the same fact against each other,
-and stops the variance from lurching at every purchase.
+and stops the variance from lurching at every purchase. It is a money figure, and what the Household
+reads as the pace. Absent while the Household is fully committed.
 
-**Buffer Days**: `Trajectory Variance ÷ Baseline Daily Budget`, signed, in days. The user-facing way
-to express variance — *"about two days' spending behind"* — and the input to State. It scales with
-Budget size automatically, so State thresholds need no per-Household tuning.
+**Buffer Days**: `Trajectory Variance ÷ the Baseline Daily Budget in force`, signed, in days: how many
+days' worth of baseline the Household is ahead of or behind. It is the input to State, and it scales with
+Budget size automatically, so State thresholds need no per-Household tuning. It is not what the Household
+is shown: the pace is stated in money (Trajectory Variance), and Buffer Days is not on the wire (#155 R7).
+Undefined while fully committed.
 
-**State**: One of `afloat` | `drifting` | `taking_on_water`. See §Calculation spec.
+**Fully committed**: The Household's baseline in force is zero: its Daily Pool is at or below zero, or it
+cut its Budget to at or below what the target line had already reached, so the line is flat from there
+(see Mid-period Budget changes). It is a statement about **the target line, not about money**: a cut to
+2.500.000 on day 16 with 1.000.000 settled is fully committed and has Rp1.500.000 unspent. With no pace to
+read there is no State, no Baseline Daily Budget and no Trajectory Variance; Today's Allowance and Left to
+Spend Today are still answered, and a fixed-mode allowance is 0. Nothing says the plan is used up.
+_Avoid_: used up, exhausted, spent (each says something about money).
+
+**Available Pool used up**: `P' − S_settled ≤ 0`: what the Household has settled is at or past what the
+pool held. It is a statement **about money, and independent of fully committed**: it can hold with a
+healthy baseline. Adaptive Today's Allowance is zero or negative, and is shown as it is, negative as
+negative; the State is computed as usual, and usually reads *taking on water*, though not always (a future-dated
+Expense can use the pool up while the settled pace is afloat, and warm-up reads afloat).
+
+**State**: One of `afloat` | `drifting` | `taking_on_water`. See §Calculation spec. There is none while
+fully committed.
 
 ### Indonesian (id-ID) terms
 
@@ -236,10 +261,12 @@ of them and reported separately.
 
 | Symbol | Meaning |
 |---|---|
-| `P` | Daily Pool for the Period |
+| `P` | Daily Pool in force Today (it may have changed in the Period) |
 | `D` | Total Period Days |
 | `e` | Days Elapsed (settled days, strictly before Today) |
 | `r` | Days Remaining (inclusive of Today); `r = D − e` |
+| `T(j)` | The cumulative target through day `j` of the Period; `T(0) = 0` (§Mid-period Budget changes) |
+| `B_now` | The slope of the target line on Today; `P / D` while the pool has not changed in the Period; never negative |
 | `S_settled` | Daily-bucket spend with `occurred_on` in the current Period and strictly before Today |
 | `S_today` | Daily-bucket spend with `occurred_on` = Today |
 | `S_future` | Daily-bucket spend with `occurred_on` after Today and on or before the current Period's last day (future-dated) |
@@ -250,27 +277,34 @@ or later, counts toward that Period's figures and none of this one's (Q-25, rule
 ### Core figures
 
 ```
-B  (Baseline Daily Budget) = P / D
-P' (Available Pool)        = P − S_future
+B  (Baseline Daily Budget) = B_now = max(P / D, 0)         if the Daily Pool has not changed in the Period
+                           = the slope of the target line on Today    otherwise (§Mid-period Budget changes)
+P' (Available Pool)        = P − max(S_future, 0)
 A  (Today's Allowance)     = (P' − S_settled) / r          [adaptive mode]
 A                          = B                             [fixed mode]
 Left to Spend Today        = A − S_today
 Forward Daily Rate         = (P' − S_settled − S_today) / (r − 1)     if r > 1
                            = undefined ("—")                          if r = 1
-V  (Trajectory Variance)   = (B × e) − S_settled
-Buffer Days                = V / B
+V  (Trajectory Variance)   = T(e) − S_settled              (T(e) = B × e if the pool has not changed)
+Buffer Days                = V / B                         if B > 0
+                           = undefined, and so is State    if B = 0  (fully committed)
 ```
+
+`P'` takes `max(S_future, 0)`, not `S_future`: it is the net of future-dated spend, and a refund dated in
+the future never raises Today's Allowance (#155 R3). A refund dated before Today lowers
+`S_settled` and so raises it; one dated Today raises Left to Spend Today.
 
 ### Why it behaves at the edges
 
-- **Day one** (`e = 0`, `r = D`): `A = P/D = B`, `V = 0`, State is `afloat`. Nothing pretends to know
+- **Day one** (`e = 0`, `r = D`): for a positive pool, `A = P/D = B`, `V = 0`, State is `afloat`
+  (at or below zero the Household is fully committed: no State). Nothing pretends to know
   anything yet.
 - **Last day** (`r = 1`): `A` equals the entire remaining pool. Under the old "remaining daily
   allowance" framing this read as nonsense; framed as **Left to Spend Today** it is simply true and
   useful — it is the last day, and that *is* what is left. Forward Daily Rate is undefined and shown
   as "—" rather than dividing by zero.
 - **Adaptive borrowing.** Under-spending early raises `A`, which is honest but invites spending the
-  slack. The UI therefore always shows `B` beside `A`, so an inflated allowance is visibly borrowed
+  slack. The UI therefore shows `B` beside `A` (except while fully committed, when there is no `B`), so an inflated allowance is visibly borrowed
   from the Household's own future rather than presented as found money. **[OPEN Q-04]** — whether to
   additionally cap displayed `A` at some multiple of `B`.
 - **Rounding.** Store `DECIMAL(20,4)`, mirroring Balances (ADR-0011); serialise decimals as strings
@@ -292,7 +326,9 @@ Buffer Days                = V / B
 ### Adaptive vs fixed
 
 Adaptive is the default. Fixed (`A = B` always) is available as an advanced Household setting. The
-setting changes only `A`; `V`, Buffer Days and State are computed from `B` in both modes.
+setting changes only `A`; `V`, Buffer Days and State are read against the same target line in both
+modes. After a mid-Period change, a fixed allowance is `B_now`, the slope in force Today; while fully
+committed it is 0, never a negative raw `P / D`.
 
 ### State thresholds
 
@@ -302,9 +338,14 @@ Buffer Days ≥ −1                      → afloat
 Buffer Days < −3                      → taking_on_water
 ```
 
-Note that `Buffer Days < 0` is exactly equivalent to *"projected end-of-period spend, at the average
-pace so far, exceeds the Daily Pool"* — the two candidate signals are the same signal, so Afloat
-computes one.
+Buffer Days here is `V ÷ B_now`, and State is decided from `V` against `threshold × B_now`, so a Household
+that changed its Budget mid-Period is read against the pace it now has. While fully committed there is no
+State.
+
+For a Period whose Daily Pool never changed, `Buffer Days < 0` is exactly equivalent to *"projected
+end-of-period spend, at the average pace so far, exceeds the Daily Pool"* — the two candidate signals are
+the same signal, so Afloat computes one. After a change the line has a kink and the equivalence no longer
+holds, which is why `V` is defined against the line and not against a projection.
 
 **Warm-up rule.** While `e < 3`, State is pinned to `afloat`. Three settled days is too little
 evidence to call a trend, and a State that panics on day two is how a Household stops opening the app
@@ -315,42 +356,79 @@ distinct neutral "getting a read" presentation rather than reusing `afloat`.
 once real data exists. Both the warm-up floor (`e < 3` above) and the two State thresholds
 (`drifting_below: -1`, `taking_on_water_below: -3`) are **arguments to the calculation**, not literals
 inside it — `contract/testdata/trajectory.json`'s `parameters` section carries the defaults, and any
-row may override them, so a future change to the defaults is a fixture edit, not a code change.
+row may override them, so a future change to the defaults is a fixture edit plus the matching edit to
+`DefaultParameters()`, and a test pins the second to the first so they cannot drift apart.
 
 ### Future-dated Expenses
 
 An Expense may be dated after Today. It reduces the Available Pool immediately (`P'`), so the
-allowance reflects money already spoken for. It does **not** count as a settled day, does **not**
+allowance reflects money already spoken for. A future-dated **refund** does not raise it: `P'` takes
+`max(S_future, 0)`. It does **not** count as a settled day, does **not**
 enter `V`, and does **not** appear on the actual cumulative line before its date. On the day it
 arrives it becomes an ordinary `S_today`.
 
 ### Mid-period Budget changes
 
 Budgets are **versioned events with effective dates**; Expenses are mutable current state. Changing
-the Monthly Budget mid-Period does not rewrite history.
+the Daily Pool mid-Period does not rewrite history. **Any change of the Daily Pool is one**: the Monthly
+Budget, or a Commitment's allocation (which moves the Commitments Budget and so the pool). A Daily
+Category's allocation moves only Unallocated, and is none.
 
-The target cumulative line **kinks, continuously**. If the Budget changes effective day `j`
-(1-indexed), let `T(j−1)` be the target cumulative through day `j−1` under the old baseline. From day
-`j` onward:
+The target cumulative line `T` **kinks, continuously**. If the pool changes effective day `j`
+(1-indexed), let `T(j−1)` be the target cumulative through day `j−1`, **kept as an exact value** across
+every earlier change. From day `j` onward:
 
 ```
 B_new = (P_new − T(j−1)) / (D − (j − 1))
+slope = max(B_new, 0)
 ```
 
-The line has no vertical jump at `j`, and it still terminates exactly at `P_new` on day `D`. A
-retroactive redraw was rejected: it silently falsifies "you were ahead of pace yesterday".
+The line has no vertical jump at `j`, and it still terminates exactly at `P_new` on day `D` unless the
+clamp engages. A retroactive redraw was rejected: it silently falsifies "you were ahead of pace
+yesterday". A pool in force from the Period's first day (a Budget set on day 14 is read as its Budget from
+day 1) is no change and no kink.
 
-If `P_new ≤ T(j−1)` — the Household cut its Budget to at or below what it has already targeted —
-`B_new` is zero or negative. The target line is clamped flat at `T(j−1)` for the rest of the Period
-and the Period is reported as already fully committed. **[OPEN Q-06]** — the right presentation for
-this case.
+**Every slope is clamped at zero, the first segment's included.** A Daily Pool at or below zero from day 1
+is a flat target at zero, and a later raise starts from `T(j−1) = 0`: a Monthly Budget of 6.000.000 with
+Commitments of 7.000.000 (`P` = −1.000.000), raised to `P` = 2.000.000 on day 11, has slope 100.000 from
+day 11 and ends at 2.000.000; unclamped it would have run at 116.667 from `T(10)` = −333.333. A cut to at or
+below `T(j−1)` holds the line flat at `T(j−1)` for as long as that pool stays, and a later raise starts from
+the flat value: 6.000.000, cut to 2.500.000 on day 16, raised to 5.000.000 on day 21, has slopes 200.000, 0
+and 200.000, and `T(30)` = 5.000.000.
+
+**What the figures read.** `V = T(e) − S_settled`; Buffer Days and the State thresholds use `B_now`, the
+slope in force Today; a fixed-mode allowance is `B_now`. With no change `T(e) = B × e`, so a Period whose
+pool never moved and was positive, with no future-dated refund, is read exactly as before. Where no spend is future-dated and the last segment is
+unclamped, the line ends on `P`, so `V = r × (A_adaptive − B_now)`: the pace and the allowance are one
+statement.
+
+**Fully committed** and **Available Pool used up** (the glossary) are the two situations a cut and an
+empty pool put a Household in, and they are independent: the first is about the line (the baseline in force
+is zero), the second about money (`P' − S_settled ≤ 0`). In the first there is no State, baseline or
+variance and nothing says the plan is used up; in the second the allowance reads zero or negative and the
+State is computed as usual.
+
+**Consequences, ruled and accepted** (#155 R2):
+
+- A cut can turn *afloat* into *drifting* with no new spend: 6.000.000 cut to 4.000.000 on day 16 with
+  3.150.000 settled has `V` = −150.000 against `B_now` of about 66.667, Buffer Days −2.25, *drifting*; before
+  the cut the same spend read −0.75.
+- A raise does not cure an overspend already incurred: raised to 7.500.000 on day 11 with 2.600.000 settled,
+  `V` = −600.000, Buffer Days −2.18, *drifting*, where a flat reading would have said *afloat*.
+- Just above the clamp the State is a hair trigger. A cut to 3.000.100 after a target of 3.000.000 on day 16
+  gives a `B_now` of about 6.67 rupiah a day, so an overspend of Rp7 reads *drifting* and one of Rp25 *taking on
+  water*. At zero there is no State.
+- Deleting or restoring a Category carries its allocation from the Period's first day ("as if it was never
+  deleted"), so it moves the line retroactively for that Category. That is the Category rulings' choice, not
+  changed here.
 
 ### Recalculation
 
 Every figure above is derived from current data on read. There are no stored aggregates and no
 snapshots in the MVP. Editing or deleting a past Expense correctly changes the past — including
 yesterday's State as displayed in history. That is the intended behaviour: Afloat shows what is true
-now, not what it believed at the time.
+now, not what it believed at the time. Today's Allowance is frozen against *today's spending*, not against
+this: a future-dated Expense, an edit of a past one or a change of the Budget moves it inside the day.
 
 ### Worked check
 
@@ -388,6 +466,22 @@ warm-up rule, is what makes the first week of a Period readable.
 **Target-line continuity under a mid-period change.** `P` 6.000.000 → 7.500.000 effective day 11:
 `B_old` = 200.000, `B_new` = 275.000. Target runs 2.000.000 at day 10 → 2.275.000 at day 11 (a slope
 change, no vertical jump) → exactly 7.500.000 at day 30.
+
+**The same Household after a change of the Daily Pool.** `D` = 30; every row's values are in
+`contract/testdata/trajectory.json`'s `figures` rows (the table rounds to whole rupiah), each computed
+independently in exact rationals. `P` is the pool in force Today.
+
+| Case | `e` | `P` | `S_settled` | `A` | `B_now` | `V` | Buffer | State |
+|---|---|---|---|---|---|---|---|---|
+| 6.000.000 → 7.500.000 on day 11, exactly on the line | 10 | 7.500.000 | 2.000.000 | 275.000 | 275.000 | 0 | 0.00d | afloat |
+| The same, 600k over the line's 2.000.000 | 10 | 7.500.000 | 2.600.000 | 245.000 | 275.000 | −600.000 | −2.18d | drifting |
+| 6.000.000 → 4.000.000 on day 16, on the line | 15 | 4.000.000 | 3.000.000 | 66.667 | 66.667 | 0 | 0.00d | afloat |
+| The same, 150k over, with no new spend after the cut | 15 | 4.000.000 | 3.150.000 | 56.667 | 66.667 | −150.000 | −2.25d | drifting |
+| 6.000.000 → 7.500.000 on day 11 → 6.500.000 on day 21 | 20 | 6.500.000 | 4.400.000 | 210.000 | 175.000 | +350.000 | +2.00d | afloat |
+| Cut to 2.500.000 on day 16, 1.000.000 settled (fully committed, money left) | 15 | 2.500.000 | 1.000.000 | 100.000 | 0 | no State | no State | no State |
+| Cut to 2.800.000 on day 16, 3.000.000 settled (fully committed, pool used up) | 15 | 2.800.000 | 3.000.000 | −13.333 | 0 | no State | no State | no State |
+| Fixed mode, cut to 2.500.000 on day 16, 1.000.000 settled | 15 | 2.500.000 | 1.000.000 | 0 | 0 | no State | no State | no State |
+| Pool used up with a healthy baseline, 6.200.000 settled | 20 | 6.000.000 | 6.200.000 | −20.000 | 200.000 | −2.200.000 | −11.00d | taking on water |
 
 ---
 

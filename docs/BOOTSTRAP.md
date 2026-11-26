@@ -1075,7 +1075,10 @@ it answers `500 INTERNAL` instead of `401`, so every session-requiring operation
 nothing. This keeps one source of truth.
 
 **`contract/testdata/trajectory.json` is a test fixture** holding the reference rows from
-`CONTEXT.md` §Worked check. The backend's unit tests read it. The conformance harness proves the
+`CONTEXT.md` §Worked check. The backend's unit tests read it. Since #155 (PR 2) its `figures` rows may
+carry a `base_daily_pool` and `changes` for a Period whose Daily Pool changed (the kinked target line),
+and a `target_line_changes` section pins the line itself; a test pins `DefaultParameters()` to its
+`parameters`. The conformance harness proves the
 backend serves the contract's *shape*; only this proves it computes the right *numbers*.
 
 **`contract/testdata/periods.json` pins the Period Day arithmetic** (#130): which day Today is across
@@ -1090,8 +1093,8 @@ Budget, Daily Pool and Unallocated for a Monthly Budget and a set of Categories 
 case,
 over-allocation, Commitments above the Budget, a zero allocation, an inactive Category counted, a
 deleted one not, no Monthly Budget yet). The backend's budget tests read it row by row through
-`GET /budget` and keep no copy of the numbers. `trajectory.json` is untouched: `Calculate` takes the
-Daily Pool as an input, and these rows are where that pool comes from.
+`GET /budget` and keep no copy of the numbers. `trajectory.json` takes the Daily Pool as an
+input, and these rows are where that pool comes from.
 
 **`contract/testdata/dashboard.json` pins the dashboard's assembly** (#155): what the Period's stored rows
 add up to for a Household on an instant, which `trajectory.json` (it takes aggregates) cannot. Households

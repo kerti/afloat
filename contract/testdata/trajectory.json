@@ -24,7 +24,32 @@
     "T(j-1) for the rest of the Period in that case, never dipping below it.",
     "Every expected value here was computed independently in exact rational arithmetic (Python's",
     "fractions.Fraction) and cross-checked against Python's decimal module with ROUND_FLOOR /",
-    "ROUND_HALF_UP, not derived from the backend's implementation."
+    "ROUND_HALF_UP, not derived from the backend's implementation.",
+    "Rows added with issue #155 PR 2 (the calculation, a formula change): the existing rows above are",
+    "unchanged and still hold, since a Period whose Daily Pool never changed has T(e) = B x e.",
+    "A `figures` row may carry `base_daily_pool` and `changes` (a list of {effective_day, daily_pool}):",
+    "the Daily Pool the Period began with and each later change. `daily_pool` is then the pool in force",
+    "Today (day e+1), which is what the dashboard passes as P; the test checks the two agree. The target",
+    "line is built from the list, and Trajectory Variance is V = T(e) - S_settled; Buffer Days and the",
+    "State thresholds are read against B_now, the slope in force Today; fixed-mode A = B_now. Every",
+    "segment's slope is max(slope, 0), the first included, so a pool at or below zero is a flat target",
+    "at zero and a later raise starts from the flat value. A change effective on day 1 replaces the base,",
+    "two changes on one day are one (the later wins) and a change to the pool already in force merges away.",
+    "P' = P - max(S_future, 0): a refund dated in the future never raises the Available Pool.",
+    "`fully_committed: true` in `expected` means the baseline in force is zero: there is then no State,",
+    "no baseline_daily_budget, no trajectory_variance and no buffer_days (the keys are absent), while",
+    "available_pool, todays_allowance (fixed mode: 0), left_to_spend_today and forward_daily_rate are",
+    "still answered. That is the target line's situation and says nothing about money: a row whose",
+    "todays_allowance is zero or negative with a healthy baseline is an Available Pool used up, and its",
+    "State is computed as usual.",
+    "`target_line_changes` rows: the list shape. `inputs` are the Period's `period_days`, its",
+    "`base_daily_pool` and `changes`; `expected.points` lists, at chosen days, the cumulative `target`",
+    "(half-up at 4dp) and the `baseline` in force that day (floored at 4dp, clamped at zero).",
+    "The `target_line` rows keep their single-change shape; a test runs them through the list as well.",
+    "The new rows were computed independently in exact rational arithmetic (Python's fractions.Fraction,",
+    "a separate implementation of the line, the clamp and the State), and V = r x (A_adaptive - B_now)",
+    "was asserted for every row with no future-dated spend, every change in force and an unclamped last",
+    "segment."
   ],
   "parameters": {
     "warm_up_days": 3,
@@ -472,6 +497,1014 @@
         "buffer_days": "5.0000",
         "state": "afloat"
       }
+    },
+    {
+      "name": "kink_context_example_6m_to_7_5m_on_day_11_exactly_on_target",
+      "inputs": {
+        "daily_pool": "7500000.0000",
+        "period_days": 30,
+        "days_elapsed": 10,
+        "settled_spend": "2000000.0000",
+        "today_spend": "0.0000",
+        "future_spend": "0.0000",
+        "mode": "adaptive",
+        "base_daily_pool": "6000000.0000",
+        "changes": [
+          { "effective_day": 11, "daily_pool": "7500000.0000" }
+        ]
+      },
+      "expected": {
+        "fully_committed": false,
+        "baseline_daily_budget": "275000.0000",
+        "available_pool": "7500000.0000",
+        "todays_allowance": "275000.0000",
+        "left_to_spend_today": "275000.0000",
+        "forward_daily_rate": "289473.6842",
+        "trajectory_variance": "0.0000",
+        "buffer_days": "0.0000",
+        "state": "afloat"
+      }
+    },
+    {
+      "name": "kink_cut_4m_on_day_16_on_target_stays_afloat",
+      "inputs": {
+        "daily_pool": "4000000.0000",
+        "period_days": 30,
+        "days_elapsed": 15,
+        "settled_spend": "3000000.0000",
+        "today_spend": "0.0000",
+        "future_spend": "0.0000",
+        "mode": "adaptive",
+        "base_daily_pool": "6000000.0000",
+        "changes": [
+          { "effective_day": 16, "daily_pool": "4000000.0000" }
+        ]
+      },
+      "expected": {
+        "fully_committed": false,
+        "baseline_daily_budget": "66666.6666",
+        "available_pool": "4000000.0000",
+        "todays_allowance": "66666.6666",
+        "left_to_spend_today": "66666.6666",
+        "forward_daily_rate": "71428.5714",
+        "trajectory_variance": "0.0000",
+        "buffer_days": "0.0000",
+        "state": "afloat"
+      }
+    },
+    {
+      "name": "kink_cut_4m_on_day_16_150k_over_turns_drifting_with_no_new_spend",
+      "inputs": {
+        "daily_pool": "4000000.0000",
+        "period_days": 30,
+        "days_elapsed": 15,
+        "settled_spend": "3150000.0000",
+        "today_spend": "0.0000",
+        "future_spend": "0.0000",
+        "mode": "adaptive",
+        "base_daily_pool": "6000000.0000",
+        "changes": [
+          { "effective_day": 16, "daily_pool": "4000000.0000" }
+        ]
+      },
+      "expected": {
+        "fully_committed": false,
+        "baseline_daily_budget": "66666.6666",
+        "available_pool": "4000000.0000",
+        "todays_allowance": "56666.6666",
+        "left_to_spend_today": "56666.6666",
+        "forward_daily_rate": "60714.2857",
+        "trajectory_variance": "-150000.0000",
+        "buffer_days": "-2.2500",
+        "state": "drifting"
+      }
+    },
+    {
+      "name": "kink_cut_reference_same_spend_before_the_cut_is_afloat",
+      "inputs": {
+        "daily_pool": "6000000.0000",
+        "period_days": 30,
+        "days_elapsed": 15,
+        "settled_spend": "3150000.0000",
+        "today_spend": "0.0000",
+        "future_spend": "0.0000",
+        "mode": "adaptive"
+      },
+      "expected": {
+        "fully_committed": false,
+        "baseline_daily_budget": "200000.0000",
+        "available_pool": "6000000.0000",
+        "todays_allowance": "190000.0000",
+        "left_to_spend_today": "190000.0000",
+        "forward_daily_rate": "203571.4285",
+        "trajectory_variance": "-150000.0000",
+        "buffer_days": "-0.7500",
+        "state": "afloat"
+      }
+    },
+    {
+      "name": "kink_raise_does_not_cure_an_overspend_already_incurred",
+      "inputs": {
+        "daily_pool": "7500000.0000",
+        "period_days": 30,
+        "days_elapsed": 10,
+        "settled_spend": "2600000.0000",
+        "today_spend": "0.0000",
+        "future_spend": "0.0000",
+        "mode": "adaptive",
+        "base_daily_pool": "6000000.0000",
+        "changes": [
+          { "effective_day": 11, "daily_pool": "7500000.0000" }
+        ]
+      },
+      "expected": {
+        "fully_committed": false,
+        "baseline_daily_budget": "275000.0000",
+        "available_pool": "7500000.0000",
+        "todays_allowance": "245000.0000",
+        "left_to_spend_today": "245000.0000",
+        "forward_daily_rate": "257894.7368",
+        "trajectory_variance": "-600000.0000",
+        "buffer_days": "-2.1818",
+        "state": "drifting"
+      }
+    },
+    {
+      "name": "kink_two_changes_6m_7_5m_on_11_6_5m_on_21",
+      "inputs": {
+        "daily_pool": "6500000.0000",
+        "period_days": 30,
+        "days_elapsed": 20,
+        "settled_spend": "4400000.0000",
+        "today_spend": "0.0000",
+        "future_spend": "0.0000",
+        "mode": "adaptive",
+        "base_daily_pool": "6000000.0000",
+        "changes": [
+          { "effective_day": 11, "daily_pool": "7500000.0000" },
+          { "effective_day": 21, "daily_pool": "6500000.0000" }
+        ]
+      },
+      "expected": {
+        "fully_committed": false,
+        "baseline_daily_budget": "175000.0000",
+        "available_pool": "6500000.0000",
+        "todays_allowance": "210000.0000",
+        "left_to_spend_today": "210000.0000",
+        "forward_daily_rate": "233333.3333",
+        "trajectory_variance": "350000.0000",
+        "buffer_days": "2.0000",
+        "state": "afloat"
+      }
+    },
+    {
+      "name": "kink_change_on_day_1_replaces_the_base_no_kink",
+      "inputs": {
+        "daily_pool": "7500000.0000",
+        "period_days": 30,
+        "days_elapsed": 10,
+        "settled_spend": "2200000.0000",
+        "today_spend": "0.0000",
+        "future_spend": "0.0000",
+        "mode": "adaptive",
+        "base_daily_pool": "6000000.0000",
+        "changes": [
+          { "effective_day": 1, "daily_pool": "7500000.0000" }
+        ]
+      },
+      "expected": {
+        "fully_committed": false,
+        "baseline_daily_budget": "250000.0000",
+        "available_pool": "7500000.0000",
+        "todays_allowance": "265000.0000",
+        "left_to_spend_today": "265000.0000",
+        "forward_daily_rate": "278947.3684",
+        "trajectory_variance": "300000.0000",
+        "buffer_days": "1.2000",
+        "state": "afloat"
+      }
+    },
+    {
+      "name": "kink_change_effective_yesterday_day_10_of_today_11",
+      "inputs": {
+        "daily_pool": "7500000.0000",
+        "period_days": 30,
+        "days_elapsed": 10,
+        "settled_spend": "2000000.0000",
+        "today_spend": "0.0000",
+        "future_spend": "0.0000",
+        "mode": "adaptive",
+        "base_daily_pool": "6000000.0000",
+        "changes": [
+          { "effective_day": 10, "daily_pool": "7500000.0000" }
+        ]
+      },
+      "expected": {
+        "fully_committed": false,
+        "baseline_daily_budget": "271428.5714",
+        "available_pool": "7500000.0000",
+        "todays_allowance": "275000.0000",
+        "left_to_spend_today": "275000.0000",
+        "forward_daily_rate": "289473.6842",
+        "trajectory_variance": "71428.5714",
+        "buffer_days": "0.2632",
+        "state": "afloat"
+      }
+    },
+    {
+      "name": "kink_change_after_today_is_not_in_force",
+      "inputs": {
+        "daily_pool": "6000000.0000",
+        "period_days": 30,
+        "days_elapsed": 10,
+        "settled_spend": "2300000.0000",
+        "today_spend": "0.0000",
+        "future_spend": "0.0000",
+        "mode": "adaptive",
+        "base_daily_pool": "6000000.0000",
+        "changes": [
+          { "effective_day": 20, "daily_pool": "7500000.0000" }
+        ]
+      },
+      "expected": {
+        "fully_committed": false,
+        "baseline_daily_budget": "200000.0000",
+        "available_pool": "6000000.0000",
+        "todays_allowance": "185000.0000",
+        "left_to_spend_today": "185000.0000",
+        "forward_daily_rate": "194736.8421",
+        "trajectory_variance": "-300000.0000",
+        "buffer_days": "-1.5000",
+        "state": "drifting"
+      }
+    },
+    {
+      "name": "kink_raise_on_the_last_day",
+      "inputs": {
+        "daily_pool": "9000000.0000",
+        "period_days": 30,
+        "days_elapsed": 29,
+        "settled_spend": "5500000.0000",
+        "today_spend": "0.0000",
+        "future_spend": "0.0000",
+        "mode": "adaptive",
+        "base_daily_pool": "6000000.0000",
+        "changes": [
+          { "effective_day": 30, "daily_pool": "9000000.0000" }
+        ]
+      },
+      "expected": {
+        "fully_committed": false,
+        "baseline_daily_budget": "3200000.0000",
+        "available_pool": "9000000.0000",
+        "todays_allowance": "3500000.0000",
+        "left_to_spend_today": "3500000.0000",
+        "forward_daily_rate": null,
+        "trajectory_variance": "300000.0000",
+        "buffer_days": "0.0938",
+        "state": "afloat"
+      }
+    },
+    {
+      "name": "kink_same_day_edits_later_wins_and_equal_neighbours_merge",
+      "inputs": {
+        "daily_pool": "6500000.0000",
+        "period_days": 30,
+        "days_elapsed": 20,
+        "settled_spend": "4400000.0000",
+        "today_spend": "0.0000",
+        "future_spend": "0.0000",
+        "mode": "adaptive",
+        "base_daily_pool": "6000000.0000",
+        "changes": [
+          { "effective_day": 11, "daily_pool": "7000000.0000" },
+          { "effective_day": 11, "daily_pool": "7500000.0000" },
+          { "effective_day": 15, "daily_pool": "7500000.0000" },
+          { "effective_day": 21, "daily_pool": "6500000.0000" }
+        ]
+      },
+      "expected": {
+        "fully_committed": false,
+        "baseline_daily_budget": "175000.0000",
+        "available_pool": "6500000.0000",
+        "todays_allowance": "210000.0000",
+        "left_to_spend_today": "210000.0000",
+        "forward_daily_rate": "233333.3333",
+        "trajectory_variance": "350000.0000",
+        "buffer_days": "2.0000",
+        "state": "afloat"
+      }
+    },
+    {
+      "name": "kink_fixed_mode_after_a_kink_allowance_is_b_now",
+      "inputs": {
+        "daily_pool": "7500000.0000",
+        "period_days": 30,
+        "days_elapsed": 10,
+        "settled_spend": "2400000.0000",
+        "today_spend": "0.0000",
+        "future_spend": "0.0000",
+        "mode": "fixed",
+        "base_daily_pool": "6000000.0000",
+        "changes": [
+          { "effective_day": 11, "daily_pool": "7500000.0000" }
+        ]
+      },
+      "expected": {
+        "fully_committed": false,
+        "baseline_daily_budget": "275000.0000",
+        "available_pool": "7500000.0000",
+        "todays_allowance": "275000.0000",
+        "left_to_spend_today": "275000.0000",
+        "forward_daily_rate": "268421.0526",
+        "trajectory_variance": "-400000.0000",
+        "buffer_days": "-1.4545",
+        "state": "drifting"
+      }
+    },
+    {
+      "name": "kink_non_terminating_segments_stay_exact_across_changes",
+      "inputs": {
+        "daily_pool": "6700000.0000",
+        "period_days": 31,
+        "days_elapsed": 20,
+        "settled_spend": "3900000.0000",
+        "today_spend": "0.0000",
+        "future_spend": "0.0000",
+        "mode": "adaptive",
+        "base_daily_pool": "6100000.0000",
+        "changes": [
+          { "effective_day": 8, "daily_pool": "7000000.0000" },
+          { "effective_day": 14, "daily_pool": "6700000.0000" }
+        ]
+      },
+      "expected": {
+        "fully_committed": false,
+        "baseline_daily_budget": "217607.5268",
+        "available_pool": "6700000.0000",
+        "todays_allowance": "254545.4545",
+        "left_to_spend_today": "254545.4545",
+        "forward_daily_rate": "280000.0000",
+        "trajectory_variance": "406317.2043",
+        "buffer_days": "1.8672",
+        "state": "afloat"
+      }
+    },
+    {
+      "name": "kink_future_dated_spend_with_a_kink_lowers_the_pool_not_v",
+      "inputs": {
+        "daily_pool": "7500000.0000",
+        "period_days": 30,
+        "days_elapsed": 10,
+        "settled_spend": "2100000.0000",
+        "today_spend": "0.0000",
+        "future_spend": "400000.0000",
+        "mode": "adaptive",
+        "base_daily_pool": "6000000.0000",
+        "changes": [
+          { "effective_day": 11, "daily_pool": "7500000.0000" }
+        ]
+      },
+      "expected": {
+        "fully_committed": false,
+        "baseline_daily_budget": "275000.0000",
+        "available_pool": "7100000.0000",
+        "todays_allowance": "250000.0000",
+        "left_to_spend_today": "250000.0000",
+        "forward_daily_rate": "263157.8947",
+        "trajectory_variance": "-100000.0000",
+        "buffer_days": "-0.3636",
+        "state": "afloat"
+      }
+    },
+    {
+      "name": "kink_future_dated_refund_does_not_raise_the_pool",
+      "inputs": {
+        "daily_pool": "6000000.0000",
+        "period_days": 30,
+        "days_elapsed": 9,
+        "settled_spend": "1800000.0000",
+        "today_spend": "0.0000",
+        "future_spend": "-500000.0000",
+        "mode": "adaptive"
+      },
+      "expected": {
+        "fully_committed": false,
+        "baseline_daily_budget": "200000.0000",
+        "available_pool": "6000000.0000",
+        "todays_allowance": "200000.0000",
+        "left_to_spend_today": "200000.0000",
+        "forward_daily_rate": "210000.0000",
+        "trajectory_variance": "0.0000",
+        "buffer_days": "0.0000",
+        "state": "afloat"
+      }
+    },
+    {
+      "name": "kink_future_dated_refund_after_a_kink",
+      "inputs": {
+        "daily_pool": "7500000.0000",
+        "period_days": 30,
+        "days_elapsed": 10,
+        "settled_spend": "2000000.0000",
+        "today_spend": "0.0000",
+        "future_spend": "-250000.0000",
+        "mode": "adaptive",
+        "base_daily_pool": "6000000.0000",
+        "changes": [
+          { "effective_day": 11, "daily_pool": "7500000.0000" }
+        ]
+      },
+      "expected": {
+        "fully_committed": false,
+        "baseline_daily_budget": "275000.0000",
+        "available_pool": "7500000.0000",
+        "todays_allowance": "275000.0000",
+        "left_to_spend_today": "275000.0000",
+        "forward_daily_rate": "289473.6842",
+        "trajectory_variance": "0.0000",
+        "buffer_days": "0.0000",
+        "state": "afloat"
+      }
+    },
+    {
+      "name": "clamp_cut_to_2_5m_on_day_16_money_left_adaptive_a_100k",
+      "inputs": {
+        "daily_pool": "2500000.0000",
+        "period_days": 30,
+        "days_elapsed": 15,
+        "settled_spend": "1000000.0000",
+        "today_spend": "0.0000",
+        "future_spend": "0.0000",
+        "mode": "adaptive",
+        "base_daily_pool": "6000000.0000",
+        "changes": [
+          { "effective_day": 16, "daily_pool": "2500000.0000" }
+        ]
+      },
+      "expected": {
+        "fully_committed": true,
+        "available_pool": "2500000.0000",
+        "todays_allowance": "100000.0000",
+        "left_to_spend_today": "100000.0000",
+        "forward_daily_rate": "107142.8571"
+      }
+    },
+    {
+      "name": "clamp_cut_to_2_5m_on_day_16_money_left_fixed_a_is_zero",
+      "inputs": {
+        "daily_pool": "2500000.0000",
+        "period_days": 30,
+        "days_elapsed": 15,
+        "settled_spend": "1000000.0000",
+        "today_spend": "0.0000",
+        "future_spend": "0.0000",
+        "mode": "fixed",
+        "base_daily_pool": "6000000.0000",
+        "changes": [
+          { "effective_day": 16, "daily_pool": "2500000.0000" }
+        ]
+      },
+      "expected": {
+        "fully_committed": true,
+        "available_pool": "2500000.0000",
+        "todays_allowance": "0.0000",
+        "left_to_spend_today": "0.0000",
+        "forward_daily_rate": "107142.8571"
+      }
+    },
+    {
+      "name": "clamp_then_raise_cut_2_5m_on_16_raise_5m_on_21",
+      "inputs": {
+        "daily_pool": "5000000.0000",
+        "period_days": 30,
+        "days_elapsed": 20,
+        "settled_spend": "3000000.0000",
+        "today_spend": "0.0000",
+        "future_spend": "0.0000",
+        "mode": "adaptive",
+        "base_daily_pool": "6000000.0000",
+        "changes": [
+          { "effective_day": 16, "daily_pool": "2500000.0000" },
+          { "effective_day": 21, "daily_pool": "5000000.0000" }
+        ]
+      },
+      "expected": {
+        "fully_committed": false,
+        "baseline_daily_budget": "200000.0000",
+        "available_pool": "5000000.0000",
+        "todays_allowance": "200000.0000",
+        "left_to_spend_today": "200000.0000",
+        "forward_daily_rate": "222222.2222",
+        "trajectory_variance": "0.0000",
+        "buffer_days": "0.0000",
+        "state": "afloat"
+      }
+    },
+    {
+      "name": "clamp_then_raise_today_is_the_last_day_of_the_cycle",
+      "inputs": {
+        "daily_pool": "5000000.0000",
+        "period_days": 30,
+        "days_elapsed": 29,
+        "settled_spend": "4800000.0000",
+        "today_spend": "0.0000",
+        "future_spend": "0.0000",
+        "mode": "adaptive",
+        "base_daily_pool": "6000000.0000",
+        "changes": [
+          { "effective_day": 16, "daily_pool": "2500000.0000" },
+          { "effective_day": 21, "daily_pool": "5000000.0000" }
+        ]
+      },
+      "expected": {
+        "fully_committed": false,
+        "baseline_daily_budget": "200000.0000",
+        "available_pool": "5000000.0000",
+        "todays_allowance": "200000.0000",
+        "left_to_spend_today": "200000.0000",
+        "forward_daily_rate": null,
+        "trajectory_variance": "0.0000",
+        "buffer_days": "0.0000",
+        "state": "afloat"
+      }
+    },
+    {
+      "name": "clamp_in_the_flat_stretch_between_cut_and_raise",
+      "inputs": {
+        "daily_pool": "2500000.0000",
+        "period_days": 30,
+        "days_elapsed": 17,
+        "settled_spend": "1000000.0000",
+        "today_spend": "0.0000",
+        "future_spend": "0.0000",
+        "mode": "adaptive",
+        "base_daily_pool": "6000000.0000",
+        "changes": [
+          { "effective_day": 16, "daily_pool": "2500000.0000" },
+          { "effective_day": 21, "daily_pool": "5000000.0000" }
+        ]
+      },
+      "expected": {
+        "fully_committed": true,
+        "available_pool": "2500000.0000",
+        "todays_allowance": "115384.6153",
+        "left_to_spend_today": "115384.6153",
+        "forward_daily_rate": "125000.0000"
+      }
+    },
+    {
+      "name": "fully_committed_pool_zero_answers_a_and_no_state",
+      "inputs": {
+        "daily_pool": "0.0000",
+        "period_days": 30,
+        "days_elapsed": 0,
+        "settled_spend": "0.0000",
+        "today_spend": "0.0000",
+        "future_spend": "0.0000",
+        "mode": "adaptive"
+      },
+      "expected": {
+        "fully_committed": true,
+        "available_pool": "0.0000",
+        "todays_allowance": "0.0000",
+        "left_to_spend_today": "0.0000",
+        "forward_daily_rate": "0.0000"
+      }
+    },
+    {
+      "name": "fully_committed_pool_zero_with_spend_a_is_negative",
+      "inputs": {
+        "daily_pool": "0.0000",
+        "period_days": 30,
+        "days_elapsed": 4,
+        "settled_spend": "100000.0000",
+        "today_spend": "0.0000",
+        "future_spend": "0.0000",
+        "mode": "adaptive"
+      },
+      "expected": {
+        "fully_committed": true,
+        "available_pool": "0.0000",
+        "todays_allowance": "-3846.1539",
+        "left_to_spend_today": "-3846.1539",
+        "forward_daily_rate": "-4000.0000"
+      }
+    },
+    {
+      "name": "fully_committed_negative_pool_from_day_1",
+      "inputs": {
+        "daily_pool": "-1000000.0000",
+        "period_days": 30,
+        "days_elapsed": 5,
+        "settled_spend": "0.0000",
+        "today_spend": "0.0000",
+        "future_spend": "0.0000",
+        "mode": "adaptive"
+      },
+      "expected": {
+        "fully_committed": true,
+        "available_pool": "-1000000.0000",
+        "todays_allowance": "-40000.0000",
+        "left_to_spend_today": "-40000.0000",
+        "forward_daily_rate": "-41666.6667"
+      }
+    },
+    {
+      "name": "fully_committed_negative_pool_fixed_mode_a_is_zero",
+      "inputs": {
+        "daily_pool": "-1000000.0000",
+        "period_days": 30,
+        "days_elapsed": 5,
+        "settled_spend": "0.0000",
+        "today_spend": "0.0000",
+        "future_spend": "0.0000",
+        "mode": "fixed"
+      },
+      "expected": {
+        "fully_committed": true,
+        "available_pool": "-1000000.0000",
+        "todays_allowance": "0.0000",
+        "left_to_spend_today": "0.0000",
+        "forward_daily_rate": "-41666.6667"
+      }
+    },
+    {
+      "name": "negative_pool_then_a_raise_6m_budget_7m_commitments_raised_to_2m_on_11",
+      "inputs": {
+        "daily_pool": "2000000.0000",
+        "period_days": 30,
+        "days_elapsed": 15,
+        "settled_spend": "400000.0000",
+        "today_spend": "0.0000",
+        "future_spend": "0.0000",
+        "mode": "adaptive",
+        "base_daily_pool": "-1000000.0000",
+        "changes": [
+          { "effective_day": 11, "daily_pool": "2000000.0000" }
+        ]
+      },
+      "expected": {
+        "fully_committed": false,
+        "baseline_daily_budget": "100000.0000",
+        "available_pool": "2000000.0000",
+        "todays_allowance": "106666.6666",
+        "left_to_spend_today": "106666.6666",
+        "forward_daily_rate": "114285.7142",
+        "trajectory_variance": "100000.0000",
+        "buffer_days": "1.0000",
+        "state": "afloat"
+      }
+    },
+    {
+      "name": "negative_pool_then_a_raise_still_flat_the_day_before",
+      "inputs": {
+        "daily_pool": "-1000000.0000",
+        "period_days": 30,
+        "days_elapsed": 9,
+        "settled_spend": "100000.0000",
+        "today_spend": "0.0000",
+        "future_spend": "0.0000",
+        "mode": "adaptive",
+        "base_daily_pool": "-1000000.0000",
+        "changes": [
+          { "effective_day": 11, "daily_pool": "2000000.0000" }
+        ]
+      },
+      "expected": {
+        "fully_committed": true,
+        "available_pool": "-1000000.0000",
+        "todays_allowance": "-52380.9524",
+        "left_to_spend_today": "-52380.9524",
+        "forward_daily_rate": "-55000.0000"
+      }
+    },
+    {
+      "name": "clamp_with_the_money_gone_cut_to_2_8m_with_3m_settled",
+      "inputs": {
+        "daily_pool": "2800000.0000",
+        "period_days": 30,
+        "days_elapsed": 15,
+        "settled_spend": "3000000.0000",
+        "today_spend": "0.0000",
+        "future_spend": "0.0000",
+        "mode": "adaptive",
+        "base_daily_pool": "6000000.0000",
+        "changes": [
+          { "effective_day": 16, "daily_pool": "2800000.0000" }
+        ]
+      },
+      "expected": {
+        "fully_committed": true,
+        "available_pool": "2800000.0000",
+        "todays_allowance": "-13333.3334",
+        "left_to_spend_today": "-13333.3334",
+        "forward_daily_rate": "-14285.7143"
+      }
+    },
+    {
+      "name": "clamp_with_the_money_gone_fixed_mode",
+      "inputs": {
+        "daily_pool": "2800000.0000",
+        "period_days": 30,
+        "days_elapsed": 15,
+        "settled_spend": "3000000.0000",
+        "today_spend": "0.0000",
+        "future_spend": "0.0000",
+        "mode": "fixed",
+        "base_daily_pool": "6000000.0000",
+        "changes": [
+          { "effective_day": 16, "daily_pool": "2800000.0000" }
+        ]
+      },
+      "expected": {
+        "fully_committed": true,
+        "available_pool": "2800000.0000",
+        "todays_allowance": "0.0000",
+        "left_to_spend_today": "0.0000",
+        "forward_daily_rate": "-14285.7143"
+      }
+    },
+    {
+      "name": "clamp_cut_exactly_to_the_target_is_fully_committed",
+      "inputs": {
+        "daily_pool": "2000000.0000",
+        "period_days": 30,
+        "days_elapsed": 15,
+        "settled_spend": "1500000.0000",
+        "today_spend": "0.0000",
+        "future_spend": "0.0000",
+        "mode": "adaptive",
+        "base_daily_pool": "6000000.0000",
+        "changes": [
+          { "effective_day": 11, "daily_pool": "2000000.0000" }
+        ]
+      },
+      "expected": {
+        "fully_committed": true,
+        "available_pool": "2000000.0000",
+        "todays_allowance": "33333.3333",
+        "left_to_spend_today": "33333.3333",
+        "forward_daily_rate": "35714.2857"
+      }
+    },
+    {
+      "name": "pool_used_up_exactly_healthy_baseline_a_is_zero",
+      "inputs": {
+        "daily_pool": "6000000.0000",
+        "period_days": 30,
+        "days_elapsed": 20,
+        "settled_spend": "6000000.0000",
+        "today_spend": "0.0000",
+        "future_spend": "0.0000",
+        "mode": "adaptive"
+      },
+      "expected": {
+        "fully_committed": false,
+        "baseline_daily_budget": "200000.0000",
+        "available_pool": "6000000.0000",
+        "todays_allowance": "0.0000",
+        "left_to_spend_today": "0.0000",
+        "forward_daily_rate": "0.0000",
+        "trajectory_variance": "-2000000.0000",
+        "buffer_days": "-10.0000",
+        "state": "taking_on_water"
+      }
+    },
+    {
+      "name": "pool_used_up_overspent_healthy_baseline_state_is_computed",
+      "inputs": {
+        "daily_pool": "6000000.0000",
+        "period_days": 30,
+        "days_elapsed": 20,
+        "settled_spend": "6200000.0000",
+        "today_spend": "0.0000",
+        "future_spend": "0.0000",
+        "mode": "adaptive"
+      },
+      "expected": {
+        "fully_committed": false,
+        "baseline_daily_budget": "200000.0000",
+        "available_pool": "6000000.0000",
+        "todays_allowance": "-20000.0000",
+        "left_to_spend_today": "-20000.0000",
+        "forward_daily_rate": "-22222.2223",
+        "trajectory_variance": "-2200000.0000",
+        "buffer_days": "-11.0000",
+        "state": "taking_on_water"
+      }
+    },
+    {
+      "name": "pool_used_up_by_a_future_dated_expense",
+      "inputs": {
+        "daily_pool": "6000000.0000",
+        "period_days": 30,
+        "days_elapsed": 9,
+        "settled_spend": "1800000.0000",
+        "today_spend": "0.0000",
+        "future_spend": "4200000.0000",
+        "mode": "adaptive"
+      },
+      "expected": {
+        "fully_committed": false,
+        "baseline_daily_budget": "200000.0000",
+        "available_pool": "1800000.0000",
+        "todays_allowance": "0.0000",
+        "left_to_spend_today": "0.0000",
+        "forward_daily_rate": "0.0000",
+        "trajectory_variance": "0.0000",
+        "buffer_days": "0.0000",
+        "state": "afloat"
+      }
+    },
+    {
+      "name": "hair_trigger_v_minus_6_6666_is_just_inside_afloat",
+      "inputs": {
+        "daily_pool": "3000100.0000",
+        "period_days": 30,
+        "days_elapsed": 15,
+        "settled_spend": "3000006.6666",
+        "today_spend": "0.0000",
+        "future_spend": "0.0000",
+        "mode": "adaptive",
+        "base_daily_pool": "6000000.0000",
+        "changes": [
+          { "effective_day": 16, "daily_pool": "3000100.0000" }
+        ]
+      },
+      "expected": {
+        "fully_committed": false,
+        "baseline_daily_budget": "6.6666",
+        "available_pool": "3000100.0000",
+        "todays_allowance": "6.2222",
+        "left_to_spend_today": "6.2222",
+        "forward_daily_rate": "6.6666",
+        "trajectory_variance": "-6.6666",
+        "buffer_days": "-1.0000",
+        "state": "afloat"
+      }
+    },
+    {
+      "name": "hair_trigger_v_minus_6_6667_is_just_past_negative_1b_and_drifting",
+      "inputs": {
+        "daily_pool": "3000100.0000",
+        "period_days": 30,
+        "days_elapsed": 15,
+        "settled_spend": "3000006.6667",
+        "today_spend": "0.0000",
+        "future_spend": "0.0000",
+        "mode": "adaptive",
+        "base_daily_pool": "6000000.0000",
+        "changes": [
+          { "effective_day": 16, "daily_pool": "3000100.0000" }
+        ]
+      },
+      "expected": {
+        "fully_committed": false,
+        "baseline_daily_budget": "6.6666",
+        "available_pool": "3000100.0000",
+        "todays_allowance": "6.2222",
+        "left_to_spend_today": "6.2222",
+        "forward_daily_rate": "6.6666",
+        "trajectory_variance": "-6.6667",
+        "buffer_days": "-1.0000",
+        "state": "drifting"
+      }
+    },
+    {
+      "name": "hair_trigger_a_7_rupiah_overspend_reads_drifting",
+      "inputs": {
+        "daily_pool": "3000100.0000",
+        "period_days": 30,
+        "days_elapsed": 15,
+        "settled_spend": "3000007.0000",
+        "today_spend": "0.0000",
+        "future_spend": "0.0000",
+        "mode": "adaptive",
+        "base_daily_pool": "6000000.0000",
+        "changes": [
+          { "effective_day": 16, "daily_pool": "3000100.0000" }
+        ]
+      },
+      "expected": {
+        "fully_committed": false,
+        "baseline_daily_budget": "6.6666",
+        "available_pool": "3000100.0000",
+        "todays_allowance": "6.2000",
+        "left_to_spend_today": "6.2000",
+        "forward_daily_rate": "6.6428",
+        "trajectory_variance": "-7.0000",
+        "buffer_days": "-1.0500",
+        "state": "drifting"
+      }
+    },
+    {
+      "name": "hair_trigger_a_20_rupiah_overspend_still_drifting",
+      "inputs": {
+        "daily_pool": "3000100.0000",
+        "period_days": 30,
+        "days_elapsed": 15,
+        "settled_spend": "3000020.0000",
+        "today_spend": "0.0000",
+        "future_spend": "0.0000",
+        "mode": "adaptive",
+        "base_daily_pool": "6000000.0000",
+        "changes": [
+          { "effective_day": 16, "daily_pool": "3000100.0000" }
+        ]
+      },
+      "expected": {
+        "fully_committed": false,
+        "baseline_daily_budget": "6.6666",
+        "available_pool": "3000100.0000",
+        "todays_allowance": "5.3333",
+        "left_to_spend_today": "5.3333",
+        "forward_daily_rate": "5.7142",
+        "trajectory_variance": "-20.0000",
+        "buffer_days": "-3.0000",
+        "state": "drifting"
+      }
+    },
+    {
+      "name": "hair_trigger_a_25_rupiah_overspend_reads_taking_on_water",
+      "inputs": {
+        "daily_pool": "3000100.0000",
+        "period_days": 30,
+        "days_elapsed": 15,
+        "settled_spend": "3000025.0000",
+        "today_spend": "0.0000",
+        "future_spend": "0.0000",
+        "mode": "adaptive",
+        "base_daily_pool": "6000000.0000",
+        "changes": [
+          { "effective_day": 16, "daily_pool": "3000100.0000" }
+        ]
+      },
+      "expected": {
+        "fully_committed": false,
+        "baseline_daily_budget": "6.6666",
+        "available_pool": "3000100.0000",
+        "todays_allowance": "5.0000",
+        "left_to_spend_today": "5.0000",
+        "forward_daily_rate": "5.3571",
+        "trajectory_variance": "-25.0000",
+        "buffer_days": "-3.7500",
+        "state": "taking_on_water"
+      }
+    },
+    {
+      "name": "hair_trigger_cut_one_rupiah_above_the_target_baseline_0_0667",
+      "inputs": {
+        "daily_pool": "3000001.0000",
+        "period_days": 30,
+        "days_elapsed": 15,
+        "settled_spend": "3000001.0000",
+        "today_spend": "0.0000",
+        "future_spend": "0.0000",
+        "mode": "adaptive",
+        "base_daily_pool": "6000000.0000",
+        "changes": [
+          { "effective_day": 16, "daily_pool": "3000001.0000" }
+        ]
+      },
+      "expected": {
+        "fully_committed": false,
+        "baseline_daily_budget": "0.0666",
+        "available_pool": "3000001.0000",
+        "todays_allowance": "0.0000",
+        "left_to_spend_today": "0.0000",
+        "forward_daily_rate": "0.0000",
+        "trajectory_variance": "-1.0000",
+        "buffer_days": "-15.0000",
+        "state": "taking_on_water"
+      }
+    },
+    {
+      "name": "hair_trigger_a_baseline_of_one_hundredth_of_a_rupiah",
+      "inputs": {
+        "daily_pool": "3000000.1500",
+        "period_days": 30,
+        "days_elapsed": 15,
+        "settled_spend": "3000000.0001",
+        "today_spend": "0.0000",
+        "future_spend": "0.0000",
+        "mode": "adaptive",
+        "base_daily_pool": "6000000.0000",
+        "changes": [
+          { "effective_day": 16, "daily_pool": "3000000.1500" }
+        ]
+      },
+      "expected": {
+        "fully_committed": false,
+        "baseline_daily_budget": "0.0100",
+        "available_pool": "3000000.1500",
+        "todays_allowance": "0.0099",
+        "left_to_spend_today": "0.0099",
+        "forward_daily_rate": "0.0107",
+        "trajectory_variance": "-0.0001",
+        "buffer_days": "-0.0100",
+        "state": "afloat"
+      }
     }
   ],
   "target_line": [
@@ -524,6 +1557,202 @@
           { "day": 30, "target": "2200000.0000" }
         ],
         "baseline_after": "-63157.8948"
+      }
+    }
+  ],
+  "target_line_changes": [
+    {
+      "name": "list_context_example_single_change_6m_to_7_5m_on_day_11",
+      "inputs": {
+        "period_days": 30,
+        "base_daily_pool": "6000000.0000",
+        "changes": [
+          { "effective_day": 11, "daily_pool": "7500000.0000" }
+        ]
+      },
+      "expected": {
+        "points": [
+          { "day": 1, "target": "200000.0000", "baseline": "200000.0000" },
+          { "day": 10, "target": "2000000.0000", "baseline": "200000.0000" },
+          { "day": 11, "target": "2275000.0000", "baseline": "275000.0000" },
+          { "day": 20, "target": "4750000.0000", "baseline": "275000.0000" },
+          { "day": 30, "target": "7500000.0000", "baseline": "275000.0000" }
+        ]
+      }
+    },
+    {
+      "name": "list_two_changes_6m_7_5m_on_11_6_5m_on_21",
+      "inputs": {
+        "period_days": 30,
+        "base_daily_pool": "6000000.0000",
+        "changes": [
+          { "effective_day": 11, "daily_pool": "7500000.0000" },
+          { "effective_day": 21, "daily_pool": "6500000.0000" }
+        ]
+      },
+      "expected": {
+        "points": [
+          { "day": 10, "target": "2000000.0000", "baseline": "200000.0000" },
+          { "day": 11, "target": "2275000.0000", "baseline": "275000.0000" },
+          { "day": 20, "target": "4750000.0000", "baseline": "275000.0000" },
+          { "day": 21, "target": "4925000.0000", "baseline": "175000.0000" },
+          { "day": 30, "target": "6500000.0000", "baseline": "175000.0000" }
+        ]
+      }
+    },
+    {
+      "name": "list_cut_then_raise_6m_2_5m_on_16_5m_on_21",
+      "inputs": {
+        "period_days": 30,
+        "base_daily_pool": "6000000.0000",
+        "changes": [
+          { "effective_day": 16, "daily_pool": "2500000.0000" },
+          { "effective_day": 21, "daily_pool": "5000000.0000" }
+        ]
+      },
+      "expected": {
+        "points": [
+          { "day": 15, "target": "3000000.0000", "baseline": "200000.0000" },
+          { "day": 16, "target": "3000000.0000", "baseline": "0.0000" },
+          { "day": 20, "target": "3000000.0000", "baseline": "0.0000" },
+          { "day": 21, "target": "3200000.0000", "baseline": "200000.0000" },
+          { "day": 25, "target": "4000000.0000", "baseline": "200000.0000" },
+          { "day": 30, "target": "5000000.0000", "baseline": "200000.0000" }
+        ]
+      }
+    },
+    {
+      "name": "list_negative_base_then_raise_minus_1m_then_2m_on_11",
+      "inputs": {
+        "period_days": 30,
+        "base_daily_pool": "-1000000.0000",
+        "changes": [
+          { "effective_day": 11, "daily_pool": "2000000.0000" }
+        ]
+      },
+      "expected": {
+        "points": [
+          { "day": 1, "target": "0.0000", "baseline": "0.0000" },
+          { "day": 10, "target": "0.0000", "baseline": "0.0000" },
+          { "day": 11, "target": "100000.0000", "baseline": "100000.0000" },
+          { "day": 20, "target": "1000000.0000", "baseline": "100000.0000" },
+          { "day": 30, "target": "2000000.0000", "baseline": "100000.0000" }
+        ]
+      }
+    },
+    {
+      "name": "list_zero_base_never_rises_without_a_raise",
+      "inputs": {
+        "period_days": 30,
+        "base_daily_pool": "0.0000",
+        "changes": [
+          { "effective_day": 21, "daily_pool": "3000000.0000" }
+        ]
+      },
+      "expected": {
+        "points": [
+          { "day": 20, "target": "0.0000", "baseline": "0.0000" },
+          { "day": 21, "target": "300000.0000", "baseline": "300000.0000" },
+          { "day": 30, "target": "3000000.0000", "baseline": "300000.0000" }
+        ]
+      }
+    },
+    {
+      "name": "list_change_on_day_1_replaces_the_base",
+      "inputs": {
+        "period_days": 30,
+        "base_daily_pool": "6000000.0000",
+        "changes": [
+          { "effective_day": 1, "daily_pool": "7500000.0000" }
+        ]
+      },
+      "expected": {
+        "points": [
+          { "day": 1, "target": "250000.0000", "baseline": "250000.0000" },
+          { "day": 10, "target": "2500000.0000", "baseline": "250000.0000" },
+          { "day": 30, "target": "7500000.0000", "baseline": "250000.0000" }
+        ]
+      }
+    },
+    {
+      "name": "list_change_on_the_last_day",
+      "inputs": {
+        "period_days": 30,
+        "base_daily_pool": "6000000.0000",
+        "changes": [
+          { "effective_day": 30, "daily_pool": "9000000.0000" }
+        ]
+      },
+      "expected": {
+        "points": [
+          { "day": 29, "target": "5800000.0000", "baseline": "200000.0000" },
+          { "day": 30, "target": "9000000.0000", "baseline": "3200000.0000" }
+        ]
+      }
+    },
+    {
+      "name": "list_same_day_edits_later_wins_and_equal_neighbours_merge",
+      "inputs": {
+        "period_days": 30,
+        "base_daily_pool": "6000000.0000",
+        "changes": [
+          { "effective_day": 11, "daily_pool": "7000000.0000" },
+          { "effective_day": 11, "daily_pool": "7500000.0000" },
+          { "effective_day": 15, "daily_pool": "7500000.0000" },
+          { "effective_day": 21, "daily_pool": "6500000.0000" }
+        ]
+      },
+      "expected": {
+        "points": [
+          { "day": 10, "target": "2000000.0000", "baseline": "200000.0000" },
+          { "day": 11, "target": "2275000.0000", "baseline": "275000.0000" },
+          { "day": 15, "target": "3375000.0000", "baseline": "275000.0000" },
+          { "day": 20, "target": "4750000.0000", "baseline": "275000.0000" },
+          { "day": 21, "target": "4925000.0000", "baseline": "175000.0000" },
+          { "day": 30, "target": "6500000.0000", "baseline": "175000.0000" }
+        ]
+      }
+    },
+    {
+      "name": "list_non_terminating_slopes_across_three_segments",
+      "inputs": {
+        "period_days": 31,
+        "base_daily_pool": "6100000.0000",
+        "changes": [
+          { "effective_day": 8, "daily_pool": "7000000.0000" },
+          { "effective_day": 14, "daily_pool": "6700000.0000" }
+        ]
+      },
+      "expected": {
+        "points": [
+          { "day": 7, "target": "1377419.3548", "baseline": "196774.1935" },
+          { "day": 8, "target": "1611693.5484", "baseline": "234274.1935" },
+          { "day": 13, "target": "2783064.5161", "baseline": "234274.1935" },
+          { "day": 14, "target": "3000672.0430", "baseline": "217607.5268" },
+          { "day": 17, "target": "3653494.6237", "baseline": "217607.5268" },
+          { "day": 20, "target": "4306317.2043", "baseline": "217607.5268" },
+          { "day": 31, "target": "6700000.0000", "baseline": "217607.5268" }
+        ]
+      }
+    },
+    {
+      "name": "list_a_cut_exactly_to_the_target_is_flat_then_a_raise_rises",
+      "inputs": {
+        "period_days": 30,
+        "base_daily_pool": "6000000.0000",
+        "changes": [
+          { "effective_day": 11, "daily_pool": "2000000.0000" },
+          { "effective_day": 16, "daily_pool": "4000000.0000" }
+        ]
+      },
+      "expected": {
+        "points": [
+          { "day": 10, "target": "2000000.0000", "baseline": "200000.0000" },
+          { "day": 11, "target": "2000000.0000", "baseline": "0.0000" },
+          { "day": 15, "target": "2000000.0000", "baseline": "0.0000" },
+          { "day": 16, "target": "2133333.3333", "baseline": "133333.3333" },
+          { "day": 30, "target": "4000000.0000", "baseline": "133333.3333" }
+        ]
       }
     }
   ]

@@ -7,7 +7,7 @@
     "- Commitments Budget; Unallocated = Daily Pool - the sum of the allocations of live Daily Categories.",
     "Inactive Categories count and deleted ones do not. A negative Daily Pool or Unallocated is information,",
     "never an error, and is sent as such (S9; whether and how a zero or negative pool is shown is the trajectory",
-    "slice's, with Q-06). Every figure is a string at exactly four decimals. `monthly_budget` null means none has",
+    "slice's: Q-06, answered in #155). Every figure is a string at exactly four decimals. `monthly_budget` null means none has",
     "been set: the Daily Pool and Unallocated are then omitted, the Commitments Budget is not. A Category with a",
     "null `allocation` has none and is absent from `allocations`, which lists live Categories in creation order.",
     "The categories are created in the order written. Every expected value was worked out independently of the",

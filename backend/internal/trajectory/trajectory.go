@@ -22,8 +22,9 @@ import (
 )
 
 // Mode selects how Today's Allowance is computed. Trajectory Variance,
-// Buffer Days and State are computed from the Baseline Daily Budget in both
-// modes (CONTEXT.md §Adaptive vs fixed) — the setting changes only A.
+// Buffer Days and State are computed against the target line in both modes
+// (CONTEXT.md §Adaptive vs fixed) — the setting changes only A, which in fixed
+// mode is the baseline in force.
 type Mode string
 
 const (
@@ -52,7 +53,7 @@ type Parameters struct {
 	WarmUpDays int
 
 	// DriftingBelow and TakingOnWaterBelow are dimensionless multipliers of
-	// the Baseline Daily Budget (B). State compares Trajectory Variance (V)
+	// the baseline in force (B_now). State compares Trajectory Variance (V)
 	// against threshold x B directly, with no division, so a non-terminating
 	// B never enters the comparison as a rounded number (ruling R2):
 	// V >= DriftingBelow*B is Afloat, V >= TakingOnWaterBelow*B is Drifting,
@@ -77,7 +78,7 @@ func DefaultParameters() Parameters {
 // Inputs are the daily-bucket aggregates for one read (CONTEXT.md §Symbols:
 // P, D, e, S_settled, S_today, S_future). Every money field is DECIMAL(20,4).
 type Inputs struct {
-	DailyPool    decimal.Decimal // P: Daily Pool for the Period
+	DailyPool    decimal.Decimal // P: the Daily Pool in force Today
 	PeriodDays   int             // D: Total Period Days
 	DaysElapsed  int             // e: settled days, strictly before Today
 	SettledSpend decimal.Decimal // S_settled: occurred_on strictly before Today
@@ -85,24 +86,49 @@ type Inputs struct {
 	FutureSpend  decimal.Decimal // S_future: occurred_on after Today
 	Mode         Mode
 	Parameters   Parameters
+
+	// TargetThroughElapsed is T(e), the exact cumulative target through the e
+	// settled days, and BaselineInForce is B_now, the exact slope of the
+	// target line on Today. Both come from a TargetLine (AtToday) and are
+	// given together or not at all. Both nil means the Daily Pool never
+	// changed in the Period, so the line is flat: B_now = max(P / D, 0) and
+	// T(e) = B_now x e. Neither is ever rounded on the way in.
+	TargetThroughElapsed *big.Rat
+	BaselineInForce      *big.Rat
+}
+
+// Pace is what reads the trajectory against the target line: it exists only
+// while a baseline is in force. Present means a State can be said.
+type Pace struct {
+	BaselineDailyBudget decimal.Decimal // B_now, floored (R1)
+	TrajectoryVariance  decimal.Decimal // V = T(e) - S_settled, half-up (R2)
+	BufferDays          decimal.Decimal // V / B_now, half-up (R2)
+	State               State
 }
 
 // Figures are every trajectory number for one read, at the storage scale
 // (DECIMAL(20,4), BOOTSTRAP.md §4). ForwardDailyRate is nil exactly when
 // r = D - e = 1 — the last day of a Period — per CONTEXT.md's "undefined on
 // the last day" rule; a wire response renders that as "—".
+//
+// Pace is nil exactly when the household is fully committed: the baseline in
+// force is zero, so there is no pace to read and no State, Baseline Daily
+// Budget or Trajectory Variance to say (CONTEXT.md §Fully committed). That is
+// the target line's situation and says nothing about money; the figures that
+// are about money (AvailablePool, TodaysAllowance, LeftToSpendToday) are
+// always answered, and a negative one is a Household whose Available Pool is
+// used up.
 type Figures struct {
-	BaselineDailyBudget decimal.Decimal  // B, floored (R1)
-	AvailablePool       decimal.Decimal  // P' = P - S_future
-	TodaysAllowance     decimal.Decimal  // A, floored (R1)
-	LeftToSpendToday    decimal.Decimal  // floored A - S_today (R1)
-	ForwardDailyRate    *decimal.Decimal // floored (R1); nil when r = 1
-	TrajectoryVariance  decimal.Decimal  // V, half-up (R2)
-	BufferDays          decimal.Decimal  // V / B, half-up (R2)
-	State               State
+	AvailablePool    decimal.Decimal  // P' = P - max(S_future, 0)
+	TodaysAllowance  decimal.Decimal  // A, floored (R1)
+	LeftToSpendToday decimal.Decimal  // floored A - S_today (R1)
+	ForwardDailyRate *decimal.Decimal // floored (R1); nil when r = 1
+	Pace             *Pace            // nil when fully committed
 }
 
-// Calculate implements CONTEXT.md §Calculation spec's core figures.
+// Calculate implements CONTEXT.md §Calculation spec's core figures. It never
+// refuses a Daily Pool at or below zero: that is a fully committed Household
+// (Pace nil), a situation to answer, not an error.
 func Calculate(in Inputs) (Figures, error) {
 	if in.PeriodDays <= 0 {
 		return Figures{}, fmt.Errorf("trajectory: period_days must be positive, got %d", in.PeriodDays)
@@ -114,30 +140,40 @@ func Calculate(in Inputs) (Figures, error) {
 	if in.Mode != ModeAdaptive && in.Mode != ModeFixed {
 		return Figures{}, fmt.Errorf("trajectory: unknown mode %q", in.Mode)
 	}
+	if (in.TargetThroughElapsed == nil) != (in.BaselineInForce == nil) {
+		return Figures{}, fmt.Errorf("trajectory: target_through_elapsed and baseline_in_force are given together or not at all")
+	}
 
 	p := in.DailyPool.Rat()
-	d := big.NewRat(int64(in.PeriodDays), 1)
 	e := big.NewRat(int64(in.DaysElapsed), 1)
 	rRat := big.NewRat(int64(r), 1)
 	sSettled := in.SettledSpend.Rat()
 	sToday := in.TodaySpend.Rat()
-	sFuture := in.FutureSpend.Rat()
 
-	b := new(big.Rat).Quo(p, d) // B = P / D
-	if b.Sign() == 0 {
-		return Figures{}, fmt.Errorf("trajectory: baseline daily budget is zero (daily_pool is zero); buffer days is undefined")
+	var bNow, target *big.Rat
+	if in.BaselineInForce != nil {
+		bNow, target = in.BaselineInForce, in.TargetThroughElapsed
+		if bNow.Sign() < 0 || target.Sign() < 0 {
+			return Figures{}, fmt.Errorf("trajectory: a target line never runs below zero (baseline %s, target %s)", bNow.RatString(), target.RatString())
+		}
+	} else {
+		// A pool at or below zero is a flat target at zero, like every segment.
+		bNow = clampAtZero(new(big.Rat).Quo(p, big.NewRat(int64(in.PeriodDays), 1)))
+		target = new(big.Rat).Mul(bNow, e)
 	}
-	pPrime := new(big.Rat).Sub(p, sFuture) // P' = P - S_future
+
+	// P' = P - max(S_future, 0): a refund dated in the future never raises
+	// Today's Allowance (#155 R3). Rounding-free: both are already at scale <= 4.
+	futureSpend := decimal.Max(in.FutureSpend, decimal.Zero)
+	pPrime := new(big.Rat).Sub(p, futureSpend.Rat())
 
 	var a *big.Rat
 	if in.Mode == ModeFixed {
-		a = b // A = B [fixed mode]
+		a = bNow // A = B_now [fixed mode]; zero when fully committed
 	} else {
-		numerator := new(big.Rat).Sub(pPrime, sSettled)
-		a = new(big.Rat).Quo(numerator, rRat) // A = (P' - S_settled) / r [adaptive mode]
+		a = new(big.Rat).Quo(new(big.Rat).Sub(pPrime, sSettled), rRat) // A = (P' - S_settled) / r [adaptive mode]
 	}
 	aFloored := floorAt4dp(a)
-	left := aFloored.Sub(in.TodaySpend) // Left = floored A - S_today (R1); S_today is already exact at 4dp
 
 	var forwardRate *decimal.Decimal
 	if r > 1 {
@@ -147,23 +183,30 @@ func Calculate(in Inputs) (Figures, error) {
 		forwardRate = &fwd
 	}
 
-	v := new(big.Rat).Sub(new(big.Rat).Mul(b, e), sSettled) // V = (B x e) - S_settled
-	buffer := new(big.Rat).Quo(v, b)                        // Buffer Days = V / B
+	figures := Figures{
+		AvailablePool:    in.DailyPool.Sub(futureSpend), // exact
+		TodaysAllowance:  aFloored,
+		LeftToSpendToday: aFloored.Sub(in.TodaySpend), // Left = floored A - S_today (R1); S_today is exact at 4dp
+		ForwardDailyRate: forwardRate,
+	}
+	if bNow.Sign() == 0 {
+		return figures, nil
+	}
 
-	return Figures{
-		BaselineDailyBudget: floorAt4dp(b),
-		AvailablePool:       in.DailyPool.Sub(in.FutureSpend), // exact: both operands are already at scale <= 4
-		TodaysAllowance:     aFloored,
-		LeftToSpendToday:    left,
-		ForwardDailyRate:    forwardRate,
+	v := new(big.Rat).Sub(target, sSettled) // V = T(e) - S_settled
+	buffer := new(big.Rat).Quo(v, bNow)     // Buffer Days = V / B_now
+	figures.Pace = &Pace{
+		BaselineDailyBudget: floorAt4dp(bNow),
 		TrajectoryVariance:  halfUpAt4dp(v),
 		BufferDays:          halfUpAt4dp(buffer),
-		State:               decideState(in.DaysElapsed, in.Parameters, v, b),
-	}, nil
+		State:               decideState(in.DaysElapsed, in.Parameters, v, bNow),
+	}
+	return figures, nil
 }
 
 // decideState never divides: it compares V against threshold x B directly, on
-// the exact (unrounded) V and B, per ruling R2.
+// the exact (unrounded) V and B, per ruling R2. B is the baseline in force
+// (B_now), so a household that cut its Budget is read against its new pace.
 func decideState(daysElapsed int, params Parameters, v, b *big.Rat) State {
 	if daysElapsed < params.WarmUpDays {
 		return StateAfloat

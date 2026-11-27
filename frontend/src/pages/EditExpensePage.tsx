@@ -4,6 +4,7 @@ import { useLocation, useNavigate, useParams } from "react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import { ApiError, restoreExpense, type Me } from "@/api/client";
 import {
+  dashboardKey,
   expensesKey,
   pocketsKey,
   useCategories,
@@ -143,7 +144,12 @@ export function EditExpensePage({ me }: { me: Me }) {
         toastUndoable({
           message: t("toast.deleted", { name: amount }),
           undo: () =>
-            restoreExpense(stored.id).then(() => qc.invalidateQueries({ queryKey: pocketsKey })),
+            restoreExpense(stored.id).then(() =>
+              Promise.all([
+                qc.invalidateQueries({ queryKey: pocketsKey }),
+                qc.invalidateQueries({ queryKey: dashboardKey }),
+              ]),
+            ),
           qc,
           invalidate: expensesKey,
         });

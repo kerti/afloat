@@ -38,7 +38,7 @@ whole scaffold sheet. If the two ever disagree, `BOOTSTRAP.md` wins and this fil
   per Period, `HEAD` included, committed on its own), then everything the answer holds from one
   `REPEATABLE READ`, `READ ONLY` snapshot, the Household row too (the currency a figure is stated in is read
   with the figures). The Position and the settings it is computed from (`period_start_day`, `day_starts_at`,
-  later `allowance_mode`) come from `budget.LocateHousehold`'s one read before it, and a setting the snapshot
+  `allowance_mode`) come from `budget.LocateHousehold`'s one read before it, and a setting the snapshot
   reads never enters the Period Day arithmetic. One statement reads the Period's Expenses (`PeriodSpend`) and Go folds it, so no two
   figures disagree about one Expense; `captured_at` is never read. A property joins the wire in the PR that
   renders it: only optional properties are added, omitted when empty and never `null`, so each answer is a

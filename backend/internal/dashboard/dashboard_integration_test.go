@@ -3,6 +3,7 @@ package dashboard_test
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -10,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -136,6 +138,7 @@ func TestConcurrentFirstReadsOfOnePeriodLeaveOnePeriodAndNeverAMarkerWithoutItsC
 	for month := 2; month <= 12; month++ {
 		f.clock.set(t, fmt.Sprintf("2026-%02d-10T10:00:00+07:00", month))
 		label := fmt.Sprintf("2026-%02d", month)
+		wantRemaining := time.Date(2026, time.Month(month)+1, 0, 0, 0, 0, 0, time.UTC).Day() - 9 // the 10th: nine days elapsed
 		var wg sync.WaitGroup
 		var mu sync.Mutex
 		var problems []string
@@ -163,8 +166,12 @@ func TestConcurrentFirstReadsOfOnePeriodLeaveOnePeriodAndNeverAMarkerWithoutItsC
 					fail("get: %v", err)
 					return
 				}
-				if err := resp.VisitGetDashboardResponse(rec); err != nil || rec.Code != 200 || rec.Body.String() != `{"currency":"IDR"}`+"\n" {
-					fail("get: %d %q %v", rec.Code, rec.Body.String(), err)
+				// The Budget carried forward is read: 6.000.000 on day 10, so the
+				// pool of the Period is whole and nothing is spent.
+				var got api.Dashboard
+				if err := resp.VisitGetDashboardResponse(rec); err != nil || rec.Code != 200 || json.Unmarshal(rec.Body.Bytes(), &got) != nil ||
+					got.Currency != "IDR" || got.Trajectory == nil || got.Trajectory.RemainingDailyPool != "6000000.0000" || got.Trajectory.DaysRemaining != wantRemaining {
+					fail("get: %d %q %v, want 6000000.0000 left over %d days", rec.Code, rec.Body.String(), err, wantRemaining)
 					return
 				}
 				// The answer is back, so the Period is committed whole: a marker
@@ -217,14 +224,16 @@ func TestADifferentHouseholdsFirstReadDoesNotMaterialiseThisOnesPeriod(t *testin
 
 // ---- the snapshot ----------------------------------------------------------
 
-// hookTx runs fn once, just before the first statement of a snapshot: after
-// the Period was ensured and before anything was read. Until fn is set it does
-// nothing.
+// hookBeginner runs fn once, just before the snapshot's before-th statement
+// (the first when before is 0): after the Period was ensured and the Position
+// worked out, and between two statements of the answer when before is later.
+// Until fn is set it does nothing.
 type hookBeginner struct {
 	budget.Beginner
-	mu   sync.Mutex
-	fn   func()
-	done bool
+	mu     sync.Mutex
+	fn     func()
+	before int
+	done   bool
 }
 
 func (b *hookBeginner) BeginTx(ctx context.Context, opts pgx.TxOptions) (pgx.Tx, error) {
@@ -238,12 +247,16 @@ func (b *hookBeginner) BeginTx(ctx context.Context, opts pgx.TxOptions) (pgx.Tx,
 type hookTx struct {
 	pgx.Tx
 	owner *hookBeginner
+	seen  int
 }
 
 func (tx *hookTx) fire() {
+	tx.seen++
 	tx.owner.mu.Lock()
-	run := tx.owner.fn != nil && !tx.owner.done
-	tx.owner.done = true
+	run := tx.owner.fn != nil && !tx.owner.done && tx.seen >= max(tx.owner.before, 1)
+	if run {
+		tx.owner.done = true
+	}
 	fn := tx.owner.fn
 	tx.owner.mu.Unlock()
 	if run {
@@ -282,6 +295,130 @@ func TestTheCurrencyIsReadInTheSnapshotNotBeforeThePeriodWasEnsured(t *testing.T
 	}
 	if !hook.done {
 		t.Error("the hook never ran: the read did not go through the snapshot")
+	}
+}
+
+// answerOf is the dashboard's whole answer as bytes: what two reads must
+// agree on to be one answer.
+func (f fixture) answerOf(ctx context.Context, t *testing.T) string {
+	t.Helper()
+	resp, err := f.handlers.GetDashboard(ctx, api.GetDashboardRequestObject{})
+	if err != nil {
+		t.Fatalf("GetDashboard: %v", err)
+	}
+	rec := httptest.NewRecorder()
+	if err := resp.VisitGetDashboardResponse(rec); err != nil || rec.Code != 200 {
+		t.Fatalf("GetDashboard = %d %q %v, want 200", rec.Code, rec.Body.String(), err)
+	}
+	return rec.Body.String()
+}
+
+// seedTearHousehold is a Household whose answer a single write can change in
+// two of the statements that make it: a Monthly Budget of 3.000.000 and one
+// Expense of 100.000, read on the 14th.
+func (f fixture) seedTearHousehold(t *testing.T) (householdID, pocket pgtype.UUID, ctx context.Context) {
+	t.Helper()
+	householdID, ctx = f.member(t, "Home", "a@example.com")
+	pocket = f.tdb.CreatePocket(t, householdID, "Wallet")
+	f.exec(t, `INSERT INTO budgets (household_id, year_month) VALUES ($1, '2026-11')`, householdID)
+	f.exec(t, `INSERT INTO monthly_budgets VALUES ($1, '2026-11', '2026-11-01', 3000000)`, householdID)
+	f.expense(t, householdID, pocket, pgtype.UUID{}, "2026-11-05", "100000")
+	return householdID, pocket, ctx
+}
+
+// A write that commits between the answer's statements is in the answer whole
+// or not at all. The write is one transaction that moves the Monthly Budget
+// (read by the answer's second statement) and adds an Expense (read by its
+// last), so a read that sees the first as it was and the second as it became
+// is a Budget that never existed with spending it never had. The snapshot is
+// taken at the first statement, so the answer is the state before the write.
+// Proven red with the snapshot at READ COMMITTED: the answer was 6 days of a
+// Budget and an Expense no stored state ever held together.
+func TestAWriteCommittedBetweenTheStatementsIsInTheAnswerWholeOrNotAtAll(t *testing.T) {
+	// The write lands before the third statement (Assemble's first
+	// AllocationsAsOf): after the versions are read, before the spend. Reorder
+	// Assemble's statements and this index must move with them.
+	hook := &hookBeginner{before: 3}
+	f := newFixtureWith(t, nil, func(b budget.Beginner) budget.Beginner { hook.Beginner = b; return hook })
+	householdID, pocket, ctx := f.seedTearHousehold(t)
+
+	before := f.answerOf(ctx, t)
+
+	hook.fn = func() {
+		tx, err := f.tdb.Pool.Begin(context.Background())
+		if err != nil {
+			t.Errorf("begin: %v", err)
+			return
+		}
+		defer func() { _ = tx.Rollback(context.Background()) }()
+		for _, sql := range []string{
+			`INSERT INTO monthly_budgets VALUES ($1, '2026-11', '2026-11-14', 6000000)`,
+			`INSERT INTO expenses (id, household_id, occurred_on, amount, currency, pocket_id) VALUES (gen_random_uuid(), $1, '2026-11-10', 500000, 'IDR', $2)`,
+		} {
+			args := []any{householdID}
+			if strings.Contains(sql, "$2") {
+				args = append(args, pocket)
+			}
+			if _, err := tx.Exec(context.Background(), sql, args...); err != nil {
+				t.Errorf("%s: %v", sql, err)
+				return
+			}
+		}
+		if err := tx.Commit(context.Background()); err != nil {
+			t.Errorf("commit: %v", err)
+		}
+	}
+	during := f.answerOf(ctx, t)
+	if !hook.done {
+		t.Fatal("the write never ran between the statements")
+	}
+	after := f.answerOf(ctx, t)
+
+	if after == before {
+		t.Fatalf("the write changed nothing a read can see (%s): this test would prove nothing", after)
+	}
+	if during != before && during != after {
+		t.Errorf("the answer is neither state of the Household:\n before %s\n during %s\n after  %s", before, during, after)
+	}
+	if during != before {
+		t.Errorf("the answer saw the write the snapshot began before:\n before %s\n during %s", before, during)
+	}
+}
+
+// A setting that moves the window (period_start_day) edited after the Position
+// was worked out is not in the answer: every figure is keyed by the one Period
+// the request located, so the answer is the one a request a moment earlier
+// would have given, never the old Period's Budget over the new window's
+// Expenses. Checked with the edit before the snapshot's first statement and
+// between two of its statements.
+func TestAPeriodStartDayEditedAfterThePositionWasWorkedOutDoesNotTearTheAnswer(t *testing.T) {
+	for _, before := range []int{1, 3} {
+		t.Run(fmt.Sprintf("before statement %d", before), func(t *testing.T) {
+			hook := &hookBeginner{before: before}
+			f := newFixtureWith(t, nil, func(b budget.Beginner) budget.Beginner { hook.Beginner = b; return hook })
+			householdID, pocket, ctx := f.seedTearHousehold(t)
+			// Spend that the new window (20 Oct to 19 Nov) would count and the old
+			// (1 to 30 Nov) does not: 28 Oct.
+			f.expense(t, householdID, pocket, pgtype.UUID{}, "2026-10-28", "250000")
+
+			beforeEdit := f.answerOf(ctx, t)
+
+			hook.fn = func() {
+				f.exec(t, `UPDATE households SET period_start_day = 20 WHERE id = $1`, householdID)
+			}
+			during := f.answerOf(ctx, t)
+			if !hook.done {
+				t.Fatal("the edit never ran after the Position was worked out")
+			}
+			afterEdit := f.answerOf(ctx, t)
+
+			if afterEdit == beforeEdit {
+				t.Fatalf("re-cutting the window changed nothing a read can see (%s): this test would prove nothing", afterEdit)
+			}
+			if during != beforeEdit {
+				t.Errorf("the answer is not the one for the Period the request located:\n before the edit %s\n during         %s\n after the edit  %s", beforeEdit, during, afterEdit)
+			}
+		})
 	}
 }
 

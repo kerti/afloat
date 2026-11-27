@@ -2,8 +2,10 @@ package httpserver
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -91,6 +93,13 @@ func (f dashboardFixture) markers(t *testing.T) string {
 // removes what an earlier one added), so this golden is only ever extended by
 // properties, never edited into another shape.
 const dashboardAnswerPR1 = `{"currency":"IDR"}`
+
+// The answer at PR 3 of #155 for a Household with a Monthly Budget of 3.000.000
+// from the Period's first day and no spending, read on 14 Nov 2026: PR 1's
+// answer plus the `trajectory`. Every money is four decimals and nothing the
+// merged PRs do not render (State, Trajectory Variance, Buffer Days, a day
+// count other than days_remaining) is on it.
+const dashboardAnswerPR3 = `{"currency":"IDR","trajectory":{"baseline_daily_budget":"100000.0000","days_remaining":17,"left_to_spend_today":"176470.5882","remaining_daily_pool":"3000000.0000","todays_allowance":"176470.5882"}}`
 
 func TestGetDashboardThroughTheRouterAnswersTheCurrencyAndNothingElse(t *testing.T) {
 	f := newDashboardFixture(t)
@@ -210,5 +219,92 @@ func TestTheDashboardAnswersOnlyReads(t *testing.T) {
 	}
 	if got := f.markers(t); got != "" {
 		t.Errorf("budgets = %q, want none: a refused method writes nothing", got)
+	}
+}
+
+// Each PR's answer is a strict superset of the one before it (#155 R5: a
+// property joins the wire in the PR that renders it, and none is removed). PR 1's
+// golden is the answer of a Household with no Monthly Budget, which stays
+// currency alone; once it has one, the same answer gains `trajectory` and loses
+// nothing, and money is a four-decimals string, never a number or an exponent.
+func TestTheAnswerWithAMonthlyBudgetIsPR1sAnswerPlusTheTrajectory(t *testing.T) {
+	f := newDashboardFixture(t)
+	f.mustExec(t, `INSERT INTO budgets (household_id, year_month) VALUES ($1, '2026-11')`)
+	f.mustExec(t, `INSERT INTO monthly_budgets VALUES ($1, '2026-11', '2026-11-01', 3000000)`)
+
+	rec := f.do(http.MethodGet)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+	got := strings.TrimSpace(rec.Body.String())
+	if got != dashboardAnswerPR3 {
+		t.Errorf("body = %s\nwant %s", got, dashboardAnswerPR3)
+	}
+
+	var older, newer map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(dashboardAnswerPR1), &older); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal([]byte(got), &newer); err != nil {
+		t.Fatal(err)
+	}
+	for key, value := range older {
+		if string(newer[key]) != string(value) {
+			t.Errorf("PR 1's %q = %s, PR 3's = %s: an earlier answer's property was changed or removed", key, value, newer[key])
+		}
+	}
+	var trajectory map[string]any
+	if err := json.Unmarshal(newer["trajectory"], &trajectory); err != nil {
+		t.Fatal(err)
+	}
+	money := regexp.MustCompile(`^-?[0-9]{1,16}\.[0-9]{4}$`)
+	for key, value := range trajectory {
+		switch key {
+		case "days_remaining":
+			if _, ok := value.(float64); !ok {
+				t.Errorf("days_remaining = %#v, want an integer", value)
+			}
+		case "left_to_spend_today", "todays_allowance", "remaining_daily_pool", "baseline_daily_budget":
+			if s, ok := value.(string); !ok || !money.MatchString(s) {
+				t.Errorf("%s = %#v, want a money string with four decimals", key, value)
+			}
+		default:
+			t.Errorf("trajectory carries %q: not rendered by any merged PR of #155, so not on the wire", key)
+		}
+		if value == nil {
+			t.Errorf("%s is null: an absent property is absent", key)
+		}
+	}
+}
+
+// A Household fully committed has a trajectory with no baseline: absent, never
+// null, and nothing about a State.
+func TestAFullyCommittedHouseholdsTrajectoryHasNoBaselineProperty(t *testing.T) {
+	f := newDashboardFixture(t)
+	var rent pgtype.UUID
+	if err := f.tdb.Pool.QueryRow(context.Background(),
+		`INSERT INTO categories (id, household_id, category_display_name, bucket) VALUES (gen_random_uuid(), $1, 'Rent', 'commitment') RETURNING id`, f.householdID).Scan(&rent); err != nil {
+		t.Fatal(err)
+	}
+	f.mustExec(t, `INSERT INTO budgets (household_id, year_month) VALUES ($1, '2026-11')`)
+	f.mustExec(t, `INSERT INTO monthly_budgets VALUES ($1, '2026-11', '2026-11-01', 3000000)`)
+	if _, err := f.tdb.Pool.Exec(context.Background(),
+		`INSERT INTO allocations (household_id, year_month, effective_on, category_id, allocation) VALUES ($1, '2026-11', '2026-11-01', $2, 3500000)`, f.householdID, rent); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := f.do(http.MethodGet)
+
+	want := `{"currency":"IDR","trajectory":{"days_remaining":17,"left_to_spend_today":"-29411.7648","remaining_daily_pool":"-500000.0000","todays_allowance":"-29411.7648"}}`
+	if got := strings.TrimSpace(rec.Body.String()); rec.Code != http.StatusOK || got != want {
+		t.Errorf("answer = %d %s\nwant %s", rec.Code, got, want)
+	}
+}
+
+func (f dashboardFixture) mustExec(t *testing.T, sql string) {
+	t.Helper()
+	if _, err := f.tdb.Pool.Exec(context.Background(), sql, f.householdID); err != nil {
+		t.Fatalf("%s: %v", sql, err)
 	}
 }

@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import { alice, defaultHandlers, emptyBudget, envelope, server, type State } from "@/test/server";
 import { renderApp } from "@/test/render";
 import { UNDO_TOAST_MS } from "@/lib/undoToast";
+import { dashboardKey } from "@/api/queries";
 import enGB from "@/locales/en-GB.json";
 
 vi.mock("sonner", async () => (await import("@/test/sonnerMock")).sonnerMock());
@@ -118,6 +119,21 @@ describe("deleting a Category", () => {
       expect(figure(enGB.budget.commitmentsBudget)).toHaveTextContent("Rp3,000,000"),
     );
     expect(state.categoryRestores).toEqual(["a"]);
+  });
+
+  it("Undo invalidates the dashboard, since the restored allocation moves the Daily Pool (#155 R5)", async () => {
+    server.use(...defaultHandlers(setup()));
+    const user = userEvent.setup();
+    const { client } = renderApp("/budget");
+
+    const dialog = await openEdit(user, "Rent");
+    await user.click(within(dialog).getByRole("button", { name: c.delete }));
+    await waitFor(() => expect(toastMock).toHaveBeenCalledTimes(1));
+    // A fresh entry, so only the Undo can mark it stale.
+    client.setQueryData(dashboardKey, { currency: "IDR" });
+    action(0);
+
+    await waitFor(() => expect(client.getQueryState(dashboardKey)?.isInvalidated).toBe(true));
   });
 
   it("a refused delete (CATEGORY_IN_USE) keeps the dialog open with the error and Deactivate", async () => {

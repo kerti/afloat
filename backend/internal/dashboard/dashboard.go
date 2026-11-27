@@ -3,10 +3,10 @@
 // on the server, from one snapshot. Handlers live with their domain
 // (docs/adr/go/0001).
 //
-// The dependency runs one way: this package imports auth, budget and period
-// (and, once it computes a figure, trajectory, which stays pure); none of them
-// imports this one. Expenses are read only here and only through PeriodSpend,
-// so every figure that reads them agrees about one Expense.
+// The dependency runs one way: this package imports auth, budget, period and
+// trajectory (which stays pure); none of them imports this one. Expenses are
+// read only here and only through PeriodSpend, so every figure that reads them
+// agrees about one Expense.
 package dashboard
 
 import (
@@ -22,6 +22,7 @@ import (
 	"github.com/kerti/afloat/backend/internal/auth"
 	"github.com/kerti/afloat/backend/internal/budget"
 	"github.com/kerti/afloat/backend/internal/db"
+	"github.com/kerti/afloat/backend/internal/trajectory"
 )
 
 // Handlers implements the dashboard's half of api.StrictServerInterface.
@@ -56,9 +57,8 @@ func New(d Deps) *Handlers {
 // Household is the authenticated User's, taken from the context and never from
 // the request, and every statement filters on it in SQL.
 //
-// Only what the merged PRs of #155 render is on the wire (R5): so far the
-// currency. PeriodSpend and ListAllocationChangeDays are written and tested but
-// feed nothing here yet.
+// Only what the merged PRs of #155 render is on the wire (R5): the currency
+// and, once the Household has a Monthly Budget, the trajectory's figures.
 func (h *Handlers) GetDashboard(ctx context.Context, _ api.GetDashboardRequestObject) (api.GetDashboardResponseObject, error) {
 	user, ok := auth.UserFromContext(ctx)
 	if !ok {
@@ -71,7 +71,7 @@ func (h *Handlers) GetDashboard(ctx context.Context, _ api.GetDashboardRequestOb
 		}, nil
 	}
 
-	at, _, err := budget.LocateHousehold(ctx, h.q, h.now, user)
+	at, household, err := budget.LocateHousehold(ctx, h.q, h.now, user)
 	if err != nil {
 		slog.Error("get dashboard: resolve the period", "err", err)
 		return internalError(), nil
@@ -80,7 +80,11 @@ func (h *Handlers) GetDashboard(ctx context.Context, _ api.GetDashboardRequestOb
 		slog.Error("get dashboard: ensure the period", "err", err)
 		return internalError(), nil
 	}
-	out, err := h.readSnapshot(ctx, user.HouseholdID)
+	// allowance_mode comes from the same read as the Position and not from the
+	// snapshot: a setting the snapshot reads never enters the Period Day
+	// arithmetic (BOOTSTRAP §4), and a mode changed between the two is an
+	// answer as of a moment earlier, never a mix.
+	out, err := h.readSnapshot(ctx, user.HouseholdID, at, trajectory.Mode(household.AllowanceMode))
 	if err != nil {
 		// Never a figure, a name or an amount in the log.
 		slog.Error("get dashboard", "err", err)
@@ -96,7 +100,7 @@ func (h *Handlers) GetDashboard(ctx context.Context, _ api.GetDashboardRequestOb
 // fail to serialise or hold a lock a writer would wait on. The same shape as
 // GET /budget's, taken rather than shared: budget's is unexported, and ten
 // lines are cheaper than an interface.
-func (h *Handlers) readSnapshot(ctx context.Context, householdID pgtype.UUID) (api.Dashboard, error) {
+func (h *Handlers) readSnapshot(ctx context.Context, householdID pgtype.UUID, at budget.Position, mode trajectory.Mode) (api.Dashboard, error) {
 	tx, err := h.tx.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
 	if err != nil {
 		return api.Dashboard{}, fmt.Errorf("begin: %w", err)
@@ -104,19 +108,28 @@ func (h *Handlers) readSnapshot(ctx context.Context, householdID pgtype.UUID) (a
 	// Nothing was written, so ending it is the same either way; the rollback is
 	// detached from ctx so a cancelled request still releases the connection.
 	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
-	return read(ctx, db.New(tx), householdID)
+	return read(ctx, db.New(tx), householdID, at, mode)
 }
 
 // read is the answer, from one snapshot. The currency is read here, in the
 // snapshot, and not taken from the Household row Locate read before the Period
 // was ensured: that read is outside the snapshot, and the currency the figures
-// are stated in must be the one they were read under.
-func read(ctx context.Context, q db.Querier, householdID pgtype.UUID) (api.Dashboard, error) {
+// are stated in must be the one they were read under. Today and the Period are
+// the Position's, so every statement below is keyed by the one window.
+func read(ctx context.Context, q db.Querier, householdID pgtype.UUID, at budget.Position, mode trajectory.Mode) (api.Dashboard, error) {
 	household, err := q.GetHouseholdByID(ctx, householdID)
 	if err != nil {
 		return api.Dashboard{}, fmt.Errorf("look up household: %w", err)
 	}
-	return api.Dashboard{Currency: household.ReportingCurrency}, nil
+	out := api.Dashboard{Currency: household.ReportingCurrency}
+	assembly, ok, err := Assemble(ctx, q, householdID, at, mode)
+	if err != nil {
+		return api.Dashboard{}, err
+	}
+	if ok {
+		out.Trajectory = assembly.trajectoryOnTheWire()
+	}
+	return out, nil
 }
 
 // internalError is this package's own 500: auth's panics for a response type it

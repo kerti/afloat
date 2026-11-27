@@ -822,6 +822,10 @@ export interface paths {
          *     snapshot. It states the currency of every `Money` this answer carries,
          *     which has no `currency` of its own (PRD N3). Every other property is
          *     optional and omitted when empty, never `null`.
+         *
+         *     `trajectory` is the figures the Daily Pool makes of the Period's
+         *     spending so far (PRD D1, D4, D8). It is omitted while the Household has
+         *     no Monthly Budget, and then the answer is `currency` alone.
          */
         get: operations["getDashboard"];
         put?: never;
@@ -1726,6 +1730,48 @@ export interface components {
              * @example IDR
              */
             currency: string;
+            trajectory?: components["schemas"]["Trajectory"];
+        };
+        /**
+         * @description The Period's daily-bucket spending read against its Daily Pool (CONTEXT.md
+         *     §Trajectory), computed on the server from the Monthly Budget's and the
+         *     Commitments' versions as they stand on the caller's Today and the
+         *     Expenses dated in the Period. Present once the Household has a Monthly
+         *     Budget, absent before, never `null`. Every `Money` is in the answer's
+         *     `currency` and is exact at four decimals; a negative one is information
+         *     and is never clamped.
+         *
+         *     - `left_to_spend_today`: Today's Allowance less what is already spent
+         *       today (PRD D1). Negative once more is spent than the allowance.
+         *     - `todays_allowance`: what the Daily Pool still allows for each of the
+         *       remaining days, Today included, or the baseline in `fixed` mode (PRD
+         *       D4). Floored at four decimals, so it never overstates.
+         *     - `days_remaining`: PRD D8.
+         *     - `remaining_daily_pool`: what is left of the Period's Available Pool
+         *       after the spending that has settled before Today (PRD D8). Today's
+         *       spending is not in it, so it stays still through the day. Negative
+         *       once the Pool is used up.
+         *     - `baseline_daily_budget`: the slope of the target line on Today: the
+         *       Daily Pool's even share of one day until the pool changes in the
+         *       Period, then the slope set by the latest change (PRD D4). Absent while the Household is fully committed
+         *       (the baseline in force is zero), which is not the same as having no
+         *       money left.
+         *
+         *     Only a Commitment's Expense is left out of these figures: an
+         *     uncategorised Expense is Daily. Nothing here says what the Household
+         *     should do, and no figure is better or worse than another.
+         */
+        Trajectory: {
+            left_to_spend_today: components["schemas"]["Money"];
+            todays_allowance: components["schemas"]["Money"];
+            /**
+             * @description The days left in the Budget Period counting Today, so the Period's
+             *     last day reads 1.
+             * @example 17
+             */
+            days_remaining: number;
+            remaining_daily_pool: components["schemas"]["Money"];
+            baseline_daily_budget?: components["schemas"]["Money"];
         };
         /**
          * @description One Category's allocation in the current Budget Period, set to an

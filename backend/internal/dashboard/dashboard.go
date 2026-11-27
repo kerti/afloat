@@ -58,7 +58,8 @@ func New(d Deps) *Handlers {
 // the request, and every statement filters on it in SQL.
 //
 // Only what the merged PRs of #155 render is on the wire (R5): the currency
-// and, once the Household has a Monthly Budget, the trajectory's figures.
+// and, once the Household has a Monthly Budget, the trajectory's figures and the
+// two breakdowns (each omitted again where it has no row).
 func (h *Handlers) GetDashboard(ctx context.Context, _ api.GetDashboardRequestObject) (api.GetDashboardResponseObject, error) {
 	user, ok := auth.UserFromContext(ctx)
 	if !ok {
@@ -128,6 +129,8 @@ func read(ctx context.Context, q db.Querier, householdID pgtype.UUID, at budget.
 	}
 	if ok {
 		out.Trajectory = assembly.trajectoryOnTheWire()
+		out.Categories = assembly.Breakdown.categoriesOnTheWire()
+		out.Pockets = assembly.Breakdown.pocketsOnTheWire()
 	}
 	return out, nil
 }

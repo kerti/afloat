@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
@@ -295,6 +296,9 @@ type seeded struct {
 	spec        fixtureHousehold
 	householdID pgtype.UUID
 	ctx         context.Context
+	// categoryKeys and pocketKeys name the ids the seeding minted, by their
+	// canonical spelling, so an answer's rows can be read in the fixture's terms.
+	categoryKeys, pocketKeys map[string]string
 }
 
 // seed writes every fixture Household into the database, side by side, and
@@ -317,9 +321,11 @@ func (f fixture) seed(t *testing.T, file fixtureFile) []seeded {
 			userID, householdID, "user"+string(rune('a'+i))+"@example.com", h.TimeZone)
 
 		pockets := map[string]pgtype.UUID{}
+		pocketKeys, categoryKeys := map[string]string{}, map[string]string{}
 		for _, p := range h.Pockets {
 			id := testutil.NewUUID(t)
 			pockets[p.Key] = id
+			pocketKeys[uuidString(id)] = p.Key
 			f.exec(t, `INSERT INTO pockets (id, household_id, pocket_display_name, active) VALUES ($1, $2, $3, $4)`,
 				id, householdID, p.Name, p.Active == nil || *p.Active)
 		}
@@ -327,6 +333,7 @@ func (f fixture) seed(t *testing.T, file fixtureFile) []seeded {
 		for _, c := range h.Categories {
 			id := testutil.NewUUID(t)
 			categories[c.Key] = id
+			categoryKeys[uuidString(id)] = c.Key
 			f.exec(t, `INSERT INTO categories (id, household_id, category_display_name, bucket, active) VALUES ($1, $2, $3, $4, $5)`,
 				id, householdID, c.Name, c.Bucket, c.Active == nil || *c.Active)
 		}
@@ -360,7 +367,8 @@ func (f fixture) seed(t *testing.T, file fixtureFile) []seeded {
 				VALUES ($1, $2, $3::date, coalesce($4::timestamptz, now()), $5::numeric, $6, $7, $8, CASE WHEN $9::boolean THEN now() END)`,
 				testutil.NewUUID(t), householdID, e.OccurredOn, capturedAt, e.Amount, h.ReportingCurrency, pockets[e.Pocket], category, e.Deleted)
 		}
-		out = append(out, seeded{spec: h, householdID: householdID, ctx: f.ctxOf(t, userID)})
+		out = append(out, seeded{spec: h, householdID: householdID, ctx: f.ctxOf(t, userID),
+			categoryKeys: categoryKeys, pocketKeys: pocketKeys})
 	}
 	return out
 }
@@ -373,4 +381,29 @@ func mustUser(t *testing.T, h seeded) db.User {
 		t.Fatal("the seeded context has no User")
 	}
 	return user
+}
+
+func uuidString(id pgtype.UUID) string {
+	return uuid.UUID(id.Bytes).String()
+}
+
+// inFixtureTerms rewrites an answer's `categories` and `pockets` the way the
+// fixture writes them: the id of a row is the key of the Category or Pocket it
+// was seeded as (`category`, `pocket`), since the ids are minted at seeding.
+// An id the seeding did not mint is left as it is, and fails the comparison.
+func (h seeded) inFixtureTerms(wire map[string]any) {
+	rewrite := func(property, idField, keyField string, keys map[string]string) {
+		rows, _ := wire[property].([]any)
+		for _, r := range rows {
+			row, _ := r.(map[string]any)
+			if id, ok := row[idField].(string); ok {
+				if key, known := keys[id]; known {
+					delete(row, idField)
+					row[keyField] = key
+				}
+			}
+		}
+	}
+	rewrite("categories", "category_id", "category", h.categoryKeys)
+	rewrite("pockets", "pocket_id", "pocket", h.pocketKeys)
 }

@@ -386,6 +386,49 @@ type Category struct {
 	Id openapi_types.UUID `json:"id"`
 }
 
+// CategoryFigure One Daily Category's row of the dashboard's breakdown, or the one row
+// of uncategorised spending. The names travel with the figure so the
+// screen needs no Category list, and a name never disagrees with its
+// figure: they come from the snapshot the figure was read from.
+//
+// `category_id`, `category_display_name` and `active` are present
+// together and absent together: absent on the row that stands for the
+// Expenses with no Category. `spent` is the sum of the Category's live
+// Expenses dated in the Budget Period and on or before the caller's
+// Today, signed (a refund subtracts), the same Expenses the Pockets add
+// up. `allocation` is the Category's allocation in force Today and is
+// absent where it has none (and always on the uncategorised row). Nothing
+// else is derived from the pair: no difference, no share, no pace.
+type CategoryFigure struct {
+	// Active `false` for a Category that has been deactivated: it still has
+	// spending or an allocation, and is kept in the breakdown.
+	Active *bool `json:"active,omitempty"`
+
+	// Allocation A decimal serialised as a string at exactly four decimal places (PRD
+	// N2, BOOTSTRAP.md §4): `"9000000.0000"`, never a JSON number, never
+	// trimmed, never exponent notation. In the Household's
+	// `reporting_currency`; a Budget's money carries no `currency` of its own
+	// (PRD N3), an Expense's has one. May be negative where it is a difference
+	// (`unallocated`) or a refund (an Expense's `amount`).
+	//
+	//
+	// Example: 9000000.0000
+	Allocation          *Money              `json:"allocation,omitempty"`
+	CategoryDisplayName *string             `json:"category_display_name,omitempty"`
+	CategoryId          *openapi_types.UUID `json:"category_id,omitempty"`
+
+	// Spent A decimal serialised as a string at exactly four decimal places (PRD
+	// N2, BOOTSTRAP.md §4): `"9000000.0000"`, never a JSON number, never
+	// trimmed, never exponent notation. In the Household's
+	// `reporting_currency`; a Budget's money carries no `currency` of its own
+	// (PRD N3), an Expense's has one. May be negative where it is a difference
+	// (`unallocated`) or a refund (an Expense's `amount`).
+	//
+	//
+	// Example: 9000000.0000
+	Spent Money `json:"spent"`
+}
+
 // CategoryList The Household's Categories in creation order. An object rather than a
 // bare array so it can grow without breaking a client.
 type CategoryList struct {
@@ -486,6 +529,19 @@ type CreatePocketRequest struct {
 // `currency` is the one required property. Every other is optional,
 // omitted when it has nothing to say and never `null`.
 type Dashboard struct {
+	// Categories The Daily Categories' share of the Period's spending (PRD D7): one
+	// row for each live Daily Category, active or inactive, that has
+	// spending counted or an allocation in force Today, and one row
+	// without a `category_id` for the spending no Category classifies
+	// (an uncategorised Expense is Daily). A Commitment Category is never
+	// in it: its Expenses are in `pockets` and, once the Household's
+	// Commitments are shown, in the Commitments figures. Ordered on the
+	// server by `spent` descending, then by `category_id` ascending, the
+	// uncategorised row after the rows of equal `spent`. Omitted while
+	// there is no Monthly Budget and when it has no row, never `null` and
+	// never `[]`.
+	Categories *[]CategoryFigure `json:"categories,omitempty"`
+
 	// Currency ISO 4217. The Household's `reporting_currency` as it stands in the
 	// snapshot this answer was read from: the currency of every `Money`
 	// the answer carries, now and in later properties.
@@ -493,6 +549,14 @@ type Dashboard struct {
 	//
 	// Example: IDR
 	Currency string `json:"currency"`
+
+	// Pockets Where the Period's spending went (PRD D7): one row for each Pocket,
+	// active or inactive, with spending counted, over the Expenses of
+	// both buckets (a Pocket is where money went, whatever it was for).
+	// Ordered on the server by `spent` descending, then by `pocket_id`
+	// ascending. Omitted while there is no Monthly Budget and when it has
+	// no row, never `null` and never `[]`.
+	Pockets *[]PocketFigure `json:"pockets,omitempty"`
 
 	// Trajectory The Period's daily-bucket spending read against its Daily Pool (CONTEXT.md
 	// §Trajectory), computed on the server from the Monthly Budget's and the
@@ -912,6 +976,29 @@ type Pocket struct {
 	// Id UUIDv7, supplied by the client at creation.
 	Id                openapi_types.UUID `json:"id"`
 	PocketDisplayName string             `json:"pocket_display_name"`
+}
+
+// PocketFigure One Pocket's row of the dashboard's breakdown: where the Period's money
+// went, of both buckets. `spent` is the sum of the Pocket's live Expenses
+// dated in the Budget Period and on or before the caller's Today, signed.
+// The name travels with the figure, from the same snapshot.
+type PocketFigure struct {
+	// Active `false` for a Pocket that has been deactivated but still has
+	// spending in the Period.
+	Active            bool               `json:"active"`
+	PocketDisplayName string             `json:"pocket_display_name"`
+	PocketId          openapi_types.UUID `json:"pocket_id"`
+
+	// Spent A decimal serialised as a string at exactly four decimal places (PRD
+	// N2, BOOTSTRAP.md §4): `"9000000.0000"`, never a JSON number, never
+	// trimmed, never exponent notation. In the Household's
+	// `reporting_currency`; a Budget's money carries no `currency` of its own
+	// (PRD N3), an Expense's has one. May be negative where it is a difference
+	// (`unallocated`) or a refund (an Expense's `amount`).
+	//
+	//
+	// Example: 9000000.0000
+	Spent Money `json:"spent"`
 }
 
 // PocketList The Household's Pockets in creation order. An object rather than a bare

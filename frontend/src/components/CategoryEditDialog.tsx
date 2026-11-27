@@ -1,7 +1,13 @@
 import { useState, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { useQueryClient } from "@tanstack/react-query";
-import { budgetKey, categoriesKey, useUpdateBudget, useUpdateCategory } from "@/api/queries";
+import {
+  budgetKey,
+  categoriesKey,
+  dashboardKey,
+  useUpdateBudget,
+  useUpdateCategory,
+} from "@/api/queries";
 import type { ApiError, Category } from "@/api/client";
 import { errorMessage } from "@/api/errors";
 import { DetailActions } from "@/components/DetailActions";
@@ -140,12 +146,13 @@ export function CategoryEditDialog({
       const failure = e as ApiError;
       if (isGone(failure)) {
         // The Category is gone, so there is no form left to hold the message:
-        // say it as a toast, refetch both reads (the Category drops out) and
+        // say it as a toast, refetch the reads it was in (it drops out) and
         // close. PATCH /budget answers a deleted Category as VALIDATION
         // {category_id, invalid}, the same answer as for an unknown or foreign one.
         toastError(t("errors.NOT_FOUND"));
         void qc.invalidateQueries({ queryKey: categoriesKey });
         void qc.invalidateQueries({ queryKey: budgetKey });
+        void qc.invalidateQueries({ queryKey: dashboardKey });
         close();
       } else {
         setErr(failure);

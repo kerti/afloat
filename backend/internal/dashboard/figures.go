@@ -32,6 +32,10 @@ type Assembly struct {
 	PeriodDays, DaysElapsed int
 	Spend                   Spend
 	Figures                 trajectory.Figures
+	// Breakdown is PRD D7: the Daily Categories' and the Pockets' share of what
+	// the Period's Expenses added up to, made of the same PeriodSpend rows as
+	// Spend.
+	Breakdown Breakdown
 }
 
 // DaysRemaining is r: the days left counting Today, so the last day reads 1.
@@ -73,7 +77,7 @@ func Assemble(ctx context.Context, q db.Querier, householdID pgtype.UUID, at bud
 		})
 	}
 
-	pools := poolReader{ctx: ctx, q: q, householdID: householdID, yearMonth: at.Period.YearMonth, versions: versions, cache: map[period.Date]decimal.Decimal{}}
+	pools := poolReader{ctx: ctx, q: q, householdID: householdID, yearMonth: at.Period.YearMonth, versions: versions, cache: map[period.Date]poolAt{}}
 
 	// The pool in force Today, by the same two functions GET /budget uses.
 	poolToday, err := pools.at(at.Today)
@@ -117,7 +121,25 @@ func Assemble(ctx context.Context, q db.Querier, householdID pgtype.UUID, at bud
 	}
 	target, baseline := line.AtToday(elapsed)
 
-	spend, err := LoadSpend(ctx, q, householdID, at)
+	expenses, err := LoadPeriodSpend(ctx, q, householdID, at)
+	if err != nil {
+		return Assembly{}, false, err
+	}
+	spend, err := FoldSpend(expenses, at)
+	if err != nil {
+		return Assembly{}, false, err
+	}
+	live, err := q.ListCategories(ctx, householdID)
+	if err != nil {
+		return Assembly{}, false, fmt.Errorf("list categories: %w", err)
+	}
+	// The allocations in force Today are the rows the pool Today was made of:
+	// one as-of rule, read once.
+	allocationsToday, err := pools.allocationsAt(at.Today)
+	if err != nil {
+		return Assembly{}, false, err
+	}
+	breakdown, err := FoldBreakdown(expenses, live, allocationsToday, at)
 	if err != nil {
 		return Assembly{}, false, err
 	}
@@ -139,6 +161,7 @@ func Assemble(ctx context.Context, q db.Querier, householdID pgtype.UUID, at bud
 	return Assembly{
 		DailyPool: poolToday, BasePool: basePool, Changes: changes,
 		PeriodDays: periodDays, DaysElapsed: elapsed, Spend: spend, Figures: figures,
+		Breakdown: breakdown,
 	}, true, nil
 }
 
@@ -151,15 +174,22 @@ type poolReader struct {
 	householdID pgtype.UUID
 	yearMonth   string
 	versions    []budget.Version
-	cache       map[period.Date]decimal.Decimal
+	cache       map[period.Date]poolAt
+}
+
+// poolAt is what one Period Day's as-of read made: the pool and the allocation
+// rows it was summed from.
+type poolAt struct {
+	pool       decimal.Decimal
+	allocation []db.AllocationsAsOfRow
 }
 
 // at is the Daily Pool in force on a Period Day: the Monthly Budget less the
 // Commitments' allocations, both as of budget.InForceDay, as GET /budget reads
 // them. Inactive Categories count; a deleted one's allocation is not there.
 func (p poolReader) at(day period.Date) (decimal.Decimal, error) {
-	if pool, ok := p.cache[day]; ok {
-		return pool, nil
+	if cached, ok := p.cache[day]; ok {
+		return cached.pool, nil
 	}
 	monthly, has := budget.MonthlyBudgetAsOf(p.versions, day)
 	allocated, err := p.q.AllocationsAsOf(p.ctx, db.AllocationsAsOfParams{
@@ -182,8 +212,17 @@ func (p poolReader) at(day period.Date) (decimal.Decimal, error) {
 		}
 	}
 	pool := budget.ComputeFigures(monthly, has, commitments, daily).DailyPool
-	p.cache[day] = pool
+	p.cache[day] = poolAt{pool: pool, allocation: allocated}
 	return pool, nil
+}
+
+// allocationsAt is the allocations in force on a Period Day, the rows the pool
+// of that day was made of (read once, with it).
+func (p poolReader) allocationsAt(day period.Date) ([]db.AllocationsAsOfRow, error) {
+	if _, err := p.at(day); err != nil {
+		return nil, err
+	}
+	return p.cache[day].allocation, nil
 }
 
 // changeDays are the days a Daily Pool could have changed on: the effective

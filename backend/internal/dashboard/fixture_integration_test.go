@@ -19,7 +19,7 @@ import (
 // statements: where Today and the Period land for an instant, what PeriodSpend
 // returns and what the daily bucket folds into, the Daily Pool through the
 // Period and the figures made of it, and what the wire carries at this stage of
-// #155. Every Household of the file is in the database for every
+// #155 (the breakdowns' rows in the fixture's terms: a key for an id). Every Household of the file is in the database for every
 // row, so another Household's rows are present throughout (tenancy).
 func TestTheFixtureRowsAreAnsweredAsPinned(t *testing.T) {
 	f := newFixture(t)
@@ -100,6 +100,7 @@ func TestTheFixtureRowsAreAnsweredAsPinned(t *testing.T) {
 				if err := json.Unmarshal(rec.Body.Bytes(), &gotWire); err != nil {
 					t.Fatalf("decode the answer: %v", err)
 				}
+				h.inFixtureTerms(gotWire)
 				if !reflect.DeepEqual(gotWire, want.Wire) {
 					gotJSON, _ := json.MarshalIndent(gotWire, "", " ")
 					wantJSON, _ := json.MarshalIndent(want.Wire, "", " ")

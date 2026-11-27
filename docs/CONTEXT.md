@@ -273,6 +273,9 @@ JSON. Blank means not yet in the UI.
 | Remaining Daily Pool | sisa dana harian | approved 27 Nov 2026 (#155 PR 5), provisional; "dana harian" is the Daily Pool's word |
 | State names: Afloat / Drifting / Taking on water | aman / bocor / nyaris tenggelam | approved 27 Nov 2026 (#155 PR 6, Q-10); "nyaris tenggelam" (nearly sinking), never "tenggelam", which is terminal (VISION §4) |
 | *ahead of pace* / *behind pace* / *On pace* | di depan laju / di belakang laju / sesuai laju | approved 27 Nov 2026 (#155 PR 6, Q-10); Buffer Days is not shown, so needs no word |
+| By Category / By Pocket (the Home sections) | per kategori / per kantong | approved 27 Nov 2026 (#155 PR 7), provisional |
+| *of* (an allocation: "of Rp1.500.000") | dari | approved 27 Nov 2026 (#155 PR 7), provisional |
+| Uncategorised (a Home row) | tanpa kategori | in the UI since the Expenses list (#140); first on Home (#155 PR 7), provisional |
 
 ---
 

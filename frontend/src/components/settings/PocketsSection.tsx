@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { useQueryClient } from "@tanstack/react-query";
 import { restorePocket, updatePocket, type ApiError, type Pocket } from "@/api/client";
 import {
+  dashboardKey,
   pocketsKey,
   useCreatePocket,
   useDeletePocket,
@@ -209,6 +210,11 @@ function PocketForm({
 export function PocketsSection() {
   const { t } = useTranslation();
   const qc = useQueryClient();
+  // The Undos call the client directly, outside the mutation hooks, so they
+  // refetch what a Pocket's name and Inactive flag are shown in (Home's By
+  // Pocket) themselves, as the Category Undos do (BudgetPage).
+  const refetchDashboard = <T,>(r: T) =>
+    qc.invalidateQueries({ queryKey: dashboardKey }).then(() => r);
   const pockets = usePockets();
   const toggle = useUpdatePocket();
   const remove = useDeletePocket();
@@ -233,7 +239,7 @@ export function PocketsSection() {
     const undoable = () =>
       toastUndoable({
         message: t(p.active ? "toast.deactivated" : "toast.reactivated", { name }),
-        undo: () => updatePocket(p.id, { active: p.active }),
+        undo: () => updatePocket(p.id, { active: p.active }).then(refetchDashboard),
         qc,
         invalidate: pocketsKey,
       });
@@ -262,7 +268,7 @@ export function PocketsSection() {
     editParam.close();
     toastUndoable({
       message: t("toast.deleted", { name }),
-      undo: () => restorePocket(p.id),
+      undo: () => restorePocket(p.id).then(refetchDashboard),
       qc,
       invalidate: pocketsKey,
     });

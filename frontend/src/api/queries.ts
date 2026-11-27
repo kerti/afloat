@@ -78,7 +78,9 @@ export function useDashboard() {
 
 // The dashboard is made of the Budget, the Categories' allocations, the
 // Expenses and the Household's and the User's settings (the Period's window,
-// Today), so a write to any of them can move a figure and invalidates it.
+// Today), and it carries the names and the Inactive flags of the Categories and
+// Pockets its breakdown rows stand for, so a write to any of them can move a
+// figure or a row and invalidates it.
 const invalidateDashboard = (qc: QueryClient) => qc.invalidateQueries({ queryKey: dashboardKey });
 
 // The session probe (contract: "A 401 means show the login screen"). A 401 is
@@ -204,12 +206,18 @@ export function usePockets() {
   return useQuery<PocketList, ApiError>({ queryKey: pocketsKey, queryFn: listPockets });
 }
 
+// A Pocket's name and Inactive flag are on the dashboard's By Pocket rows (D7),
+// so every Pocket write also invalidates the dashboard: a rename or a
+// deactivation must not leave a stale row on Home (a create or a delete has no
+// row to move, and costs one refetch it never needs).
+//
 // The list is the one read path, as /me is: invalidate, never patch the cache.
 export function useCreatePocket() {
   const qc = useQueryClient();
   return useMutation<Pocket, ApiError, CreatePocketRequest>({
     mutationFn: createPocket,
-    onSuccess: () => qc.invalidateQueries({ queryKey: pocketsKey }),
+    onSuccess: () =>
+      Promise.all([qc.invalidateQueries({ queryKey: pocketsKey }), invalidateDashboard(qc)]),
   });
 }
 
@@ -217,11 +225,13 @@ export function useCreatePocket() {
 // it is refetched whichever way the write went.
 export function useUpdatePocket() {
   const qc = useQueryClient();
+  const refetch = () =>
+    Promise.all([qc.invalidateQueries({ queryKey: pocketsKey }), invalidateDashboard(qc)]);
   return useMutation<Pocket, ApiError, { id: string; body: UpdatePocketRequest }>({
     mutationFn: ({ id, body }) => updatePocket(id, body),
-    onSuccess: () => qc.invalidateQueries({ queryKey: pocketsKey }),
+    onSuccess: refetch,
     onError: (err) => {
-      if (err.code === "NOT_FOUND") void qc.invalidateQueries({ queryKey: pocketsKey });
+      if (err.code === "NOT_FOUND") void refetch();
     },
   });
 }
@@ -230,11 +240,13 @@ export function useUpdatePocket() {
 // A NOT_FOUND means the list is stale, so it is refetched.
 export function useDeletePocket() {
   const qc = useQueryClient();
+  const refetch = () =>
+    Promise.all([qc.invalidateQueries({ queryKey: pocketsKey }), invalidateDashboard(qc)]);
   return useMutation<void, ApiError, string>({
     mutationFn: deletePocket,
-    onSuccess: () => qc.invalidateQueries({ queryKey: pocketsKey }),
+    onSuccess: refetch,
     onError: (err) => {
-      if (err.code === "NOT_FOUND") void qc.invalidateQueries({ queryKey: pocketsKey });
+      if (err.code === "NOT_FOUND") void refetch();
     },
   });
 }

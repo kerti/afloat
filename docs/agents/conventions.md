@@ -79,7 +79,7 @@ whole scaffold sheet. If the two ever disagree, `BOOTSTRAP.md` wins and this fil
 - **Contract:** `contract/openapi.yaml` is hand-written and authoritative. Regenerate the Go server
   interfaces and TypeScript types from it; never hand-edit generated output. `make check` regenerates
   into a scratch directory and diffs.
-- **Trajectory:** computed server-side. The client formats and floors for display but derives
+- **Trajectory:** computed server-side. The client formats for display but derives
   nothing. `contract/testdata/trajectory.json` is the fixture the backend's unit tests read — a
   formula change updates the fixture and the tests together.
 - **Migrations, pre-release:** a schema change **edits `00001_baseline.sql` in place** — it does not

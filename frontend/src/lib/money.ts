@@ -80,12 +80,23 @@ function increment(digits: string): string {
   return "1" + out.join("");
 }
 
-// The digits of an amount rounded half up to `decimals`, shared by what the
-// figure rows show and what the money field loads, so the two never differ.
-function roundedDigits(m: RegExpExecArray, decimals: number) {
+// The digits of an amount cut to `decimals`, shared by what the figure rows show
+// and what the money field loads, so the two never differ. `half-up` is half
+// away from zero. `floor` is toward minus infinity, the allowance figures' mode
+// (#155 R11): a positive amount is cut, a negative one with anything cut away
+// grows by one unit in its last place, so the figure never reads as more than
+// the Household can spend. Both work on the digits, never a float.
+type Rounding = "half-up" | "floor";
+
+function roundedDigits(m: RegExpExecArray, decimals: number, mode: Rounding = "half-up") {
   const frac = m[3] ?? "";
   let digits = stripLeadingZeros(m[2]!) + frac.slice(0, decimals).padEnd(decimals, "0");
-  if (frac.length > decimals && frac.charCodeAt(decimals) >= 53) digits = increment(digits);
+  const cutAway = frac.slice(decimals);
+  const up =
+    mode === "floor"
+      ? m[1] === "-" && /[1-9]/.test(cutAway)
+      : cutAway !== "" && cutAway.charCodeAt(0) >= 53;
+  if (up) digits = increment(digits);
   digits = digits.padStart(decimals + 1, "0");
   const cut = digits.length - decimals;
   return {
@@ -95,21 +106,34 @@ function roundedDigits(m: RegExpExecArray, decimals: number) {
   };
 }
 
-/** A wire amount for the screen: grouped in the locale, the currency's own
- * decimals, half-up on the digits. Anything that is not a plain decimal comes
- * back as given, never NaN. */
-export function formatMoney(value: string, currency: string, locale: string): string {
+function format(value: string, currency: string, locale: string, mode: Rounding): string {
   const m = SIGNED.exec(value);
   if (!m) return value;
   const decimals = currencyDecimals(currency);
   const sep = separators(locale);
-  const { int, fraction, negative } = roundedDigits(m, decimals);
+  const { int, fraction, negative } = roundedDigits(m, decimals, mode);
   return (
     (negative ? "-" : "") +
     prefix(currency) +
     group(int, sep.group) +
     (decimals > 0 ? sep.decimal + fraction : "")
   );
+}
+
+/** A wire amount for the screen: grouped in the locale, the currency's own
+ * decimals, half-up on the digits. Anything that is not a plain decimal comes
+ * back as given, never NaN. */
+export function formatMoney(value: string, currency: string, locale: string): string {
+  return format(value, currency, locale, "half-up");
+}
+
+/** An allowance figure for the screen (the hero, Today's allowance, the
+ * Baseline): as `formatMoney`, but toward minus infinity at the currency's own
+ * minor unit, so "203448.2758" reads `Rp203.448` and "-0.5" reads `-Rp1`, and
+ * a figure never shows as more than the server's. Never "-0". Every other
+ * figure stays on `formatMoney`. (#155 R11.) */
+export function formatAllowance(value: string, currency: string, locale: string): string {
+  return format(value, currency, locale, "floor");
 }
 
 /** A wire amount rounded half up to the currency's decimals, unpadded

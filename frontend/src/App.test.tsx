@@ -23,8 +23,7 @@ describe("session flow", () => {
     await user.type(screen.getByLabelText("Password"), "correct-horse");
     await user.click(screen.getByRole("button", { name: "Sign in" }));
 
-    expect(await screen.findByText("Signed in as Alice.")).toBeInTheDocument();
-    expect(screen.getByText("Household: Test Household")).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Home" })).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Sign out" }));
     expect(await screen.findByRole("heading", { name: "Sign in" })).toBeInTheDocument();
@@ -102,7 +101,7 @@ describe("session flow", () => {
   it("switches to the signed-in user's own locale, <html lang> included", async () => {
     server.use(...defaultHandlers({ signedIn: true, me: { ...alice, locale: "id-ID" } }));
     renderApp("/");
-    expect(await screen.findByText("Masuk sebagai Alice.")).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Beranda" })).toBeInTheDocument();
     expect(document.documentElement.lang).toBe("id-ID");
   });
 
@@ -120,7 +119,7 @@ describe("session flow", () => {
     server.use(...defaultHandlers({ signedIn: true, me: alice }));
     const user = userEvent.setup();
     const { client } = renderApp("/");
-    await screen.findByText("Signed in as Alice.");
+    await screen.findByRole("heading", { name: "Home" });
     // Stands in for the Household data later steps will cache.
     client.setQueryData(["household", "expenses"], [{ id: "x" }]);
 
@@ -139,7 +138,7 @@ describe("session flow", () => {
       ...defaultHandlers({ signedIn: true, me: { ...alice, locale: "id-ID" } }),
     );
     const { client } = renderApp("/");
-    await screen.findByText("Masuk sebagai Alice.");
+    await screen.findByRole("heading", { name: "Beranda" });
     client.setQueryData(["household", "cached"], [{ id: "x" }]);
 
     // The session ended server-side; some other request finds out first.
@@ -164,7 +163,7 @@ describe("session flow", () => {
     const state = { signedIn: true, me: alice };
     server.use(...defaultHandlers(state));
     const { client } = renderApp("/");
-    await screen.findByText("Signed in as Alice.");
+    await screen.findByRole("heading", { name: "Home" });
     client.setQueryData(["household", "expenses"], [{ id: "x" }]);
 
     state.signedIn = false;
@@ -208,11 +207,12 @@ describe("session flow", () => {
         if (slow) await delay(150);
         return HttpResponse.json(alice);
       }),
-      ...defaultHandlers(),
+      // Signed in, so the dashboard Home reads is answered rather than a 401.
+      ...defaultHandlers({ signedIn: true, me: alice }),
     );
     const user = userEvent.setup();
     const { client } = renderApp("/");
-    await screen.findByText("Signed in as Alice.");
+    await screen.findByRole("heading", { name: "Home" });
 
     slow = true;
     void client.invalidateQueries({ queryKey: ["me"] });
@@ -230,19 +230,20 @@ describe("session flow", () => {
       http.get("/api/me", () =>
         fail ? HttpResponse.json(envelope("INTERNAL"), { status: 500 }) : HttpResponse.json(alice),
       ),
-      ...defaultHandlers(),
+      // Signed in, so the dashboard Home reads is answered rather than a 401.
+      ...defaultHandlers({ signedIn: true, me: alice }),
     );
     const user = userEvent.setup();
     renderApp("/");
     await screen.findByRole("alert");
     fail = false;
     await user.click(screen.getByRole("button", { name: "Try again" }));
-    expect(await screen.findByText("Signed in as Alice.")).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Home" })).toBeInTheDocument();
   });
 
   it("leaves the login screen for home when already signed in", async () => {
     server.use(...defaultHandlers({ signedIn: true, me: alice }));
     renderApp("/login");
-    await waitFor(() => expect(screen.getByText("Signed in as Alice.")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Home" })).toBeInTheDocument());
   });
 });

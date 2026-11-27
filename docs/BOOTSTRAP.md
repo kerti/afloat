@@ -1071,7 +1071,7 @@ When the session cookie was presented but the lookup itself failed (an outage, n
 it answers `500 INTERNAL` instead of `401`, so every session-requiring operation declares a `500`
 (§5.1).
 
-**Trajectory is computed server-side.** The client formats and floors for display but derives
+**Trajectory is computed server-side.** The client formats for display but derives
 nothing. This keeps one source of truth.
 
 **`contract/testdata/trajectory.json` is a test fixture** holding the reference rows from

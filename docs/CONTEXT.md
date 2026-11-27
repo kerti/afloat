@@ -259,7 +259,11 @@ JSON. Blank means not yet in the UI.
 | Restore | pulihkan | Recycle Bin (#140 PR 5), provisional |
 | `allowance_mode` (as a user reads it: **Allowance**) | jatah harian | approved 26 Nov 2026 (#155 PR 4) |
 | Adaptive / Fixed (the allowance modes) | adaptif / tetap | approved 26 Nov 2026 (#155 PR 4) |
-| Baseline Daily Budget (as a user reads it: **Baseline**) | jatah dasar | approved 26 Nov 2026 (#155 PR 4, in the Allowance hint) |
+| Baseline Daily Budget (as a user reads it: **Baseline**) | jatah dasar | approved 26 Nov 2026 (#155 PR 4, in the Allowance hint); first a figure label on Home (#155 PR 5) |
+| Left to Spend Today | sisa untuk dibelanjakan hari ini | approved 27 Nov 2026 (#155 PR 5), provisional |
+| Today's Allowance (as a figure label) | jatah harian hari ini | approved 27 Nov 2026 (#155 PR 5), provisional; "jatah harian" is the ruled word for the allowance |
+| Days Remaining | sisa hari | approved 27 Nov 2026 (#155 PR 5), provisional |
+| Remaining Daily Pool | sisa dana harian | approved 27 Nov 2026 (#155 PR 5), provisional; "dana harian" is the Daily Pool's word |
 | State names, *ahead of pace*, Buffer Days | | **[OPEN Q-10]** |
 
 ---
@@ -316,9 +320,10 @@ the future never raises Today's Allowance (#155 R3). A refund dated before Today
   useful — it is the last day, and that *is* what is left. Forward Daily Rate is undefined and shown
   as "—" rather than dividing by zero.
 - **Adaptive borrowing.** Under-spending early raises `A`, which is honest but invites spending the
-  slack. The UI therefore shows `B` beside `A` (except while fully committed, when there is no `B`), so an inflated allowance is visibly borrowed
-  from the Household's own future rather than presented as found money. **[OPEN Q-04]** — whether to
-  additionally cap displayed `A` at some multiple of `B`.
+  slack. The UI therefore shows `B` beside `A`, so an inflated allowance is visibly borrowed
+  from the Household's own future rather than presented as found money. **Two exceptions:** while
+  fully committed there is no `B`, and in **fixed mode** `A = B`, so `A` is shown alone, chosen from
+  `allowance_mode` and never by comparing the amounts. No cap on displayed `A` (Q-04, answered).
 - **Rounding.** Store `DECIMAL(20,4)`, mirroring Balances (ADR-0011); serialise decimals as strings
   on the wire. Everything is computed from exact values and rounded only on output — never feed a
   rounded intermediate into another figure, except `A` into Left to Spend Today below.
@@ -326,9 +331,7 @@ the future never raises Today's Allowance (#155 R3). A refund dated before Today
     Forward Daily Rate and Left to Spend Today are **floored** (`RoundingMode.FLOOR`, toward −∞, not
     toward zero) at the storage scale, so Afloat never tells a Household it can spend more than it
     can. `A` is rounded once, then Left to Spend Today is that floored `A` minus `S_today`. Forward
-    Daily Rate is computed from exact values, then floored. The client's own floor to the display unit
-    (Rp1.000 for IDR, N5a) is separate and downstream of this — the server never applies a display
-    unit.
+    Daily Rate is computed from exact values, then floored. The server never applies a display unit.
   - **R2 — Trajectory Variance and Buffer Days go on the wire half-up at 4dp.** Half-up means half
     away from zero (shopspring `Round`). State is decided from the *exact*
     (unrounded) `V` and `B` — compared as `V` against `threshold × B`, with no division — never from

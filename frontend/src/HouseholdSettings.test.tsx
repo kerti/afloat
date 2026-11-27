@@ -51,7 +51,7 @@ describe("household settings", () => {
     expect(currencyFixture.codes).not.toContain("ZWL");
   });
 
-  it("sends only the name when only the name changed, raises one toast, and the shell shows it after", async () => {
+  it("sends only the name when only the name changed, raises one toast, and Settings reads it back after", async () => {
     const state = signedIn();
     server.use(...defaultHandlers(state));
     const user = userEvent.setup();
@@ -68,9 +68,12 @@ describe("household settings", () => {
     expect(state.patches).toEqual([{ household_display_name: "Kos Kuning" }]);
     expect(household().getByRole("button", { name: "Save" })).toBeDisabled();
 
-    // /me was invalidated, so the shell answers with the new name.
-    await user.click(within(screen.getByRole("navigation")).getByRole("link", { name: "Home" }));
-    expect(await screen.findByText("Household: Kos Kuning")).toBeInTheDocument();
+    // /me was invalidated, so coming back to Settings reads the new name.
+    const nav = () => within(screen.getByRole("navigation"));
+    await user.click(nav().getByRole("link", { name: "Home" }));
+    expect(await screen.findByRole("heading", { name: "Home" })).toBeInTheDocument();
+    await user.click(nav().getByRole("link", { name: "Settings" }));
+    expect(await screen.findByLabelText("Household name")).toHaveValue("Kos Kuning");
   });
 
   it("saves on Enter, reverts on Esc, and ignores a trailing space", async () => {

@@ -59,7 +59,7 @@ describe("user settings", () => {
     expect(offered).toContain("Mars/Base");
   });
 
-  it("sends only the name when only the name changed, raises one toast, and the shell shows it after", async () => {
+  it("sends only the name when only the name changed, raises one toast, and Settings reads it back after", async () => {
     const state = signedIn();
     server.use(...defaultHandlers(state));
     const user = userEvent.setup();
@@ -75,8 +75,13 @@ describe("user settings", () => {
     expect(toastMock).toHaveBeenCalledWith("Saved.", expect.objectContaining({ duration: 4000 }));
     expect(state.mePatches).toEqual([{ user_display_name: "Alicia" }]);
 
-    await user.click(within(screen.getByRole("navigation")).getByRole("link", { name: "Home" }));
-    expect(await screen.findByText("Signed in as Alicia.")).toBeInTheDocument();
+    // /me was invalidated, so coming back to Settings reads the new name.
+    const nav = () => within(screen.getByRole("navigation"));
+    await user.click(nav().getByRole("link", { name: "Home" }));
+    expect(await screen.findByRole("heading", { name: "Home" })).toBeInTheDocument();
+    await user.click(nav().getByRole("link", { name: "Settings" }));
+    await open();
+    expect(profile().getByLabelText("Your name")).toHaveValue("Alicia");
   });
 
   it("saves the chosen zone on change, with one toast, and nothing else", async () => {

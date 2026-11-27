@@ -195,6 +195,27 @@ func (e Ownership) Valid() bool {
 	}
 }
 
+// Defines values for TrajectoryState.
+const (
+	Afloat        TrajectoryState = "afloat"
+	Drifting      TrajectoryState = "drifting"
+	TakingOnWater TrajectoryState = "taking_on_water"
+)
+
+// Valid indicates whether the value is a known member of the TrajectoryState enum.
+func (e TrajectoryState) Valid() bool {
+	switch e {
+	case Afloat:
+		return true
+	case Drifting:
+		return true
+	case TakingOnWater:
+		return true
+	default:
+		return false
+	}
+}
+
 // Allocation A Category's planned amount in the Budget's Period (PRD S8), in force
 // as of Today.
 type Allocation struct {
@@ -496,6 +517,16 @@ type Dashboard struct {
 	//   Period, then the slope set by the latest change (PRD D4). Absent while the Household is fully committed
 	//   (the baseline in force is zero), which is not the same as having no
 	//   money left.
+	// - `state`: how the trajectory reads (PRD D2), decided on the server from
+	//   exact figures. It reads `afloat` while the first few days settle (the
+	//   warm-up), plainly and on day one too. Absent while the Household is
+	//   fully committed: with no baseline there is no pace to read.
+	// - `trajectory_variance`: the target line's cumulative target through the
+	//   days that have settled, less what has settled (CONTEXT.md §Trajectory
+	//   Variance; PRD D3). Positive means less is spent than the target ("ahead
+	//   of pace"), negative means more ("behind pace"). Rounded half-up at four
+	//   decimals. Absent on the Period's first day, when nothing has settled,
+	//   and while the Household is fully committed.
 	//
 	// Only a Commitment's Expense is left out of these figures: an
 	// uncategorised Expense is Daily. Nothing here says what the Household
@@ -928,6 +959,16 @@ type SignedMoneyInput = string
 //     Period, then the slope set by the latest change (PRD D4). Absent while the Household is fully committed
 //     (the baseline in force is zero), which is not the same as having no
 //     money left.
+//   - `state`: how the trajectory reads (PRD D2), decided on the server from
+//     exact figures. It reads `afloat` while the first few days settle (the
+//     warm-up), plainly and on day one too. Absent while the Household is
+//     fully committed: with no baseline there is no pace to read.
+//   - `trajectory_variance`: the target line's cumulative target through the
+//     days that have settled, less what has settled (CONTEXT.md §Trajectory
+//     Variance; PRD D3). Positive means less is spent than the target ("ahead
+//     of pace"), negative means more ("behind pace"). Rounded half-up at four
+//     decimals. Absent on the Period's first day, when nothing has settled,
+//     and while the Household is fully committed.
 //
 // Only a Commitment's Expense is left out of these figures: an
 // uncategorised Expense is Daily. Nothing here says what the Household
@@ -973,6 +1014,11 @@ type Trajectory struct {
 	// Example: 9000000.0000
 	RemainingDailyPool Money `json:"remaining_daily_pool"`
 
+	// State The reading of the trajectory (CONTEXT.md §State; PRD D2): `afloat`,
+	// `drifting` or `taking_on_water`. A reading and never a verdict: no
+	// figure and no person is scored by it.
+	State *TrajectoryState `json:"state,omitempty"`
+
 	// TodaysAllowance A decimal serialised as a string at exactly four decimal places (PRD
 	// N2, BOOTSTRAP.md §4): `"9000000.0000"`, never a JSON number, never
 	// trimmed, never exponent notation. In the Household's
@@ -983,7 +1029,23 @@ type Trajectory struct {
 	//
 	// Example: 9000000.0000
 	TodaysAllowance Money `json:"todays_allowance"`
+
+	// TrajectoryVariance A decimal serialised as a string at exactly four decimal places (PRD
+	// N2, BOOTSTRAP.md §4): `"9000000.0000"`, never a JSON number, never
+	// trimmed, never exponent notation. In the Household's
+	// `reporting_currency`; a Budget's money carries no `currency` of its own
+	// (PRD N3), an Expense's has one. May be negative where it is a difference
+	// (`unallocated`) or a refund (an Expense's `amount`).
+	//
+	//
+	// Example: 9000000.0000
+	TrajectoryVariance *Money `json:"trajectory_variance,omitempty"`
 }
+
+// TrajectoryState The reading of the trajectory (CONTEXT.md §State; PRD D2): `afloat`,
+// `drifting` or `taking_on_water`. A reading and never a verdict: no
+// figure and no person is scored by it.
+type TrajectoryState string
 
 // UpdateBudgetRequest What a Budget change may set, merge-style: a property left out is
 // unchanged and none is required. `null` is not accepted for either

@@ -182,8 +182,8 @@ func checkPool(t *testing.T, got dashboard.Assembly, want fixtureExpected) {
 	}
 }
 
-// checkPace pins what the calculation reads against the line. The wire does not
-// carry it yet, so only this sees it.
+// checkPace pins what the calculation reads against the line, Buffer Days
+// included, which the wire never carries.
 func checkPace(t *testing.T, got dashboard.Assembly, want fixtureExpected) {
 	t.Helper()
 	pace := got.Figures.Pace

@@ -12,6 +12,7 @@ import { ErrorState, Loading } from "@/components/states";
 import { BodyText, EmptyState, MutedText, PageTitle } from "@/components/Text";
 import { TextLink } from "@/components/TextLink";
 import { formatAllowance, formatMoney } from "@/lib/money";
+import { paceOf } from "@/lib/pace";
 import { routes } from "@/lib/routes";
 
 // What silent founding hands Home through router state (R2): the name of the
@@ -27,8 +28,9 @@ function foundedPocket(state: unknown): string | null {
 // the server's, shown and never derived (PRD N5a); the allowance figures are
 // cut toward minus infinity at the currency's minor unit and the rest are
 // half-up (#155 R11). Whether the allowance stands alone or beside the Baseline
-// is `allowance_mode`, never a comparison of the amounts (R10). The Shell
-// around it carries the app name and sign-out.
+// is `allowance_mode`, never a comparison of the amounts (R10). The State and
+// the pace sentence come last, as words only (R12): each is there exactly when
+// the server sent it. The Shell around it carries the app name and sign-out.
 export function HomePage({ me }: { me: Me }) {
   const { t, i18n } = useTranslation();
   const dashboard = useDashboard();
@@ -101,6 +103,12 @@ function Figures({
   trajectory: NonNullable<Dashboard["trajectory"]>;
 }) {
   const { t } = useTranslation();
+  // Present only while the server has a pace to read (fully committed has none;
+  // day one has a State and no variance), so absence is never decided here.
+  const pace =
+    trajectory.trajectory_variance !== undefined
+      ? paceOf(trajectory.trajectory_variance, currency, locale)
+      : null;
   const allowance = {
     label: t("dashboard.todaysAllowance"),
     value: formatAllowance(trajectory.todays_allowance, currency, locale),
@@ -130,6 +138,20 @@ function Figures({
           {formatMoney(trajectory.remaining_daily_pool, currency, locale)}
         </FigureRow>
       </ListCard>
+      {(trajectory.state !== undefined || pace) && (
+        <div className="flex flex-col gap-1">
+          {trajectory.state !== undefined && (
+            <BodyText>{t(`dashboard.state.${trajectory.state}`)}</BodyText>
+          )}
+          {pace && (
+            <MutedText>
+              {pace.direction === "on"
+                ? t("dashboard.pace.on")
+                : t(`dashboard.pace.${pace.direction}`, { amount: pace.amount })}
+            </MutedText>
+          )}
+        </div>
+      )}
     </>
   );
 }

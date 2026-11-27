@@ -260,8 +260,198 @@ describe("in Indonesian", () => {
   });
 });
 
+const mainText = (text: string) => screen.queryByText(text, { selector: "main p" });
+const STATES = [
+  ["afloat", "Afloat"],
+  ["drifting", "Drifting"],
+  ["taking_on_water", "Taking on water"],
+] as const;
+
+describe("the State (D2): the name and nothing else", () => {
+  it.each(STATES)("shows %s as the word %s, whatever the pace says", async (state, word) => {
+    await home(signedIn(dashboardOf({ state, trajectory_variance: "420000.0000" })));
+    expect(await screen.findByText(word, { selector: "main p" })).toBeInTheDocument();
+    for (const [, other] of STATES) {
+      if (other !== word) expect(mainText(other)).not.toBeInTheDocument();
+    }
+  });
+
+  it("shows no State when the server sent none, as when fully committed", async () => {
+    const full = dashboardOf({ todays_allowance: "100000.0000" });
+    delete full.trajectory!.baseline_daily_budget;
+    await home(signedIn(full));
+    await screen.findByText("Days remaining");
+    for (const [, word] of STATES) expect(mainText(word)).not.toBeInTheDocument();
+    expect(screen.queryByText(/pace/i)).not.toBeInTheDocument();
+  });
+
+  it("reads plain Afloat while the warm-up pins it, beside the pace as it is", async () => {
+    await home(signedIn(dashboardOf({ state: "afloat", trajectory_variance: "-200000.0000" })));
+    expect(await screen.findByText("Afloat", { selector: "main p" })).toBeInTheDocument();
+    expect(screen.getByText("Rp200,000 behind pace")).toBeInTheDocument();
+  });
+
+  it("reads Afloat on day one with no pace sentence, because nothing has settled", async () => {
+    await home(signedIn(dashboardOf({ state: "afloat" })));
+    expect(await screen.findByText("Afloat", { selector: "main p" })).toBeInTheDocument();
+    expect(screen.queryByText(/pace/i)).not.toBeInTheDocument();
+  });
+
+  it("is the name only: no colour, no gloss, no sentence about the State, no live region", async () => {
+    await home(
+      signedIn(dashboardOf({ state: "taking_on_water", trajectory_variance: "-350000.0000" })),
+    );
+    const word = await screen.findByText("Taking on water", { selector: "main p" });
+    const block = word.parentElement!;
+    for (const el of [word, block]) {
+      expect(el.className).not.toMatch(
+        /attention|destructive|primary|success|red|green|amber|orange|bg-|border/,
+      );
+    }
+    expect(block.querySelector("[aria-live],[role=status],[role=alert],svg,img")).toBeNull();
+    // The name and the pace sentence are the whole block.
+    expect(block.children).toHaveLength(2);
+    expect(word.textContent).toBe("Taking on water");
+  });
+
+  it("comes after the supporting figures, beside the numbers and never instead of them", async () => {
+    await home(signedIn(dashboardOf({ state: "drifting", trajectory_variance: "-100000.0000" })));
+    const word = await screen.findByText("Drifting", { selector: "main p" });
+    const pool = screen.getByText("Remaining Daily Pool");
+    expect(pool.compareDocumentPosition(word) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.getByRole("region", { name: "Left to spend today" })).toBeInTheDocument();
+  });
+});
+
+describe("the pace sentence (D3, R8)", () => {
+  const pace = async (variance: string) => {
+    await home(signedIn(dashboardOf({ state: "afloat", trajectory_variance: variance })));
+    await screen.findByText("Days remaining");
+  };
+
+  it("says ahead of pace for a variance above zero, which is less spent than the target", async () => {
+    await pace("420000.0000");
+    expect(screen.getByText("Rp420,000 ahead of pace")).toBeInTheDocument();
+  });
+
+  it("says behind pace for a variance below zero, with no sign character", async () => {
+    await pace("-420000.0000");
+    const sentence = screen.getByText("Rp420,000 behind pace");
+    expect(sentence).toBeInTheDocument();
+    expect(sentence.textContent).not.toMatch(/[-+\u2212]/);
+  });
+
+  it.each(["0.4999", "-0.4999", "0.0000", "-0.0000", "0"])(
+    "says On pace when %s shows as zero, never Rp0 ahead or behind",
+    async (variance) => {
+      await pace(variance);
+      expect(screen.getByText("On pace")).toBeInTheDocument();
+      expect(screen.queryByText(/ahead|behind|Rp0/)).not.toBeInTheDocument();
+    },
+  );
+
+  it.each([
+    ["0.5000", "Rp1 ahead of pace"],
+    ["-0.5000", "Rp1 behind pace"],
+    ["-0.5", "Rp1 behind pace"],
+  ])("rounds %s half away from zero, then reads %s", async (variance, sentence) => {
+    await pace(variance);
+    expect(screen.getByText(sentence)).toBeInTheDocument();
+    expect(screen.queryByText("On pace")).not.toBeInTheDocument();
+  });
+
+  it("writes the whole amount, never abbreviated", async () => {
+    await pace("-1234567.8900");
+    expect(screen.getByText("Rp1,234,568 behind pace")).toBeInTheDocument();
+    expect(screen.queryByText(/\d\s?(k|rb|jt|m)\b/i)).not.toBeInTheDocument();
+  });
+
+  it("is the muted sentence under the State, in no colour", async () => {
+    await pace("420000.0000");
+    const sentence = screen.getByText("Rp420,000 ahead of pace");
+    expect(sentence.className).toMatch(/text-muted-foreground/);
+    expect(sentence.className).not.toMatch(/attention|destructive|red|green/);
+  });
+
+  it("is absent with the State alone when the server sent no variance", async () => {
+    await home(signedIn(dashboardOf({ state: "drifting" })));
+    expect(await screen.findByText("Drifting", { selector: "main p" })).toBeInTheDocument();
+    expect(screen.queryByText(/pace/i)).not.toBeInTheDocument();
+  });
+
+  it("is absent when the variance is not a plain decimal, not a guess", async () => {
+    await home(signedIn(dashboardOf({ state: "afloat", trajectory_variance: "1e6" })));
+    expect(await screen.findByText("Afloat", { selector: "main p" })).toBeInTheDocument();
+    expect(screen.queryByText(/pace/i)).not.toBeInTheDocument();
+  });
+
+  it("follows the Household's currency", async () => {
+    const state = signedIn({
+      currency: "USD",
+      trajectory: { ...trajectory, state: "afloat", trajectory_variance: "12.3450" },
+    });
+    await home(state);
+    expect(await screen.findByText(/^USD\s12\.35 ahead of pace$/)).toBeInTheDocument();
+  });
+});
+
+describe("the D9 audit of the State and the pace", () => {
+  it.each([
+    ["afloat", "420000.0000"],
+    ["drifting", "-150000.0000"],
+    ["taking_on_water", "-9999999.0000"],
+  ] as const)(
+    "%s says nothing of fault, advice or score, and colours nothing",
+    async (state, v) => {
+      await home(signedIn(dashboardOf({ state, trajectory_variance: v })));
+      await screen.findByText("Days remaining");
+      const main = document.querySelector("main")!;
+      expect(main.textContent).not.toMatch(
+        /overspen|over budget|failed|should|must|careful|warning|streak|score|%/i,
+      );
+      expect(
+        main.querySelector("[class*=attention],[class*=destructive],[class*=success]"),
+      ).toBeNull();
+      expect(main.querySelector("meter,progress,[role=progressbar],[role=meter]")).toBeNull();
+    },
+  );
+});
+
+describe("the State and the pace in Indonesian (Q-10, ruled 27 Nov 2026)", () => {
+  const inIndonesian = async (over: Partial<Trajectory>) => {
+    const state = signedIn(dashboardOf(over));
+    state.me = { ...state.me, locale: "id-ID" };
+    await home(state);
+    await screen.findByText(idID.dashboard.remainingDailyPool);
+  };
+
+  it.each([
+    ["afloat", "Aman"],
+    ["drifting", "Bocor"],
+    ["taking_on_water", "Nyaris tenggelam"],
+  ] as const)("words %s as %s", async (state, word) => {
+    await inIndonesian({ state });
+    expect(screen.getByText(word, { selector: "main p" })).toBeInTheDocument();
+  });
+
+  it("words ahead, behind and on pace, with dots grouping the amount", async () => {
+    await inIndonesian({ state: "afloat", trajectory_variance: "1420000.0000" });
+    expect(screen.getByText("Rp1.420.000 di depan laju")).toBeInTheDocument();
+  });
+
+  it("words behind pace", async () => {
+    await inIndonesian({ state: "drifting", trajectory_variance: "-420000.0000" });
+    expect(screen.getByText("Rp420.000 di belakang laju")).toBeInTheDocument();
+  });
+
+  it("words on pace for an amount that shows as zero", async () => {
+    await inIndonesian({ state: "afloat", trajectory_variance: "-0.4999" });
+    expect(screen.getByText(idID.dashboard.pace.on)).toBeInTheDocument();
+  });
+});
+
 describe("what Home does not show yet", () => {
-  it("has no State, pace, chart or breakdowns, no colour and no placeholder lines", async () => {
+  it("has no State or pace without the server's, no chart or breakdowns, and no placeholder lines", async () => {
     await home(signedIn(dashboardOf()));
     await screen.findByText("Days remaining");
     for (const word of [

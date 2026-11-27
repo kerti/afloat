@@ -1241,7 +1241,8 @@ onto the screen without a wrong-scheme flash is the one thing that needs a rule 
 
 Beyond the mechanical argument, this is a product gate: *Afloat / Drifting / Taking on water* is an
 English nautical idiom, and whether it survives translation into Indonesian is something to learn
-**before** the brand session builds an identity around a waterline, not after. See `PRD.md` Q-10.
+**before** the brand session builds an identity around a waterline, not after. `PRD.md` Q-10, answered
+27 Nov 2026: *aman / bocor / nyaris tenggelam*.
 
 Backend returns error codes; the frontend owns all user-facing strings.
 

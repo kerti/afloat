@@ -216,11 +216,18 @@ func (p poolReader) changeDays(at budget.Position) ([]period.Date, error) {
 	return slices.Compact(days), nil
 }
 
-// trajectoryOnTheWire is the Assembly as PR 3 of #155 renders it (R5): the
-// allowance, Left to Spend Today, Days Remaining, the Remaining Daily Pool and
-// the Baseline. State and Trajectory Variance are computed and fixture-pinned,
-// and join the wire with the PR that renders them. Money is exactly four
-// decimals, a negative keeps its sign.
+// trajectoryOnTheWire is the Assembly as #155 renders it (R5): the allowance,
+// Left to Spend Today, Days Remaining, the Remaining Daily Pool and the
+// Baseline (PR 3), and the State and Trajectory Variance (PR 6). Buffer Days
+// is computed and fixture-pinned but never on the wire (R7). Money is exactly
+// four decimals, a negative keeps its sign.
+//
+// The pace is absent while the Household is fully committed (no Pace): no
+// baseline, no State, no variance. The State is present on every day the pace
+// is, day one included, where it reads a plain afloat (R13); the variance is
+// not, because on day one nothing has settled and there is nothing to say
+// about the pace (R5, T12). Warm-up pins the State and leaves the variance as
+// it is.
 func (a Assembly) trajectoryOnTheWire() *api.Trajectory {
 	out := &api.Trajectory{
 		LeftToSpendToday:   money(a.Figures.LeftToSpendToday),
@@ -231,6 +238,12 @@ func (a Assembly) trajectoryOnTheWire() *api.Trajectory {
 	if a.Figures.Pace != nil {
 		b := money(a.Figures.Pace.BaselineDailyBudget)
 		out.BaselineDailyBudget = &b
+		state := api.TrajectoryState(a.Figures.Pace.State)
+		out.State = &state
+		if a.DaysElapsed > 0 {
+			v := money(a.Figures.Pace.TrajectoryVariance)
+			out.TrajectoryVariance = &v
+		}
 	}
 	return out
 }

@@ -43,8 +43,8 @@ const (
 )
 
 // Parameters are the warm-up floor and State thresholds. They are fixture
-// inputs, not constants (BOOTSTRAP.md §11 step 8 ruling R3; CONTEXT.md's
-// [OPEN Q-05] stays open) — a caller passes its own configured Parameters, or
+// inputs, not constants (BOOTSTRAP.md §11 step 8 ruling R3; Q-05 answered, the
+// warm-up stays 3: #155 R13) — a caller passes its own configured Parameters, or
 // DefaultParameters.
 type Parameters struct {
 	// WarmUpDays: State is pinned to Afloat while DaysElapsed is below this.

@@ -280,10 +280,20 @@ The first screen answers the core question with no navigation.
   `-0.5` reads `-Rp1`), so it never reads as more than the Household can spend. There is no larger
   display unit: the Rp1.000 floor was dropped on 2026-11-26 (it entered in Draft 1's synthesis and
   has no recorded rationale). Negative is shown as negative, not clamped, and neutral.
-- **D2. State.** One of Afloat / Drifting / Taking on water, with the waterline treatment. Always
-  beside the numbers, never instead of them.
-- **D3. Pace, in plain language.** "Rp420k ahead of pace", not a signed delta. Localised Indonesian
-  wording is unresolved — **[OPEN Q-10]**.
+- **D2. State.** One of Afloat / Drifting / Taking on water, shown as the State's name and nothing
+  else: no colour, no gloss, no sentence about it. **The waterline treatment is not met in this slice**
+  (2026-11-27, R12): it arrives with the brand session (§9), which adds it and the three State colours
+  without a layout change. Always beside the numbers, never instead of them. Shown whenever the server
+  sends a State, and nothing when it sends none (fully committed, where there is no pace to read). While
+  the warm-up pins it, and on day one, it reads plain Afloat (Q-05, R13).
+- **D3. Pace, in plain language.** "Rp420.000 ahead of pace", not a signed delta: the whole amount through
+  the one money formatter, half-up, no abbreviation and no sign character. **Ahead of pace means
+  under-spent** (Trajectory Variance above zero, less spent than the target line) and **behind pace means
+  over-spent** (below zero); an amount that shows as zero reads **"On pace"**, never "Rp0 behind pace",
+  so the words are chosen from the amount as shown and not from the raw sign (R8, 2026-11-27). Shown
+  only while the server sends the variance: not on a Period's first day, when nothing has settled, and
+  not while fully committed. The basis is money, never Buffer Days (R7). Localised Indonesian wording
+  was ruled at PR 6's phone preview (Q-10, answered; `CONTEXT.md`'s id-ID table).
 - **D4. Baseline beside the adaptive figure.** Under the hero, **Today's allowance** and the
   **Baseline** side by side, so an inflated allowance reads as borrowed from the Household's own
   future rather than as found money; one name each, and no sentence about borrowing. No cap (Q-04).
@@ -374,7 +384,7 @@ and a cached server Today (`today` on `GET /me`), both additive:
 - **N12a.** **en-GB and id-ID from day one**, both locale files real, i18next, matching Balances.
   Beyond avoiding a week of string extraction later, this is a product gate: whether the nautical
   state vocabulary survives translation into Indonesian must be known **before** the brand session
-  builds an identity around it. See Q-10.
+  builds an identity around it. Q-10 answered it (§11).
 
 ### 8.4 Client
 
@@ -452,13 +462,14 @@ new spend, a raise does not cure an overspend already incurred, and the State is
 above a clamp (R2, R3) · **Q-26** (raised and answered in the grilling, so never open) D8's money
 figure is `P' − S_settled`, the number Today's Allowance is made of, frozen through Today, signed, with
 Commitments left out as in every daily figure; it is named the **Remaining Daily Pool** and sent as
-`remaining_daily_pool` (R6).
+`remaining_daily_pool` (R6) · **Q-05** the warm-up stays 3 settled days, pinned by a test that holds
+`DefaultParameters()` to `contract/testdata/trajectory.json`; the State reads plain Afloat while it is
+pinned and on day one, with no distinct "getting a read" presentation (a fourth State by the back door), and
+`warming_up` is not on the wire (R13; PR 6) · **Q-10** (ruled at PR 6's phone preview, 27 Nov 2026) the id-ID State names are *aman*, *bocor* and *nyaris tenggelam*: "nearly sinking", never *tenggelam*, which is terminal (VISION §4's "Why not Sinking"); the pace words are *di depan laju*, *di belakang laju* and *sesuai laju*.
 
 | # | Question | Blocks |
 |---|---|---|
-| Q-05 | Is a 3-settled-day warm-up the right floor, and should warm-up have its own neutral presentation rather than reusing `afloat`? | State model |
 | Q-08 | What UI mechanism actually prevents top-ups and ATM withdrawals being recorded as Expenses? Copy alone will not do it. | Capture |
-| Q-10 | Indonesian terminology for the trajectory vocabulary — *ahead of pace*, *Drifting*, *Taking on water*. The State names may not survive translation intact. | Copy, i18n, brand |
 | Q-13 | Cash discipline. Every cash spend must be recorded individually or the Cash Pocket silently under-reports. Is a periodic "cash reconciliation" adjustment Expense worth the conceptual cost? | Post-MVP, probably |
 | Q-14 | Backup / restore / erasure. Balances has all three, including a GDPR erasure path. Afloat holds spending data, which is arguably more sensitive. Defer, or parity from the start? | Post-MVP scope |
 | Q-15 | Does a Household ever need more than one Budget Period shape — e.g. a weekly view for the daily bucket? | Post-MVP |
@@ -487,6 +498,7 @@ its due date by hand. Adding it back later is a non-breaking contract change plu
 
 | Date | Change |
 |---|---|
+| 2026-11-27 | State and pace (issue #155, PR 6 of 9: the contract and the backend, with the Home text). **R7, R8:** `GET /dashboard`'s `trajectory` gains `state` (the new `TrajectoryState` enum: `afloat`, `drifting`, `taking_on_water`) and `trajectory_variance` (money, four decimals, half-up), each optional and omitted, never `null`: both are absent while the Household is fully committed, and on a Period's first day `state` reads `afloat` and the variance is absent because nothing has settled; while the warm-up pins the State both are sent. `buffer_days` and `warming_up` stay off the wire. **D2 is reworded:** the State is shown as its name only (R12), and the waterline treatment is **not met in this slice**, arriving with the brand session. **D3 is reworded:** "Rp420.000 ahead of pace" means under-spent, "behind pace" over-spent, an amount that shows as zero reads "On pace", chosen from the amount as shown (R8). **Q-05 is recorded in §11 as answered (R13):** the warm-up stays 3 and the State reads plain Afloat while pinned. **Q-10 answered at the phone preview, 27 Nov 2026:** *aman* / *bocor* / *nyaris tenggelam* and *di depan laju* / *di belakang laju* / *sesuai laju* (R18; *tenggelam* alone was refused as terminal, VISION §4). VISION §4's Drifting sentence is reworded to say "running faster than the intended pace", since "ahead of pace" meant the opposite there (the maintainer's wording). Home shows the State's name and the pace sentence below the supporting figures; the text uses the existing Body and Muted body roles, confirmed by the maintainer at the preview. `contract/testdata/dashboard.json`'s `wire` expectations carry the two properties. No schema change, no `make db-reset`, no new environment variable. |
 | 2026-11-27 | Home answers the question (issue #155, PR 5 of 9: the frontend only; no contract, schema or backend change). **R10 (Q-04 recorded in §11 as answered):** no cap on the displayed allowance. Under the hero, **Today's allowance** and the **Baseline** are shown as a pair, and in `fixed` mode Today's allowance alone, chosen from `allowance_mode` and never by comparing amounts; while fully committed there is no Baseline and the allowance stands alone with no wording about it; "Daily allowance" is retired (D4). **R11:** D1's "Floored to Rp1.000" is dropped (it had no recorded rationale) and no replacement display unit exists. The allowance figures (the hero, Today's allowance, the Baseline) are formatted **toward minus infinity at the currency's own minor unit** (IDR: whole rupiah, so `203448.2758` reads `Rp203.448` and `-0.5` reads `-Rp1`, never `-Rp0`), on the digits and never a float; every other figure stays half-up. N5a is reworded: "the client formats for display but derives nothing". The Home screen shows the hero, the pair, Days Remaining and the Remaining Daily Pool (D8, half-up), a sentence and a link to Budget while there is no Monthly Budget, Loading, a retryable failure, and keeps the previous figures while a refetch runs; it shows no State, pace, chart or breakdown yet (PRs 6 to 9), no colour, gauge or nag (D9), and its placeholder lines ("Signed in as", the Household line, "coming soon") are gone. The hero element and its size, the pair and the allowance rounding were **confirmed by the maintainer on the phone preview, 27 Nov 2026 (R18)**, with the id-ID words. A failed refresh keeps the figures shown, with no alert (ruled the same day). The same PR fixes `useChoice`'s one-frame flash of the old value after a save-on-change write (it cleared its pending value a tick before the refetched `/me` arrived). New id-ID terms are provisional in `CONTEXT.md`. |
 | 2026-11-26 | `allowance_mode` is writable (issue #155, PR 4 of 9: the backend and the contract; the Settings choice is the frontend half of the same PR). **R9 (T15):** `PATCH /household` gains `allowance_mode`, the existing `AllowanceMode` enum (`adaptive` or `fixed`), strictly additive: merge semantics like the other fields (left out is unchanged), `null` and a value outside the enum are `INVALID_JSON_BODY` as for the User's `locale` (the spec validator refuses them, so no new `VALIDATION` field or rule), the answer is the whole Household, and **no new error code**. It is written in the same one `UPDATE` with `coalesce` as the other three non-clearable settings, tenant-filtered in SQL, and needs no lock and no guard (it is a setting, not a refusal on spending). S3 now lists five writable settings. It sits before Home (PR 5) so fixed mode is reachable when Home ships; the dashboard already reads the mode from the Household, so the next `GET /dashboard` answers a fixed Today's Allowance as the Baseline Daily Budget. No schema change, so no `make db-reset`; no new environment variable. |
 | 2026-11-26 | The figures on the wire (issue #155, PR 3 of 9: `GET /dashboard` answers its first figures; no screen yet). Rulings from the maintainer, as they bear on this PR: **R5**, `Dashboard` gains the optional `trajectory`, strictly additive and a property joins the wire in the PR that renders it: `left_to_spend_today`, `todays_allowance`, `days_remaining`, `remaining_daily_pool` and `baseline_daily_budget` (absent while fully committed), omitted while the Household has no Monthly Budget and never `null`; `state`, `trajectory_variance` and the rest wait for the PRs that render them (the State and the pace, PR 6), and `buffer_days`, `warming_up`, flags and every day count but `days_remaining` are never on the wire. **R6 (Q-26 recorded in §11 as answered):** D8's money figure is `P' − S_settled`, named the **Remaining Daily Pool** (a `CONTEXT.md` entry), and D8 is reworded from "Remaining Budget". **R1, R2, R3:** the assembly in `backend/internal/dashboard` reads the Daily Pool by the same two functions `GET /budget` uses (the two answers are asserted equal), reads the pool as of the Period's first day as the base and builds the target line from the days after it and on or before Today on which the pool really changed, whether the Monthly Budget's or a Commitment's allocation (a Daily Category's moves nothing and a version after the viewer's Today is not in force), and feeds `trajectory.Calculate` the pool in force Today with `DefaultParameters()`; the allowance mode is the one `LocateHousehold` read, never the snapshot's. `contract/testdata/dashboard.json` gains the expected pool, pace and wire figures for every row, worked in exact rationals independently of the backend, and rows for versions before, inside and after a re-cut window, a Commitment's change, a future-dated refund, the fixed mode and a negative pool. The frontend gains `useDashboard` and invalidates it from every Expense, Budget, Category and Household write and from `useUpdateMe` (R5). No schema change, so no `make db-reset`; no new environment variable. |

@@ -1763,6 +1763,16 @@ export interface components {
          *       Period, then the slope set by the latest change (PRD D4). Absent while the Household is fully committed
          *       (the baseline in force is zero), which is not the same as having no
          *       money left.
+         *     - `state`: how the trajectory reads (PRD D2), decided on the server from
+         *       exact figures. It reads `afloat` while the first few days settle (the
+         *       warm-up), plainly and on day one too. Absent while the Household is
+         *       fully committed: with no baseline there is no pace to read.
+         *     - `trajectory_variance`: the target line's cumulative target through the
+         *       days that have settled, less what has settled (CONTEXT.md §Trajectory
+         *       Variance; PRD D3). Positive means less is spent than the target ("ahead
+         *       of pace"), negative means more ("behind pace"). Rounded half-up at four
+         *       decimals. Absent on the Period's first day, when nothing has settled,
+         *       and while the Household is fully committed.
          *
          *     Only a Commitment's Expense is left out of these figures: an
          *     uncategorised Expense is Daily. Nothing here says what the Household
@@ -1779,7 +1789,16 @@ export interface components {
             days_remaining: number;
             remaining_daily_pool: components["schemas"]["Money"];
             baseline_daily_budget?: components["schemas"]["Money"];
+            state?: components["schemas"]["TrajectoryState"];
+            trajectory_variance?: components["schemas"]["Money"];
         };
+        /**
+         * @description The reading of the trajectory (CONTEXT.md §State; PRD D2): `afloat`,
+         *     `drifting` or `taking_on_water`. A reading and never a verdict: no
+         *     figure and no person is scored by it.
+         * @enum {string}
+         */
+        TrajectoryState: "afloat" | "drifting" | "taking_on_water";
         /**
          * @description One Category's allocation in the current Budget Period, set to an
          *     amount or to none. Both properties are required: `allocation` is

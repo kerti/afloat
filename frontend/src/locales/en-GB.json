@@ -70,6 +70,16 @@
     "baseline": "Baseline",
     "daysRemaining": "Days remaining",
     "remainingDailyPool": "Remaining Daily Pool",
+    "state": {
+      "afloat": "Afloat",
+      "drifting": "Drifting",
+      "taking_on_water": "Taking on water"
+    },
+    "pace": {
+      "ahead": "{{amount}} ahead of pace",
+      "behind": "{{amount}} behind pace",
+      "on": "On pace"
+    },
     "noBudget": "Set a Monthly Budget to see how much is left to spend today.",
     "noBudgetLink": "Go to Budget"
   },

@@ -146,6 +146,23 @@ tag each, so it has components only. A missing element is proposed first (see Ho
   lines, never a clipped or wrapped number. (Uruni `web/src/screens/Home.tsx` cash-flow card, a
   two-column `dl` that drops to one column when either figure is wide; `components/Figures.tsx`.)
 - Days Remaining and the Remaining Daily Pool are `FigureRow`s in a `ListCard`: no new element.
+- **The State text and the pace sentence** (confirmed by the maintainer on the phone preview, 27 Nov
+  2026, for #155 PR 6). No new element: a `div` of layout classes only (a
+  column, `gap-1`) holding the State's name in the **Body role** (`BodyText`: "Afloat", "Drifting" or
+  "Taking on water") over the pace sentence in the **Muted body role** (`MutedText`: "Rp420.000 ahead of
+  pace", "Rp420.000 behind pace" or "On pace"). It follows the Days Remaining and Remaining Daily Pool
+  list, so the order of Home's questions is: the figure, the allowance, what is left, then how the
+  Period is reading. The State is words only: no colour, no pill, no icon, no gloss and no sentence
+  about it (the waterline and the three State colours arrive with the brand session, PRD §9); it is
+  not a live region, so a refetch announces nothing. Each line is there exactly when the server sent
+  its property (`state`, `trajectory_variance`), and neither is ever decided from a figure. The
+  sentence's amount is the one formatter's, half-up, whole currency units, never abbreviated ("Rp420k"
+  does not exist), and carries **no sign character**: the words are the direction (positive variance
+  is "ahead", negative "behind"). An amount that shows as zero reads "On pace", chosen from the
+  amount as displayed and never from the raw sign (`lib/pace.ts`; #155 R8). (Uruni
+  `web/src/screens/Home.tsx`: the hero's status tucked under it as plain labelled text, and `components/Badge.tsx`'s
+  "a word on the system's type", the pill of which Afloat does not take because a coloured or filled
+  State is a verdict; the roles are Afloat's own Body and Muted body.)
 
 **Lists**
 

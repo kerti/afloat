@@ -257,7 +257,8 @@ type fixtureExpected struct {
 		} `json:"changes"`
 	} `json:"pool"`
 	// Pace is what the calculation reads against the line (State, Trajectory
-	// Variance, Buffer Days): pinned here, on the wire from PR 6 of #155.
+	// Variance, Buffer Days): pinned here; State and Variance are on the wire from
+	// PR 6 of #155 (Variance not on the Period's first day), Buffer Days never.
 	// Absent exactly where the Household is fully committed.
 	Pace *struct {
 		State              string `json:"state"`

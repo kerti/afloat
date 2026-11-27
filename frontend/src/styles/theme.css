@@ -3,7 +3,7 @@
  * use the Tailwind names mapped in index.css, never a literal colour.
  *
  * Palette: Shallows (chosen 22 Nov 2026, PRD §9), sky blue over warm sand.
- * The State colours are not here: they stay the brand session's (PRD §9, Q-10).
+ * The State colours are not here: they stay the brand session's (PRD §9).
  *
  * --primary in light is a deeper step of the study's accent (#2E8BC9): white on
  * #2E8BC9 is 3.7:1, below WCAG AA's 4.5:1 for button text, and #1F74AC is 5.1:1.

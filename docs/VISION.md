@@ -74,7 +74,7 @@ is load-bearing rather than decorative.
 | State | Meaning |
 |---|---|
 | **Afloat** | Spending is at or near the intended pace. Nothing to do. |
-| **Drifting** | Spending is running ahead of pace. Recoverable with mild attention. |
+| **Drifting** | Spending is running faster than the intended pace. Recoverable with mild attention. |
 | **Taking on water** | The current pace would exhaust the period's budget before the period ends. |
 
 **Why not "Sinking".** Sinking is terminal and removes agency — it tells someone their ship is going

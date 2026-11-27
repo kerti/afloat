@@ -203,7 +203,12 @@ cumulative target through the settled days (`B × e` while the Daily Pool has no
 Positive means under pace. Computed on **settled days only** — it does not move during Today. This
 keeps the live wallet figure and the trend signal from restating the same fact against each other,
 and stops the variance from lurching at every purchase. It is a money figure, and what the Household
-reads as the pace. Absent while the Household is fully committed.
+reads as the pace. Not sent on the wire while the Household is fully committed, nor on a Period's
+first day, when nothing has settled (`e = 0`, so `V = 0`) and there is no pace to say. **How it is said (PRD D3, #155 R8):** positive
+is **ahead of pace** (less spent than the target) and negative is **behind pace** (more spent), the whole
+amount unsigned and unabbreviated ("Rp420.000 ahead of pace"); an amount that shows as zero in the
+currency's own decimals reads **"On pace"**, so the words follow the amount as displayed and not the raw
+sign. *Ahead* never means the spending is ahead: it means the Household is.
 
 **Buffer Days**: `Trajectory Variance ÷ the Baseline Daily Budget in force`, signed, in days: how many
 days' worth of baseline the Household is ahead of or behind. It is the input to State, and it scales with
@@ -226,7 +231,9 @@ negative; the State is computed as usual, and usually reads *taking on water*, t
 Expense can use the pool up while the settled pace is afloat, and warm-up reads afloat).
 
 **State**: One of `afloat` | `drifting` | `taking_on_water`. See §Calculation spec. There is none while
-fully committed.
+fully committed. In the UI it is its name alone, **Afloat**, **Drifting** or **Taking on water**, beside
+the numbers: no colour, no gloss, no sentence about it (PRD D2, #155 R12); the waterline arrives with
+the brand session. It reads `afloat` on day one and while the warm-up pins it.
 
 ### Indonesian (id-ID) terms
 
@@ -264,7 +271,8 @@ JSON. Blank means not yet in the UI.
 | Today's Allowance (as a figure label) | jatah harian hari ini | approved 27 Nov 2026 (#155 PR 5), provisional; "jatah harian" is the ruled word for the allowance |
 | Days Remaining | sisa hari | approved 27 Nov 2026 (#155 PR 5), provisional |
 | Remaining Daily Pool | sisa dana harian | approved 27 Nov 2026 (#155 PR 5), provisional; "dana harian" is the Daily Pool's word |
-| State names, *ahead of pace*, Buffer Days | | **[OPEN Q-10]** |
+| State names: Afloat / Drifting / Taking on water | aman / bocor / nyaris tenggelam | approved 27 Nov 2026 (#155 PR 6, Q-10); "nyaris tenggelam" (nearly sinking), never "tenggelam", which is terminal (VISION §4) |
+| *ahead of pace* / *behind pace* / *On pace* | di depan laju / di belakang laju / sesuai laju | approved 27 Nov 2026 (#155 PR 6, Q-10); Buffer Days is not shown, so needs no word |
 
 ---
 
@@ -312,7 +320,7 @@ the future never raises Today's Allowance (#155 R3). A refund dated before Today
 
 ### Why it behaves at the edges
 
-- **Day one** (`e = 0`, `r = D`): for a positive pool, `A = P/D = B`, `V = 0`, State is `afloat`
+- **Day one** (`e = 0`, `r = D`): for a positive pool, `A = P/D = B`, `V = 0` (not sent on the wire), State is `afloat`
   (at or below zero the Household is fully committed: no State). Nothing pretends to know
   anything yet.
 - **Last day** (`r = 1`): `A` equals the entire remaining pool. Under the old "remaining daily
@@ -364,8 +372,11 @@ holds, which is why `V` is defined against the line and not against a projection
 
 **Warm-up rule.** While `e < 3`, State is pinned to `afloat`. Three settled days is too little
 evidence to call a trend, and a State that panics on day two is how a Household stops opening the app
-in month one. **[OPEN Q-05]** — whether three days is the right floor, and whether to surface a
-distinct neutral "getting a read" presentation rather than reusing `afloat`.
+in month one. **Q-05, answered (#155 R13):** three days stays, pinned by a test that holds
+`DefaultParameters()` to this fixture's `parameters`, and the State **reads plain `afloat` while pinned**
+(and on day one): no distinct "getting a read" presentation, which would be a fourth State by the back
+door, and no `warming_up` on the wire. The variance is still sent while the State is pinned, so the pace
+sentence can say a Household is behind pace under an `afloat` State.
 
 **Thresholds are configuration, not constants.** They live in one place and are expected to be tuned
 once real data exists. Both the warm-up floor (`e < 3` above) and the two State thresholds

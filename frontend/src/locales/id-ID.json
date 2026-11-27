@@ -70,6 +70,16 @@
     "baseline": "Jatah dasar",
     "daysRemaining": "Sisa hari",
     "remainingDailyPool": "Sisa dana harian",
+    "state": {
+      "afloat": "Aman",
+      "drifting": "Bocor",
+      "taking_on_water": "Nyaris tenggelam"
+    },
+    "pace": {
+      "ahead": "{{amount}} di depan laju",
+      "behind": "{{amount}} di belakang laju",
+      "on": "Sesuai laju"
+    },
     "noBudget": "Atur anggaran bulanan untuk melihat sisa yang bisa dibelanjakan hari ini.",
     "noBudgetLink": "Buka Anggaran"
   },

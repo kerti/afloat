@@ -8,15 +8,23 @@
 -- in one statement, so two writers of different fields both land. None of the
 -- four columns is nullable, so coalesce cannot be mistaken for "clear".
 --
--- updated_at is set here because the baseline has no trigger, and from the
--- database's own clock (BOOTSTRAP.md §5.1).
+-- updated_at moves only when a column's value does (#137; the row-wise IS DISTINCT FROM
+-- as in UpdateExpense), so a {} or a resend of the stored values is a no-op
+-- (BOOTSTRAP.md §4), and from the database's own clock (BOOTSTRAP.md §5.1).
 -- name: UpdateUser :one
 UPDATE users SET
     user_display_name = coalesce(sqlc.narg(user_display_name), user_display_name),
     locale            = coalesce(sqlc.narg(locale), locale),
     time_zone         = coalesce(sqlc.narg(time_zone), time_zone),
     appearance        = coalesce(sqlc.narg(appearance), appearance),
-    updated_at        = now()
+    updated_at        = CASE WHEN (user_display_name, locale, time_zone, appearance)
+                              IS DISTINCT FROM (
+                                  coalesce(sqlc.narg(user_display_name), user_display_name),
+                                  coalesce(sqlc.narg(locale), locale),
+                                  coalesce(sqlc.narg(time_zone), time_zone),
+                                  coalesce(sqlc.narg(appearance), appearance)
+                              )
+                         THEN now() ELSE updated_at END
 WHERE id = sqlc.arg(user_id) AND household_id = sqlc.arg(household_id) AND deleted_at IS NULL
 RETURNING *;
 

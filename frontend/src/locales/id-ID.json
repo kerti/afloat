@@ -80,6 +80,15 @@
       "behind": "{{amount}} di belakang laju",
       "on": "Sesuai laju"
     },
+    "chart": {
+      "title": "Periode anggaran ini",
+      "label": "Pengeluaran kumulatif terhadap target periode anggaran ini",
+      "date": "Tanggal",
+      "target": "Target",
+      "actual": "Aktual",
+      "inProgress": "hari ini, sedang berjalan",
+      "unavailable": "Grafik tidak dapat dimuat."
+    },
     "byCategory": "Per kategori",
     "byPocket": "Per kantong",
     "ofAllocation": "dari {{amount}}",

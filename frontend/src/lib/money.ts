@@ -106,7 +106,13 @@ function roundedDigits(m: RegExpExecArray, decimals: number, mode: Rounding = "h
   };
 }
 
-function format(value: string, currency: string, locale: string, mode: Rounding): string {
+function format(
+  value: string,
+  currency: string,
+  locale: string,
+  mode: Rounding,
+  symbol = true,
+): string {
   const m = SIGNED.exec(value);
   if (!m) return value;
   const decimals = currencyDecimals(currency);
@@ -114,7 +120,7 @@ function format(value: string, currency: string, locale: string, mode: Rounding)
   const { int, fraction, negative } = roundedDigits(m, decimals, mode);
   return (
     (negative ? "-" : "") +
-    prefix(currency) +
+    (symbol ? prefix(currency) : "") +
     group(int, sep.group) +
     (decimals > 0 ? sep.decimal + fraction : "")
   );
@@ -125,6 +131,13 @@ function format(value: string, currency: string, locale: string, mode: Rounding)
  * back as given, never NaN. */
 export function formatMoney(value: string, currency: string, locale: string): string {
   return format(value, currency, locale, "half-up");
+}
+
+/** `formatMoney` without the currency symbol: the digits, grouped and signed, for
+ * a chart's axis, whose card already says what it counts. The same half-up cut on
+ * the digits of a string, never a float. (#155 PR 8.) */
+export function formatMoneyDigits(value: string, currency: string, locale: string): string {
+  return format(value, currency, locale, "half-up", false);
 }
 
 /** An allowance figure for the screen (the hero, Today's allowance, the

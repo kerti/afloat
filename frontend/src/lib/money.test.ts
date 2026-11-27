@@ -8,6 +8,7 @@ import {
   draftToWire,
   formatAllowance,
   formatMoney,
+  formatMoneyDigits,
   parseMoney,
   roundMoney,
   currencySymbol,
@@ -235,5 +236,31 @@ describe("compareMoney", () => {
     expect(compareMoney("-2", "-1")).toBe(-1);
     expect(compareMoney("1e3", "1")).toBeNull();
     expect(compareMoney("", "1")).toBeNull();
+  });
+});
+
+describe("formatMoneyDigits", () => {
+  it("is the money formatter without the currency symbol, on the digits", () => {
+    expect(formatMoneyDigits("9000000.0000", "IDR", "en-GB")).toBe("9,000,000");
+    expect(formatMoneyDigits("9000000.0000", "IDR", "id-ID")).toBe("9.000.000");
+    expect(formatMoneyDigits("-1500", "IDR", "en-GB")).toBe("-1,500");
+    expect(formatMoneyDigits("1234.5", "USD", "en-GB")).toBe("1,234.50");
+    expect(formatMoneyDigits("1234.5", "USD", "id-ID")).toBe("1.234,50");
+  });
+
+  it("is half-up like formatMoney and never prints a negative zero", () => {
+    expect(formatMoneyDigits("0.5", "IDR", "en-GB")).toBe("1");
+    expect(formatMoneyDigits("-0.4", "IDR", "en-GB")).toBe("0");
+  });
+
+  it("holds the 16-digit worst case, which no float can", () => {
+    expect(formatMoneyDigits("9999999999999999.9999", "IDR", "en-GB")).toBe(
+      "10,000,000,000,000,000",
+    );
+    expect(formatMoneyDigits("9007199254740993", "IDR", "en-GB")).toBe("9,007,199,254,740,993");
+  });
+
+  it("gives anything that is not a plain decimal back as given", () => {
+    expect(formatMoneyDigits("1e21", "IDR", "en-GB")).toBe("1e21");
   });
 });

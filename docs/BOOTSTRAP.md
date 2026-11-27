@@ -108,6 +108,15 @@ Inherited wholesale from Balances-v2 where it exists there, which is most of it.
 Recharts, i18next, Vitest, Playwright, MSW. Node 22 (`.nvmrc`). Mobile-first; installable PWA with an
 app-shell service worker (no push in MVP — see §10).
 
+**Recharts is in `package.json`** (3.x, with `react-is` 19 beside it: the hoisted `react-is` of the test
+tooling is 17, which does not know React 19's elements) since #155 PR 8, for the dashboard's chart
+(PRD D5). It is **one lazy chunk**: `ChartCardImpl.tsx` is the only file that imports it and is reached
+only through a dynamic `import()` (a test holds both), so Home's entry chunk does not wait for it.
+Lazy protects first paint, not the install: Workbox's `globPatterns` precaches every built chunk, so
+the PWA install downloads it. Its inline `style` attributes are set through the CSSOM, which a
+`style-src` without `'unsafe-inline'` allows; it renders no `<style>` element, and the shadcn
+`ChartStyle`, which does, is not carried over.
+
 **Backend** — Go 1.27.x. Migrations embedded via `//go:embed` and applied by the binary, mirroring
 Balances. The IANA zone database is embedded too (`_ "time/tzdata"` in `cmd/afloat`, about 450 KB) as
 a floor, not a pin: `time.LoadLocation` reads the host's zoneinfo first and falls back to the embedded
@@ -1112,7 +1121,9 @@ refund each have a Household. **The expected figures were worked out in exact ra
 the rows and `CONTEXT.md`'s spec and not the backend**, so a row is an independent check; a change to the
 assembly or the calculation changes this file and `trajectory.json` together. Each PR of #155 adds the figures
 it puts on the wire to the rows already there (PR 7: the `categories` and `pockets` lists, in the `wire`, with a
-key for each id since the ids are minted when the file is seeded). The dashboard's tests read it through the real statements
+key for each id since the ids are minted when the file is seeded; PR 8: `chart.points`, one point for
+every Period Day, worked out in exact fractions from the rows' raw Expenses and `pool` and cross-checked
+against the row's own `trajectory_variance` and `spend`). The dashboard's tests read it through the real statements
 (`internal/dashboard`), and assert the pool equal to `GET /budget`'s `daily_pool` on the same state.
 
 **`contract/testdata/periods.json`'s `days` rows pin a Period's day counts** (#155): D, the window's length,

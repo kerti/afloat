@@ -31,7 +31,9 @@ type Assembly struct {
 	// PeriodDays is D, DaysElapsed is e; r = D - e counts Today.
 	PeriodDays, DaysElapsed int
 	Spend                   Spend
-	Figures                 trajectory.Figures
+	// Line is the target line the figures and the chart are both read from.
+	Line    trajectory.TargetLine
+	Figures trajectory.Figures
 	// Breakdown is PRD D7: the Daily Categories' and the Pockets' share of what
 	// the Period's Expenses added up to, made of the same PeriodSpend rows as
 	// Spend.
@@ -160,7 +162,7 @@ func Assemble(ctx context.Context, q db.Querier, householdID pgtype.UUID, at bud
 	}
 	return Assembly{
 		DailyPool: poolToday, BasePool: basePool, Changes: changes,
-		PeriodDays: periodDays, DaysElapsed: elapsed, Spend: spend, Figures: figures,
+		PeriodDays: periodDays, DaysElapsed: elapsed, Spend: spend, Line: line, Figures: figures,
 		Breakdown: breakdown,
 	}, true, nil
 }
@@ -253,6 +255,13 @@ func (p poolReader) changeDays(at budget.Position) ([]period.Date, error) {
 	})
 	slices.SortFunc(days, func(a, b period.Date) int { return a.Sub(b) })
 	return slices.Compact(days), nil
+}
+
+// chartOnTheWire is PRD D5's chart (#155 T8): the target line and the actual
+// line over the whole Period, from the same line and the same fold as the
+// figures.
+func (a Assembly) chartOnTheWire(at budget.Position) *api.Chart {
+	return &api.Chart{Points: ChartPoints(a.Line, at.Period, at.Today, a.Spend.ByDay)}
 }
 
 // trajectoryOnTheWire is the Assembly as #155 renders it (R5): the allowance,

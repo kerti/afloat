@@ -163,6 +163,35 @@ tag each, so it has components only. A missing element is proposed first (see Ho
   `web/src/screens/Home.tsx`: the hero's status tucked under it as plain labelled text, and `components/Badge.tsx`'s
   "a word on the system's type", the pill of which Afloat does not take because a coloured or filled
   State is a verdict; the roles are Afloat's own Body and Muted body.)
+- **The chart card (D5)** (R17 approved the card and `recharts`; its look, the "This Period" title,
+  the error boundary and the flat target while fully committed confirmed by the maintainer on the
+  phone preview, 27 Nov 2026, for #155 PR 8.) A
+  `Section` titled **This Period** (a `SectionTitle` h2) holding `ChartCard`
+  (`components/ChartCard.tsx`): a card surface (`rounded-lg border bg-card p-3`, the surface of
+  `NoticeCard`) around the cumulative target line against the actual line for the Period, one point
+  for every Period Day, from the server's `chart.points` and nothing else. It follows the State and the
+  pace and comes before By Category. **Drawing** (`components/ChartCardImpl.tsx`, Recharts, the only
+  file that imports it): the target is `--muted-foreground`, dashed; the actual is `--primary`, solid;
+  Today's last stretch (the day that is not over, the server's `in_progress`) is dashed again and ends
+  in an open dot. **Line style tells the lines apart, never colour**: no red, no green, no fill, no
+  gradient. A legend names the two lines. Axis text is 12px (the Badge's size). The Y axis counts in
+  the currency's digits with no symbol (`formatMoneyDigits`, the one formatter, on the digits); the X
+  axis shows the Period's first and last day through `lib/dates.ts`, from the date strings. A tap or
+  hover opens a tooltip with the day and the server's two figures. No "day X of Y", no device clock, no
+  client arithmetic. **Accessibility rule:** the card is **one `role="img"`** named by the pace
+  sentence (or, with no pace to read, "Cumulative spending against the target for this Period"); a
+  **visually hidden table** (`sr-only`, a sibling of the image and not inside it, since an image's
+  children are presentational) lists the same `points`, one row for each day, an empty cell for an
+  actual after Today and "today, in progress" on Today's row; **Recharts' keyboard layer is off**
+  (`accessibilityLayer={false}`), because a focusable SVG inside a `role="img"` is nested-interactive,
+  and the chart is supplementary: the hero, the State and the pace carry the reading. **Lazy:** the
+  drawing is a separate chunk behind `React.lazy` and `Suspense` (the existing `Loading` while it
+  arrives), so Home's first paint never waits for it, and Recharts is imported nowhere else
+  (`components/chartIsLazy.test.ts`); a chunk that fails to load leaves one muted sentence and the table.
+  Colours are tokens as SVG attributes; the shadcn `ChartStyle` (a `<style>` element) is not carried
+  over, so a CSP without `'unsafe-inline'` for styles stays possible. (Precedent: Balances
+  `components/ui/chart.tsx` and `components/charts/*Impl.tsx`, recharts 3, behind a lazy boundary; the
+  card surface is Uruni's `cardClasses.ts` card. Uruni has no chart library.)
 
 **Lists**
 
@@ -196,8 +225,8 @@ screens/Home.tsx` purpose row, `web/src/components/LoadMore.tsx`; ruled 25 Nov 2
   `labelMuted`, belong to Home's D7 rows below.
 - **Home's By Category and By Pocket rows (D7)** (confirmed by the maintainer on the phone preview,
   27 Nov 2026, for #155 PR 7, R18.) Each section is a `Section` (a `SectionTitle` h2, "By Category"
-  and "By Pocket") holding a `ListCard` of `FigureRow`s, after the State and the pace and the last thing
-  on Home for now. The row gains two optional parts and no new element: `detail`, a second line
+  and "By Pocket") holding a `ListCard` of `FigureRow`s, after the State and the pace and the chart, and the last
+  thing on Home for now. The row gains two optional parts and no new element: `detail`, a second line
   right-aligned under the amount in the Hint size (14px), muted and `tabular-nums`, so a row reads
   "Rp40.000 / of Rp1.500.000". It is there only where the Category has an
   allocation in force (a Pocket has none; a Category without one has no second line, and never "No
@@ -452,7 +481,7 @@ role table follows Uruni `docs/Design-System.md` § Typography.)
   gone inactive reads as blank, never as another Pocket the person did not pick. (Ruled 25 Nov 2026,
   #140 PR 3b.)
 - **A popover uses the opaque card surface** (`bg-card`, `border`, `shadow-lg`): the date and time
-  calendars, the `SearchSelect` list and the Radix `Select` list alike. Never the glass of the bars,
+  calendars, the `SearchSelect` list, the Radix `Select` list and the chart's touch tooltip alike. Never the glass of the bars,
   never transparent over the page. (Ruled 25 Nov 2026, #140 PR 3b.)
 - **A Category's bucket field** is labelled "Kind" in en-GB ("Jenis" in id-ID), never "Type", and
   its options read Daily, then Commitment. (Confirmed by the maintainer, 23 Nov 2026, for #130.)
@@ -538,6 +567,11 @@ role table follows Uruni `docs/Design-System.md` § Typography.)
 - **Phosphor** (`@phosphor-icons/react`), **duotone app-wide**, set once by an `IconContext.Provider`
   in `main.tsx` (weight `duotone`, size 24), as Uruni does. A page or component never sets a weight
   of its own except in the two cases below. Icons are `aria-hidden` unless they are the only label.
+- **Icons only, no authored SVG.** Every icon is a Phosphor icon; no inline `<svg>` is written for
+  an icon, and none is left in `frontend/src` (the 25 Nov 2026 rule, #140 PR 3b, which moved the last
+  hand-drawn ones). The rule is about icons: **a data graphic is not an icon**, and the chart's SVG is
+  drawn by Recharts, with no `<svg` authored for it (§ Home's figures, the chart card). (Recorded as
+  icons-only, 27 Nov 2026, #155 PR 8, R17.)
 - **A glyph on a filled background** is `bold`, so it holds against the fill: the Capture plus on its
   primary square.
 - **A glyph that is itself a control** is `regular`, never duotone: the close ✕ (dialog, notice, the
@@ -630,6 +664,9 @@ role table follows Uruni `docs/Design-System.md` § Typography.)
   `--muted-foreground` is `#566a78` (4.89:1 on `--muted`), a step darker than the Shallows study's
   `#5e7280`. (Ruled 22 Nov.)
 - Colour is never the only signal; decorative icons are `aria-hidden`.
+- **A data graphic is one `role="img"` with a name and a visually hidden table of the same data**
+  (the table beside the image, not inside it); a library's keyboard layer is off beneath it. (The
+  chart card, #155 PR 8, confirmed with it.)
 - Radix owns focus trap and restore; a dialog's close button has a label; the dialog sits above the
   on-screen keyboard.
 - Live regions are mounted before they are needed.

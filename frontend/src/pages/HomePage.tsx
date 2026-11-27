@@ -3,6 +3,7 @@ import { Trans, useTranslation } from "react-i18next";
 import { useLocation, useNavigate } from "react-router";
 import type { CategoryFigure, Dashboard, Me, PocketFigure } from "@/api/client";
 import { useDashboard } from "@/api/queries";
+import { ChartCard } from "@/components/ChartCard";
 import { FigurePair } from "@/components/FigurePair";
 import { Badge } from "@/components/Badge";
 import { FigureRow } from "@/components/FigureRow";
@@ -31,8 +32,9 @@ function foundedPocket(state: unknown): string | null {
 // cut toward minus infinity at the currency's minor unit and the rest are
 // half-up (#155 R11). Whether the allowance stands alone or beside the Baseline
 // is `allowance_mode`, never a comparison of the amounts (R10). The State and
-// the pace sentence are words only (R12), then By Category and By Pocket
-// (R15); each is there exactly when the server sent it. The Shell around it carries the app name and sign-out.
+// the pace sentence are words only (R12), then the chart (D5: the server's
+// points, drawn, with the pace sentence as its name), then By Category and By
+// Pocket (R15); each is there exactly when the server sent it. The Shell around it carries the app name and sign-out.
 export function HomePage({ me }: { me: Me }) {
   const { t, i18n } = useTranslation();
   const dashboard = useDashboard();
@@ -87,6 +89,7 @@ export function HomePage({ me }: { me: Me }) {
           locale={i18n.language}
           mode={me.household.allowance_mode}
           trajectory={dashboard.data.trajectory}
+          chart={dashboard.data.chart}
           categories={dashboard.data.categories}
           pockets={dashboard.data.pockets}
         />
@@ -100,6 +103,7 @@ function Figures({
   locale,
   mode,
   trajectory,
+  chart,
   categories,
   pockets,
 }: {
@@ -107,6 +111,7 @@ function Figures({
   locale: string;
   mode: Me["household"]["allowance_mode"];
   trajectory: NonNullable<Dashboard["trajectory"]>;
+  chart: Dashboard["chart"];
   categories: Dashboard["categories"];
   pockets: Dashboard["pockets"];
 }) {
@@ -117,6 +122,11 @@ function Figures({
     trajectory.trajectory_variance !== undefined
       ? paceOf(trajectory.trajectory_variance, currency, locale)
       : null;
+  const paceSentence = pace
+    ? pace.direction === "on"
+      ? t("dashboard.pace.on")
+      : t(`dashboard.pace.${pace.direction}`, { amount: pace.amount })
+    : undefined;
   const allowance = {
     label: t("dashboard.todaysAllowance"),
     value: formatAllowance(trajectory.todays_allowance, currency, locale),
@@ -151,14 +161,18 @@ function Figures({
           {trajectory.state !== undefined && (
             <BodyText>{t(`dashboard.state.${trajectory.state}`)}</BodyText>
           )}
-          {pace && (
-            <MutedText>
-              {pace.direction === "on"
-                ? t("dashboard.pace.on")
-                : t(`dashboard.pace.${pace.direction}`, { amount: pace.amount })}
-            </MutedText>
-          )}
+          {paceSentence !== undefined && <MutedText>{paceSentence}</MutedText>}
         </div>
+      )}
+      {chart && (
+        <Section id="chart" title={t("dashboard.chart.title")}>
+          <ChartCard
+            points={chart.points}
+            currency={currency}
+            locale={locale}
+            paceSentence={paceSentence}
+          />
+        </Section>
       )}
       <Section id="by-category" title={t("dashboard.byCategory")}>
         <Rows empty={categories === undefined}>

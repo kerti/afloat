@@ -24,6 +24,27 @@ Element.prototype.releasePointerCapture ??= () => {};
 Element.prototype.hasPointerCapture ??= () => false;
 Element.prototype.scrollIntoView ??= () => {};
 
+// jsdom has no ResizeObserver and no layout; Recharts' ResponsiveContainer reads
+// its box from both. The stub reports one phone-width box when it starts
+// observing, as a real observer does, so a chart draws: tests read the data and
+// the document's structure, never pixels.
+globalThis.ResizeObserver ??= class {
+  private readonly callback: ResizeObserverCallback;
+  constructor(callback: ResizeObserverCallback) {
+    this.callback = callback;
+  }
+  observe(target: Element) {
+    queueMicrotask(() =>
+      this.callback(
+        [{ target, contentRect: { width: 320, height: 220 } } as unknown as ResizeObserverEntry],
+        this,
+      ),
+    );
+  }
+  unobserve() {}
+  disconnect() {}
+};
+
 // jsdom has no matchMedia; sonner reads it to follow the OS colour scheme.
 window.matchMedia ??= (query: string) =>
   ({

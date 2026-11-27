@@ -80,6 +80,10 @@
   --muted-foreground: light-dark(#566a78, #8ea6b5);
   --card: light-dark(#ffffff, #12222d);
   --card-foreground: light-dark(#14232e, #e3eef4);
+  /* What floats over the page (toasts, the update prompt): the card in light,
+     where its shadow carries it; --muted's tint in dark, where the card is
+     1.11:1 against the page and the shadow is lost (#153). */
+  --raised: light-dark(#ffffff, #14354a);
   --border: light-dark(#d0dde5, #1f3442);
   /* The edge of a field: WCAG 1.4.11 asks 3:1. Light #658faa is 3.11:1 on the page,
      3.46:1 on white; dark #43708e is 3.05:1 on the page, 3.38:1 on cards. */

@@ -9,6 +9,7 @@
   --color-muted-foreground: var(--muted-foreground);
   --color-card: var(--card);
   --color-card-foreground: var(--card-foreground);
+  --color-raised: var(--raised);
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);

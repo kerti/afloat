@@ -387,13 +387,12 @@ func uuidString(id pgtype.UUID) string {
 	return uuid.UUID(id.Bytes).String()
 }
 
-// inFixtureTerms rewrites an answer's `categories` and `pockets` the way the
+// inFixtureTerms rewrites an answer's `categories`, `pockets` and `commitments.items` the way the
 // fixture writes them: the id of a row is the key of the Category or Pocket it
 // was seeded as (`category`, `pocket`), since the ids are minted at seeding.
 // An id the seeding did not mint is left as it is, and fails the comparison.
 func (h seeded) inFixtureTerms(wire map[string]any) {
-	rewrite := func(property, idField, keyField string, keys map[string]string) {
-		rows, _ := wire[property].([]any)
+	rewrite := func(rows []any, idField, keyField string, keys map[string]string) {
 		for _, r := range rows {
 			row, _ := r.(map[string]any)
 			if id, ok := row[idField].(string); ok {
@@ -404,6 +403,12 @@ func (h seeded) inFixtureTerms(wire map[string]any) {
 			}
 		}
 	}
-	rewrite("categories", "category_id", "category", h.categoryKeys)
-	rewrite("pockets", "pocket_id", "pocket", h.pocketKeys)
+	categories, _ := wire["categories"].([]any)
+	rewrite(categories, "category_id", "category", h.categoryKeys)
+	pockets, _ := wire["pockets"].([]any)
+	rewrite(pockets, "pocket_id", "pocket", h.pocketKeys)
+	if commitments, ok := wire["commitments"].(map[string]any); ok {
+		items, _ := commitments["items"].([]any)
+		rewrite(items, "category_id", "category", h.categoryKeys)
+	}
 }

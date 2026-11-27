@@ -241,6 +241,17 @@ screens/Home.tsx` purpose row, `web/src/components/LoadMore.tsx`; ruled 25 Nov 2
   difference or colour, and no live region. A section with no row shows the sentence "Nothing recorded
   yet this Period." (the Empty rule) and keeps its heading. (The maintainer chose the detail under the amount over Uruni's two-line `TransactionRowLabel`, title
   over a muted detail line, which `ExpenseRow` keeps.)
+- **Home's Commitments section (D6)** (confirmed by the maintainer on the phone preview, 27 Nov 2026,
+  for #155 PR 9, per R16.) A `Section` ("Commitments") between the chart and By Category, holding a
+  `ListCard` of `FigureRow`s: a "Total" row first, then one row per Commitment in the order the server
+  sent (the Category list's order, not by name). The amount is the row's status in words: "Rp500.000
+  still due", "Paid" (muted) when nothing is still due, or "Rp200.000 more than you set aside" when
+  paid passes the allocation. The words follow the amount as the formatter shows it, so a sub-rupiah
+  remainder reads "Paid", never "Rp0 still due"; an allocation of zero with nothing paid reads "Paid".
+  Under it, the D7 `detail` line reads "Rp1.500.000 paid of Rp2.000.000". An inactive Commitment gets
+  `labelMuted` and the "Inactive" `Badge`. A refund shows as it is ("-Rp50.000 paid of Rp0"), as
+  D7 shows "Rp0" (confirmed by the maintainer, 27 Nov 2026). No bar, meter, colour or live region. With no Commitment the
+  section keeps its heading over "Your Commitments will appear here." (the Empty rule).
 
 **Notices**
 

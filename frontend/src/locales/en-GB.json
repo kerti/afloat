@@ -89,6 +89,15 @@
       "inProgress": "today, in progress",
       "unavailable": "The chart could not be loaded."
     },
+    "commitments": {
+      "title": "Commitments",
+      "empty": "Your Commitments will appear here.",
+      "total": "Total",
+      "paid": "Paid",
+      "stillDue": "{{amount}} still due",
+      "over": "{{amount}} more than you set aside",
+      "detail": "{{paid}} paid of {{allocation}}"
+    },
     "byCategory": "By Category",
     "byPocket": "By Pocket",
     "ofAllocation": "of {{amount}}",

@@ -547,3 +547,68 @@ func TestBothBreakdownsAreSpelledAsTheContractSaysAndOrderedOnTheServer(t *testi
 }
 
 func uuidText(id pgtype.UUID) string { return uuid.UUID(id.Bytes).String() }
+
+// PR 9's `commitments`, through the router and the spec validator: the totals
+// and every row at four decimals, a still due that is negative keeps its sign
+// (a Commitment paid more than it was set at is not clamped), the rows in the
+// Category list's order, the names and flags beside the figures, a future-dated
+// payment not yet paid, and no `null` (every money is compared as its exact
+// four-decimal string). The panel is the Commitments alone: the
+// Daily Category is in no row.
+func TestCommitmentsAreSpelledAsTheContractSaysAndKeepASignedStillDue(t *testing.T) {
+	f := newDashboardFixture(t)
+	f.mustExec(t, `INSERT INTO budgets (household_id, year_month) VALUES ($1, '2026-11')`)
+	f.mustExec(t, `INSERT INTO monthly_budgets VALUES ($1, '2026-11', '2026-11-01', 6000000)`)
+	wallet := f.tdb.CreatePocket(t, f.householdID, "Wallet")
+	rent := f.tdb.CreateCategory(t, f.householdID, "Rent", "commitment")
+	tax := f.tdb.CreateCategory(t, f.householdID, "Tax", "commitment")
+	food := f.tdb.CreateCategory(t, f.householdID, "Food", "daily")
+	for category, allocation := range map[pgtype.UUID]string{rent: "2000000", tax: "1000000", food: "500000"} {
+		if _, err := f.tdb.Pool.Exec(context.Background(),
+			`INSERT INTO allocations (household_id, year_month, effective_on, category_id, allocation) VALUES ($1, '2026-11', '2026-11-01', $2, $3::numeric)`,
+			f.householdID, category, allocation); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, e := range []struct {
+		category   pgtype.UUID
+		on, amount string
+	}{
+		{rent, "2026-11-03", "2000000"},
+		{tax, "2026-11-04", "1200000"}, // more than set aside
+		{tax, "2026-11-25", "5000"},    // after Today: not paid yet
+		{food, "2026-11-05", "12000"},
+	} {
+		if _, err := f.tdb.Pool.Exec(context.Background(),
+			`INSERT INTO expenses (id, household_id, occurred_on, amount, currency, pocket_id, category_id) VALUES ($1, $2, $3::date, $4::numeric, 'IDR', $5, $6)`,
+			testutil.NewUUID(t), f.householdID, e.on, e.amount, wallet, e.category); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	rec := f.do(http.MethodGet)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+	var got struct {
+		Commitments map[string]any `json:"commitments"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]any{
+		"commitments_budget": "3000000.0000",
+		"paid":               "3200000.0000",
+		"still_due":          "-200000.0000",
+		"items": []any{
+			map[string]any{"category_id": uuidText(rent), "category_display_name": "Rent", "active": true, "allocation": "2000000.0000", "paid": "2000000.0000", "still_due": "0.0000"},
+			map[string]any{"category_id": uuidText(tax), "category_display_name": "Tax", "active": true, "allocation": "1000000.0000", "paid": "1200000.0000", "still_due": "-200000.0000"},
+		},
+	}
+	if !reflect.DeepEqual(got.Commitments, want) {
+		t.Errorf("commitments = %v\nwant %v", got.Commitments, want)
+	}
+	if strings.Contains(rec.Body.String(), "null") {
+		t.Errorf("the answer carries a null: %s", rec.Body.String())
+	}
+}

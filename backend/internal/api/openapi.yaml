@@ -1141,6 +1141,12 @@ paths:
         Both are omitted with `trajectory` while there is no Monthly Budget and,
         beyond that, whenever they have no row.
 
+        `commitments` is the Household's Commitments for the Period (PRD D6):
+        what each Commitment Category is set at, what has been paid against it
+        and what is still due, apart from every daily figure. It is omitted with
+        `trajectory` while there is no Monthly Budget and while the Household
+        has no live Commitment Category.
+
         `chart` is the cumulative target line against the cumulative actual line
         for the whole Period (PRD D5), one point per Period Day, computed from
         the same target line and the same Expenses as `trajectory`, so the chart
@@ -2548,8 +2554,77 @@ components:
           minItems: 1
           items:
             $ref: '#/components/schemas/PocketFigure'
+        commitments:
+          $ref: '#/components/schemas/Commitments'
         chart:
           $ref: '#/components/schemas/Chart'
+      additionalProperties: false
+
+    Commitments:
+      type: object
+      description: |
+        The Household's Commitments read per Budget Period (PRD D6, #155 R16):
+        the Commitments Budget, what has been paid against it so far and what is
+        still due, and the same three for each live Commitment Category. A
+        Commitment that recurs over more than one Period (an annual tax) is read
+        as any other: the Period it is paid in shows the whole payment, and the
+        other Periods show it unpaid. That is accepted until the plan object
+        exists (PRD §11, Q-20).
+
+        Present once the Household has a Monthly Budget and at least one live
+        Commitment Category, absent otherwise, never `null`. Every `Money` is in
+        the answer's `currency`.
+      required: [commitments_budget, paid, still_due, items]
+      properties:
+        commitments_budget:
+          $ref: '#/components/schemas/Money'
+        paid:
+          $ref: '#/components/schemas/Money'
+        still_due:
+          $ref: '#/components/schemas/Money'
+        items:
+          type: array
+          description: |
+            One row for each live Commitment Category, active or inactive, in
+            the Category list's order (oldest first, then by `category_id`). A
+            Commitment always has an allocation, so every row has one, zero
+            included. Never empty.
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/CommitmentFigure'
+      additionalProperties: false
+
+    CommitmentFigure:
+      type: object
+      description: |
+        One Commitment Category's row of the Commitments panel. `allocation` is
+        what the Category is set at in force Today. `paid` is the sum of the
+        Category's live Expenses dated in the Budget Period and on or before the
+        caller's Today, signed (a refund subtracts): an Expense dated after
+        Today is not paid until its day. `still_due` is `allocation` less
+        `paid`, **signed and not clamped**: zero when it is paid exactly,
+        negative when more has been paid than was set aside. The names travel
+        with the figures, from the same snapshot.
+      required: [category_id, category_display_name, active, allocation, paid, still_due]
+      properties:
+        category_id:
+          type: string
+          format: uuid
+        category_display_name:
+          type: string
+          minLength: 1
+          maxLength: 255
+        active:
+          type: boolean
+          description: |
+            `false` for a Category that has been deactivated: it still has an
+            allocation and is kept in the panel.
+        allocation:
+          $ref: '#/components/schemas/Money'
+        paid:
+          $ref: '#/components/schemas/Money'
+        still_due:
+          $ref: '#/components/schemas/Money'
       additionalProperties: false
 
     Chart:

@@ -214,9 +214,9 @@
         day_starts_at: "04:00"
         allowance_mode: adaptive
 
-# `fixed`, not the `flat` this schema once had (CONTEXT, PRD §4). Nothing can
-# write allowance_mode yet, so a row is the only way to reach it; /me and the
-# PATCH's answer both report it. expected_monthly_income, when the row has one,
+# `fixed`, not the `flat` this schema once had (CONTEXT, PRD §4). Set by a row
+# here, so the round-trip is tested apart from the PATCH that writes it; /me and
+# the PATCH's answer both report it. expected_monthly_income, when the row has one,
 # is a string at exactly four decimal places.
 - name: household - fixed and an income round-trip through patch and me
   issue: "113"
@@ -716,8 +716,12 @@
     cookies: {}
     rows: *unchanged
 
-- name: household - allowance_mode is not writable yet and is INVALID_JSON_BODY
-  issue: "113"
+# allowance_mode (#155 PR 4, R9): writable, merged like the other settings.
+# The enum is the whole rule: a value outside it, and null, are refused by the
+# spec validator before the handler, as PATCH /me's locale is.
+
+- name: household - allowance_mode is written and answered
+  issue: "155"
   given: *signed-in
   request:
     method: PATCH
@@ -725,6 +729,44 @@
     headers:
       Content-Type: application/json
     body: '{"allowance_mode":"fixed"}'
+  expect:
+    status: 200
+    body_json:
+      id: 0192f0a0-0000-7000-8000-000000000001
+      household_display_name: Conformance Household
+      reporting_currency: IDR
+      period_start_day: 1
+      day_starts_at: "04:00"
+      allowance_mode: fixed
+    cookies: {}
+    rows:
+      - sql: SELECT household_display_name, reporting_currency, period_start_day, allowance_mode FROM households
+        rows: [{household_display_name: Conformance Household, reporting_currency: IDR, period_start_day: 1, allowance_mode: fixed}]
+
+- name: household - an allowance_mode outside the enum is INVALID_JSON_BODY
+  issue: "155"
+  given: *signed-in
+  request:
+    method: PATCH
+    path: /household
+    headers:
+      Content-Type: application/json
+    body: '{"allowance_mode":"Fixed"}'
+  expect:
+    status: 400
+    body_json: {code: INVALID_JSON_BODY}
+    cookies: {}
+    rows: *unchanged
+
+- name: household - a null allowance_mode is INVALID_JSON_BODY
+  issue: "155"
+  given: *signed-in
+  request:
+    method: PATCH
+    path: /household
+    headers:
+      Content-Type: application/json
+    body: '{"allowance_mode":null}'
   expect:
     status: 400
     body_json: {code: INVALID_JSON_BODY}

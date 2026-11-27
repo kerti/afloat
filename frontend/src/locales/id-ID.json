@@ -89,6 +89,15 @@
       "inProgress": "hari ini, sedang berjalan",
       "unavailable": "Grafik tidak dapat dimuat."
     },
+    "commitments": {
+      "title": "Komitmen",
+      "empty": "Komitmen Anda akan tampil di sini.",
+      "total": "Total",
+      "paid": "Lunas",
+      "stillDue": "{{amount}} masih harus dibayar",
+      "over": "{{amount}} lebih dari yang Anda sisihkan",
+      "detail": "{{paid}} dibayar dari {{allocation}}"
+    },
     "byCategory": "Per kategori",
     "byPocket": "Per kantong",
     "ofAllocation": "dari {{amount}}",

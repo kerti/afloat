@@ -38,6 +38,10 @@ type Assembly struct {
 	// the Period's Expenses added up to, made of the same PeriodSpend rows as
 	// Spend.
 	Breakdown Breakdown
+	// Commitments is PRD D6, from the same rows and the same allocations in
+	// force Today (R16): no Commitment Expense is in any daily figure, and it is
+	// paid here.
+	Commitments Commitments
 }
 
 // DaysRemaining is r: the days left counting Today, so the last day reads 1.
@@ -145,6 +149,10 @@ func Assemble(ctx context.Context, q db.Querier, householdID pgtype.UUID, at bud
 	if err != nil {
 		return Assembly{}, false, err
 	}
+	commitments, err := FoldCommitments(expenses, live, allocationsToday, at)
+	if err != nil {
+		return Assembly{}, false, err
+	}
 	figures, err := trajectory.Calculate(trajectory.Inputs{
 		DailyPool:            poolToday,
 		PeriodDays:           periodDays,
@@ -163,7 +171,7 @@ func Assemble(ctx context.Context, q db.Querier, householdID pgtype.UUID, at bud
 	return Assembly{
 		DailyPool: poolToday, BasePool: basePool, Changes: changes,
 		PeriodDays: periodDays, DaysElapsed: elapsed, Spend: spend, Line: line, Figures: figures,
-		Breakdown: breakdown,
+		Breakdown: breakdown, Commitments: commitments,
 	}, true, nil
 }
 

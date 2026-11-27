@@ -72,8 +72,8 @@ func FoldSpend(rows []db.PeriodSpendRow, at budget.Position) (Spend, error) {
 		switch api.Bucket(row.Bucket) {
 		case api.Daily:
 		case api.Commitment:
-			// Reported separately as "paid" once the Commitments panel lands,
-			// and in no daily figure.
+			// Reported separately as "paid" (FoldCommitments), and in no daily
+			// figure.
 			continue
 		default:
 			// The CHECK on categories.bucket makes this unreachable; failing

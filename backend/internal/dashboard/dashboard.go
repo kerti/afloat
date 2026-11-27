@@ -131,6 +131,7 @@ func read(ctx context.Context, q db.Querier, householdID pgtype.UUID, at budget.
 		out.Trajectory = assembly.trajectoryOnTheWire()
 		out.Categories = assembly.Breakdown.categoriesOnTheWire()
 		out.Pockets = assembly.Breakdown.pocketsOnTheWire()
+		out.Commitments = assembly.Commitments.onTheWire()
 		out.Chart = assembly.chartOnTheWire(at)
 	}
 	return out, nil

@@ -116,6 +116,17 @@ allocation in every Period; that is the point of it. _Avoid_: Fixed cost, Bill.
 
 **Commitments Budget**: `Σ allocation` over Commitment Categories for the Period.
 
+**paid** (a Commitment's): the signed `Σ amount` of live Expenses in that Commitment Category with
+`occurred_on` in the Period and on or before Today. A refund counts negative; a future-dated Expense
+counts only once its day arrives. Read per Budget Period (Q-20, interim): a payment that covers more
+than one Period, such as an annual premium, reads as over in the Period it falls in and as still
+due in the others, which is accepted until the plan object (PRD §12).
+
+**still due** (a Commitment's): `allocation − paid`, with the allocation in force Today. Signed and
+never clamped: below zero, more was paid than was set aside. The panel's total row uses the same
+formula over the sums: `Commitments Budget − Σ paid`. An inactive Commitment counts in both, as it
+does in the Commitments Budget.
+
 **Daily Pool** (`P`): `Monthly Budget − Commitments Budget`. The money the daily figures divide. This
 single subtraction is why a rent payment on day two does not report a catastrophe.
 
@@ -279,6 +290,10 @@ JSON. Blank means not yet in the UI.
 | By Category / By Pocket (the Home sections) | per kategori / per kantong | approved 27 Nov 2026 (#155 PR 7), provisional |
 | *of* (an allocation: "of Rp1.500.000") | dari | approved 27 Nov 2026 (#155 PR 7), provisional |
 | Uncategorised (a Home row) | tanpa kategori | in the UI since the Expenses list (#140); first on Home (#155 PR 7), provisional |
+| Commitments (the Home section) | komitmen | "komitmen" is the Commitment (bucket)'s word; approved 27 Nov 2026 (#155 PR 9), provisional |
+| *paid* ("<amount> paid of <allocation>") / Paid (nothing still due) | dibayar / lunas | approved 27 Nov 2026 (#155 PR 9), provisional; "lunas" is paid in full, used for the one word that stands where an amount would |
+| *still due* ("<amount> still due") | masih harus dibayar | approved 27 Nov 2026 (#155 PR 9), provisional |
+| *more than you set aside* ("<amount> more than you set aside") | lebih dari yang Anda sisihkan | approved 27 Nov 2026 (#155 PR 9), provisional; "sisihkan" is setting money aside |
 
 ---
 

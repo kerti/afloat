@@ -517,6 +517,107 @@ type ChartPoint struct {
 	Target Money `json:"target"`
 }
 
+// CommitmentFigure One Commitment Category's row of the Commitments panel. `allocation` is
+// what the Category is set at in force Today. `paid` is the sum of the
+// Category's live Expenses dated in the Budget Period and on or before the
+// caller's Today, signed (a refund subtracts): an Expense dated after
+// Today is not paid until its day. `still_due` is `allocation` less
+// `paid`, **signed and not clamped**: zero when it is paid exactly,
+// negative when more has been paid than was set aside. The names travel
+// with the figures, from the same snapshot.
+type CommitmentFigure struct {
+	// Active `false` for a Category that has been deactivated: it still has an
+	// allocation and is kept in the panel.
+	Active bool `json:"active"`
+
+	// Allocation A decimal serialised as a string at exactly four decimal places (PRD
+	// N2, BOOTSTRAP.md §4): `"9000000.0000"`, never a JSON number, never
+	// trimmed, never exponent notation. In the Household's
+	// `reporting_currency`; a Budget's money carries no `currency` of its own
+	// (PRD N3), an Expense's has one. May be negative where it is a difference
+	// (`unallocated`) or a refund (an Expense's `amount`).
+	//
+	//
+	// Example: 9000000.0000
+	Allocation          Money              `json:"allocation"`
+	CategoryDisplayName string             `json:"category_display_name"`
+	CategoryId          openapi_types.UUID `json:"category_id"`
+
+	// Paid A decimal serialised as a string at exactly four decimal places (PRD
+	// N2, BOOTSTRAP.md §4): `"9000000.0000"`, never a JSON number, never
+	// trimmed, never exponent notation. In the Household's
+	// `reporting_currency`; a Budget's money carries no `currency` of its own
+	// (PRD N3), an Expense's has one. May be negative where it is a difference
+	// (`unallocated`) or a refund (an Expense's `amount`).
+	//
+	//
+	// Example: 9000000.0000
+	Paid Money `json:"paid"`
+
+	// StillDue A decimal serialised as a string at exactly four decimal places (PRD
+	// N2, BOOTSTRAP.md §4): `"9000000.0000"`, never a JSON number, never
+	// trimmed, never exponent notation. In the Household's
+	// `reporting_currency`; a Budget's money carries no `currency` of its own
+	// (PRD N3), an Expense's has one. May be negative where it is a difference
+	// (`unallocated`) or a refund (an Expense's `amount`).
+	//
+	//
+	// Example: 9000000.0000
+	StillDue Money `json:"still_due"`
+}
+
+// Commitments The Household's Commitments read per Budget Period (PRD D6, #155 R16):
+// the Commitments Budget, what has been paid against it so far and what is
+// still due, and the same three for each live Commitment Category. A
+// Commitment that recurs over more than one Period (an annual tax) is read
+// as any other: the Period it is paid in shows the whole payment, and the
+// other Periods show it unpaid. That is accepted until the plan object
+// exists (PRD §11, Q-20).
+//
+// Present once the Household has a Monthly Budget and at least one live
+// Commitment Category, absent otherwise, never `null`. Every `Money` is in
+// the answer's `currency`.
+type Commitments struct {
+	// CommitmentsBudget A decimal serialised as a string at exactly four decimal places (PRD
+	// N2, BOOTSTRAP.md §4): `"9000000.0000"`, never a JSON number, never
+	// trimmed, never exponent notation. In the Household's
+	// `reporting_currency`; a Budget's money carries no `currency` of its own
+	// (PRD N3), an Expense's has one. May be negative where it is a difference
+	// (`unallocated`) or a refund (an Expense's `amount`).
+	//
+	//
+	// Example: 9000000.0000
+	CommitmentsBudget Money `json:"commitments_budget"`
+
+	// Items One row for each live Commitment Category, active or inactive, in
+	// the Category list's order (oldest first, then by `category_id`). A
+	// Commitment always has an allocation, so every row has one, zero
+	// included. Never empty.
+	Items []CommitmentFigure `json:"items"`
+
+	// Paid A decimal serialised as a string at exactly four decimal places (PRD
+	// N2, BOOTSTRAP.md §4): `"9000000.0000"`, never a JSON number, never
+	// trimmed, never exponent notation. In the Household's
+	// `reporting_currency`; a Budget's money carries no `currency` of its own
+	// (PRD N3), an Expense's has one. May be negative where it is a difference
+	// (`unallocated`) or a refund (an Expense's `amount`).
+	//
+	//
+	// Example: 9000000.0000
+	Paid Money `json:"paid"`
+
+	// StillDue A decimal serialised as a string at exactly four decimal places (PRD
+	// N2, BOOTSTRAP.md §4): `"9000000.0000"`, never a JSON number, never
+	// trimmed, never exponent notation. In the Household's
+	// `reporting_currency`; a Budget's money carries no `currency` of its own
+	// (PRD N3), an Expense's has one. May be negative where it is a difference
+	// (`unallocated`) or a refund (an Expense's `amount`).
+	//
+	//
+	// Example: 9000000.0000
+	StillDue Money `json:"still_due"`
+}
+
 // CreateCategoryRequest A new Category. `allocation` is what it is planned at in the current
 // Budget Period: required for a Commitment (`null` is as absent), optional
 // for a Daily Category, where absent and `null` both mean none.
@@ -618,6 +719,19 @@ type Dashboard struct {
 	// absent before, never `null`; every `Money` is in the answer's
 	// `currency`.
 	Chart *Chart `json:"chart,omitempty"`
+
+	// Commitments The Household's Commitments read per Budget Period (PRD D6, #155 R16):
+	// the Commitments Budget, what has been paid against it so far and what is
+	// still due, and the same three for each live Commitment Category. A
+	// Commitment that recurs over more than one Period (an annual tax) is read
+	// as any other: the Period it is paid in shows the whole payment, and the
+	// other Periods show it unpaid. That is accepted until the plan object
+	// exists (PRD §11, Q-20).
+	//
+	// Present once the Household has a Monthly Budget and at least one live
+	// Commitment Category, absent otherwise, never `null`. Every `Money` is in
+	// the answer's `currency`.
+	Commitments *Commitments `json:"commitments,omitempty"`
 
 	// Currency ISO 4217. The Household's `reporting_currency` as it stands in the
 	// snapshot this answer was read from: the currency of every `Money`

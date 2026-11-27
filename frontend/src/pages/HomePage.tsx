@@ -15,6 +15,7 @@ import { ErrorState, Loading } from "@/components/states";
 import { BodyText, EmptyState, MutedText, PageTitle } from "@/components/Text";
 import { TextLink } from "@/components/TextLink";
 import { formatAllowance, formatMoney } from "@/lib/money";
+import { stillDueOf } from "@/lib/commitment";
 import { paceOf } from "@/lib/pace";
 import { routes } from "@/lib/routes";
 
@@ -33,8 +34,9 @@ function foundedPocket(state: unknown): string | null {
 // half-up (#155 R11). Whether the allowance stands alone or beside the Baseline
 // is `allowance_mode`, never a comparison of the amounts (R10). The State and
 // the pace sentence are words only (R12), then the chart (D5: the server's
-// points, drawn, with the pace sentence as its name), then By Category and By
-// Pocket (R15); each is there exactly when the server sent it. The Shell around it carries the app name and sign-out.
+// points, drawn, with the pace sentence as its name), then Commitments (R16,
+// per Budget Period), then By Category and By Pocket (R15); each is there
+// exactly when the server sent it. The Shell around it carries the app name and sign-out.
 export function HomePage({ me }: { me: Me }) {
   const { t, i18n } = useTranslation();
   const dashboard = useDashboard();
@@ -90,6 +92,7 @@ export function HomePage({ me }: { me: Me }) {
           mode={me.household.allowance_mode}
           trajectory={dashboard.data.trajectory}
           chart={dashboard.data.chart}
+          commitments={dashboard.data.commitments}
           categories={dashboard.data.categories}
           pockets={dashboard.data.pockets}
         />
@@ -104,6 +107,7 @@ function Figures({
   mode,
   trajectory,
   chart,
+  commitments,
   categories,
   pockets,
 }: {
@@ -112,6 +116,7 @@ function Figures({
   mode: Me["household"]["allowance_mode"];
   trajectory: NonNullable<Dashboard["trajectory"]>;
   chart: Dashboard["chart"];
+  commitments: Dashboard["commitments"];
   categories: Dashboard["categories"];
   pockets: Dashboard["pockets"];
 }) {
@@ -174,6 +179,34 @@ function Figures({
           />
         </Section>
       )}
+      <Section id="commitments" title={t("dashboard.commitments.title")}>
+        {commitments === undefined ? (
+          <EmptyState>{t("dashboard.commitments.empty")}</EmptyState>
+        ) : (
+          <ListCard>
+            <CommitmentRow
+              label={t("dashboard.commitments.total")}
+              allocation={commitments.commitments_budget}
+              paid={commitments.paid}
+              stillDue={commitments.still_due}
+              currency={currency}
+              locale={locale}
+            />
+            {commitments.items.map((c) => (
+              <CommitmentRow
+                key={c.category_id}
+                label={c.category_display_name}
+                inactive={!c.active}
+                allocation={c.allocation}
+                paid={c.paid}
+                stillDue={c.still_due}
+                currency={currency}
+                locale={locale}
+              />
+            ))}
+          </ListCard>
+        )}
+      </Section>
       <Section id="by-category" title={t("dashboard.byCategory")}>
         <Rows empty={categories === undefined}>
           {categories?.map((c) => (
@@ -194,6 +227,54 @@ function Figures({
         </Rows>
       </Section>
     </>
+  );
+}
+
+// One Commitment, or the totals of them: what is still due (or "Paid", or "more
+// than you set aside"), and under it what has been paid of what was set aside.
+// Information and no tone: no colour, bar or percentage, and a still due below
+// zero is never clamped (D9, R16). The server sends the figures; the words are
+// chosen from the still due as it shows.
+function CommitmentRow({
+  label,
+  inactive,
+  allocation,
+  paid,
+  stillDue,
+  currency,
+  locale,
+}: {
+  label: string;
+  inactive?: boolean;
+  allocation: string;
+  paid: string;
+  stillDue: string;
+  currency: string;
+  locale: string;
+}) {
+  const { t } = useTranslation();
+  const due = stillDueOf(stillDue, currency, locale);
+  const status =
+    due === null
+      ? undefined
+      : due.kind === "paid"
+        ? t("dashboard.commitments.paid")
+        : due.kind === "due"
+          ? t("dashboard.commitments.stillDue", { amount: due.amount })
+          : t("dashboard.commitments.over", { amount: due.amount });
+  return (
+    <FigureRow
+      label={label}
+      labelMuted={inactive}
+      badge={inactive && <Badge>{t("pockets.inactive")}</Badge>}
+      muted={due?.kind === "paid"}
+      detail={t("dashboard.commitments.detail", {
+        paid: formatMoney(paid, currency, locale),
+        allocation: formatMoney(allocation, currency, locale),
+      })}
+    >
+      {status}
+    </FigureRow>
   );
 }
 

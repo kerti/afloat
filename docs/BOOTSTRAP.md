@@ -1123,7 +1123,8 @@ assembly or the calculation changes this file and `trajectory.json` together. Ea
 it puts on the wire to the rows already there (PR 7: the `categories` and `pockets` lists, in the `wire`, with a
 key for each id since the ids are minted when the file is seeded; PR 8: `chart.points`, one point for
 every Period Day, worked out in exact fractions from the rows' raw Expenses and `pool` and cross-checked
-against the row's own `trajectory_variance` and `spend`). The dashboard's tests read it through the real statements
+against the row's own `trajectory_variance` and `spend`; PR 9: `commitments`, with a key for each id as the
+breakdowns, worked out in exact fractions from the rows' raw Expenses and allocations). The dashboard's tests read it through the real statements
 (`internal/dashboard`), and assert the pool equal to `GET /budget`'s `daily_pool` on the same state.
 
 **`contract/testdata/periods.json`'s `days` rows pin a Period's day counts** (#155): D, the window's length,

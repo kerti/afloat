@@ -80,6 +80,15 @@
       "behind": "{{amount}} behind pace",
       "on": "On pace"
     },
+    "chart": {
+      "title": "This Period",
+      "label": "Cumulative spending against the target for this Period",
+      "date": "Date",
+      "target": "Target",
+      "actual": "Actual",
+      "inProgress": "today, in progress",
+      "unavailable": "The chart could not be loaded."
+    },
     "byCategory": "By Category",
     "byPocket": "By Pocket",
     "ofAllocation": "of {{amount}}",

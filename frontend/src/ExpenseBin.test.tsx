@@ -318,7 +318,9 @@ describe("the Recycle Bin", () => {
       expect(main().queryByRole("button", { name: /Lunch/ })).not.toBeInTheDocument(),
     );
     expect(main().getByRole("button", { name: "View Tea, Rp25,000" })).toBeInTheDocument();
-    expect(view.param("expense")).toBeNull();
+    // The list refetch (inside the mutation) closes the dialog a tick before the
+    // handler clears the parameter, so the URL is waited for, not read at once.
+    await waitFor(() => expect(view.param("expense")).toBeNull());
     expect(state.expenseRestores).toEqual(["b1"]);
     await act(async () => {
       await new Promise((r) => setTimeout(r, 20));

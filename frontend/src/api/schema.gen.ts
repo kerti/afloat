@@ -837,6 +837,12 @@ export interface paths {
          *     (PRD D7): the same Expenses, read once, so the two lists reconcile.
          *     Both are omitted with `trajectory` while there is no Monthly Budget and,
          *     beyond that, whenever they have no row.
+         *
+         *     `chart` is the cumulative target line against the cumulative actual line
+         *     for the whole Period (PRD D5), one point per Period Day, computed from
+         *     the same target line and the same Expenses as `trajectory`, so the chart
+         *     and the pace never disagree. It is omitted with `trajectory` while there
+         *     is no Monthly Budget.
          */
         get: operations["getDashboard"];
         put?: never;
@@ -1766,6 +1772,63 @@ export interface components {
              *     no row, never `null` and never `[]`.
              */
             pockets?: components["schemas"]["PocketFigure"][];
+            chart?: components["schemas"]["Chart"];
+        };
+        /**
+         * @description The Period's cumulative target line against its cumulative actual line
+         *     (PRD D5), drawn from these points alone: the client derives no figure
+         *     and compares no date. Present once the Household has a Monthly Budget,
+         *     absent before, never `null`; every `Money` is in the answer's
+         *     `currency`.
+         */
+        Chart: {
+            /**
+             * @description One point for every day of the Budget Period, first to last, in
+             *     date order: the Period's length is the array's. Never empty.
+             */
+            points: components["schemas"]["ChartPoint"][];
+        };
+        /**
+         * @description One Period Day of the chart. Both figures are cumulative and are read at
+         *     the **end** of `date`, so a point is the total through that day and the
+         *     first point is one day's worth, not zero.
+         *
+         *     `target` is `T(j)` of CONTEXT.md §Mid-period Budget changes for the
+         *     day's number `j`: the same target line `trajectory_variance` and the
+         *     baseline are read from, kinked where the Daily Pool changed on or before
+         *     the caller's Today and never redrawn for a change after it, with every
+         *     segment's slope clamped at zero, half-up at four decimals. It never
+         *     falls. While the Household is fully committed (no baseline in force) the
+         *     line is flat: zero from the first day, or at the value the line had
+         *     reached when the pool was cut to at or below it. The chart is still
+         *     present then; `trajectory` is what says there is no pace.
+         *     `trajectory_variance` is `target` on the point before Today's, less what
+         *     has settled, and Today's point reads about one `baseline_daily_budget`
+         *     further on (to 0.0001: the target is half-up, the baseline floored).
+         *
+         *     `actual` is the Period's daily-bucket spending summed from the first day
+         *     through `date` (an uncategorised Expense is Daily; a Commitment
+         *     Category's is never in it, as in no daily figure), signed, from the
+         *     Expenses' `occurred_on` alone. It is present on every day up to and
+         *     including the caller's Today and absent after it: an Expense dated in
+         *     the future is on no point before its date, and a future-dated refund
+         *     lowers none. On Today's point it is what has settled plus what is spent
+         *     today so far, so it moves through the day.
+         *
+         *     `in_progress` is `true` on Today's point only, the day that is not over,
+         *     and absent on every other point, never `false`. The client marks Today
+         *     from it and derives no date of its own.
+         */
+        ChartPoint: {
+            /**
+             * Format: date
+             * @example 2026-11-14
+             */
+            date: string;
+            target: components["schemas"]["Money"];
+            actual?: components["schemas"]["Money"];
+            /** @description Always `true` where present. */
+            in_progress?: boolean;
         };
         /**
          * @description One Daily Category's row of the dashboard's breakdown, or the one row

@@ -447,6 +447,76 @@ type ChangePasswordRequest struct {
 	NewPassword     string `json:"new_password"`
 }
 
+// Chart The Period's cumulative target line against its cumulative actual line
+// (PRD D5), drawn from these points alone: the client derives no figure
+// and compares no date. Present once the Household has a Monthly Budget,
+// absent before, never `null`; every `Money` is in the answer's
+// `currency`.
+type Chart struct {
+	// Points One point for every day of the Budget Period, first to last, in
+	// date order: the Period's length is the array's. Never empty.
+	Points []ChartPoint `json:"points"`
+}
+
+// ChartPoint One Period Day of the chart. Both figures are cumulative and are read at
+// the **end** of `date`, so a point is the total through that day and the
+// first point is one day's worth, not zero.
+//
+// `target` is `T(j)` of CONTEXT.md §Mid-period Budget changes for the
+// day's number `j`: the same target line `trajectory_variance` and the
+// baseline are read from, kinked where the Daily Pool changed on or before
+// the caller's Today and never redrawn for a change after it, with every
+// segment's slope clamped at zero, half-up at four decimals. It never
+// falls. While the Household is fully committed (no baseline in force) the
+// line is flat: zero from the first day, or at the value the line had
+// reached when the pool was cut to at or below it. The chart is still
+// present then; `trajectory` is what says there is no pace.
+// `trajectory_variance` is `target` on the point before Today's, less what
+// has settled, and Today's point reads about one `baseline_daily_budget`
+// further on (to 0.0001: the target is half-up, the baseline floored).
+//
+// `actual` is the Period's daily-bucket spending summed from the first day
+// through `date` (an uncategorised Expense is Daily; a Commitment
+// Category's is never in it, as in no daily figure), signed, from the
+// Expenses' `occurred_on` alone. It is present on every day up to and
+// including the caller's Today and absent after it: an Expense dated in
+// the future is on no point before its date, and a future-dated refund
+// lowers none. On Today's point it is what has settled plus what is spent
+// today so far, so it moves through the day.
+//
+// `in_progress` is `true` on Today's point only, the day that is not over,
+// and absent on every other point, never `false`. The client marks Today
+// from it and derives no date of its own.
+type ChartPoint struct {
+	// Actual A decimal serialised as a string at exactly four decimal places (PRD
+	// N2, BOOTSTRAP.md §4): `"9000000.0000"`, never a JSON number, never
+	// trimmed, never exponent notation. In the Household's
+	// `reporting_currency`; a Budget's money carries no `currency` of its own
+	// (PRD N3), an Expense's has one. May be negative where it is a difference
+	// (`unallocated`) or a refund (an Expense's `amount`).
+	//
+	//
+	// Example: 9000000.0000
+	Actual *Money `json:"actual,omitempty"`
+
+	// Date Example: 2026-11-14
+	Date openapi_types.Date `json:"date"`
+
+	// InProgress Always `true` where present.
+	InProgress *bool `json:"in_progress,omitempty"`
+
+	// Target A decimal serialised as a string at exactly four decimal places (PRD
+	// N2, BOOTSTRAP.md §4): `"9000000.0000"`, never a JSON number, never
+	// trimmed, never exponent notation. In the Household's
+	// `reporting_currency`; a Budget's money carries no `currency` of its own
+	// (PRD N3), an Expense's has one. May be negative where it is a difference
+	// (`unallocated`) or a refund (an Expense's `amount`).
+	//
+	//
+	// Example: 9000000.0000
+	Target Money `json:"target"`
+}
+
 // CreateCategoryRequest A new Category. `allocation` is what it is planned at in the current
 // Budget Period: required for a Commitment (`null` is as absent), optional
 // for a Daily Category, where absent and `null` both mean none.
@@ -541,6 +611,13 @@ type Dashboard struct {
 	// there is no Monthly Budget and when it has no row, never `null` and
 	// never `[]`.
 	Categories *[]CategoryFigure `json:"categories,omitempty"`
+
+	// Chart The Period's cumulative target line against its cumulative actual line
+	// (PRD D5), drawn from these points alone: the client derives no figure
+	// and compares no date. Present once the Household has a Monthly Budget,
+	// absent before, never `null`; every `Money` is in the answer's
+	// `currency`.
+	Chart *Chart `json:"chart,omitempty"`
 
 	// Currency ISO 4217. The Household's `reporting_currency` as it stands in the
 	// snapshot this answer was read from: the currency of every `Money`

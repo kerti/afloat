@@ -110,6 +110,12 @@ const dashboardAnswerPR3 = `{"currency":"IDR","trajectory":{"baseline_daily_budg
 // still not on it.
 const dashboardAnswerPR6 = `{"currency":"IDR","trajectory":{"baseline_daily_budget":"100000.0000","days_remaining":17,"left_to_spend_today":"176470.5882","remaining_daily_pool":"3000000.0000","state":"afloat","todays_allowance":"176470.5882","trajectory_variance":"1300000.0000"}}`
 
+// The answer at PR 8: PR 6's plus `chart`, one point for each of the Period's 30
+// days. A target of 100.000 a day, read at the end of the day, so the first
+// point is 100.000 and not zero; an actual of zero (nothing is spent) through
+// Today, the 14th, which alone is in progress; no actual after it.
+const dashboardAnswerPR8Chart = `{"points":[{"actual":"0.0000","date":"2026-11-01","target":"100000.0000"},{"actual":"0.0000","date":"2026-11-02","target":"200000.0000"},{"actual":"0.0000","date":"2026-11-03","target":"300000.0000"},{"actual":"0.0000","date":"2026-11-04","target":"400000.0000"},{"actual":"0.0000","date":"2026-11-05","target":"500000.0000"},{"actual":"0.0000","date":"2026-11-06","target":"600000.0000"},{"actual":"0.0000","date":"2026-11-07","target":"700000.0000"},{"actual":"0.0000","date":"2026-11-08","target":"800000.0000"},{"actual":"0.0000","date":"2026-11-09","target":"900000.0000"},{"actual":"0.0000","date":"2026-11-10","target":"1000000.0000"},{"actual":"0.0000","date":"2026-11-11","target":"1100000.0000"},{"actual":"0.0000","date":"2026-11-12","target":"1200000.0000"},{"actual":"0.0000","date":"2026-11-13","target":"1300000.0000"},{"actual":"0.0000","date":"2026-11-14","in_progress":true,"target":"1400000.0000"},{"date":"2026-11-15","target":"1500000.0000"},{"date":"2026-11-16","target":"1600000.0000"},{"date":"2026-11-17","target":"1700000.0000"},{"date":"2026-11-18","target":"1800000.0000"},{"date":"2026-11-19","target":"1900000.0000"},{"date":"2026-11-20","target":"2000000.0000"},{"date":"2026-11-21","target":"2100000.0000"},{"date":"2026-11-22","target":"2200000.0000"},{"date":"2026-11-23","target":"2300000.0000"},{"date":"2026-11-24","target":"2400000.0000"},{"date":"2026-11-25","target":"2500000.0000"},{"date":"2026-11-26","target":"2600000.0000"},{"date":"2026-11-27","target":"2700000.0000"},{"date":"2026-11-28","target":"2800000.0000"},{"date":"2026-11-29","target":"2900000.0000"},{"date":"2026-11-30","target":"3000000.0000"}]}`
+
 // The answer at PR 7: PR 6's plus `categories` and `pockets`. A Daily Category's
 // allocation leaves the Daily Pool alone, so the same Household with one
 // allocated Category is PR 6's answer byte for byte plus the one list.
@@ -253,15 +259,29 @@ func TestTheAnswerWithAMonthlyBudgetIsEachEarlierAnswerPlusItsOwnProperties(t *t
 		t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
 	}
 	got := strings.TrimSpace(rec.Body.String())
-	if got != dashboardAnswerPR6 {
-		t.Errorf("body = %s\nwant %s", got, dashboardAnswerPR6)
-	}
-
-	var older, newer map[string]json.RawMessage
-	if err := json.Unmarshal([]byte(dashboardAnswerPR1), &older); err != nil {
+	// PR 6's answer, every property of it byte for byte, and PR 8's `chart`:
+	// nothing else (no categories or pockets: nothing is spent or allocated).
+	var wholePR6, newer map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(dashboardAnswerPR6), &wholePR6); err != nil {
 		t.Fatal(err)
 	}
 	if err := json.Unmarshal([]byte(got), &newer); err != nil {
+		t.Fatal(err)
+	}
+	for key, value := range wholePR6 {
+		if string(newer[key]) != string(value) {
+			t.Errorf("PR 6's %q = %s, now %s: an earlier answer's property was changed or removed", key, value, newer[key])
+		}
+	}
+	if string(newer["chart"]) != dashboardAnswerPR8Chart {
+		t.Errorf("chart = %s\nwant %s", newer["chart"], dashboardAnswerPR8Chart)
+	}
+	if len(newer) != len(wholePR6)+1 {
+		t.Errorf("the answer has %d properties, want PR 6's %d and `chart`", len(newer), len(wholePR6))
+	}
+
+	var older map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(dashboardAnswerPR1), &older); err != nil {
 		t.Fatal(err)
 	}
 	for key, value := range older {
@@ -384,9 +404,31 @@ func TestAFullyCommittedHouseholdsTrajectoryHasNoBaselineProperty(t *testing.T) 
 
 	rec := f.do(http.MethodGet)
 
-	want := `{"currency":"IDR","trajectory":{"days_remaining":17,"left_to_spend_today":"-29411.7648","remaining_daily_pool":"-500000.0000","todays_allowance":"-29411.7648"}}`
-	if got := strings.TrimSpace(rec.Body.String()); rec.Code != http.StatusOK || got != want {
-		t.Errorf("answer = %d %s\nwant %s", rec.Code, got, want)
+	// The chart is there, and is a flat target at zero: it is the trajectory
+	// that says there is no pace, not the chart that goes missing.
+	var got struct {
+		Currency   string          `json:"currency"`
+		Trajectory json.RawMessage `json:"trajectory"`
+		Chart      struct {
+			Points []struct {
+				Target string `json:"target"`
+			} `json:"points"`
+		} `json:"chart"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil || rec.Code != http.StatusOK {
+		t.Fatalf("answer = %d %s (%v)", rec.Code, rec.Body.String(), err)
+	}
+	const want = `{"days_remaining":17,"left_to_spend_today":"-29411.7648","remaining_daily_pool":"-500000.0000","todays_allowance":"-29411.7648"}`
+	if got.Currency != "IDR" || string(got.Trajectory) != want {
+		t.Errorf("answer = %s %s\nwant IDR %s", got.Currency, got.Trajectory, want)
+	}
+	if len(got.Chart.Points) != 30 {
+		t.Fatalf("chart has %d points, want 30", len(got.Chart.Points))
+	}
+	for i, p := range got.Chart.Points {
+		if p.Target != "0.0000" {
+			t.Errorf("point %d target = %s, want the flat zero of a fully committed Period", i+1, p.Target)
+		}
 	}
 }
 
@@ -436,8 +478,8 @@ func TestTheAnswerWithABreakdownIsPR6sAnswerPlusItsOwnProperties(t *testing.T) {
 	if _, ok := newer["pockets"]; ok {
 		t.Errorf("pockets = %s, want it omitted: no Pocket has spend", newer["pockets"])
 	}
-	if len(newer) != len(older)+1 {
-		t.Errorf("the answer has %d properties, want PR 6's %d and `categories`", len(newer), len(older))
+	if len(newer) != len(older)+2 {
+		t.Errorf("the answer has %d properties, want PR 6's %d, `categories` and `chart`", len(newer), len(older))
 	}
 }
 

@@ -462,7 +462,6 @@ describe("session and locale", () => {
 
     await user.click(await screen.findByRole("link", { name: "Settings" }));
     expect(await screen.findByText("Cash")).toBeInTheDocument();
-    await user.click(within(screen.getByRole("navigation")).getByRole("link", { name: "Home" }));
     await user.click(await screen.findByRole("button", { name: "Sign out" }));
     await screen.findByRole("heading", { name: "Sign in" });
     expect(client.getQueryData(["pockets"])).toBeUndefined();

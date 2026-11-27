@@ -245,6 +245,15 @@ describe("user settings", () => {
     await waitFor(() =>
       expect(client.getQueryData<{ email: string }>(["me"])?.email).toBe("alice@new.example"),
     );
+    // The section names the address in use, before and after.
+    expect(await email().findByText("Signed in as alice@new.example")).toBeInTheDocument();
+  });
+
+  it("names the address signed in with above the email form", async () => {
+    server.use(...defaultHandlers(signedIn()));
+    renderApp("/settings");
+    await open();
+    expect(email().getByText(`Signed in as ${alice.email}`)).toBeInTheDocument();
   });
 
   it("keeps a wrong current password on the email form and does not end the session", async () => {

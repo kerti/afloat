@@ -14,15 +14,14 @@ import {
 } from "recharts";
 import type { ChartPoint } from "@/api/client";
 import { formatDate } from "@/lib/dates";
-import { currencyDecimals, formatMoney, formatMoneyDigits } from "@/lib/money";
+import { currencyDecimals, formatMoney, formatMoneyCompact } from "@/lib/money";
 
 // The drawing of ChartCard, and the only file that imports Recharts: it is its
 // own lazy chunk. It draws what `points` says and derives no figure. The numbers
 // handed to Recharts are positions on a page, converted once from the wire's
 // strings below; nothing on the screen is formatted from them except the Y
-// axis's ticks, which are axis positions cut to the currency's decimals and run
-// through the one formatter on their digits. The tooltip and the table show the
-// server's strings.
+// axis's ticks, which are axis positions in compact words with the currency's
+// symbol ("Rp2.4M"). The tooltip and the table show the server's strings.
 //
 // Line style, not colour, tells the lines apart (PRD §9, D9): the target is
 // dashed and muted, the actual solid and primary, and Today's last stretch
@@ -115,7 +114,7 @@ export default function ChartCardImpl({
           allowDecimals={decimals > 0}
           domain={[(min: number) => Math.min(0, min), "auto"]}
           tick={{ fontSize: 12, fill: "var(--muted-foreground)" }}
-          tickFormatter={(v: number) => formatMoneyDigits(v.toFixed(decimals), currency, locale)}
+          tickFormatter={(v: number) => formatMoneyCompact(v, currency, locale)}
         />
         <Tooltip
           cursor={{ stroke: "var(--border)" }}

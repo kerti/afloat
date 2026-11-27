@@ -13,6 +13,8 @@ const alias = {
 
 export default defineConfig({
   resolve: { alias },
+  // A fixed build name, so a test never depends on the checkout's git state.
+  define: { __APP_VERSION__: JSON.stringify("dev (test)") },
   test: {
     environment: "jsdom",
     // Above setup.ts's asyncUtilTimeout, so a starved wait fails as its own error.

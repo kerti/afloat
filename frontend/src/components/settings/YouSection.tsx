@@ -4,7 +4,7 @@ import type { Me } from "@/api/client";
 import { useAuthMethods, useChangeEmail, useChangePassword, useUpdateMe } from "@/api/queries";
 import { errorMessage } from "@/api/errors";
 import { Field, Form, Section } from "@/components/Form";
-import { FieldError } from "@/components/Text";
+import { FieldError, MutedText } from "@/components/Text";
 import { TextSetting } from "@/components/TextSetting";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -47,7 +47,7 @@ export function YouSection({ me }: { me: Me }) {
   return (
     <Section id="you" title={t("settings.user.title")}>
       <ProfileSubsection me={me} />
-      {local && <EmailForm />}
+      {local && <EmailForm email={me.email} />}
       {local && <PasswordForm />}
     </Section>
   );
@@ -134,7 +134,7 @@ function ProfileSubsection({ me }: { me: Me }) {
   );
 }
 
-function EmailForm() {
+function EmailForm({ email: stored }: { email: string }) {
   const { t } = useTranslation();
   const change = useChangeEmail();
   const [email, setEmail] = useState("");
@@ -162,6 +162,9 @@ function EmailForm() {
 
   return (
     <Section subsection id="email" title={t("settings.user.email.heading")}>
+      <MutedText className="break-all">
+        {t("settings.user.email.current", { email: stored })}
+      </MutedText>
       <Form onSubmit={onSubmit}>
         <Field>
           <Label htmlFor="new-email">{t("settings.user.email.newEmail")}</Label>

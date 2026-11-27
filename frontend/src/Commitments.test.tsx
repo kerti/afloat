@@ -182,6 +182,36 @@ describe("Commitments", () => {
     expect(within(rentRow!).queryByText("Inactive")).not.toBeInTheDocument();
   });
 
+  it("leaves out an inactive Commitment with nothing set aside and nothing paid, and keeps one with either", async () => {
+    const empty = {
+      ...tax,
+      category_id: "0192f0a0-0000-7000-8000-0000000000c4",
+      category_display_name: "Trip",
+      allocation: "0.0000",
+      paid: "0.0000",
+      still_due: "0.0000",
+    };
+    const paidOnly = {
+      ...empty,
+      category_id: "0192f0a0-0000-7000-8000-0000000000c5",
+      category_display_name: "Visa",
+      paid: "50000.0000",
+      still_due: "-50000.0000",
+    };
+    const activeEmpty = {
+      ...empty,
+      category_id: "0192f0a0-0000-7000-8000-0000000000c6",
+      category_display_name: "Gift",
+      active: true,
+    };
+    await home(dashboardOf({ commitments: commitmentsOf([rent, empty, paidOnly, activeEmpty]) }));
+    const names = rowsOf().map((r) => r.textContent ?? "");
+    expect(names).toHaveLength(4);
+    expect(names.join(" ")).not.toContain("Trip");
+    expect(names[2]).toContain("Visa");
+    expect(names[3]).toContain("Gift");
+  });
+
   it("formats half-up and never abbreviates, to sixteen digits", async () => {
     await home(
       dashboardOf({

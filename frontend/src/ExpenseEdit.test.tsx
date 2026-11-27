@@ -89,8 +89,13 @@ describe("Edit an Expense", () => {
     expect(screen.getByRole("button", { name: "Time, 12:30" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: enGB.dates.clearTime })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Cancel" })).not.toBeInTheDocument();
-    // The record-level act below the form: Delete, alone.
-    expect(screen.getByRole("button", { name: e.delete })).toBeInTheDocument();
+    // Below a hairline, Delete and Save share one row, Save last: never Delete
+    // alone above Save, where a thumb reaching for Save lands on it.
+    const del = screen.getByRole("button", { name: e.delete });
+    const save = screen.getByRole("button", { name: e.save });
+    expect(del.parentElement).toBe(save.parentElement);
+    expect(del.parentElement).toHaveClass("grid-cols-2", "border-t");
+    expect(del.compareDocumentPosition(save) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     // Expenses stays lit.
     expect(
       screen.getAllByRole("link", { name: enGB.shell.tabs.expenses }).map((a) => a.ariaCurrent),

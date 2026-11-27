@@ -207,11 +207,6 @@ export function BudgetPage({ me }: { me: Me }) {
             </ListCard>
           )}
           {data.unallocated?.startsWith("-") && <MutedText>{t("budget.overAllocated")}</MutedText>}
-          {hiddenCount > 0 && (
-            <CheckboxRow checked={showInactive} onChange={setShowInactive}>
-              {t("categories.showInactive", { count: hiddenCount })}
-            </CheckboxRow>
-          )}
           {categories.error ? (
             <ErrorState error={categories.error} onRetry={() => void categories.refetch()} />
           ) : !listed ? (
@@ -257,6 +252,13 @@ export function BudgetPage({ me }: { me: Me }) {
                 </Section>
               );
             })
+          )}
+          {/* Under the lists it widens, beside the create action that also
+              changes them, not floating above the Commitments heading. */}
+          {hiddenCount > 0 && (
+            <CheckboxRow checked={showInactive} onChange={setShowInactive}>
+              {t("categories.showInactive", { count: hiddenCount })}
+            </CheckboxRow>
           )}
           <Button className="w-full" onClick={() => newParam.open("category")}>
             {t("categories.addHeading")}

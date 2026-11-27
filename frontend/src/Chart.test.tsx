@@ -256,12 +256,12 @@ describe("the drawing", () => {
     expect(document.querySelectorAll(".recharts-reference-dot")).toHaveLength(0);
   });
 
-  it("labels the Y axis with digits and no currency symbol, and the X axis with the Period's two ends", async () => {
+  it("labels the Y axis in compact words with the currency's symbol, and the X axis with the Period's two ends", async () => {
     await home(signedIn(dashboardOf(pointsOf())));
     await drawn();
     await waitFor(() => expect(yTicks().length).toBeGreaterThan(1));
     for (const tick of yTicks()) {
-      expect(tick.textContent).toMatch(/^-?[\d,]+$/);
+      expect(tick.textContent).toMatch(/^-?Rp\d+(\.\d)?[km]?$/);
     }
     // The X ticks are the first and last day of the Period, as the server sent them.
     expect(xTicks().map((t) => t.textContent)).toEqual(["1 November", "30 November"]);
@@ -271,14 +271,14 @@ describe("the drawing", () => {
     }
   });
 
-  it("separates Y digits as the locale does", async () => {
+  it("words the Y ticks as the locale does", async () => {
     await home(signedIn(dashboardOf(pointsOf(), "-1.0000"), "id-ID"));
     await screen.findByText(idID.dashboard.chart.target, {
       selector: ".recharts-legend-item-text span",
     });
     await waitFor(() => expect(yTicks().length).toBeGreaterThan(1));
     const ticks = yTicks().map((t) => t.textContent ?? "");
-    expect(ticks.some((t) => /^\d{1,3}(\.\d{3})+$/.test(t))).toBe(true);
-    expect(ticks.join(" ")).not.toContain(",");
+    expect(ticks.some((t) => /^Rp\d+(,\d)?\u00a0(rb|jt)$/.test(t))).toBe(true);
+    expect(ticks.join(" ")).not.toMatch(/\d\.\d/);
   });
 });

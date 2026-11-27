@@ -8,7 +8,7 @@ import { ErrorState, Loading } from "@/components/states";
 import { EmptyState, MutedText, PageTitle } from "@/components/Text";
 import { TextLink } from "@/components/TextLink";
 import { formatMoney } from "@/lib/money";
-import { routes } from "@/lib/routes";
+import { fromUncategorised, routes } from "@/lib/routes";
 import { useDayHeading } from "@/lib/useDayHeading";
 
 // The Household's Expenses, newest first, a page at a time behind a Load more
@@ -29,7 +29,7 @@ export function ExpensesPage({ me }: { me: Me }) {
     <>
       {uncategorised && <BackLink to={routes.expenses} label={t("expenses.allExpenses")} />}
       {uncategorised ? (
-        <PageTitle>{t("expenses.title")}</PageTitle>
+        <PageTitle>{t("expenses.needsCategoryTitle")}</PageTitle>
       ) : (
         <div className="flex items-baseline justify-between gap-4">
           <PageTitle>{t("expenses.title")}</PageTitle>
@@ -113,6 +113,7 @@ export function ExpensesPage({ me }: { me: Me }) {
               <ExpenseRow
                 key={e.id}
                 to={routes.expense(e.id)}
+                state={uncategorised ? fromUncategorised : undefined}
                 label={t("expenses.editRow", { name, amount })}
                 title={name}
                 muted={title === undefined}

@@ -106,13 +106,7 @@ function roundedDigits(m: RegExpExecArray, decimals: number, mode: Rounding = "h
   };
 }
 
-function format(
-  value: string,
-  currency: string,
-  locale: string,
-  mode: Rounding,
-  symbol = true,
-): string {
+function format(value: string, currency: string, locale: string, mode: Rounding): string {
   const m = SIGNED.exec(value);
   if (!m) return value;
   const decimals = currencyDecimals(currency);
@@ -120,7 +114,7 @@ function format(
   const { int, fraction, negative } = roundedDigits(m, decimals, mode);
   return (
     (negative ? "-" : "") +
-    (symbol ? prefix(currency) : "") +
+    prefix(currency) +
     group(int, sep.group) +
     (decimals > 0 ? sep.decimal + fraction : "")
   );
@@ -133,11 +127,16 @@ export function formatMoney(value: string, currency: string, locale: string): st
   return format(value, currency, locale, "half-up");
 }
 
-/** `formatMoney` without the currency symbol: the digits, grouped and signed, for
- * a chart's axis, whose card already says what it counts. The same half-up cut on
- * the digits of a string, never a float. (#155 PR 8.) */
-export function formatMoneyDigits(value: string, currency: string, locale: string): string {
-  return format(value, currency, locale, "half-up", false);
+/** A chart axis tick: the currency's symbol and the amount in the locale's
+ * compact words ("Rp2.4M", "Rp2,4 jt"), so the axis reads at a glance. Ticks are
+ * the chart's own round numbers, not the server's figures, so a float is
+ * fine here; every figure the server sends stays on `formatMoney`. */
+export function formatMoneyCompact(value: number, currency: string, locale: string): string {
+  const digits = new Intl.NumberFormat(locale, {
+    notation: "compact",
+    maximumFractionDigits: 1,
+  }).format(Math.abs(value));
+  return (value < 0 ? "-" : "") + prefix(currency) + digits;
 }
 
 /** An allowance figure for the screen (the hero, Today's allowance, the

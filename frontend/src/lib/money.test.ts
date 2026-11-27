@@ -6,6 +6,7 @@ import {
   displayDraft,
   draftFromWire,
   draftToWire,
+  formatAllowance,
   formatMoney,
   parseMoney,
   roundMoney,
@@ -42,6 +43,75 @@ describe("formatMoney", () => {
   it("renders a bad input as given, never NaN", () => {
     for (const bad of ["", "abc", "1e6", "1,000", " 5", "NaN", "1.2.3"]) {
       expect(formatMoney(bad, "IDR", "en-GB")).toBe(bad);
+    }
+  });
+});
+
+describe("formatAllowance (toward minus infinity at the minor unit, #155 R11)", () => {
+  it("cuts a positive amount, never rounds it up", () => {
+    expect(formatAllowance("203448.2758", "IDR", "id-ID")).toBe("Rp203.448");
+    expect(formatAllowance("203448.2758", "IDR", "en-GB")).toBe("Rp203,448");
+    expect(formatAllowance("203448.9999", "IDR", "en-GB")).toBe("Rp203,448");
+    expect(formatAllowance("0.9999", "IDR", "en-GB")).toBe("Rp0");
+    // formatMoney is half-up and would say Rp1 here: the two differ on purpose.
+    expect(formatMoney("0.9999", "IDR", "en-GB")).toBe("Rp1");
+  });
+
+  it("grows a negative amount away from zero, so it never reads as less than it is", () => {
+    expect(formatAllowance("-0.5", "IDR", "en-GB")).toBe("-Rp1");
+    expect(formatAllowance("-0.0001", "IDR", "en-GB")).toBe("-Rp1");
+    expect(formatAllowance("-1.0001", "IDR", "id-ID")).toBe("-Rp2");
+    expect(formatAllowance("-203448.2758", "IDR", "id-ID")).toBe("-Rp203.449");
+    expect(formatAllowance("-2000.0000", "IDR", "id-ID")).toBe("-Rp2.000");
+  });
+
+  it("leaves an exact value exactly as it is", () => {
+    expect(formatAllowance("200000.0000", "IDR", "id-ID")).toBe("Rp200.000");
+    expect(formatAllowance("-200000.0000", "IDR", "id-ID")).toBe("-Rp200.000");
+    expect(formatAllowance("5.0000", "IDR", "en-GB")).toBe("Rp5");
+    expect(formatAllowance("7", "IDR", "en-GB")).toBe("Rp7");
+  });
+
+  it("never prints a negative zero", () => {
+    for (const zero of ["0", "0.0000", "-0", "-0.0000"]) {
+      expect(formatAllowance(zero, "IDR", "en-GB"), zero).toBe("Rp0");
+    }
+    expect(formatAllowance("-0.0000", "USD", "en-GB")).toBe("USD 0.00");
+  });
+
+  it("carries through the integer part", () => {
+    expect(formatAllowance("-999.0001", "IDR", "en-GB")).toBe("-Rp1,000");
+    expect(formatAllowance("-9999999999999999.5", "IDR", "en-GB")).toBe(
+      "-Rp10,000,000,000,000,000",
+    );
+  });
+
+  it("cuts at the currency's own minor unit: two decimals, three, none", () => {
+    expect(formatAllowance("1234.5678", "USD", "en-GB")).toBe("USD 1,234.56");
+    expect(formatAllowance("1234.5678", "USD", "id-ID")).toBe("USD 1.234,56");
+    expect(formatAllowance("-1234.5601", "USD", "en-GB")).toBe("-USD 1,234.57");
+    expect(formatAllowance("-1234.5600", "USD", "en-GB")).toBe("-USD 1,234.56");
+    expect(formatAllowance("1.2349", "KWD", "en-GB")).toBe("KWD 1.234");
+    expect(formatAllowance("-1.2341", "KWD", "en-GB")).toBe("-KWD 1.235");
+    expect(formatAllowance("1234.9999", "JPY", "en-GB")).toBe("JPY 1,234");
+    expect(formatAllowance("-1234.0001", "JPY", "en-GB")).toBe("-JPY 1,235");
+  });
+
+  it("holds 16 integer digits exactly, which a float cannot", () => {
+    expect(formatAllowance("9999999999999999.9999", "IDR", "id-ID")).toBe(
+      "Rp9.999.999.999.999.999",
+    );
+    expect(formatAllowance("9007199254740993.9999", "IDR", "en-GB")).toBe(
+      "Rp9,007,199,254,740,993",
+    );
+    expect(formatAllowance("-9007199254740993.0001", "IDR", "en-GB")).toBe(
+      "-Rp9,007,199,254,740,994",
+    );
+  });
+
+  it("renders a bad input as given, never NaN", () => {
+    for (const bad of ["", "abc", "1e6", "1,000", "NaN"]) {
+      expect(formatAllowance(bad, "IDR", "en-GB")).toBe(bad);
     }
   });
 });

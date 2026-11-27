@@ -76,7 +76,7 @@ describe("create account", () => {
     await register(user, { name: "  Dewi Putri " });
 
     // No gate: the person is on Home, signed in as the new User.
-    expect(await screen.findByText("Signed in as Dewi Putri.")).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Home" })).toBeInTheDocument();
     expect(screen.queryByLabelText("Household name")).not.toBeInTheDocument();
     expect(state.registered).toEqual({
       email: "dewi@example.com",
@@ -111,7 +111,10 @@ describe("create account", () => {
 
     await register(user);
 
-    expect(await screen.findByText("Household: dewi's Household")).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Home" })).toBeInTheDocument();
+    // Home's own read has answered, so nothing is still in flight to leak.
+    expect(await screen.findByText(enGB.dashboard.noBudget)).toBeInTheDocument();
+    expect(screen.getByText("dewi's Household", { selector: "strong" })).toBeInTheDocument();
     expect(state.committed?.household_display_name).toBe("dewi's Household");
     // No user_display_name key at all, so the server defaults it.
     expect(state.registered).not.toHaveProperty("user_display_name");
@@ -230,7 +233,7 @@ describe("the Home notice", () => {
     await user.click(screen.getByRole("link", { name: "Settings" }));
     await screen.findByRole("heading", { name: "Settings" });
     act(() => view.navigate(-1));
-    expect(await screen.findByText("Signed in as Dewi.")).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Home" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Dismiss" })).not.toBeInTheDocument();
   });
 
@@ -241,14 +244,14 @@ describe("the Home notice", () => {
     await screen.findByRole("heading", { name: "Settings" });
     act(() => view.navigate(-1));
 
-    expect(await screen.findByText("Signed in as Dewi.")).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Home" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Dismiss" })).not.toBeInTheDocument();
   });
 
   it("is not shown on Home without the founding router state", async () => {
     server.use(...defaultHandlers({ signedIn: true, me: alice }));
     renderApp("/");
-    expect(await screen.findByText("Signed in as Alice.")).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Home" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Dismiss" })).not.toBeInTheDocument();
     expect(screen.queryByText(/We named your Household/)).not.toBeInTheDocument();
   });
@@ -343,7 +346,7 @@ describe("founding at /onboarding", () => {
     expect(screen.queryByText(/INTERNAL/)).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Try again" }));
 
-    expect(await screen.findByText("Signed in as D.")).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Home" })).toBeInTheDocument();
     expect(sent).toEqual([
       { found: true, household_display_name: "D's Household", pocket_display_name: "Cash" },
     ]);
@@ -368,7 +371,7 @@ describe("founding at /onboarding", () => {
     const state: State = { signedIn: true, me: alice };
     server.use(...defaultHandlers(state));
     renderApp("/onboarding");
-    expect(await screen.findByText("Signed in as Alice.")).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Home" })).toBeInTheDocument();
     expect(state.committed).toBeUndefined();
     expect(screen.queryByRole("button", { name: "Dismiss" })).not.toBeInTheDocument();
   });

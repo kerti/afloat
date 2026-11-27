@@ -57,15 +57,21 @@
   },
   "home": {
     "title": "Beranda",
-    "signedInAs": "Masuk sebagai {{name}}.",
-    "household": "Rumah tangga: {{name}}",
-    "comingSoon": "Dasbor Anda akan muncul di sini.",
     "founded": {
       "dismiss": "Tutup",
       "named": "Kami menamai rumah tangga Anda <strong>{{household}}</strong> dan kantong pertama Anda <strong>{{pocket}}</strong>, dengan mata uang <strong>{{currency}}</strong>.",
       "hint": "Ganti namanya kapan saja. Ubah mata uang sebelum pengeluaran pertama, karena setelah itu tidak bisa diubah.",
       "settings": "Buka Pengaturan"
     }
+  },
+  "dashboard": {
+    "leftToSpendToday": "Sisa untuk dibelanjakan hari ini",
+    "todaysAllowance": "Jatah harian hari ini",
+    "baseline": "Jatah dasar",
+    "daysRemaining": "Sisa hari",
+    "remainingDailyPool": "Sisa dana harian",
+    "noBudget": "Atur anggaran bulanan untuk melihat sisa yang bisa dibelanjakan hari ini.",
+    "noBudgetLink": "Buka Anggaran"
   },
   "pwa": {
     "updateReady": "Versi baru Afloat sudah siap.",

@@ -12,27 +12,36 @@ export function useChoice<T extends string | number>(
   write: (v: T) => Promise<unknown>,
 ): [T, (v: T) => void] {
   const { t } = useTranslation();
-  const [pending, setPending] = useState<T | null>(null);
+  // `settled`: the write succeeded, and the choice holds until the refetched
+  // stored value arrives. React Query delivers it a tick after the write
+  // resolves, so clearing on the write alone shows the old value for a frame.
+  const [pending, setPending] = useState<{ value: T; settled: boolean } | null>(null);
+  const [seen, setSeen] = useState(stored);
+  if (stored !== seen) {
+    setSeen(stored);
+    if (pending?.settled) setPending(null);
+  }
   // Only the latest choice may settle the control: with two quick choices, A
   // then B, A's late answer must neither clear B's pending value (a flicker
   // back to the stored one) nor raise a toast about a choice already replaced.
   const latest = useRef(0);
+  const shown = pending?.value ?? stored;
   function choose(v: T) {
-    if (v === (pending ?? stored)) return;
+    if (v === shown) return;
     const seq = ++latest.current;
-    setPending(v);
+    setPending({ value: v, settled: false });
     write(v)
       .then(() => {
-        if (seq === latest.current) toastSaved();
+        if (seq !== latest.current) return;
+        toastSaved();
+        setPending((p) => (p ? { ...p, settled: true } : p));
       })
       .catch((err: unknown) => {
         if (seq !== latest.current) return;
         const e = err instanceof ApiError ? err : new ApiError(0, "UNKNOWN");
         toastError(errorMessage(t, e));
-      })
-      .finally(() => {
-        if (seq === latest.current) setPending(null);
+        setPending(null);
       });
   }
-  return [pending ?? stored, choose];
+  return [shown, choose];
 }

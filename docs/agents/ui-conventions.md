@@ -59,7 +59,7 @@ tag each, so it has components only. A missing element is proposed first (see Ho
   form's submit ("Already have an account? Sign in").
 - `FieldError`: a failure, under its field or above a form's footer. `role="alert"`, attention
   colour. Raised in a form only; with no form open it is a `toastError` (§ Feedback).
-- `BodyText`: a plain body sentence ("Signed in as …").
+- `BodyText`: a plain body sentence (the founding notice's "We named your Household …").
 - `MutedText`: a muted body sentence: an intro, a status message (`role="status"`), a note.
 - `EmptyState`: what a list says when it has nothing, naming what will appear.
 - `TextLink` (`components/TextLink.tsx`): the body link, small and underlined, standalone (the Home
@@ -126,6 +126,26 @@ tag each, so it has components only. A missing element is proposed first (see Ho
   cleared, not zeroed); a `hint` is a `FieldHint` under it; its `save` may resolve to a sentence that
   replaces the bare "Saved." toast. Several settings may stack in one `Section`, each with its own
   Save. (Confirmed by the maintainer, 24 Nov 2026, for #130 PR 5.)
+
+**Home's figures** (Confirmed by the maintainer on the phone preview, 27 Nov 2026, for #155 PR 5, R18.)
+
+- `HeroFigure` (`components/HeroFigure.tsx`): the screen's one headline figure, Left to Spend Today. A
+  `section` labelled by its muted label (the Muted body role), over the figure in the **display role**:
+  bold, `tabular-nums`, centred, 36px. It is a labelled figure, not a live region (a refetch announces
+  nothing), neutral whatever its sign, never coloured, never clamped. **Its size steps down by the
+  length of the formatted string** (`lib/heroSize.ts`): 36px to 13 characters, 32px to 16, 28px to 19, 24px to 23 (the
+  worst case, `Rp9.999.999.999.999.999`, 16 integer digits, is about 300px of the 343px column), and
+  20px beyond, so it never wraps; the step is chosen from what is shown, never from the amount. No card
+  and no fill: the size is the prominence. (Uruni `web/src/screens/Home.tsx` hero and its `heroSize`,
+  36px/700 tabular, stepped by length down to 24px; Uruni fills the hero with a primary card, which
+  Afloat does not, to keep the figure neutral.)
+- `FigurePair` (`components/FigurePair.tsx`): up to two labelled figures side by side in one bordered
+  box (`rounded-md border px-3 py-2`), each a small muted label (the Hint role) over a medium
+  `tabular-nums` amount. Today's allowance beside the Baseline, or the allowance alone in fixed mode
+  or while fully committed. When either figure is longer than 15 characters both go on their own
+  lines, never a clipped or wrapped number. (Uruni `web/src/screens/Home.tsx` cash-flow card, a
+  two-column `dl` that drops to one column when either figure is wide; `components/Figures.tsx`.)
+- Days Remaining and the Remaining Daily Pool are `FigureRow`s in a `ListCard`: no new element.
 
 **Lists**
 
@@ -198,22 +218,23 @@ appearance, not the OS. (Confirmed by the maintainer, 23 Nov 2026, for #124.)
 One font, Figtree (`--font-ui`). Sizes and weights come from these roles, never per screen. (The
 role table follows Uruni `docs/Design-System.md` § Typography.)
 
-| Role                     | Size             | Weight              | Colour                                | Used for                                                                                                     |
-| ------------------------ | ---------------- | ------------------- | ------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
-| Page title               | 20px (`text-xl`) | semibold            | foreground                            | `PageTitle`; every screen, auth included                                                                     |
-| Section and dialog title | 18px (`text-lg`) | semibold            | foreground                            | `SectionTitle`, `DialogTitle`: one look (Uruni H2, 600; ruled 22 Nov)                                        |
-| Subsection label         | 14px (`text-sm`) | semibold            | muted-foreground                      | `SubsectionLabel`: Uruni's grey semibold h3, one step under the section title (ruled 24 Nov 2026, #140 PR 1) |
-| Brand                    | 18px (`text-lg`) | semibold            | foreground                            | the top bar's "Afloat" link                                                                                  |
-| Body                     | 16px (base)      | regular             | foreground                            | `BodyText`, a list row's title, inputs, select values                                                        |
-| Muted body               | 16px             | regular             | muted-foreground                      | `MutedText`, `EmptyState`, `Loading`, `BackLink`, an inactive row's title                                    |
-| Label                    | 14px (`text-sm`) | medium              | foreground                            | `Label`, buttons                                                                                             |
-| Destructive label        | 14px             | medium              | destructive                           | the `destructive` Button, DetailActions' Delete (ruled 22 Nov)                                               |
-| Hint                     | 14px             | regular             | muted-foreground                      | `FieldHint`, `SectionDescription`, `CheckboxRow`                                                             |
-| Error                    | 14px             | regular             | attention                             | `FieldError`                                                                                                 |
-| Load failure             | 16px             | regular             | attention                             | `ErrorState`                                                                                                 |
-| Link                     | 14px             | regular, underlined | foreground                            | `TextLink`                                                                                                   |
-| Badge                    | 12px (`text-xs`) | regular             | muted-foreground on muted             | `Badge`                                                                                                      |
-| Tab label                | 11px / 16px line | medium              | muted-foreground; primary when active | the bottom tab bar's labels (Uruni `Shell.tsx`)                                                              |
+| Role                     | Size                                                      | Weight              | Colour                                | Used for                                                                                                                |
+| ------------------------ | --------------------------------------------------------- | ------------------- | ------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| Page title               | 20px (`text-xl`)                                          | semibold            | foreground                            | `PageTitle`; every screen, auth included                                                                                |
+| Section and dialog title | 18px (`text-lg`)                                          | semibold            | foreground                            | `SectionTitle`, `DialogTitle`: one look (Uruni H2, 600; ruled 22 Nov)                                                   |
+| Subsection label         | 14px (`text-sm`)                                          | semibold            | muted-foreground                      | `SubsectionLabel`: Uruni's grey semibold h3, one step under the section title (ruled 24 Nov 2026, #140 PR 1)            |
+| Brand                    | 18px (`text-lg`)                                          | semibold            | foreground                            | the top bar's "Afloat" link                                                                                             |
+| Hero figure              | 36px to 24px, stepped by length (20px past 23 characters) | bold                | foreground, never coloured            | `HeroFigure`: Left to Spend Today (Uruni's Balance / display role, 36px 700 tabular). Confirmed 27 Nov 2026 (#155 PR 5) |
+| Body                     | 16px (base)                                               | regular             | foreground                            | `BodyText`, a list row's title, inputs, select values                                                                   |
+| Muted body               | 16px                                                      | regular             | muted-foreground                      | `MutedText`, `EmptyState`, `Loading`, `BackLink`, an inactive row's title                                               |
+| Label                    | 14px (`text-sm`)                                          | medium              | foreground                            | `Label`, buttons                                                                                                        |
+| Destructive label        | 14px                                                      | medium              | destructive                           | the `destructive` Button, DetailActions' Delete (ruled 22 Nov)                                                          |
+| Hint                     | 14px                                                      | regular             | muted-foreground                      | `FieldHint`, `SectionDescription`, `CheckboxRow`                                                                        |
+| Error                    | 14px                                                      | regular             | attention                             | `FieldError`                                                                                                            |
+| Load failure             | 16px                                                      | regular             | attention                             | `ErrorState`                                                                                                            |
+| Link                     | 14px                                                      | regular, underlined | foreground                            | `TextLink`                                                                                                              |
+| Badge                    | 12px (`text-xs`)                                          | regular             | muted-foreground on muted             | `Badge`                                                                                                                 |
+| Tab label                | 11px / 16px line                                          | medium              | muted-foreground; primary when active | the bottom tab bar's labels (Uruni `Shell.tsx`)                                                                         |
 
 - **Field borders** (`--input`) meet WCAG 3:1 non-text contrast against the surface they sit on:
   light `#658faa` (3.11:1 on the page, 3.46:1 on white), dark `#43708e` (3.05:1 on the page, 3.38:1
@@ -225,7 +246,7 @@ role table follows Uruni `docs/Design-System.md` § Typography.)
   `rounded-full` for the dialog's close button.
 - **Spacing steps:** `gap-2` inside a field; `gap-4` inside a form or section, and a dialog's body;
   `gap-6` between a screen's sections (the Shell's column) and inside an auth card; `gap-1` between
-  two lines of one block (Home's signed-in lines); `gap-3` in a row. Row padding `px-3 py-2`;
+  two lines of one block (the hero's label and figure); `gap-3` in a row. Row padding `px-3 py-2`;
   dialog padding `p-4`; the Shell's side gutters 1rem plus the safe-area inset.
 
 ## Layout and navigation
@@ -472,6 +493,9 @@ role table follows Uruni `docs/Design-System.md` § Typography.)
   when a filter hides everything ("No active Pockets. 3 inactive hidden…"). (Uruni, Balances.)
 - **Load failure:** an alert in the attention colour with an icon, `role="alert"`, and a full-width
   Retry button in the primary (default) variant. (Uruni `ErrorState`.)
+  On Home, a failed **refresh** keeps the figures already shown, with no alert: `ErrorState` is
+  only for a Home with nothing to show yet, and the next focus or write refetches. (Confirmed by
+  the maintainer, 27 Nov 2026, for #155 PR 5. Other screens still swap to `ErrorState`.)
 
 ## Icons
 
@@ -540,7 +564,17 @@ role table follows Uruni `docs/Design-System.md` § Typography.)
 - Digit separators follow the **app locale**, not the currency (en-GB `1,234.50`, id-ID `1.234,50`).
   IDR is `Rp` with no space and no decimals (`Rp9.000.000`); any other currency is its ISO code, a
   no-break space and its own decimals (2, or 3 for BHD/KWD and the like, 0 for JPY and the like).
-  Rounding is half-up; a negative reads `-Rp500`. (Confirmed by the maintainer, 23 Nov 2026, for #130.)
+  Rounding is half-up, except the allowance figures below; a negative reads `-Rp500`. (Confirmed by
+  the maintainer, 23 Nov 2026, for #130.)
+- **The allowance figures round toward minus infinity** (confirmed by the maintainer on the phone
+  preview, 27 Nov 2026, for #155 PR 5, R11): the hero, Today's allowance and the Baseline go through
+  `formatAllowance` (`lib/money.ts`), which cuts at the currency's own minor unit (whole rupiah for IDR) on the digits,
+  never a float: `203448.2758` reads `Rp203.448`, `-0.5` reads `-Rp1`, `0.9999` reads `Rp0`, and a
+  zero never prints a sign (`-Rp0`). A negative grows away from zero, so no allowance ever reads as
+  more than the Household can spend. **Every other figure stays half-up** (`formatMoney`), the
+  Remaining Daily Pool included. There is no larger display unit: the Rp1.000 floor is dropped. The
+  server floors at 4dp already (#73 R1) and applies no display unit; the client derives nothing
+  (PRD N5a).
 - A date range says a shared year once: "1 November to 30 November 2026", id-ID "sampai"; across a
   year end both years show. (Confirmed by the maintainer, 23 Nov 2026, for #130.)
 - Dates are formatted by one module (`lib/dates.ts`), long style, the month never abbreviated

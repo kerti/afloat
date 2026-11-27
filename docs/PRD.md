@@ -275,14 +275,22 @@ The ten-second target (G2) is the constraint every decision here answers to.
 
 The first screen answers the core question with no navigation.
 
-- **D1. Hero: Left to Spend Today.** One number, dominant. Floored to Rp1.000. Negative is shown as
-  negative, not clamped.
+- **D1. Hero: Left to Spend Today.** One number, dominant. It is the server's figure, shown toward minus
+  infinity at the currency's own minor unit (whole rupiah for IDR: `203448.2758` reads `Rp203.448`,
+  `-0.5` reads `-Rp1`), so it never reads as more than the Household can spend. There is no larger
+  display unit: the Rp1.000 floor was dropped on 2026-11-26 (it entered in Draft 1's synthesis and
+  has no recorded rationale). Negative is shown as negative, not clamped, and neutral.
 - **D2. State.** One of Afloat / Drifting / Taking on water, with the waterline treatment. Always
   beside the numbers, never instead of them.
 - **D3. Pace, in plain language.** "Rp420k ahead of pace", not a signed delta. Localised Indonesian
   wording is unresolved — **[OPEN Q-10]**.
-- **D4. Baseline beside the adaptive figure.** So an inflated allowance reads as borrowed from the
-  Household's own future rather than as found money.
+- **D4. Baseline beside the adaptive figure.** Under the hero, **Today's allowance** and the
+  **Baseline** side by side, so an inflated allowance reads as borrowed from the Household's own
+  future rather than as found money; one name each, and no sentence about borrowing. No cap (Q-04).
+  **In fixed mode** the allowance is the baseline, so Today's allowance is shown **alone**, chosen from
+  the Household's `allowance_mode` and never by comparing amounts (the two are also equal in adaptive
+  mode on day one). While fully committed there is no Baseline, and the allowance is shown alone with
+  no wording about it. Both allowance figures are rounded as D1's hero is.
 - **D5. Cumulative chart.** Target line versus actual line for the Period. The target line kinks at
   Budget changes and never redraws history (`CONTEXT.md`). Today is drawn as in-progress.
 - **D6. Commitments panel.** Planned versus paid, and what is still due this Period. Separate from
@@ -323,8 +331,10 @@ The first screen answers the core question with no navigation.
 - **N4.** Soft-delete everywhere. Hard delete is not exposed.
 - **N5.** No stored aggregates or derived snapshots in MVP. Every figure recomputes on read.
   **[ASSUMED]** — acceptable at single-Household data volumes; revisit if it stops being true.
-- **N5a.** **Trajectory is computed server-side.** The client formats and floors for display but
-  derives nothing. One source of truth. `contract/testdata/trajectory.json` carries the `CONTEXT.md`
+- **N5a.** **Trajectory is computed server-side.** The client formats for display but derives
+  nothing. (It rounds the allowance figures toward minus infinity and every other figure half-up,
+  at the currency's minor unit, on the digits of the server's string; that is formatting, not
+  arithmetic.) One source of truth. `contract/testdata/trajectory.json` carries the `CONTEXT.md`
   reference rows as a fixture the backend's unit tests read.
 
 ### 8.2 Contract
@@ -430,7 +440,8 @@ Ownership is stored and on the wire, with no control (R6) · **Q-25** every spen
 the current Budget Period (R13).
 
 Answered in the dashboard rulings on 2026-11-26 (issue #155), each recorded in `CONTEXT.md` and in
-§13: **Q-06** two situations, two names: **fully committed** (the baseline in force is zero, so no
+§13: **Q-04** no cap on the displayed allowance; Today's allowance and the Baseline are shown as a
+pair, one figure in fixed mode, and the pair is the mitigation (R10; PR 5) · **Q-06** two situations, two names: **fully committed** (the baseline in force is zero, so no
 State, baseline or variance, and a fixed-mode allowance is 0) and **Available Pool used up**
 (`P' − S_settled ≤ 0`, read by the hero as it is, the State computed as usual), independent of each
 other, with no sentence or flag by default (R4) · **Q-27** (raised and answered in the grilling, so
@@ -445,7 +456,6 @@ Commitments left out as in every daily figure; it is named the **Remaining Daily
 
 | # | Question | Blocks |
 |---|---|---|
-| Q-04 | Cap the displayed adaptive allowance at some multiple of baseline, or rely on showing baseline beside it? | Dashboard |
 | Q-05 | Is a 3-settled-day warm-up the right floor, and should warm-up have its own neutral presentation rather than reusing `afloat`? | State model |
 | Q-08 | What UI mechanism actually prevents top-ups and ATM withdrawals being recorded as Expenses? Copy alone will not do it. | Capture |
 | Q-10 | Indonesian terminology for the trajectory vocabulary — *ahead of pace*, *Drifting*, *Taking on water*. The State names may not survive translation intact. | Copy, i18n, brand |
@@ -477,6 +487,7 @@ its due date by hand. Adding it back later is a non-breaking contract change plu
 
 | Date | Change |
 |---|---|
+| 2026-11-27 | Home answers the question (issue #155, PR 5 of 9: the frontend only; no contract, schema or backend change). **R10 (Q-04 recorded in §11 as answered):** no cap on the displayed allowance. Under the hero, **Today's allowance** and the **Baseline** are shown as a pair, and in `fixed` mode Today's allowance alone, chosen from `allowance_mode` and never by comparing amounts; while fully committed there is no Baseline and the allowance stands alone with no wording about it; "Daily allowance" is retired (D4). **R11:** D1's "Floored to Rp1.000" is dropped (it had no recorded rationale) and no replacement display unit exists. The allowance figures (the hero, Today's allowance, the Baseline) are formatted **toward minus infinity at the currency's own minor unit** (IDR: whole rupiah, so `203448.2758` reads `Rp203.448` and `-0.5` reads `-Rp1`, never `-Rp0`), on the digits and never a float; every other figure stays half-up. N5a is reworded: "the client formats for display but derives nothing". The Home screen shows the hero, the pair, Days Remaining and the Remaining Daily Pool (D8, half-up), a sentence and a link to Budget while there is no Monthly Budget, Loading, a retryable failure, and keeps the previous figures while a refetch runs; it shows no State, pace, chart or breakdown yet (PRs 6 to 9), no colour, gauge or nag (D9), and its placeholder lines ("Signed in as", the Household line, "coming soon") are gone. The hero element and its size, the pair and the allowance rounding were **confirmed by the maintainer on the phone preview, 27 Nov 2026 (R18)**, with the id-ID words. A failed refresh keeps the figures shown, with no alert (ruled the same day). The same PR fixes `useChoice`'s one-frame flash of the old value after a save-on-change write (it cleared its pending value a tick before the refetched `/me` arrived). New id-ID terms are provisional in `CONTEXT.md`. |
 | 2026-11-26 | `allowance_mode` is writable (issue #155, PR 4 of 9: the backend and the contract; the Settings choice is the frontend half of the same PR). **R9 (T15):** `PATCH /household` gains `allowance_mode`, the existing `AllowanceMode` enum (`adaptive` or `fixed`), strictly additive: merge semantics like the other fields (left out is unchanged), `null` and a value outside the enum are `INVALID_JSON_BODY` as for the User's `locale` (the spec validator refuses them, so no new `VALIDATION` field or rule), the answer is the whole Household, and **no new error code**. It is written in the same one `UPDATE` with `coalesce` as the other three non-clearable settings, tenant-filtered in SQL, and needs no lock and no guard (it is a setting, not a refusal on spending). S3 now lists five writable settings. It sits before Home (PR 5) so fixed mode is reachable when Home ships; the dashboard already reads the mode from the Household, so the next `GET /dashboard` answers a fixed Today's Allowance as the Baseline Daily Budget. No schema change, so no `make db-reset`; no new environment variable. |
 | 2026-11-26 | The figures on the wire (issue #155, PR 3 of 9: `GET /dashboard` answers its first figures; no screen yet). Rulings from the maintainer, as they bear on this PR: **R5**, `Dashboard` gains the optional `trajectory`, strictly additive and a property joins the wire in the PR that renders it: `left_to_spend_today`, `todays_allowance`, `days_remaining`, `remaining_daily_pool` and `baseline_daily_budget` (absent while fully committed), omitted while the Household has no Monthly Budget and never `null`; `state`, `trajectory_variance` and the rest wait for the PRs that render them (the State and the pace, PR 6), and `buffer_days`, `warming_up`, flags and every day count but `days_remaining` are never on the wire. **R6 (Q-26 recorded in §11 as answered):** D8's money figure is `P' − S_settled`, named the **Remaining Daily Pool** (a `CONTEXT.md` entry), and D8 is reworded from "Remaining Budget". **R1, R2, R3:** the assembly in `backend/internal/dashboard` reads the Daily Pool by the same two functions `GET /budget` uses (the two answers are asserted equal), reads the pool as of the Period's first day as the base and builds the target line from the days after it and on or before Today on which the pool really changed, whether the Monthly Budget's or a Commitment's allocation (a Daily Category's moves nothing and a version after the viewer's Today is not in force), and feeds `trajectory.Calculate` the pool in force Today with `DefaultParameters()`; the allowance mode is the one `LocateHousehold` read, never the snapshot's. `contract/testdata/dashboard.json` gains the expected pool, pace and wire figures for every row, worked in exact rationals independently of the backend, and rows for versions before, inside and after a re-cut window, a Commitment's change, a future-dated refund, the fixed mode and a negative pool. The frontend gains `useDashboard` and invalidates it from every Expense, Budget, Category and Household write and from `useUpdateMe` (R5). No schema change, so no `make db-reset`; no new environment variable. |
 | 2026-11-26 | The calculation (issue #155, PR 2 of 9: the pure `trajectory` package only, no endpoint, no database). **This is a formula change**, ruled by the maintainer (R2, R3, R4) and made here together with `contract/testdata/trajectory.json` and the tests (N5a). **R2 (Q-27 recorded in §11 as answered):** Trajectory Variance is `V = T(e) − S_settled` on the target line, which kinks when the Daily Pool changes, where it was `(B × e) − S_settled` on a flat `B`; Buffer Days and the State thresholds use `B_now`, the slope in force Today; a fixed-mode allowance is `B_now`; every segment's slope is clamped at zero, the first included; any change of the Daily Pool kinks the line. For a Period whose pool never changed, was positive and had no future-dated refund, the two formulas are the same number, so every existing fixture row is unchanged and still holds. **R3:** `P' = P − max(S_future, 0)`, so a refund dated in the future never raises Today's Allowance. **R4 (Q-06 recorded in §11 as answered):** "fully committed" (the baseline in force is zero: no State, baseline or variance, and a fixed-mode allowance of 0) and "Available Pool used up" (`P' − S_settled ≤ 0`) are two situations; `Calculate` no longer refuses a zero Daily Pool and answers the allowance without a State. The fixture gains `figures` rows for each case and a `target_line_changes` section, and `DefaultParameters()` is pinned to its `parameters`. Nothing is on the wire yet: the dashboard (#155 PR 3 onward) is the first caller. |

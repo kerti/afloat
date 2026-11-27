@@ -58,4 +58,26 @@ describe("useChoice", () => {
     await vi.waitFor(() => expect(toastMock.error).toHaveBeenCalledTimes(1));
     expect(result.current[0]).toBe("en-GB");
   });
+
+  it("holds a saved choice until the stored value catches up, never flickering back", async () => {
+    const a = deferred();
+    const write = vi.fn().mockReturnValueOnce(a.promise);
+    const { result, rerender } = renderHook(({ stored }) => useChoice<string>(stored, write), {
+      initialProps: { stored: "adaptive" },
+    });
+
+    act(() => result.current[1]("fixed"));
+    // The write answers before the refetched stored value reaches the hook.
+    await act(async () => {
+      a.resolve();
+      await a.promise;
+    });
+    expect(result.current[0]).toBe("fixed");
+
+    rerender({ stored: "fixed" });
+    expect(result.current[0]).toBe("fixed");
+    // Settled: a later change of the stored value (another member) shows.
+    rerender({ stored: "adaptive" });
+    expect(result.current[0]).toBe("adaptive");
+  });
 });

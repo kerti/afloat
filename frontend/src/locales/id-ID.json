@@ -80,6 +80,10 @@
       "behind": "{{amount}} di belakang laju",
       "on": "Sesuai laju"
     },
+    "byCategory": "Per kategori",
+    "byPocket": "Per kantong",
+    "ofAllocation": "dari {{amount}}",
+    "breakdownEmpty": "Belum ada yang tercatat di periode anggaran ini.",
     "noBudget": "Atur anggaran bulanan untuk melihat sisa yang bisa dibelanjakan hari ini.",
     "noBudgetLink": "Buka Anggaran"
   },

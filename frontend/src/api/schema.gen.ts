@@ -832,6 +832,11 @@ export interface paths {
          *     `trajectory` is the figures the Daily Pool makes of the Period's
          *     spending so far (PRD D1, D4, D8). It is omitted while the Household has
          *     no Monthly Budget, and then the answer is `currency` alone.
+         *
+         *     `categories` and `pockets` are where the Period's money went so far
+         *     (PRD D7): the same Expenses, read once, so the two lists reconcile.
+         *     Both are omitted with `trajectory` while there is no Monthly Budget and,
+         *     beyond that, whenever they have no row.
          */
         get: operations["getDashboard"];
         put?: never;
@@ -1738,6 +1743,73 @@ export interface components {
              */
             currency: string;
             trajectory?: components["schemas"]["Trajectory"];
+            /**
+             * @description The Daily Categories' share of the Period's spending (PRD D7): one
+             *     row for each live Daily Category, active or inactive, that has
+             *     spending counted or an allocation in force Today, and one row
+             *     without a `category_id` for the spending no Category classifies
+             *     (an uncategorised Expense is Daily). A Commitment Category is never
+             *     in it: its Expenses are in `pockets` and, once the Household's
+             *     Commitments are shown, in the Commitments figures. Ordered on the
+             *     server by `spent` descending, then by `category_id` ascending, the
+             *     uncategorised row after the rows of equal `spent`. Omitted while
+             *     there is no Monthly Budget and when it has no row, never `null` and
+             *     never `[]`.
+             */
+            categories?: components["schemas"]["CategoryFigure"][];
+            /**
+             * @description Where the Period's spending went (PRD D7): one row for each Pocket,
+             *     active or inactive, with spending counted, over the Expenses of
+             *     both buckets (a Pocket is where money went, whatever it was for).
+             *     Ordered on the server by `spent` descending, then by `pocket_id`
+             *     ascending. Omitted while there is no Monthly Budget and when it has
+             *     no row, never `null` and never `[]`.
+             */
+            pockets?: components["schemas"]["PocketFigure"][];
+        };
+        /**
+         * @description One Daily Category's row of the dashboard's breakdown, or the one row
+         *     of uncategorised spending. The names travel with the figure so the
+         *     screen needs no Category list, and a name never disagrees with its
+         *     figure: they come from the snapshot the figure was read from.
+         *
+         *     `category_id`, `category_display_name` and `active` are present
+         *     together and absent together: absent on the row that stands for the
+         *     Expenses with no Category. `spent` is the sum of the Category's live
+         *     Expenses dated in the Budget Period and on or before the caller's
+         *     Today, signed (a refund subtracts), the same Expenses the Pockets add
+         *     up. `allocation` is the Category's allocation in force Today and is
+         *     absent where it has none (and always on the uncategorised row). Nothing
+         *     else is derived from the pair: no difference, no share, no pace.
+         */
+        CategoryFigure: {
+            /** Format: uuid */
+            category_id?: string;
+            category_display_name?: string;
+            /**
+             * @description `false` for a Category that has been deactivated: it still has
+             *     spending or an allocation, and is kept in the breakdown.
+             */
+            active?: boolean;
+            spent: components["schemas"]["Money"];
+            allocation?: components["schemas"]["Money"];
+        };
+        /**
+         * @description One Pocket's row of the dashboard's breakdown: where the Period's money
+         *     went, of both buckets. `spent` is the sum of the Pocket's live Expenses
+         *     dated in the Budget Period and on or before the caller's Today, signed.
+         *     The name travels with the figure, from the same snapshot.
+         */
+        PocketFigure: {
+            /** Format: uuid */
+            pocket_id: string;
+            pocket_display_name: string;
+            /**
+             * @description `false` for a Pocket that has been deactivated but still has
+             *     spending in the Period.
+             */
+            active: boolean;
+            spent: components["schemas"]["Money"];
         };
         /**
          * @description The Period's daily-bucket spending read against its Daily Pool (CONTEXT.md

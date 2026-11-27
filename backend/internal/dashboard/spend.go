@@ -32,17 +32,28 @@ type Spend struct {
 	Future decimal.Decimal
 }
 
-// LoadSpend reads the Period's spend with one statement (PeriodSpend) and folds
-// it. It is meant to run in the dashboard's snapshot, so what it returns and
-// what the other figures read agree about every Expense.
-func LoadSpend(ctx context.Context, q db.Querier, householdID pgtype.UUID, at budget.Position) (Spend, error) {
+// LoadPeriodSpend is the one statement every figure that reads Expenses is made
+// of (PeriodSpend), over the Position's Period. It is meant to run in the
+// dashboard's snapshot.
+func LoadPeriodSpend(ctx context.Context, q db.Querier, householdID pgtype.UUID, at budget.Position) ([]db.PeriodSpendRow, error) {
 	rows, err := q.PeriodSpend(ctx, db.PeriodSpendParams{
 		HouseholdID: householdID,
 		StartsOn:    pgDate(at.Period.StartsOn),
 		EndsOn:      pgDate(at.Period.EndsOn),
 	})
 	if err != nil {
-		return Spend{}, fmt.Errorf("period spend: %w", err)
+		return nil, fmt.Errorf("period spend: %w", err)
+	}
+	return rows, nil
+}
+
+// LoadSpend reads the Period's spend with that statement and folds it. It is
+// meant to run in the dashboard's snapshot, so what it returns and what the
+// other figures read agree about every Expense.
+func LoadSpend(ctx context.Context, q db.Querier, householdID pgtype.UUID, at budget.Position) (Spend, error) {
+	rows, err := LoadPeriodSpend(ctx, q, householdID, at)
+	if err != nil {
+		return Spend{}, err
 	}
 	return FoldSpend(rows, at)
 }

@@ -8,15 +8,18 @@ import {
   dashboardKey,
   useCreateCategory,
   useCreateExpense,
+  useCreatePocket,
   useDashboard,
   useDeleteCategory,
   useDeleteExpense,
+  useDeletePocket,
   useRestoreExpense,
   useUpdateBudget,
   useUpdateCategory,
   useUpdateExpense,
   useUpdateHousehold,
   useUpdateMe,
+  useUpdatePocket,
 } from "@/api/queries";
 import type { Dashboard } from "@/api/client";
 import { alice, defaultHandlers, server, type State } from "@/test/server";
@@ -145,7 +148,7 @@ describe("useDashboard", () => {
 
 // Every write that can move a figure refetches the mounted dashboard (R5): the
 // Expenses, the Budget, the Categories (an allocation may ride with one), the
-// Household (the Period's window, the allowance mode) and the User's own
+// Pockets (their names and flags are on the breakdown rows), the Household (the Period's window, the allowance mode) and the User's own
 // settings (`time_zone` moves Today). Removing the invalidation from any one
 // of these fails its row.
 describe("writes that move a figure invalidate the dashboard", () => {
@@ -191,6 +194,19 @@ describe("writes that move a figure invalidate the dashboard", () => {
       vars: { id: "c-food", body: { active: false } },
     },
     { name: "a deleted Category", use: useDeleteCategory as never, vars: "c-food" },
+    // A Pocket's name and Inactive flag are on Home's By Pocket rows (D7). The
+    // Undos, which call the client directly, are in Pockets.dashboard.test.tsx.
+    {
+      name: "a new Pocket",
+      use: useCreatePocket as never,
+      vars: { id: "0192f0a0-0000-7000-8000-0000000000b9", pocket_display_name: "OVO" },
+    },
+    {
+      name: "a renamed or deactivated Pocket",
+      use: useUpdatePocket as never,
+      vars: { id: "p-cash", body: { active: false } },
+    },
+    { name: "a deleted Pocket", use: useDeletePocket as never, vars: "p-cash" },
     {
       name: "a Household setting",
       use: useUpdateHousehold as never,

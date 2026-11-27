@@ -1,10 +1,12 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Trans, useTranslation } from "react-i18next";
 import { useLocation, useNavigate } from "react-router";
-import type { Dashboard, Me } from "@/api/client";
+import type { CategoryFigure, Dashboard, Me, PocketFigure } from "@/api/client";
 import { useDashboard } from "@/api/queries";
 import { FigurePair } from "@/components/FigurePair";
+import { Badge } from "@/components/Badge";
 import { FigureRow } from "@/components/FigureRow";
+import { Section } from "@/components/Form";
 import { HeroFigure } from "@/components/HeroFigure";
 import { ListCard } from "@/components/List";
 import { NoticeCard } from "@/components/NoticeCard";
@@ -29,8 +31,8 @@ function foundedPocket(state: unknown): string | null {
 // cut toward minus infinity at the currency's minor unit and the rest are
 // half-up (#155 R11). Whether the allowance stands alone or beside the Baseline
 // is `allowance_mode`, never a comparison of the amounts (R10). The State and
-// the pace sentence come last, as words only (R12): each is there exactly when
-// the server sent it. The Shell around it carries the app name and sign-out.
+// the pace sentence are words only (R12), then By Category and By Pocket
+// (R15); each is there exactly when the server sent it. The Shell around it carries the app name and sign-out.
 export function HomePage({ me }: { me: Me }) {
   const { t, i18n } = useTranslation();
   const dashboard = useDashboard();
@@ -85,6 +87,8 @@ export function HomePage({ me }: { me: Me }) {
           locale={i18n.language}
           mode={me.household.allowance_mode}
           trajectory={dashboard.data.trajectory}
+          categories={dashboard.data.categories}
+          pockets={dashboard.data.pockets}
         />
       )}
     </>
@@ -96,11 +100,15 @@ function Figures({
   locale,
   mode,
   trajectory,
+  categories,
+  pockets,
 }: {
   currency: string;
   locale: string;
   mode: Me["household"]["allowance_mode"];
   trajectory: NonNullable<Dashboard["trajectory"]>;
+  categories: Dashboard["categories"];
+  pockets: Dashboard["pockets"];
 }) {
   const { t } = useTranslation();
   // Present only while the server has a pace to read (fully committed has none;
@@ -152,6 +160,90 @@ function Figures({
           )}
         </div>
       )}
+      <Section id="by-category" title={t("dashboard.byCategory")}>
+        <Rows empty={categories === undefined}>
+          {categories?.map((c) => (
+            <CategoryRow
+              key={c.category_id ?? "uncategorised"}
+              figure={c}
+              currency={currency}
+              locale={locale}
+            />
+          ))}
+        </Rows>
+      </Section>
+      <Section id="by-pocket" title={t("dashboard.byPocket")}>
+        <Rows empty={pockets === undefined}>
+          {pockets?.map((p) => (
+            <PocketRow key={p.pocket_id} figure={p} currency={currency} locale={locale} />
+          ))}
+        </Rows>
+      </Section>
     </>
+  );
+}
+
+// A section's rows, or the sentence that says what will appear (T12): the
+// server omits a list that has no row, so absence is its answer, not a guess.
+function Rows({ empty, children }: { empty: boolean; children: ReactNode }) {
+  const { t } = useTranslation();
+  return empty ? (
+    <EmptyState>{t("dashboard.breakdownEmpty")}</EmptyState>
+  ) : (
+    <ListCard>{children}</ListCard>
+  );
+}
+
+// Spent, and "of <allocation>" where the Category has one, and nothing else:
+// no bar, no difference, no share, no colour (D9, R15). The rows come in the
+// order the server sent. The row for spending with no Category has no id and
+// no name, and is not a link: Home never prompts about it (E4, T11).
+function CategoryRow({
+  figure,
+  currency,
+  locale,
+}: {
+  figure: CategoryFigure;
+  currency: string;
+  locale: string;
+}) {
+  const { t } = useTranslation();
+  const inactive = figure.active === false;
+  return (
+    <FigureRow
+      label={figure.category_display_name ?? t("expenses.uncategorised")}
+      labelMuted={inactive || figure.category_display_name === undefined}
+      badge={inactive && <Badge>{t("pockets.inactive")}</Badge>}
+      detail={
+        figure.allocation === undefined
+          ? undefined
+          : t("dashboard.ofAllocation", {
+              amount: formatMoney(figure.allocation, currency, locale),
+            })
+      }
+    >
+      {formatMoney(figure.spent, currency, locale)}
+    </FigureRow>
+  );
+}
+
+function PocketRow({
+  figure,
+  currency,
+  locale,
+}: {
+  figure: PocketFigure;
+  currency: string;
+  locale: string;
+}) {
+  const { t } = useTranslation();
+  return (
+    <FigureRow
+      label={figure.pocket_display_name}
+      labelMuted={!figure.active}
+      badge={!figure.active && <Badge>{t("pockets.inactive")}</Badge>}
+    >
+      {formatMoney(figure.spent, currency, locale)}
+    </FigureRow>
   );
 }

@@ -1111,7 +1111,8 @@ nobody wrote carries the previous one forward, and the allowance mode, a negativ
 refund each have a Household. **The expected figures were worked out in exact rationals by a script that reads
 the rows and `CONTEXT.md`'s spec and not the backend**, so a row is an independent check; a change to the
 assembly or the calculation changes this file and `trajectory.json` together. Each PR of #155 adds the figures
-it puts on the wire to the rows already there. The dashboard's tests read it through the real statements
+it puts on the wire to the rows already there (PR 7: the `categories` and `pockets` lists, in the `wire`, with a
+key for each id since the ids are minted when the file is seeded). The dashboard's tests read it through the real statements
 (`internal/dashboard`), and assert the pool equal to `GET /budget`'s `daily_pool` on the same state.
 
 **`contract/testdata/periods.json`'s `days` rows pin a Period's day counts** (#155): D, the window's length,

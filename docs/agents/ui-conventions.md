@@ -192,7 +192,26 @@ screens/Home.tsx` purpose row, `web/src/components/LoadMore.tsx`; ruled 25 Nov 2
   right in `tabular-nums` medium. A negative figure is neutral, never coloured. A figure that cannot
   be computed yet is hidden, not shown as zero. An optional `badge` (the "Inactive" `Badge`) sits
   beside the label, and `muted` sets the words that stand where an amount would in the muted colour at
-  regular weight. (Confirmed by the maintainer, 23 Nov 2026, for #130.)
+  regular weight. (Confirmed by the maintainer, 23 Nov 2026, for #130.) Two more options, `detail` and
+  `labelMuted`, belong to Home's D7 rows below.
+- **Home's By Category and By Pocket rows (D7)** (confirmed by the maintainer on the phone preview,
+  27 Nov 2026, for #155 PR 7, R18.) Each section is a `Section` (a `SectionTitle` h2, "By Category"
+  and "By Pocket") holding a `ListCard` of `FigureRow`s, after the State and the pace and the last thing
+  on Home for now. The row gains two optional parts and no new element: `detail`, a second line
+  right-aligned under the amount in the Hint size (14px), muted and `tabular-nums`, so a row reads
+  "Rp40.000 / of Rp1.500.000". It is there only where the Category has an
+  allocation in force (a Pocket has none; a Category without one has no second line, and never "No
+  allocation" or zero), and `labelMuted`, the muted title of an inactive row, with the "Inactive" `Badge`
+  beside it as every list row has. The amount is the row's spent, `tabular-nums` medium, formatted
+  half-up like every figure but the allowances; a refund can make it negative and it stays neutral. The
+  row for spending with no Category is titled "Uncategorised" in the muted title (as `ExpenseRow` titles
+  it), is not a link and carries no badge: Home never prompts about a missing Category ("Needs a
+  category" stays on `/expenses`). Rows keep the order the server sent. A row whose spending nets to zero still shows, as "Rp0",
+  and an allocation of zero reads "of Rp0": both are shown as they are (confirmed by the maintainer,
+  27 Nov 2026). There is no bar, meter, share,
+  difference or colour, and no live region. A section with no row shows the sentence "Nothing recorded
+  yet this Period." (the Empty rule) and keeps its heading. (The maintainer chose the detail under the amount over Uruni's two-line `TransactionRowLabel`, title
+  over a muted detail line, which `ExpenseRow` keeps.)
 
 **Notices**
 

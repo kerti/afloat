@@ -289,6 +289,24 @@ describe("editing a Category", () => {
     expect(screen.queryByRole("button", { name: /^Edit Groceries, / })).not.toBeInTheDocument();
   });
 
+  it("a Category found gone on an allocation-only save also invalidates the dashboard, which counted it", async () => {
+    const state = rentAndGroceries();
+    server.use(...defaultHandlers(state));
+    const user = userEvent.setup();
+    const { client } = renderApp("/budget");
+    await openEdit(user, "Groceries");
+    state.categories = [cat("a", "Rent", "commitment")];
+    // A fresh entry, so only the gone path can mark it stale.
+    client.setQueryData(dashboardKey, { currency: "IDR" });
+    await user.clear(allocationField());
+    await user.type(allocationField(), "5");
+    await user.click(save());
+
+    await waitFor(() => expect(toastMock.error).toHaveBeenCalledTimes(1));
+    expect(state.budgetPatches).toHaveLength(1);
+    await waitFor(() => expect(client.getQueryState(dashboardKey)?.isInvalidated).toBe(true));
+  });
+
   it("maps a nested allocation VALIDATION to the allocation field", async () => {
     const state = rentAndGroceries();
     server.use(...defaultHandlers(state));

@@ -451,7 +451,7 @@ describe("the State and the pace in Indonesian (Q-10, ruled 27 Nov 2026)", () =>
 });
 
 describe("what Home does not show yet", () => {
-  it("has no State or pace without the server's, no chart or breakdowns, and no placeholder lines", async () => {
+  it("has no State or pace without the server's, no chart, and no placeholder lines", async () => {
     await home(signedIn(dashboardOf()));
     await screen.findByText("Days remaining");
     for (const word of [

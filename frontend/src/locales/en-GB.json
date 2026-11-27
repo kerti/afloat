@@ -80,6 +80,10 @@
       "behind": "{{amount}} behind pace",
       "on": "On pace"
     },
+    "byCategory": "By Category",
+    "byPocket": "By Pocket",
+    "ofAllocation": "of {{amount}}",
+    "breakdownEmpty": "Nothing recorded yet this Period.",
     "noBudget": "Set a Monthly Budget to see how much is left to spend today.",
     "noBudgetLink": "Go to Budget"
   },

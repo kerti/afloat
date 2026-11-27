@@ -233,7 +233,11 @@ type hookBeginner struct {
 	mu     sync.Mutex
 	fn     func()
 	before int
-	done   bool
+	// beforeSQL, when set, replaces before: fn runs once, just before the first
+	// statement whose text contains it (sqlc leaves "-- name: X" in front of
+	// every statement), so a test names the statement and not its position.
+	beforeSQL string
+	done      bool
 }
 
 func (b *hookBeginner) BeginTx(ctx context.Context, opts pgx.TxOptions) (pgx.Tx, error) {
@@ -250,10 +254,14 @@ type hookTx struct {
 	seen  int
 }
 
-func (tx *hookTx) fire() {
+func (tx *hookTx) fire(sql string) {
 	tx.seen++
 	tx.owner.mu.Lock()
-	run := tx.owner.fn != nil && !tx.owner.done && tx.seen >= max(tx.owner.before, 1)
+	reached := tx.seen >= max(tx.owner.before, 1)
+	if tx.owner.beforeSQL != "" {
+		reached = strings.Contains(sql, tx.owner.beforeSQL)
+	}
+	run := tx.owner.fn != nil && !tx.owner.done && reached
 	if run {
 		tx.owner.done = true
 	}
@@ -265,12 +273,12 @@ func (tx *hookTx) fire() {
 }
 
 func (tx *hookTx) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
-	tx.fire()
+	tx.fire(sql)
 	return tx.Tx.QueryRow(ctx, sql, args...)
 }
 
 func (tx *hookTx) Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error) {
-	tx.fire()
+	tx.fire(sql)
 	return tx.Tx.Query(ctx, sql, args...)
 }
 

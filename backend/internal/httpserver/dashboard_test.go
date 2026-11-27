@@ -3,14 +3,17 @@ package httpserver
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"regexp"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/kerti/afloat/backend/internal/auth"
@@ -106,6 +109,11 @@ const dashboardAnswerPR3 = `{"currency":"IDR","trajectory":{"baseline_daily_budg
 // 1.300.000 under it). Buffer Days and every day count but days_remaining are
 // still not on it.
 const dashboardAnswerPR6 = `{"currency":"IDR","trajectory":{"baseline_daily_budget":"100000.0000","days_remaining":17,"left_to_spend_today":"176470.5882","remaining_daily_pool":"3000000.0000","state":"afloat","todays_allowance":"176470.5882","trajectory_variance":"1300000.0000"}}`
+
+// The answer at PR 7: PR 6's plus `categories` and `pockets`. A Daily Category's
+// allocation leaves the Daily Pool alone, so the same Household with one
+// allocated Category is PR 6's answer byte for byte plus the one list.
+const dashboardAnswerPR7Categories = `[{"active":true,"allocation":"500000.0000","category_display_name":"Food","category_id":"%s","spent":"0.0000"}]`
 
 func TestGetDashboardThroughTheRouterAnswersTheCurrencyAndNothingElse(t *testing.T) {
 	f := newDashboardFixture(t)
@@ -388,3 +396,112 @@ func (f dashboardFixture) mustExec(t *testing.T, sql string) {
 		t.Fatalf("%s: %v", sql, err)
 	}
 }
+
+// PR 7 adds `categories` and `pockets` to PR 6's answer and changes nothing of it:
+// the same Household with one Daily Category allocated (which moves no pool) is
+// PR 6's answer, every property byte for byte, and the one list; no Pocket has
+// spend, so `pockets` is omitted rather than empty.
+func TestTheAnswerWithABreakdownIsPR6sAnswerPlusItsOwnProperties(t *testing.T) {
+	f := newDashboardFixture(t)
+	f.mustExec(t, `INSERT INTO budgets (household_id, year_month) VALUES ($1, '2026-11')`)
+	f.mustExec(t, `INSERT INTO monthly_budgets VALUES ($1, '2026-11', '2026-11-01', 3000000)`)
+	food := f.tdb.CreateCategory(t, f.householdID, "Food", "daily")
+	if _, err := f.tdb.Pool.Exec(context.Background(),
+		`INSERT INTO allocations (household_id, year_month, effective_on, category_id, allocation) VALUES ($1, '2026-11', '2026-11-01', $2, 500000)`,
+		f.householdID, food); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := f.do(http.MethodGet)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+	var older, newer map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(dashboardAnswerPR6), &older); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &newer); err != nil {
+		t.Fatal(err)
+	}
+	for key, value := range older {
+		if string(newer[key]) != string(value) {
+			t.Errorf("PR 6's %q = %s, PR 7's = %s: an earlier property was changed or removed", key, value, newer[key])
+		}
+	}
+	wantCategories := fmt.Sprintf(dashboardAnswerPR7Categories, uuidText(food))
+	if got := string(newer["categories"]); got != wantCategories {
+		t.Errorf("categories = %s\nwant %s", got, wantCategories)
+	}
+	if _, ok := newer["pockets"]; ok {
+		t.Errorf("pockets = %s, want it omitted: no Pocket has spend", newer["pockets"])
+	}
+	if len(newer) != len(older)+1 {
+		t.Errorf("the answer has %d properties, want PR 6's %d and `categories`", len(newer), len(older))
+	}
+}
+
+// The wire's spelling of both lists, through the router and the spec validator:
+// money at four decimals, ids and names beside every figure, the uncategorised
+// row with nothing but its spend, a refund negative, the order as the server
+// declared it, and no `null` anywhere.
+func TestBothBreakdownsAreSpelledAsTheContractSaysAndOrderedOnTheServer(t *testing.T) {
+	f := newDashboardFixture(t)
+	f.mustExec(t, `INSERT INTO budgets (household_id, year_month) VALUES ($1, '2026-11')`)
+	f.mustExec(t, `INSERT INTO monthly_budgets VALUES ($1, '2026-11', '2026-11-01', 3000000)`)
+	wallet := f.tdb.CreatePocket(t, f.householdID, "Wallet")
+	card := f.tdb.CreatePocket(t, f.householdID, "Card")
+	food := f.tdb.CreateCategory(t, f.householdID, "Food", "daily")
+	rent := f.tdb.CreateCategory(t, f.householdID, "Rent", "commitment")
+	for _, e := range []struct {
+		pocket, category pgtype.UUID
+		on, amount       string
+	}{
+		{wallet, food, "2026-11-05", "12000"},
+		{wallet, pgtype.UUID{}, "2026-11-06", "30000"},
+		{card, food, "2026-11-07", "-2000"},
+		{card, rent, "2026-11-08", "900000"},
+		{wallet, food, "2026-11-20", "555"}, // after Today: in neither list
+	} {
+		var category any
+		if e.category.Valid {
+			category = e.category
+		}
+		if _, err := f.tdb.Pool.Exec(context.Background(),
+			`INSERT INTO expenses (id, household_id, occurred_on, amount, currency, pocket_id, category_id) VALUES ($1, $2, $3::date, $4::numeric, 'IDR', $5, $6)`,
+			testutil.NewUUID(t), f.householdID, e.on, e.amount, e.pocket, category); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	rec := f.do(http.MethodGet)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+	var got struct {
+		Categories []map[string]any `json:"categories"`
+		Pockets    []map[string]any `json:"pockets"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	wantCategories := []map[string]any{
+		{"spent": "30000.0000"},
+		{"category_id": uuidText(food), "category_display_name": "Food", "active": true, "spent": "10000.0000"},
+	}
+	wantPockets := []map[string]any{
+		{"pocket_id": uuidText(card), "pocket_display_name": "Card", "active": true, "spent": "898000.0000"},
+		{"pocket_id": uuidText(wallet), "pocket_display_name": "Wallet", "active": true, "spent": "42000.0000"},
+	}
+	if !reflect.DeepEqual(got.Categories, wantCategories) {
+		t.Errorf("categories = %v\nwant %v", got.Categories, wantCategories)
+	}
+	if !reflect.DeepEqual(got.Pockets, wantPockets) {
+		t.Errorf("pockets = %v\nwant %v", got.Pockets, wantPockets)
+	}
+	if strings.Contains(rec.Body.String(), "null") {
+		t.Errorf("the answer carries a null: %s", rec.Body.String())
+	}
+}
+
+func uuidText(id pgtype.UUID) string { return uuid.UUID(id.Bytes).String() }

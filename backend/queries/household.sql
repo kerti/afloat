@@ -5,7 +5,7 @@
 -- Merge semantics (BOOTSTRAP.md §4): a NULL argument leaves its column alone,
 -- in one statement, so two writers of different fields both land. A
 -- read-modify-write would let the second overwrite the first's field. None of
--- the first three columns is nullable, so coalesce cannot be mistaken for "clear".
+-- the other coalesce columns is nullable, so coalesce cannot be mistaken for "clear".
 --
 -- A column that null must clear (expected_monthly_income, PRD S7) cannot use
 -- coalesce, which reads a NULL argument as "leave alone". It takes an explicit
@@ -20,6 +20,7 @@ UPDATE households SET
     household_display_name = coalesce(sqlc.narg(household_display_name), household_display_name),
     reporting_currency     = coalesce(sqlc.narg(reporting_currency), reporting_currency),
     period_start_day       = coalesce(sqlc.narg(period_start_day), period_start_day),
+    allowance_mode         = coalesce(sqlc.narg(allowance_mode), allowance_mode),
     expected_monthly_income = CASE WHEN sqlc.arg(set_expected_monthly_income)::boolean
                                    THEN sqlc.narg(expected_monthly_income)::numeric(20,4)
                                    ELSE expected_monthly_income END,

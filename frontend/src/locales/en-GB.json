@@ -7,6 +7,7 @@
   "fields": {
     "reportingCurrency": "Reporting currency",
     "periodStartDay": "Budget Period starts on day",
+    "allowanceMode": "Allowance",
     "email": "Email",
     "password": "Password",
     "userDisplayName": "Your name (optional)",
@@ -26,6 +27,7 @@
   "fieldNames": {
     "reporting_currency": "reporting currency",
     "period_start_day": "Budget Period start day",
+    "allowance_mode": "allowance",
     "email": "email",
     "password": "password",
     "user_display_name": "name",
@@ -144,6 +146,11 @@
     "household": {
       "title": "Household",
       "periodStartDayHint": "Each Budget Period starts on this day, from 1 to 28. Changing it re-dates your Budget Periods straight away.",
+      "allowanceModeHint": "Adaptive recalculates each day from what is left. Fixed always shows your baseline.",
+      "allowanceModes": {
+        "adaptive": "Adaptive",
+        "fixed": "Fixed"
+      },
       "searchCurrencies": "Search currencies",
       "noCurrency": "No matching currency"
     },

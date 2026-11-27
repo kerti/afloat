@@ -7,6 +7,7 @@
   "fields": {
     "reportingCurrency": "Mata uang pelaporan",
     "periodStartDay": "Periode anggaran dimulai pada tanggal",
+    "allowanceMode": "Jatah harian",
     "email": "Email",
     "password": "Kata sandi",
     "userDisplayName": "Nama Anda (opsional)",
@@ -26,6 +27,7 @@
   "fieldNames": {
     "reporting_currency": "mata uang pelaporan",
     "period_start_day": "tanggal mulai periode anggaran",
+    "allowance_mode": "jatah harian",
     "email": "email",
     "password": "kata sandi",
     "user_display_name": "nama",
@@ -142,6 +144,11 @@
     "household": {
       "title": "Rumah tangga",
       "periodStartDayHint": "Setiap periode anggaran dimulai pada tanggal ini, dari 1 sampai 28. Mengubahnya langsung menggeser tanggal periode anggaran Anda.",
+      "allowanceModeHint": "Adaptif dihitung ulang setiap hari dari sisa yang ada. Tetap selalu menampilkan jatah dasar Anda.",
+      "allowanceModes": {
+        "adaptive": "Adaptif",
+        "fixed": "Tetap"
+      },
       "searchCurrencies": "Cari mata uang",
       "noCurrency": "Mata uang tidak ditemukan"
     },

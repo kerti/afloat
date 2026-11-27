@@ -266,6 +266,91 @@ describe("household settings", () => {
     ).toBeInTheDocument();
   });
 
+  it("shows the stored allowance mode and its hint", async () => {
+    server.use(
+      ...defaultHandlers(
+        signedIn({ me: { ...alice, household: { ...alice.household, allowance_mode: "fixed" } } }),
+      ),
+    );
+    renderApp("/settings");
+
+    expect(await screen.findByRole("combobox", { name: "Allowance" })).toHaveTextContent(/^Fixed$/);
+    expect(
+      screen.getByText(
+        "Adaptive recalculates each day from what is left. Fixed always shows your baseline.",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("defaults to Adaptive, and choosing Fixed saves on change with only that field", async () => {
+    const state = signedIn();
+    server.use(...defaultHandlers(state));
+    const user = userEvent.setup();
+    renderApp("/settings");
+
+    const select = await screen.findByRole("combobox", { name: "Allowance" });
+    expect(select).toHaveTextContent(/^Adaptive$/);
+    await selectPick(user, select, "Fixed");
+
+    await waitFor(() => expect(toastMock).toHaveBeenCalledTimes(1));
+    expect(toastMock).toHaveBeenCalledWith("Saved.", expect.objectContaining({ duration: 4000 }));
+    expect(state.patches).toEqual([{ allowance_mode: "fixed" }]);
+    expect(screen.getByRole("combobox", { name: "Allowance" })).toHaveTextContent(/^Fixed$/);
+  });
+
+  it("shows a chosen allowance mode at once, before the write answers", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    server.use(
+      http.patch("/api/household", async () => {
+        await gate;
+        return HttpResponse.json({ ...alice.household, allowance_mode: "fixed" });
+      }),
+      ...defaultHandlers(signedIn()),
+    );
+    const user = userEvent.setup();
+    renderApp("/settings");
+
+    await selectPick(user, await screen.findByRole("combobox", { name: "Allowance" }), "Fixed");
+
+    expect(screen.getByRole("combobox", { name: "Allowance" })).toHaveTextContent(/^Fixed$/);
+    release();
+    await waitFor(() => expect(toastMock).toHaveBeenCalledTimes(1));
+  });
+
+  it("rolls a failed allowance change back and says why in an error toast", async () => {
+    server.use(
+      http.patch("/api/household", () =>
+        HttpResponse.json(envelope("VALIDATION", { field: "allowance_mode", rule: "invalid" }), {
+          status: 400,
+        }),
+      ),
+      ...defaultHandlers(signedIn()),
+    );
+    const user = userEvent.setup();
+    renderApp("/settings");
+
+    await selectPick(user, await screen.findByRole("combobox", { name: "Allowance" }), "Fixed");
+
+    await waitFor(() =>
+      expect(toastMock.error).toHaveBeenCalledWith("Check the allowance field.", expect.anything()),
+    );
+    expect(screen.getByRole("combobox", { name: "Allowance" })).toHaveTextContent(/^Adaptive$/);
+    expect(toastMock).not.toHaveBeenCalled();
+  });
+
+  it("renders the allowance setting in Indonesian", async () => {
+    server.use(...defaultHandlers(signedIn({ me: { ...alice, locale: "id-ID" } })));
+    const user = userEvent.setup();
+    renderApp("/settings");
+
+    const select = await screen.findByRole("combobox", { name: "Jatah harian" });
+    expect(select).toHaveTextContent(/^Adaptif$/);
+    expect(screen.getByText(/^Adaptif dihitung ulang setiap hari/)).toBeInTheDocument();
+    await selectPick(user, select, "Tetap");
+    expect(screen.getByRole("combobox", { name: "Jatah harian" })).toHaveTextContent(/^Tetap$/);
+  });
+
   it("sends a signed-out visitor to sign in", async () => {
     server.use(...defaultHandlers());
     renderApp("/settings");

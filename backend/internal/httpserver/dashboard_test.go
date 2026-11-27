@@ -16,6 +16,7 @@ import (
 	"github.com/kerti/afloat/backend/internal/auth"
 	"github.com/kerti/afloat/backend/internal/dashboard"
 	"github.com/kerti/afloat/backend/internal/db"
+	"github.com/kerti/afloat/backend/internal/household"
 	"github.com/kerti/afloat/backend/internal/system"
 	"github.com/kerti/afloat/backend/internal/testutil"
 )
@@ -59,6 +60,7 @@ func newDashboardFixture(t *testing.T) dashboardFixture {
 			SessionMaxLifetime: 90 * 24 * time.Hour,
 			CookieSecure:       true,
 		}),
+		Household:      household.New(household.Deps{Querier: tdb.Queries, Beginner: tdb.Pool}),
 		Dashboard:      dashboard.New(dashboard.Deps{Querier: tdb.Queries, Beginner: tdb.Pool, Now: func() time.Time { return now }}),
 		HandlerTimeout: testHandlerTimeout,
 	})
@@ -275,6 +277,59 @@ func TestTheAnswerWithAMonthlyBudgetIsPR1sAnswerPlusTheTrajectory(t *testing.T) 
 		if value == nil {
 			t.Errorf("%s is null: an absent property is absent", key)
 		}
+	}
+}
+
+// The setting reaches the figure: after PATCH /household sets `fixed`, the next
+// read answers Today's Allowance as the Baseline Daily Budget (CONTEXT: a fixed
+// allowance is the baseline in force), and `adaptive` restores the recalculated
+// one. Nothing is cached between the two.
+func TestPatchingTheAllowanceModeChangesTheNextDashboardRead(t *testing.T) {
+	f := newDashboardFixture(t)
+	f.mustExec(t, `INSERT INTO budgets (household_id, year_month) VALUES ($1, '2026-11')`)
+	f.mustExec(t, `INSERT INTO monthly_budgets VALUES ($1, '2026-11', '2026-11-01', 3000000)`)
+
+	trajectory := func() map[string]any {
+		t.Helper()
+		rec := f.do(http.MethodGet)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+		}
+		var got struct {
+			Trajectory map[string]any `json:"trajectory"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+			t.Fatal(err)
+		}
+		return got.Trajectory
+	}
+	patch := func(body string) {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodPatch, "/api/household", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Sec-Fetch-Site", "same-origin")
+		req.Header.Set("Cookie", f.cookie)
+		rec := httptest.NewRecorder()
+		f.srv.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("PATCH %s = %d, want 200 (body %s)", body, rec.Code, rec.Body.String())
+		}
+	}
+
+	before := trajectory()
+	if before["todays_allowance"] != "176470.5882" || before["baseline_daily_budget"] != "100000.0000" {
+		t.Fatalf("adaptive trajectory = %v, want an allowance above the baseline", before)
+	}
+
+	patch(`{"allowance_mode":"fixed"}`)
+	fixed := trajectory()
+	if fixed["todays_allowance"] != fixed["baseline_daily_budget"] || fixed["todays_allowance"] != "100000.0000" {
+		t.Errorf("fixed: todays_allowance = %v, baseline_daily_budget = %v, want both 100000.0000", fixed["todays_allowance"], fixed["baseline_daily_budget"])
+	}
+
+	patch(`{"allowance_mode":"adaptive"}`)
+	if again := trajectory(); again["todays_allowance"] != "176470.5882" {
+		t.Errorf("adaptive again: todays_allowance = %v, want 176470.5882", again["todays_allowance"])
 	}
 }
 

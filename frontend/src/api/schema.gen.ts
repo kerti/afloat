@@ -284,6 +284,12 @@ export interface paths {
          *     Monthly Budget exceeds it (PRD S6) is the client's to say, from this
          *     answer and `GET /budget`.
          *
+         *     `allowance_mode` (`adaptive` or `fixed`) is how the daily allowance is
+         *     read: `adaptive` recalculates each day from what is left, `fixed` always
+         *     shows the Baseline Daily Budget. It changes what `GET /dashboard`
+         *     answers from the next read; nothing is stored about the old value. A
+         *     value outside the enum, and `null`, are `INVALID_JSON_BODY`.
+         *
          *     `reporting_currency` is locked once the Household has recorded an
          *     Expense, a deleted one included (the Recycle Bin never empties): a
          *     value that **differs** from the stored one is `409 CURRENCY_LOCKED` and
@@ -1364,6 +1370,7 @@ export interface components {
             reporting_currency?: string;
             period_start_day?: number;
             expected_monthly_income?: components["schemas"]["MoneyInputOrNull"];
+            allowance_mode?: components["schemas"]["AllowanceMode"];
         };
         /**
          * @description A practical container the Household spends from (PRD S10, CONTEXT.md):

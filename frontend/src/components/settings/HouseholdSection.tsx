@@ -11,6 +11,7 @@ import { SearchSelect } from "@/components/ui/search-select";
 import { useChoice } from "@/lib/useChoice";
 import currencyFixture from "../../../../contract/testdata/currency.json";
 
+const allowanceModes = ["adaptive", "fixed"] as const;
 const days = Array.from({ length: 28 }, (_, i) => i + 1);
 
 export function HouseholdSection({ me }: { me: Me }) {
@@ -23,6 +24,7 @@ export function HouseholdSection({ me }: { me: Me }) {
     save({ reporting_currency: v }),
   );
   const [day, chooseDay] = useChoice(h.period_start_day, (v) => save({ period_start_day: v }));
+  const [mode, chooseMode] = useChoice(h.allowance_mode, (v) => save({ allowance_mode: v }));
 
   const currencies = useMemo(() => {
     const set = new Set([...currencyFixture.codes, h.reporting_currency]);
@@ -72,6 +74,23 @@ export function HouseholdSection({ me }: { me: Me }) {
         <FieldHint id="period-start-day-hint">
           {t("settings.household.periodStartDayHint")}
         </FieldHint>
+      </Field>
+      <Field>
+        <Label htmlFor="allowance-mode">{t("fields.allowanceMode")}</Label>
+        <Select
+          value={mode}
+          onValueChange={(v) => chooseMode(v as (typeof allowanceModes)[number])}
+        >
+          <SelectTrigger id="allowance-mode" aria-describedby="allowance-mode-hint" />
+          <SelectContent>
+            {allowanceModes.map((m) => (
+              <SelectItem key={m} value={m}>
+                {t(`settings.household.allowanceModes.${m}`)}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <FieldHint id="allowance-mode-hint">{t("settings.household.allowanceModeHint")}</FieldHint>
       </Field>
     </Section>
   );

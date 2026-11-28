@@ -7,8 +7,8 @@ import enGB from "@/locales/en-GB.json";
 import idID from "@/locales/id-ID.json";
 
 // Home's Commitments panel (#155 PR 9, D6, R16): the server's figures per
-// Budget Period, as what is still due and, under it, what was paid of what was
-// set aside. Nothing is derived, drawn or coloured.
+// Budget Period, as "paid / set aside (pct)" over a share bar (ruled 28 Nov
+// 2026). Nothing else is derived, and no word says what the figures mean.
 
 const rent: CommitmentFigure = {
   category_id: "0192f0a0-0000-7000-8000-0000000000c1",
@@ -99,68 +99,40 @@ describe("Commitments", () => {
     expect(regions).toEqual(["This Period", "Commitments", "By Category", "By Pocket"]);
   });
 
-  it("shows what is still due, and under it what was paid of what was set aside", async () => {
-    await home(dashboardOf({ commitments: commitmentsOf([rent]) }));
-    const row = rowsOf()[1]!;
-    expect(row).toHaveTextContent("Rp500,000 still due");
-    const detail = within(row).getByText("Rp1,500,000 paid of Rp2,000,000");
-    expect(detail.className).toContain("text-muted-foreground");
-    // Under the amount, not the name (as D7's rows).
-    expect(detail.parentElement).not.toHaveTextContent("Rent");
+  it("reads paid / set aside (percent), on one line beside the name", async () => {
+    await home(dashboardOf({ commitments: commitmentsOf([rent, school, tax]) }));
+    const [total, rentRow, schoolRow, taxRow] = rowsOf();
+    expect(within(total!).getByText("Rp3,700,000 / Rp4,000,000 (92%)")).toBeInTheDocument();
+    const figure = within(rentRow!).getByText("Rp1,500,000 / Rp2,000,000 (75%)");
+    expect(figure.className).toContain("tabular-nums");
+    expect(figure.className).toContain("text-sm");
+    expect(figure).not.toHaveTextContent("Rent");
+    expect(schoolRow).toHaveTextContent("Rp1,000,000 / Rp1,000,000 (100%)");
+    expect(taxRow).toHaveTextContent("Rp1,200,000 / Rp1,000,000 (120%)");
+    // The status words are gone (ruled 28 Nov 2026).
+    expect(section().queryByText(/still due|Paid|set aside|paid of/)).not.toBeInTheDocument();
   });
 
-  it("says Paid, in the muted words, where nothing is still due", async () => {
-    await home(dashboardOf({ commitments: commitmentsOf([school]) }));
-    const row = rowsOf()[1]!;
-    expect(within(row).getByText("Paid").className).toContain("text-muted-foreground");
-    expect(row).not.toHaveTextContent(/still due/);
-    expect(within(row).getByText("Rp1,000,000 paid of Rp1,000,000")).toBeInTheDocument();
-  });
-
-  it("says more than you set aside, as information, where more was paid than the allocation", async () => {
-    await home(dashboardOf({ commitments: commitmentsOf([tax]) }));
-    const row = rowsOf()[1]!;
-    expect(row).toHaveTextContent("Rp200,000 more than you set aside");
-    // The signed figure is never shown as it is: no minus sign, no "still due".
-    expect(row.textContent).not.toContain("-Rp");
-    expect(row).not.toHaveTextContent(/still due|overspen|over budget|failed|should/i);
-    expect(within(row).getByText("Rp1,200,000 paid of Rp1,000,000")).toBeInTheDocument();
-  });
-
-  it("reads the totals row as it reads a Commitment: still due, Paid, or more than set aside", async () => {
+  it("draws paid against the allocation as a share bar, the Total's too", async () => {
     await home(dashboardOf({ commitments: commitmentsOf([rent, tax]) }));
-    expect(rowsOf()[0]).toHaveTextContent("Rp300,000 still due");
-    expect(within(rowsOf()[0]!).getByText("Rp3,700,000 paid of Rp4,000,000")).toBeInTheDocument();
+    const [total, rentRow, taxRow] = rowsOf();
+    expect(within(total!).getByTestId("share-bar")).toBeInTheDocument();
+    expect(within(rentRow!).getByTestId("share-bar-fill").style.width).toBe("60%");
+    expect(within(rentRow!).queryByTestId("share-bar-over")).not.toBeInTheDocument();
+    // Paid more than set aside: the share past 100% shows.
+    expect(within(taxRow!).getByTestId("share-bar-over")).toBeInTheDocument();
   });
 
-  it.each([
-    ["0.0000", "-0.0000"],
-    ["0.4999", "-0.4999"],
-  ])(
-    "chooses the words from the amount as shown: %s and %s are Paid, never Rp0 still due",
-    async (a, b) => {
-      await home(
-        dashboardOf({
-          commitments: {
-            commitments_budget: "10.0000",
-            paid: "10.0000",
-            still_due: a,
-            items: [
-              { ...school, still_due: a },
-              { ...school, category_id: "0192f0a0-0000-7000-8000-0000000000c9", still_due: b },
-            ],
-          },
-        }),
-      );
-      const rows = rowsOf();
-      for (const row of rows) {
-        expect(within(row).getByText("Paid")).toBeInTheDocument();
-        expect(row.textContent).not.toMatch(/Rp0\b/);
-      }
-    },
-  );
+  it("floors the percent, so 100% only shows once the whole is paid", async () => {
+    await home(
+      dashboardOf({
+        commitments: commitmentsOf([{ ...rent, paid: "1999999.9999", still_due: "0.0001" }]),
+      }),
+    );
+    expect(rowsOf()[1]).toHaveTextContent("Rp2,000,000 / Rp2,000,000 (99%)");
+  });
 
-  it("shows an allocation of zero as it is, with a refund as a negative paid", async () => {
+  it("shows an allocation of zero as it is, with no percent and no bar, and a refund as a negative paid", async () => {
     await home(
       dashboardOf({
         commitments: commitmentsOf([
@@ -169,8 +141,8 @@ describe("Commitments", () => {
       }),
     );
     const row = rowsOf()[1]!;
-    expect(row).toHaveTextContent("Rp50,000 still due");
-    expect(within(row).getByText("-Rp50,000 paid of Rp0")).toBeInTheDocument();
+    expect(within(row).getByText("-Rp50,000 / Rp0")).toBeInTheDocument();
+    expect(within(row).queryByTestId("share-bar")).not.toBeInTheDocument();
   });
 
   it("wears an inactive Commitment as a muted title and the Inactive badge, as every list row does", async () => {
@@ -221,24 +193,14 @@ describe("Commitments", () => {
           still_due: "9999999998499998.5000",
           items: [
             { ...rent, allocation: "1500000.4999", paid: "1500000.9999", still_due: "-0.5000" },
-            {
-              ...school,
-              allocation: "9999999998499999.0000",
-              paid: "0.0000",
-              still_due: "9999999998499999.0000",
-            },
           ],
         },
       }),
     );
-    const total = rowsOf()[0]!;
-    expect(total).toHaveTextContent("Rp9,999,999,998,499,999 still due");
     expect(
-      within(total).getByText("Rp1,500,001 paid of Rp9,999,999,999,999,999"),
+      within(rowsOf()[0]!).getByText("Rp1,500,001 / Rp9,999,999,999,999,999 (0%)"),
     ).toBeInTheDocument();
-    const row = rowsOf()[1]!;
-    expect(within(row).getByText("Rp1,500,001 paid of Rp1,500,000")).toBeInTheDocument();
-    expect(row).toHaveTextContent("Rp1 more than you set aside");
+    expect(within(rowsOf()[1]!).getByText("Rp1,500,001 / Rp1,500,000 (100%)")).toBeInTheDocument();
   });
 
   it("says what will appear, and keeps its heading, when the server sent no Commitments", async () => {
@@ -256,21 +218,28 @@ describe("Commitments", () => {
     expect(screen.queryByText("Commitments")).not.toBeInTheDocument();
   });
 
-  it("derives nothing: no bar, meter, percentage, colour or word of fault, and no live region", async () => {
+  it("derives nothing but the percent: no meter, colour only past 100% of a bar, no word of fault, and no live region", async () => {
     await home(dashboardOf({ commitments: commitmentsOf([rent, school, tax]) }));
     const main = document.querySelector("main")!;
     expect(
       main.querySelector("meter,progress,[role=progressbar],[role=meter],svg[role=img]"),
     ).toBeNull();
+    // The share bar (ruled 28 Nov 2026) is a picture the figures already say:
+    // hidden from assistive technology, its fill the one bg-primary and the
+    // share past 100% the one attention colour.
+    for (const bar of main.querySelectorAll("[data-testid=share-bar]")) {
+      expect(bar).toHaveAttribute("aria-hidden", "true");
+      bar.remove();
+    }
     expect(
       main.querySelector(
         "[class*=attention],[class*=destructive],[class*=success],[class*=bg-primary]",
       ),
     ).toBeNull();
     expect(main.querySelector("[aria-live],[role=status],[role=alert]")).toBeNull();
-    expect(main.textContent).not.toMatch(/overspen|over budget|failed|should|warning|%/i);
-    // The figures shown are the wire's and no other: no sum of a row's own.
-    expect(main.textContent).not.toContain("500,000 of");
+    expect(main.textContent).not.toMatch(/overspen|over budget|failed|should|warning/i);
+    // The figures shown are the wire's and the percent: no still due, no sum.
+    expect(main.textContent).not.toContain("Rp500,000");
     expect(main.textContent).not.toContain("Rp3,000,000");
   });
 
@@ -281,15 +250,13 @@ describe("Commitments", () => {
 });
 
 describe("in Indonesian", () => {
-  it("words the panel, groups with dots, and reads each of the three states", async () => {
+  it("words the panel and groups with dots", async () => {
     await home(dashboardOf({ commitments: commitmentsOf([rent, school, tax]) }), "id-ID");
     expect(screen.getByRole("heading", { level: 2, name: "Komitmen" })).toBeInTheDocument();
     const rows = section("Komitmen").getAllByRole("listitem");
     expect(rows[0]).toHaveTextContent("Total");
-    expect(rows[1]).toHaveTextContent("Rp500.000 masih harus dibayar");
-    expect(within(rows[1]!).getByText("Rp1.500.000 dibayar dari Rp2.000.000")).toBeInTheDocument();
-    expect(within(rows[2]!).getByText("Lunas")).toBeInTheDocument();
-    expect(rows[3]).toHaveTextContent("Rp200.000 lebih dari yang Anda sisihkan");
+    expect(within(rows[0]!).getByText("Rp3.700.000 / Rp4.000.000 (92%)")).toBeInTheDocument();
+    expect(within(rows[1]!).getByText("Rp1.500.000 / Rp2.000.000 (75%)")).toBeInTheDocument();
     expect(within(rows[3]!).getByText(idID.pockets.inactive)).toBeInTheDocument();
   });
 

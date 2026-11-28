@@ -7,8 +7,8 @@ import enGB from "@/locales/en-GB.json";
 import idID from "@/locales/id-ID.json";
 
 // Home's By Category and By Pocket (#155 PR 7, D7): the server's two lists,
-// shown in the order they came, as spent and, where there is one, "of
-// <allocation>". Nothing is derived, drawn or coloured.
+// shown in the order they came, as spent or, where there is an allocation,
+// "spent / allocation (pct)" over a share bar (ruled 28 Nov 2026).
 
 const food: CategoryFigure = {
   category_id: "0192f0a0-0000-7000-8000-0000000000c1",
@@ -91,18 +91,36 @@ describe("By Category", () => {
     expect(rows[1]).toHaveTextContent("Food");
   });
 
-  it("shows spent, and of the allocation as a muted second line only where there is one", async () => {
+  it("shows spent / allocation (percent) where there is an allocation, and spent alone where not", async () => {
     await home(dashboardOf({ categories: [food, snacks] }));
     const [foodRow, snacksRow] = rowsOf("By Category");
-    expect(foodRow).toHaveTextContent("Rp40,000");
-    const detail = within(foodRow!).getByText("of Rp1,500,000");
-    expect(detail.className).toContain("text-muted-foreground");
-    // Under the amount, not the name (ruled at the preview).
-    expect(detail.parentElement).toHaveTextContent(/^Rp40,000of Rp1,500,000$/);
-    expect(detail.parentElement).not.toHaveTextContent("Food");
-    expect(snacksRow).toHaveTextContent("Rp16,000");
-    expect(snacksRow!.textContent).not.toMatch(/\bof\b/);
-    expect(within(snacksRow!).queryByText(/No allocation|Rp0/)).not.toBeInTheDocument();
+    const figure = within(foodRow!).getByText("Rp40,000 / Rp1,500,000 (2%)");
+    expect(figure.className).toContain("tabular-nums");
+    expect(figure).not.toHaveTextContent("Food");
+    expect(within(snacksRow!).getByText("Rp16,000")).toBeInTheDocument();
+    expect(snacksRow!.textContent).not.toMatch(/\/|%|No allocation|Rp0/);
+  });
+
+  it("draws a share bar only under a Category with an allocation above zero", async () => {
+    await home(
+      dashboardOf({
+        categories: [
+          food,
+          snacks,
+          uncategorised,
+          { ...food, category_id: "z", allocation: "0.0000" },
+        ],
+        pockets: [wallet],
+      }),
+    );
+    const [foodRow, snacksRow, uncatRow, zeroRow] = rowsOf("By Category");
+    expect(parseFloat(within(foodRow!).getByTestId("share-bar-fill").style.width)).toBeCloseTo(
+      (40000 / 1500000 / 1.25) * 100,
+    );
+    for (const row of [snacksRow, uncatRow, zeroRow]) {
+      expect(within(row!).queryByTestId("share-bar")).not.toBeInTheDocument();
+    }
+    expect(section("By Pocket").queryByTestId("share-bar")).not.toBeInTheDocument();
   });
 
   it("shows an allocation of zero as an allocation, and a refund net as negative", async () => {
@@ -112,8 +130,7 @@ describe("By Category", () => {
       }),
     );
     const [row] = rowsOf("By Category");
-    expect(row).toHaveTextContent("-Rp5,000");
-    expect(within(row!).getByText("of Rp0")).toBeInTheDocument();
+    expect(within(row!).getByText("-Rp5,000 / Rp0")).toBeInTheDocument();
   });
 
   it("formats spent half-up, as every figure but the allowances, and never abbreviates", async () => {
@@ -123,8 +140,7 @@ describe("By Category", () => {
       }),
     );
     const [row] = rowsOf("By Category");
-    expect(row).toHaveTextContent("Rp10,000,000");
-    expect(within(row!).getByText("of Rp1,500,000")).toBeInTheDocument();
+    expect(within(row!).getByText("Rp10,000,000 / Rp1,500,000 (666%)")).toBeInTheDocument();
   });
 
   it("wears an inactive Category as a muted title and the Inactive badge, as every list row does", async () => {
@@ -205,7 +221,7 @@ describe("both sections", () => {
     expect(screen.queryByText("By Pocket")).not.toBeInTheDocument();
   });
 
-  it("derive nothing: no bar, meter, percentage, difference or colour, and no word of fault", async () => {
+  it("derive nothing but the percent: no meter or difference, colour only past 100% of a bar, and no word of fault", async () => {
     await home(
       dashboardOf({
         categories: [food, snacks, uncategorised],
@@ -216,13 +232,20 @@ describe("both sections", () => {
     expect(
       main.querySelector("meter,progress,[role=progressbar],[role=meter],svg[role=img]"),
     ).toBeNull();
+    // The share bar (ruled 28 Nov 2026) is a picture the figures already say:
+    // hidden from assistive technology, its fill the one bg-primary and the
+    // share past 100% the one attention colour.
+    for (const bar of main.querySelectorAll("[data-testid=share-bar]")) {
+      expect(bar).toHaveAttribute("aria-hidden", "true");
+      bar.remove();
+    }
     expect(
       main.querySelector(
         "[class*=attention],[class*=destructive],[class*=success],[class*=bg-primary]",
       ),
     ).toBeNull();
     expect(main.textContent).not.toMatch(
-      /overspen|over budget|under budget|left of|remaining of|failed|should|careful|warning|streak|score|%/i,
+      /overspen|over budget|under budget|left of|remaining of|failed|should|careful|warning|streak|score/i,
     );
     // The figures shown are the wire's and no other: Food's 40,000 of 1,500,000
     // leaves no 1,460,000 anywhere.
@@ -238,7 +261,7 @@ describe("both sections", () => {
 });
 
 describe("in Indonesian", () => {
-  it("words the sections and the detail line, groups with dots, and names Uncategorised", async () => {
+  it("words the sections, groups with dots, and names Uncategorised", async () => {
     await home(
       dashboardOf({ categories: [food, uncategorised, snacks], pockets: [wallet, oldCard] }),
       "id-ID",
@@ -248,8 +271,7 @@ describe("in Indonesian", () => {
     const rows = within(
       screen.getByRole("region", { name: idID.dashboard.byCategory }),
     ).getAllByRole("listitem");
-    expect(rows[0]).toHaveTextContent("Rp40.000");
-    expect(within(rows[0]!).getByText("dari Rp1.500.000")).toBeInTheDocument();
+    expect(within(rows[0]!).getByText("Rp40.000 / Rp1.500.000 (2%)")).toBeInTheDocument();
     expect(rows[1]).toHaveTextContent("Tanpa kategori");
     expect(within(rows[2]!).getByText(idID.pockets.inactive)).toBeInTheDocument();
   });

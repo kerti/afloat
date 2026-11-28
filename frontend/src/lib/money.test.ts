@@ -9,6 +9,8 @@ import {
   formatAllowance,
   formatMoney,
   formatMoneyCompact,
+  formatPercent,
+  percentOf,
   parseMoney,
   roundMoney,
   currencySymbol,
@@ -247,5 +249,35 @@ describe("formatMoneyCompact", () => {
     expect(formatMoneyCompact(0, "IDR", "en-GB")).toBe("Rp0");
     expect(formatMoneyCompact(-1500, "IDR", "en-GB")).toBe("-Rp1.5k");
     expect(formatMoneyCompact(1200, "USD", "en-GB")).toBe("USD\u00a01.2k");
+  });
+});
+
+describe("percentOf", () => {
+  it.each([
+    ["1500000.0000", "2000000.0000", 75],
+    ["1999999.9999", "2000000", 99],
+    ["2000000", "2000000.0000", 100],
+    ["1200000", "1000000", 120],
+    ["40000", "1500000", 2],
+    ["0", "1000", 0],
+    ["-5000", "1500000", 0],
+    ["-50000", "100000", -50],
+  ])("%s of %s is %d%%, toward zero, on the digits", (part, whole, pct) => {
+    expect(percentOf(part, whole)).toBe(pct);
+  });
+
+  it.each([
+    ["100", "0"],
+    ["100", "-5"],
+    ["x", "100"],
+  ])("%s of %s has no percent", (part, whole) => {
+    expect(percentOf(part, whole)).toBeNull();
+  });
+});
+
+describe("formatPercent", () => {
+  it("groups as the locale does", () => {
+    expect(formatPercent(1234, "en-GB")).toBe("1,234%");
+    expect(formatPercent(1234, "id-ID")).toBe("1.234%");
   });
 });

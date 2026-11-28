@@ -230,38 +230,45 @@ screens/Home.tsx` purpose row, `web/src/components/LoadMore.tsx`; ruled 25 Nov 2
   right in `tabular-nums` medium. A negative figure is neutral, never coloured. A figure that cannot
   be computed yet is hidden, not shown as zero. An optional `badge` (the "Inactive" `Badge`) sits
   beside the label, and `muted` sets the words that stand where an amount would in the muted colour at
-  regular weight. (Confirmed by the maintainer, 23 Nov 2026, for #130.) Two more options, `detail` and
-  `labelMuted`, belong to Home's D7 rows below.
+  regular weight. (Confirmed by the maintainer, 23 Nov 2026, for #130.) More options, `detail`,
+  `labelMuted`, `bar` and `small`, belong to Home's D6 and D7 rows below.
+- `ShareBar` (`components/ShareBar.tsx`): how much of an allocation has gone, drawn under a
+  `FigureRow` through its `bar` option, full row width under both lines. An 8px `bg-muted` track
+  that runs to 125%, a thin tick at 100%, the fill in `--primary`, the share past 100% in
+  `--attention`, and the fill stops at the track's end. Nothing against an allocation of zero or
+  none; a negative share draws empty. `aria-hidden`: the figures beside it say it. (Balances'
+  `DashboardScreen` breakdown bar; ruled by the maintainer on the phone preview, 28 Nov 2026.)
 - **Home's By Category and By Pocket rows (D7)** (confirmed by the maintainer on the phone preview,
   27 Nov 2026, for #155 PR 7, R18.) Each section is a `Section` (a `SectionTitle` h2, "By Category"
   and "By Pocket") holding a `ListCard` of `FigureRow`s, after the State and the pace and the chart, and the last
-  thing on Home for now. The row gains two optional parts and no new element: `detail`, a second line
-  right-aligned under the amount in the Hint size (14px), muted and `tabular-nums`, so a row reads
-  "Rp40.000 / of Rp1.500.000". It is there only where the Category has an
-  allocation in force (a Pocket has none; a Category without one has no second line, and never "No
-  allocation" or zero), and `labelMuted`, the muted title of an inactive row, with the "Inactive" `Badge`
+  thing on Home for now. Where the Category has an allocation in force, the amount is the **share
+  figure** "Rp40.000 / Rp1.500.000 (2%)", set `small` (the Hint size, 14px, still `tabular-nums`
+  medium) so the longer line sits beside its name, over a `ShareBar` (ruled 28 Nov 2026, replacing
+  the 27 Nov `detail` line "of Rp1.500.000"). The percent is whole and toward zero, so 100% shows
+  only once the whole is spent, grouped as the locale groups, and absent against an allocation of
+  zero ("Rp0 / Rp0"), where no bar is drawn. A Pocket, a Category without an allocation and the
+  uncategorised row show the spent alone at the full size, with no bar, and never "No allocation" or
+  zero. `labelMuted` is the muted title of an inactive row, with the "Inactive" `Badge`
   beside it as every list row has. The amount is the row's spent, `tabular-nums` medium, formatted
   half-up like every figure but the allowances; a refund can make it negative and it stays neutral. The
   row for spending with no Category is titled "Uncategorised" in the muted title (as `ExpenseRow` titles
   it), is not a link and carries no badge: Home never prompts about a missing Category ("Needs a
   category" stays on `/expenses`). Rows keep the order the server sent. A row whose spending nets to zero still shows, as "Rp0",
-  and an allocation of zero reads "of Rp0": both are shown as they are (confirmed by the maintainer,
-  27 Nov 2026). There is no bar, meter, share,
-  difference or colour, and no live region. A section with no row shows the sentence "Nothing recorded
-  yet this Period." (the Empty rule) and keeps its heading. (The maintainer chose the detail under the amount over Uruni's two-line `TransactionRowLabel`, title
-  over a muted detail line, which `ExpenseRow` keeps.)
+  and an allocation of zero reads "Rp5.000 / Rp0": both are shown as they are (confirmed by the maintainer,
+  27 Nov 2026). There is no meter, difference or other colour, and no live region. A section with no row shows the sentence "Nothing recorded
+  yet this Period." (the Empty rule) and keeps its heading.
 - **Home's Commitments section (D6)** (confirmed by the maintainer on the phone preview, 27 Nov 2026,
   for #155 PR 9, per R16.) A `Section` ("Commitments") between the chart and By Category, holding a
   `ListCard` of `FigureRow`s: a "Total" row first, then one row per Commitment in the order the server
-  sent (the Category list's order, not by name). The amount is the row's status in words: "Rp500.000
-  still due", "Paid" (muted) when nothing is still due, or "Rp200.000 more than you set aside" when
-  paid passes the allocation. The words follow the amount as the formatter shows it, so a sub-rupiah
-  remainder reads "Paid", never "Rp0 still due"; an allocation of zero with nothing paid reads "Paid".
-  Under it, the D7 `detail` line reads "Rp1.500.000 paid of Rp2.000.000". An inactive Commitment gets
+  sent (the Category list's order, not by name). Every row, the Total's too, reads as D7's share
+  figure, paid for spent: "Rp1.500.000 / Rp2.000.000 (75%)", `small`, over a `ShareBar` (ruled
+  28 Nov 2026, retiring the status words "still due", "Paid" and "more than you set aside" and the
+  "paid of" line; `still_due` stays on the wire, unshown). An inactive Commitment gets
   `labelMuted` and the "Inactive" `Badge`; one with an allocation of zero and nothing paid says nothing and
   is left out, as `/budget` leaves out an inactive Category without an allocation (the Total still
-  counts it; ruled by the maintainer, 27 Nov 2026). A refund shows as it is ("-Rp50.000 paid of Rp0"), as
-  D7 shows "Rp0" (confirmed by the maintainer, 27 Nov 2026). No bar, meter, colour or live region. With no Commitment the
+  counts it; ruled by the maintainer, 27 Nov 2026). A refund shows as it is ("-Rp50.000 / Rp0"), as
+  D7 shows "Rp0" (confirmed by the maintainer, 27 Nov 2026). No meter, words about the figures or
+  live region. With no Commitment the
   section keeps its heading over "Your Commitments will appear here." (the Empty rule).
 
 **Notices**
@@ -308,7 +315,7 @@ appearance, not the OS. (Confirmed by the maintainer, 23 Nov 2026, for #124.)
 
 ## Typography and spacing
 
-One font, Figtree (`--font-ui`). Sizes and weights come from these roles, never per screen. (The
+One font, Plus Jakarta Sans (`--font-ui`), Uruni's face; it replaced Figtree on 28 Nov 2026, whose figures read too rounded. Sizes and weights come from these roles, never per screen. (The
 role table follows Uruni `docs/Design-System.md` § Typography.)
 
 | Role                     | Size                                                      | Weight              | Colour                                | Used for                                                                                                                |

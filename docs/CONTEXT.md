@@ -288,11 +288,11 @@ JSON. Blank means not yet in the UI.
 | This Period (the chart's section title) | periode anggaran ini | approved 27 Nov 2026 (#155 PR 8), provisional; "periode anggaran" is the Period's word |
 | Date (the chart table's column) | tanggal | approved 27 Nov 2026 (#155 PR 8), provisional |
 | By Category / By Pocket (the Home sections) | per kategori / per kantong | approved 27 Nov 2026 (#155 PR 7), provisional |
-| *of* (an allocation: "of Rp1.500.000") | dari | approved 27 Nov 2026 (#155 PR 7), provisional |
+| *of* (an allocation: "of Rp1.500.000") | dari | approved 27 Nov 2026 (#155 PR 7), provisional; off the screen since 28 Nov 2026 (the share figure "<spent> / <allocation> (<percent>)" replaced it) |
 | Uncategorised (a Home row) | tanpa kategori | in the UI since the Expenses list (#140); first on Home (#155 PR 7), provisional |
 | Commitments (the Home section) | komitmen | "komitmen" is the Commitment (bucket)'s word; approved 27 Nov 2026 (#155 PR 9), provisional |
-| *paid* ("<amount> paid of <allocation>") / Paid (nothing still due) | dibayar / lunas | approved 27 Nov 2026 (#155 PR 9), provisional; "lunas" is paid in full, used for the one word that stands where an amount would |
-| *still due* ("<amount> still due") | masih harus dibayar | approved 27 Nov 2026 (#155 PR 9), provisional |
+| *paid* ("<amount> paid of <allocation>") / Paid (nothing still due) | dibayar / lunas | approved 27 Nov 2026 (#155 PR 9), provisional; "lunas" is paid in full, used for the one word that stands where an amount would; off the screen since 28 Nov 2026 (the share figure "<spent> / <allocation> (<percent>)" replaced it) |
+| *still due* ("<amount> still due") | masih harus dibayar | approved 27 Nov 2026 (#155 PR 9), provisional; off the screen since 28 Nov 2026 (the share figure "<spent> / <allocation> (<percent>)" replaced it) |
 | *more than you set aside* ("<amount> more than you set aside") | lebih dari yang Anda sisihkan | approved 27 Nov 2026 (#155 PR 9), provisional; "sisihkan" is setting money aside |
 
 ---

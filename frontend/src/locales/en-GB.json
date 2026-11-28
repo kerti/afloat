@@ -92,15 +92,12 @@
     "commitments": {
       "title": "Commitments",
       "empty": "Your Commitments will appear here.",
-      "total": "Total",
-      "paid": "Paid",
-      "stillDue": "{{amount}} still due",
-      "over": "{{amount}} more than you set aside",
-      "detail": "{{paid}} paid of {{allocation}}"
+      "total": "Total"
     },
     "byCategory": "By Category",
     "byPocket": "By Pocket",
-    "ofAllocation": "of {{amount}}",
+    "share": "{{spent}} / {{allocation}} ({{percent}})",
+    "shareNoPercent": "{{spent}} / {{allocation}}",
     "breakdownEmpty": "Nothing recorded yet this Period.",
     "noBudget": "Set a Monthly Budget to see how much is left to spend today.",
     "noBudgetLink": "Go to Budget"

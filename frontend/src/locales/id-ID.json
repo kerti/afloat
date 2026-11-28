@@ -92,15 +92,12 @@
     "commitments": {
       "title": "Komitmen",
       "empty": "Komitmen Anda akan tampil di sini.",
-      "total": "Total",
-      "paid": "Lunas",
-      "stillDue": "{{amount}} masih harus dibayar",
-      "over": "{{amount}} lebih dari yang Anda sisihkan",
-      "detail": "{{paid}} dibayar dari {{allocation}}"
+      "total": "Total"
     },
     "byCategory": "Per kategori",
     "byPocket": "Per kantong",
-    "ofAllocation": "dari {{amount}}",
+    "share": "{{spent}} / {{allocation}} ({{percent}})",
+    "shareNoPercent": "{{spent}} / {{allocation}}",
     "breakdownEmpty": "Belum ada yang tercatat di periode anggaran ini.",
     "noBudget": "Atur anggaran bulanan untuk melihat sisa yang bisa dibelanjakan hari ini.",
     "noBudgetLink": "Buka Anggaran"

@@ -265,7 +265,13 @@ screens/Home.tsx` purpose row, `web/src/components/LoadMore.tsx`; ruled 25 Nov 2
   #140 R2; confirmed on a phone mock.)
 
 **States** (`components/states.tsx`): `Loading`, `ErrorState`. `UpdatePrompt`
-(`components/UpdatePrompt.tsx`): the update banner.
+(`components/UpdatePrompt.tsx`): the update banner, sitting where bottom toasts do (`clearOfTabBar`,
+`lib/tabBar.ts`) and above the tab bar (`z-20`), so both its buttons can be tapped (#153).
+
+**What floats over the page** (toasts and the update prompt) wears the `--raised` surface: the card's
+white in light, where the shadow carries it; `--muted`'s #14354a in dark, where the card is 1.11:1
+against the page and the floating surface blended in. (Uruni's update banner sits on its tinted
+`--secondary`. Confirmed by the maintainer, 27 Nov 2026, for #153.)
 
 **Toasts**: `lib/plainToast.ts` (`toastPlain`, `toastSaved`, and `toastError` for a failure with
 no form open) and `lib/undoToast.ts` (`toastUndoable`, `toastWithAction`), all tap-to-dismiss (`lib/tapToDismiss.ts`)

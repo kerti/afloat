@@ -7,6 +7,7 @@ import { ChartCard } from "@/components/ChartCard";
 import { FigurePair } from "@/components/FigurePair";
 import { Badge } from "@/components/Badge";
 import { FigureRow } from "@/components/FigureRow";
+import { ShareBar } from "@/components/ShareBar";
 import { Section } from "@/components/Form";
 import { HeroFigure } from "@/components/HeroFigure";
 import { ListCard } from "@/components/List";
@@ -14,8 +15,7 @@ import { NoticeCard } from "@/components/NoticeCard";
 import { ErrorState, Loading } from "@/components/states";
 import { BodyText, EmptyState, MutedText, PageTitle } from "@/components/Text";
 import { TextLink } from "@/components/TextLink";
-import { compareMoney, formatAllowance, formatMoney } from "@/lib/money";
-import { stillDueOf } from "@/lib/commitment";
+import { compareMoney, formatAllowance, formatMoney, formatPercent, percentOf } from "@/lib/money";
 import { paceOf } from "@/lib/pace";
 import { routes } from "@/lib/routes";
 
@@ -190,7 +190,6 @@ function Figures({
               label={t("dashboard.commitments.total")}
               allocation={commitments.commitments_budget}
               paid={commitments.paid}
-              stillDue={commitments.still_due}
               currency={currency}
               locale={locale}
             />
@@ -201,7 +200,6 @@ function Figures({
                 inactive={!c.active}
                 allocation={c.allocation}
                 paid={c.paid}
-                stillDue={c.still_due}
                 currency={currency}
                 locale={locale}
               />
@@ -232,17 +230,38 @@ function Figures({
   );
 }
 
-// One Commitment, or the totals of them: what is still due (or "Paid", or "more
-// than you set aside"), and under it what has been paid of what was set aside.
-// Information and no tone: no colour, bar or percentage, and a still due below
-// zero is never clamped (D9, R16). The server sends the figures; the words are
-// chosen from the still due as it shows.
+// What has gone against what was set aside, as "spent / allocation (pct)", and
+// its bar: one form for a Commitment, the Commitments Total and a Category with
+// an allocation (ruled 28 Nov 2026, replacing D6's still-due words and D7's
+// "of <allocation>"). The percent is whole, toward zero, and absent against an
+// allocation of zero. The figures are the wire's; nothing else is shown.
+function Share({
+  spent,
+  allocation,
+  currency,
+  locale,
+}: {
+  spent: string;
+  allocation: string;
+  currency: string;
+  locale: string;
+}) {
+  const { t } = useTranslation();
+  const percent = percentOf(spent, allocation);
+  const amounts = {
+    spent: formatMoney(spent, currency, locale),
+    allocation: formatMoney(allocation, currency, locale),
+  };
+  return percent === null
+    ? t("dashboard.shareNoPercent", amounts)
+    : t("dashboard.share", { ...amounts, percent: formatPercent(percent, locale) });
+}
+
 function CommitmentRow({
   label,
   inactive,
   allocation,
   paid,
-  stillDue,
   currency,
   locale,
 }: {
@@ -250,32 +269,19 @@ function CommitmentRow({
   inactive?: boolean;
   allocation: string;
   paid: string;
-  stillDue: string;
   currency: string;
   locale: string;
 }) {
   const { t } = useTranslation();
-  const due = stillDueOf(stillDue, currency, locale);
-  const status =
-    due === null
-      ? undefined
-      : due.kind === "paid"
-        ? t("dashboard.commitments.paid")
-        : due.kind === "due"
-          ? t("dashboard.commitments.stillDue", { amount: due.amount })
-          : t("dashboard.commitments.over", { amount: due.amount });
   return (
     <FigureRow
       label={label}
       labelMuted={inactive}
       badge={inactive && <Badge>{t("pockets.inactive")}</Badge>}
-      muted={due?.kind === "paid"}
-      detail={t("dashboard.commitments.detail", {
-        paid: formatMoney(paid, currency, locale),
-        allocation: formatMoney(allocation, currency, locale),
-      })}
+      bar={<ShareBar spent={paid} allocation={allocation} />}
+      small
     >
-      {status}
+      <Share spent={paid} allocation={allocation} currency={currency} locale={locale} />
     </FigureRow>
   );
 }
@@ -298,9 +304,8 @@ function Rows({ empty, children }: { empty: boolean; children: ReactNode }) {
   );
 }
 
-// Spent, and "of <allocation>" where the Category has one, and nothing else:
-// no bar, no difference, no share, no colour (D9, R15). The rows come in the
-// order the server sent. The row for spending with no Category has no id and
+// Spent, or its Share where the Category has an allocation; no difference
+// (R15). The rows come in the order the server sent. The row for spending with no Category has no id and
 // no name, and is not a link: Home never prompts about it (E4, T11).
 function CategoryRow({
   figure,
@@ -318,15 +323,23 @@ function CategoryRow({
       label={figure.category_display_name ?? t("expenses.uncategorised")}
       labelMuted={inactive || figure.category_display_name === undefined}
       badge={inactive && <Badge>{t("pockets.inactive")}</Badge>}
-      detail={
-        figure.allocation === undefined
-          ? undefined
-          : t("dashboard.ofAllocation", {
-              amount: formatMoney(figure.allocation, currency, locale),
-            })
+      small={figure.allocation !== undefined}
+      bar={
+        figure.allocation !== undefined && (
+          <ShareBar spent={figure.spent} allocation={figure.allocation} />
+        )
       }
     >
-      {formatMoney(figure.spent, currency, locale)}
+      {figure.allocation === undefined ? (
+        formatMoney(figure.spent, currency, locale)
+      ) : (
+        <Share
+          spent={figure.spent}
+          allocation={figure.allocation}
+          currency={currency}
+          locale={locale}
+        />
+      )}
     </FigureRow>
   );
 }

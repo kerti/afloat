@@ -300,3 +300,29 @@ export function compareMoney(a: string, b: string): number | null {
   const y = scaled(mb);
   return x < y ? -1 : x > y ? 1 : 0;
 }
+
+/** How much of an allocation a figure is, in whole percent rounded toward zero
+ * (so 99.6% reads 99%, and 100% only once the whole is reached), on the digits
+ * and never a float. Null when the allocation is zero or below, or either is not
+ * a plain decimal: there is no share of nothing. Display only (PRD N5a, ruled
+ * 28 Nov 2026). */
+export function percentOf(part: string, whole: string): number | null {
+  const mp = SIGNED.exec(part);
+  const mw = SIGNED.exec(whole);
+  if (!mp || !mw) return null;
+  const scale = Math.max((mp[3] ?? "").length, (mw[3] ?? "").length);
+  const scaled = (m: RegExpExecArray) => {
+    const n = BigInt(m[2]! + (m[3] ?? "").padEnd(scale, "0"));
+    return m[1] === "-" ? -n : n;
+  };
+  const w = scaled(mw);
+  if (w <= 0n) return null;
+  return Number((scaled(mp) * 100n) / w);
+}
+
+/** A whole percent in the locale's form ("75%", "1,234%"). */
+export function formatPercent(percent: number, locale: string): string {
+  return new Intl.NumberFormat(locale, { style: "percent", maximumFractionDigits: 0 }).format(
+    percent / 100,
+  );
+}

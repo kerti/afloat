@@ -214,7 +214,7 @@
       - sql: SELECT pocket_display_name AS name, household_id::text AS household_id, active, (deleted_at IS NOT NULL) AS deleted, (updated_at = '2026-01-05T00:00:00Z') AS untouched FROM pockets ORDER BY id
         rows:
           - {name: OVO, household_id: 0192f0a0-0000-7000-8000-000000000001, active: true, deleted: false, untouched: true}
-          - {name: Dana, household_id: 0192f0a0-0000-7000-8000-000000000001, active: false, deleted: false, untouched: false}
+          - {name: Dana, household_id: 0192f0a0-0000-7000-8000-000000000001, active: false, deleted: false, untouched: true}
           - {name: Gopay, household_id: 0192f0a0-0000-7000-8000-000000000001, active: true, deleted: true, untouched: true}
           - {name: Theirs, household_id: 0192f0a0-0000-7000-8000-000000000002, active: true, deleted: false, untouched: true}
 

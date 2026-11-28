@@ -495,8 +495,9 @@ type Querier interface {
 	// categories_household_name_idx is a rename into a held name. Deactivating
 	// touches no allocation, so no figure moves.
 	//
-	// updated_at is set here because the baseline has no trigger, and from the
-	// database's own clock (BOOTSTRAP.md §5.1).
+	// updated_at moves only when a column's value does (#137; the row-wise IS DISTINCT FROM
+	// as in UpdateExpense), so a {} or a resend of the stored values is a no-op
+	// (BOOTSTRAP.md §4), and from the database's own clock (BOOTSTRAP.md §5.1).
 	UpdateCategory(ctx context.Context, arg UpdateCategoryParams) (Category, error)
 	// Merge semantics: a NULL argument leaves a column alone (coalesce) where the
 	// column cannot be cleared, and a column that can (occurred_time, category_id,
@@ -523,8 +524,9 @@ type Querier interface {
 	// sent, and the value is then NULL for a clear. Same one statement, same
 	// last-write-wins per field; the pattern for every later clearable column.
 	//
-	// updated_at is set here because the baseline has no trigger, and from the
-	// database's own clock (BOOTSTRAP.md §5.1).
+	// updated_at moves only when a column's value does (#137; the row-wise IS DISTINCT FROM
+	// as in UpdateExpense), so a {} or a resend of the stored values is a no-op
+	// (BOOTSTRAP.md §4), and from the database's own clock (BOOTSTRAP.md §5.1).
 	UpdateHousehold(ctx context.Context, arg UpdateHouseholdParams) (Household, error)
 	// Merge semantics (BOOTSTRAP.md §4): a NULL argument leaves its column alone,
 	// in one statement, so a rename and a deactivation sent by two writers both
@@ -534,8 +536,9 @@ type Querier interface {
 	// the caller answers all three NOT_FOUND. A 23505 on pockets_household_name_idx
 	// is a rename into a held name.
 	//
-	// updated_at is set here because the baseline has no trigger, and from the
-	// database's own clock (BOOTSTRAP.md §5.1).
+	// updated_at moves only when a column's value does (#137; the row-wise IS DISTINCT FROM
+	// as in UpdateExpense), so a {} or a resend of the stored values is a no-op
+	// (BOOTSTRAP.md §4), and from the database's own clock (BOOTSTRAP.md §5.1).
 	UpdatePocket(ctx context.Context, arg UpdatePocketParams) (Pocket, error)
 	// User settings (PRD S4). A User changes only their own row, so every statement
 	// here filters on BOTH ids in SQL: users is Household-scoped, and a query that
@@ -546,8 +549,9 @@ type Querier interface {
 	// in one statement, so two writers of different fields both land. None of the
 	// four columns is nullable, so coalesce cannot be mistaken for "clear".
 	//
-	// updated_at is set here because the baseline has no trigger, and from the
-	// database's own clock (BOOTSTRAP.md §5.1).
+	// updated_at moves only when a column's value does (#137; the row-wise IS DISTINCT FROM
+	// as in UpdateExpense), so a {} or a resend of the stored values is a no-op
+	// (BOOTSTRAP.md §4), and from the database's own clock (BOOTSTRAP.md §5.1).
 	UpdateUser(ctx context.Context, arg UpdateUserParams) (User, error)
 	// The sign-in handle. The unique index users_email_idx (lower(email), live rows
 	// only) is the race-free answer to "is it taken": a violation is EMAIL_TAKEN,

@@ -18,7 +18,14 @@ UPDATE users SET
     locale            = coalesce($2, locale),
     time_zone         = coalesce($3, time_zone),
     appearance        = coalesce($4, appearance),
-    updated_at        = now()
+    updated_at        = CASE WHEN (user_display_name, locale, time_zone, appearance)
+                              IS DISTINCT FROM (
+                                  coalesce($1, user_display_name),
+                                  coalesce($2, locale),
+                                  coalesce($3, time_zone),
+                                  coalesce($4, appearance)
+                              )
+                         THEN now() ELSE updated_at END
 WHERE id = $5 AND household_id = $6 AND deleted_at IS NULL
 RETURNING id, household_id, email, user_display_name, locale, time_zone, appearance, created_at, updated_at, deleted_at
 `
@@ -41,8 +48,9 @@ type UpdateUserParams struct {
 // in one statement, so two writers of different fields both land. None of the
 // four columns is nullable, so coalesce cannot be mistaken for "clear".
 //
-// updated_at is set here because the baseline has no trigger, and from the
-// database's own clock (BOOTSTRAP.md §5.1).
+// updated_at moves only when a column's value does (#137; the row-wise IS DISTINCT FROM
+// as in UpdateExpense), so a {} or a resend of the stored values is a no-op
+// (BOOTSTRAP.md §4), and from the database's own clock (BOOTSTRAP.md §5.1).
 func (q *Queries) UpdateUser(ctx context.Context, arg UpdateUserParams) (User, error) {
 	row := q.db.QueryRow(ctx, updateUser,
 		arg.UserDisplayName,

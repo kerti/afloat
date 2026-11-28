@@ -227,6 +227,9 @@ describe("Commitments", () => {
     // The share bar (ruled 28 Nov 2026) is a picture the figures already say:
     // hidden from assistive technology, its fill the one bg-primary and the
     // share past 100% the one attention colour.
+    // The hero's card is --primary whatever the figures say (ruled 28 Nov 2026):
+    // a surface, not a tone, so it is out of this audit.
+    screen.getByRole("region", { name: "Left to spend today" }).remove();
     for (const bar of main.querySelectorAll("[data-testid=share-bar]")) {
       expect(bar).toHaveAttribute("aria-hidden", "true");
       bar.remove();

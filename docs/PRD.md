@@ -279,13 +279,20 @@ The first screen answers the core question with no navigation.
   infinity at the currency's own minor unit (whole rupiah for IDR: `203448.2758` reads `Rp203.448`,
   `-0.5` reads `-Rp1`), so it never reads as more than the Household can spend. There is no larger
   display unit: the Rp1.000 floor was dropped on 2026-11-26 (it entered in Draft 1's synthesis and
-  has no recorded rationale). Negative is shown as negative, not clamped, and neutral.
-- **D2. State.** One of Afloat / Drifting / Taking on water, shown as the State's name and nothing
-  else: no colour, no gloss, no sentence about it. **The waterline treatment is not met in this slice**
-  (2026-11-27, R12): it arrives with the brand session (§9), which adds it and the three State colours
-  without a layout change. Always beside the numbers, never instead of them. Shown whenever the server
-  sends a State, and nothing when it sends none (fully committed, where there is no pace to read). While
-  the warm-up pins it, and on day one, it reads plain Afloat (Q-05, R13).
+  has no recorded rationale). Negative is shown as negative, not clamped, and neutral. It sits
+  in the disc of Home's **dial** (ruled 28 Nov 2026): one card whose ring is the Period (D8) and
+  whose disc carries the figure in its top two thirds and the sea in its bottom third (D2).
+- **D2. State.** One of Afloat / Drifting / Taking on water, **shown as a boat on the dial's sea**
+  (ruled 28 Nov 2026, replacing R12's name-only State): the sea holds the bottom third of the disc
+  whatever the State, and the boat sits in it at one of three fixed depths, the whole hull showing
+  when Afloat, the water nearly over the deck when Drifting, and only the cabin and mast above it
+  when Taking on water; the waves are a little rougher at each step. The sea and the boat settle as
+  Home opens and are then still. The State's name is for screen readers; on screen the boat is the
+  reading, beside the numbers and never instead of them. No colour and no sentence about it. Shown
+  whenever the server sends a State, and no boat and no sea when it sends none (fully committed,
+  where there is no pace to read). While the warm-up pins it, and on day one, it reads plain Afloat
+  (Q-05, R13). The maintainer ruled that the low boat stands for Taking on water as it is, against
+  `VISION.md` §4's reason for refusing "Sinking", on 28 Nov 2026.
 - **D3. Pace, in plain language.** "Rp420.000 ahead of pace", not a signed delta: the whole amount through
   the one money formatter, half-up, no abbreviation and no sign character. **Ahead of pace means
   under-spent** (Trajectory Variance above zero, less spent than the target line) and **behind pace means
@@ -294,13 +301,14 @@ The first screen answers the core question with no navigation.
   only while the server sends the variance: not on a Period's first day, when nothing has settled, and
   not while fully committed. The basis is money, never Buffer Days (R7). Localised Indonesian wording
   was ruled at PR 6's phone preview (Q-10, answered; `CONTEXT.md`'s id-ID table).
-- **D4. Baseline beside the adaptive figure.** Under the hero, **Today's allowance** and the
-  **Baseline** side by side, so an inflated allowance reads as borrowed from the Household's own
-  future rather than as found money; one name each, and no sentence about borrowing. No cap (Q-04).
-  **In fixed mode** the allowance is the baseline, so Today's allowance is shown **alone**, chosen from
-  the Household's `allowance_mode` and never by comparing amounts (the two are also equal in adaptive
-  mode on day one). While fully committed there is no Baseline, and the allowance is shown alone with
-  no wording about it. Both allowance figures are rounded as D1's hero is.
+- **D4. Baseline beside the adaptive figure.** **Today's allowance** is what the hero is out of,
+  a line under it ("of Rp312.500"), left out when the allowance is zero or less, since "of" nothing
+  or of a debt says nothing. The **Baseline** is at the dial card's foot, so an inflated allowance
+  reads as borrowed from the Household's own future rather than as found money; one name each, and
+  no sentence about borrowing. No cap (Q-04). **In fixed mode** the allowance is the baseline, so
+  there is no Baseline figure, chosen from the Household's `allowance_mode` and never by comparing
+  amounts (the two are also equal in adaptive mode on day one). While fully committed there is no
+  Baseline, with no wording about it. Both allowance figures are rounded as D1's hero is.
 - **D5. Cumulative chart.** Target line versus actual line for the Period. The target line kinks at
   Budget changes and never redraws history (`CONTEXT.md`). Today is drawn as in-progress. **On the
   wire** (`GET /dashboard`'s `chart.points`, #155 PR 8): one point for each day of the Period, first to
@@ -343,12 +351,20 @@ The first screen answers the core question with no navigation.
   uncategorised row follows any row it ties with, and never links to "Needs a category". An
   inactive row wears the muted title and the "Inactive" badge. A section with no row says what will
   appear. Over-allocation is presented as information, never as a violation.
-- **D8. Remaining Daily Pool and Days Remaining**, as supporting figures. The Remaining Daily Pool is
+- **D8. Remaining Daily Pool and Days Remaining**, as supporting figures: the Remaining Daily Pool
+  at the dial card's foot beside the Baseline, and Days Remaining as the dial's ring. The ring has a
+  tick for each day of the Period, a thin arc for the days gone by with a marker at Today labelled
+  "<n> days left", and a thick arc for the share of the Daily Pool spent, labelled "<percent> spent",
+  whose part past the whole laps the ring again in the attention colour, as a share bar does past
+  100%; the two labels curve along the ring and run away from each other, so they never overlap.
+  The Remaining Daily Pool is
   `P' − S_settled` (`CONTEXT.md`): what the Available Pool still holds after the spending that has settled
   before Today, the number the adaptive Today's Allowance is made of, so it reconciles with the Days
   Remaining and the allowance beside it. "Remaining Budget" was the scratch draft's name for it; Budget is the whole plan, so
   the name is retired (Q-26).
-- **D9. No gauge chart.**
+- **D9. No gauge chart.** The dial (D1) is not one: its ring is the Period and the Daily Pool's
+  share, both said in words on it, and its sea and boat move in three fixed steps, one for each
+  State, never with a figure.
 
 > **Q-11 resolved (2026-09-13), reversed (2026-11-24): the dashboard is the launch surface.** The
 > 2026-09-13 ruling made capture the default route on mobile. The maintainer reversed it on
@@ -382,7 +398,10 @@ The first screen answers the core question with no navigation.
   at the currency's minor unit, on the digits of the server's string; that is formatting, not
   arithmetic. The one exception is D6's and D7's share of an allocation, a whole percent worked
   out on the digits and drawn as a bar, ruled 28 Nov 2026: a ratio of two wire figures for display,
-  never a figure the trajectory reads.) One source of truth. `contract/testdata/trajectory.json` carries the `CONTEXT.md`
+  never a figure the trajectory reads. The dial's "<percent> spent" (D8) is the same kind of ratio,
+  Today's `actual` over the last chart point's `target`, worked out in the client **for now**: the
+  maintainer means to move it to the server, and `Chart`'s contract description, which says the
+  client derives no figure from the points, is to be squared then.) One source of truth. `contract/testdata/trajectory.json` carries the `CONTEXT.md`
   reference rows as a fixture the backend's unit tests read.
 
 ### 8.2 Contract
@@ -538,6 +557,7 @@ its due date by hand. Adding it back later is a non-breaking contract change plu
 
 | Date | Change |
 |---|---|
+| 2026-11-28 | Home's dial, Capture's Category, the row chevron (polish pass; the frontend only, no contract, schema or backend change). **The hero becomes a dial** (D1, D2, D4, D8, D9): one card holding a ring for the Budget Period (a tick a day, the days gone by to a marker at Today labelled "<n> days left", the Daily Pool's share spent as a thick arc labelled "<percent> spent", the part past the whole in `--attention`), a disc with the label, the figure and its "of <Today's allowance>" line in its top two thirds and the sea in its bottom third, then the pace sentence and the Baseline and Remaining Daily Pool at its foot. Today's allowance and Days Remaining are no longer rows; the "of" line is left out when the allowance is zero or less. **The State is a boat** riding the sea at one of three fixed depths, replacing R12's name-only State (now for screen readers); the waterline the brand session was to bring (§9) arrives here, and its colours (`--sky`, `--sea`, `--sea-back`, `--sea-crest`, `--marker`) are provisional until that session. The sea and the boat settle over about three seconds as Home opens, then are still, and do not move at all under reduced motion. The maintainer ruled the low boat stands for Taking on water as it is, against `VISION.md` §4's reason for refusing "Sinking". The share spent is an N5a exception worked out in the client for now; the maintainer means to move it to the server. **Capture's Category starts at "No Category"**, as the edit route does for an Expense without one, so the two read alike (an exception to "a picker starts blank"). **Rows that go to another screen share `RowChevron`.** All ruled by the maintainer at the phone preview. |
 | 2026-11-28 | Share bars and one figure form on Home (polish pass; the frontend only, no contract, schema or backend change). **The maintainer overrules R15 and R16's "no bar, no share, no colour"**, whose recorded reason was that a bar is "a gauge by another name (D9) and a verdict by shape (§10)": a row that has an allocation now reads **"<spent> / <allocation> (<percent>)"**, D6's paid for spent, over a **share bar** (`ShareBar`), on every Commitment row, the Commitments totals row and each By Category row with an allocation above zero; By Pocket, the uncategorised row and a Category with no allocation keep spent alone. The percent is whole and toward zero (99.6% reads 99%), absent against an allocation of zero, and grouped as the locale groups. The bar's track runs to 125% with a tick at 100%, the share past 100% wears `--attention` and the fill stops at the track's end; it is hidden from assistive technology, since the figures say it. D6's still-due words ("still due", "Paid", "more than you set aside") and the "paid of" and "of <allocation>" lines are retired; `still_due` stays on the wire. N5a gains the share as its one exception: a ratio of two wire figures for display, worked out on the digits. The longer figure is set a step smaller (`FigureRow` `small`). **The UI typeface is Plus Jakarta Sans** (Uruni's), replacing Figtree, whose figures read too rounded: self-hosted variable `woff2` from `@fontsource-variable/plus-jakarta-sans@5.3.0`, SIL OFL 1.1, weights 200 to 800. All ruled by the maintainer at the phone preview. |
 | 2026-11-27 | The chart (issue #155, PR 8 of 9: the contract, the backend and the Home section). **R17 (D5):** `GET /dashboard`'s `Dashboard` gains the optional `chart` (`Chart`: `points`, an array of `ChartPoint`: `date`, `target`, `actual`, `in_progress`), strictly additive, omitted with `trajectory` while there is no Monthly Budget and never `null`. There is one point for every Period Day, in date order, and both figures are **cumulative at the end of the day** (`T(j)` of CONTEXT's §Mid-period Budget changes, so `trajectory_variance` is the target on the point before Today's, less what has settled, and Today's point is about one `baseline_daily_budget` further on, to 0.0001, since the target is half-up and the baseline floored): `target` is the existing target line, kinked where the Daily Pool changed on or before Today and with every slope clamped at zero, half-up at four decimals, folded from nothing new (`Assembly` keeps the line it built); `actual` is the **daily bucket's** spend summed from the first day, from the per-day totals `FoldSpend` already makes of `PeriodSpend`'s rows (never the breakdown rows, which count a Commitment's Expense under its Pocket), present for days up to and including Today and absent after, so a future-dated Expense, and a future-dated refund, are on no point before their date; `in_progress` is `true` on Today's point only and absent elsewhere. **Fully committed:** the chart is still sent, its target flat (zero from day 1, or at the value the line had reached when the pool was cut to at or below it), because the chart is a statement about spending and `trajectory` is what says there is no pace. **No new SQL statement, no schema change, no `make db-reset`, no new environment variable**; `dashboard.json` gains `chart` for every row with a Monthly Budget, worked out in exact fractions from the rows and cross-checked against each row's own variance and spend. **`recharts` (3.x, with `react-is` 19 as its peer) is added, approved by R17 as D5 asked:** BOOTSTRAP §3 named it and the repository did not carry it. It is a lazy chunk behind one themed chart card, imported by `ChartCardImpl.tsx` alone (a test holds it), drawn as two lines told apart by line style and not colour (D9), with Today's last stretch dashed and ending in an open dot, 12px axis text, Y ticks in the currency's digits with no symbol (the one formatter) and X ticks the Period's first and last day from the date strings; the card is a `role="img"` named by the pace sentence beside a visually hidden table of the same `points`, with Recharts' keyboard layer off. Home's order is the figure, the allowance, what is left, the State and the pace, **the chart** under the title **This Period**, then By Category and By Pocket. **The 25 Nov "no inline SVG" rule is recorded as an icon rule** (ui-conventions § Icons): a data graphic drawn by Recharts is not one. The chart card, its title and legend wording and its id-ID words (*target*, *aktual*, *periode anggaran ini*, *tanggal*) were **confirmed by the maintainer at the phone preview, 27 Nov 2026** (R18), as were the flat target while fully committed, the error boundary and `react-is` as a direct dependency. |
 | 2026-11-27 | Commitments (issue #155, PR 9 of 9: the contract, the backend and the Home section). **R16 (Q-20 answered, interim, in §11):** D6 reads per Budget Period, and **the annual-payment distortion is accepted until the plan object (§12)**: the month a yearly Commitment is paid shows the whole payment against a twelfth, and the other eleven show it unpaid, and "still due" is wrong for a payment made last month. `Dashboard` gains the optional `commitments` (`Commitments`: `commitments_budget`, `paid`, `still_due` and `items`, each `CommitmentFigure`: `category_id`, `category_display_name`, `active`, `allocation`, `paid`, `still_due`), strictly additive, money at four decimals, omitted with `trajectory` while there is no Monthly Budget and omitted while the Household has no live Commitment Category (never `null`, never an empty `items`). `items` holds every live Commitment Category, active or inactive, in the Category list's order, with the allocation in force Today (read as zero where none is in force for the viewer's Today, so the row stays); `commitments_budget` is their sum, the Commitments Budget the Daily Pool of Today was made of. `paid` is the live Commitment-bucket Expenses dated in the Period and on or before Today (the actual line's rule, so a future-dated payment, and a future-dated refund, are not paid until their day) and `still_due = allocation - paid`, **signed and never clamped**, in the totals as in the rows. No new statement: the fold reads `PeriodSpend`'s rows (the ones the hero is folded from), the Category list and `AllocationsAsOf` as of Today, in the one snapshot, so the panel and the Daily Pool cannot disagree about a Commitment; no schema change, no `make db-reset`. **D6 is reworded.** Home shows the section after the chart: a totals row first, then a row for each Commitment as a `FigureRow` with the still due as words ("Rp500.000 still due", "Paid", "Rp200.000 more than you set aside", chosen from the amount as it shows, so never "Rp0 still due") and the muted detail line "Rp1.500.000 paid of Rp2.000.000" under it; no colour, bar or tone. New id-ID terms (Commitments, paid, still due) are provisional. No client write needed a new invalidation: every write that moves an allocation, a Category or an Expense already refreshes the dashboard. |

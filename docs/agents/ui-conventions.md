@@ -136,40 +136,37 @@ tag each, so it has components only. A missing element is proposed first (see Ho
 
 **Home's figures** (Confirmed by the maintainer on the phone preview, 27 Nov 2026, for #155 PR 5, R18.)
 
-- `HeroFigure` (`components/HeroFigure.tsx`): the screen's one headline figure, Left to Spend Today. A
-  `section` labelled by its muted label (the Muted body role), over the figure in the **display role**:
-  bold, `tabular-nums`, centred, 36px. It is a labelled figure, not a live region (a refetch announces
-  nothing), neutral whatever its sign, never coloured, never clamped. **Its size steps down by the
-  length of the formatted string** (`lib/heroSize.ts`): 36px to 13 characters, 32px to 16, 28px to 19, 24px to 23 (the
-  worst case, `Rp9.999.999.999.999.999`, 16 integer digits, is about 300px of the 343px column), and
-  20px beyond, so it never wraps; the step is chosen from what is shown, never from the amount. No card
-  and no fill: the size is the prominence. (Uruni `web/src/screens/Home.tsx` hero and its `heroSize`,
-  36px/700 tabular, stepped by length down to 24px; Uruni fills the hero with a primary card, which
-  Afloat does not, to keep the figure neutral.)
-- `FigurePair` (`components/FigurePair.tsx`): up to two labelled figures side by side in one bordered
-  box (`rounded-md border px-3 py-2`), each a small muted label (the Hint role) over a medium
-  `tabular-nums` amount. Today's allowance beside the Baseline, or the allowance alone in fixed mode
-  or while fully committed. When either figure is longer than 15 characters both go on their own
-  lines, never a clipped or wrapped number. (Uruni `web/src/screens/Home.tsx` cash-flow card, a
-  two-column `dl` that drops to one column when either figure is wide; `components/Figures.tsx`.)
-- Days Remaining and the Remaining Daily Pool are `FigureRow`s in a `ListCard`: no new element.
-- **The State text and the pace sentence** (confirmed by the maintainer on the phone preview, 27 Nov
-  2026, for #155 PR 6). No new element: a `div` of layout classes only (a
-  column, `gap-1`) holding the State's name in the **Body role** (`BodyText`: "Afloat", "Drifting" or
-  "Taking on water") over the pace sentence in the **Muted body role** (`MutedText`: "Rp420.000 ahead of
-  pace", "Rp420.000 behind pace" or "On pace"). It follows the Days Remaining and Remaining Daily Pool
-  list, so the order of Home's questions is: the figure, the allowance, what is left, then how the
-  Period is reading. The State is words only: no colour, no pill, no icon, no gloss and no sentence
-  about it (the waterline and the three State colours arrive with the brand session, PRD §9); it is
-  not a live region, so a refetch announces nothing. Each line is there exactly when the server sent
-  its property (`state`, `trajectory_variance`), and neither is ever decided from a figure. The
-  sentence's amount is the one formatter's, half-up, whole currency units, never abbreviated ("Rp420k"
-  does not exist), and carries **no sign character**: the words are the direction (positive variance
-  is "ahead", negative "behind"). An amount that shows as zero reads "On pace", chosen from the
-  amount as displayed and never from the raw sign (`lib/pace.ts`; #155 R8). (Uruni
-  `web/src/screens/Home.tsx`: the hero's status tucked under it as plain labelled text, and `components/Badge.tsx`'s
-  "a word on the system's type", the pill of which Afloat does not take because a coloured or filled
-  State is a verdict; the roles are Afloat's own Body and Muted body.)
+- `HeroDial` (`components/HeroDial.tsx`): Home's hero, one card (`rounded-2xl bg-card hero-glass`)
+  holding a **dial** and the figures that support it (ruled by the maintainer at the phone preview,
+  28 Nov 2026, replacing `HeroFigure`, `FigurePair` and the Days Remaining and Remaining Daily Pool
+  rows). It is a `section` labelled by "Left to spend today", a labelled figure and not a live region.
+  - **The ring** is the Budget Period: a tick a day (every fifth longer), a thin arc for the days
+    gone by to a `--marker` triangle at Today, and a thick arc for the share of the Daily Pool spent
+    in `--primary`, whose part past the whole laps the ring again in `--attention`. Two labels curve
+    along the outside of the ring, "<n> days left" at the marker in `--marker` and "<percent> spent"
+    at the arc's end; each starts just clear of its own point and runs away from the other, so they
+    never overlap, and both are read once more, plainly, to a screen reader.
+  - **The disc**'s top two thirds hold the label (medium), the figure (the display role: bold,
+    `tabular-nums`, neutral whatever its sign, never coloured or clamped) and "of <Today's
+    allowance>" (muted), left out when the allowance is zero or less. Sizes are in `cqw`, shares of
+    the dial's width, so the words shrink with it. **The figure's size steps down by the length of
+    the formatted string** (`lib/heroSize.ts`), to fit the disc's chord at its line: 9.9cqw to 10
+    characters, 8.2 to 13, 7 to 16, 5.6 to 19, 4.6 to 24 (the worst case and its negative), 4
+    beyond; at a 304px dial 9.9cqw is 30px.
+  - **The sea** holds the disc's bottom third whatever the State; a boat (a small motor boat side on,
+    the hull in `--marker`, the cabin and mast in `--foreground`) rides it at one of three fixed
+    depths: the whole hull above the water when Afloat, the water nearly over the deck when Drifting,
+    only the cabin and mast above it when Taking on water. The waves are a little rougher at each
+    step. The sea and the boat settle as Home opens (about three seconds: the water arrives a little
+    high and rough, bobs down and calms, the boat riding and rocking with it), then are still, so
+    nothing moves behind the figure while it is read; under reduced motion they are drawn settled.
+    The drawing is hidden from assistive technology and the State's name is read instead. No sea and
+    no boat when the server sends no State.
+  - **Under the dial**, the pace sentence (Muted body, centred), then a rule and the supporting
+    figures in one row, each a muted label over a semibold `tabular-nums` amount: the Baseline
+    (adaptive mode only, and not while fully committed) and the Remaining Daily Pool.
+  (Uruni `web/src/screens/Home.tsx` hero card and its `heroSize`, stepped by length; the waterline is
+  `VISION.md` §4's identity. Its colours are provisional until the brand session, PRD §9.)
 - **The chart card (D5)** (R17 approved the card and `recharts`; its look, the "This Period" title,
   the error boundary and the flat target while fully committed confirmed by the maintainer on the
   phone preview, 27 Nov 2026, for #155 PR 8.) A
@@ -324,7 +321,7 @@ role table follows Uruni `docs/Design-System.md` § Typography.)
 | Section and dialog title | 18px (`text-lg`)                                          | semibold            | foreground                            | `SectionTitle`, `DialogTitle`: one look (Uruni H2, 600; ruled 22 Nov)                                                   |
 | Subsection label         | 14px (`text-sm`)                                          | semibold            | muted-foreground                      | `SubsectionLabel`: Uruni's grey semibold h3, one step under the section title (ruled 24 Nov 2026, #140 PR 1)            |
 | Brand                    | 18px (`text-lg`)                                          | semibold            | foreground                            | the top bar's "Afloat" link                                                                                             |
-| Hero figure              | 36px to 24px, stepped by length (20px past 23 characters) | bold                | foreground, never coloured            | `HeroFigure`: Left to Spend Today (Uruni's Balance / display role, 36px 700 tabular). Confirmed 27 Nov 2026 (#155 PR 5) |
+| Hero figure              | 9.9cqw to 4.6cqw of the dial, stepped by length (4cqw past 24 characters) | bold | foreground, never coloured | `HeroDial`: Left to Spend Today (Uruni's Balance / display role, tabular). Ruled 28 Nov 2026 (the dial) |
 | Body                     | 16px (base)                                               | regular             | foreground                            | `BodyText`, a list row's title, inputs, select values                                                                   |
 | Muted body               | 16px                                                      | regular             | muted-foreground                      | `MutedText`, `EmptyState`, `Loading`, `BackLink`, an inactive row's title                                               |
 | Label                    | 14px (`text-sm`)                                          | medium              | foreground                            | `Label`, buttons                                                                                                        |
@@ -446,7 +443,10 @@ role table follows Uruni `docs/Design-System.md` § Typography.)
   hover tint and a focus ring; its badges (Inactive) sit inside it; its accessible name names the
   record ("Edit OVO"), and its figure when the row shows one ("Edit Rent, Rp3,000,000", "Edit Transport,
   No allocation"), then ", inactive" when it is. (Confirmed by the maintainer, 23 Nov 2026, for #130 PR 3.) No per-row pencil, trash or ⋮ menu. A row that navigates to another screen ends
-  in a chevron; a row that opens a dialog does not. (Uruni `TransactionList`, list cards.)
+  in a chevron, always `RowChevron` (`components/RowChevron.tsx`: `CaretRight`, 16px, muted); a row
+  that opens a dialog does not, so the arrow keeps meaning "this goes somewhere". (Uruni
+  `TransactionList`, list cards, and `components/RowChevron.tsx`; the shared element confirmed by the
+  maintainer, 28 Nov 2026.)
 - **The create action** is one full-width button below the list ("Add a Pocket"), the same button the
   empty state offers. No header "+" and no floating button. (Uruni Locations.)
 - **An inactive Category on `/budget`** is listed only while it has a non-zero allocation in the
@@ -530,6 +530,9 @@ role table follows Uruni `docs/Design-System.md` § Typography.)
   account and otherwise leaves it blank; Afloat departs from it on purpose. A chosen Pocket that has
   gone inactive reads as blank, never as another Pocket the person did not pick. (Ruled 25 Nov 2026,
   #140 PR 3b.)
+- **Capture's Category starts at "No Category"**, not blank: the Category is optional, and the edit
+  route shows "No Category" for an Expense without one, so create and edit read alike. (Ruled by the
+  maintainer, 28 Nov 2026.)
 - **A popover uses the opaque card surface** (`bg-card`, `border`, `shadow-lg`): the date and time
   calendars, the `SearchSelect` list, the Radix `Select` list and the chart's touch tooltip alike. Never the glass of the bars,
   never transparent over the page. (Ruled 25 Nov 2026, #140 PR 3b.)

@@ -279,16 +279,17 @@ JSON. Blank means not yet in the UI.
 | Adaptive / Fixed (the allowance modes) | adaptif / tetap | approved 26 Nov 2026 (#155 PR 4) |
 | Baseline Daily Budget (as a user reads it: **Baseline**) | jatah dasar | approved 26 Nov 2026 (#155 PR 4, in the Allowance hint); first a figure label on Home (#155 PR 5) |
 | Left to Spend Today | sisa untuk dibelanjakan hari ini | approved 27 Nov 2026 (#155 PR 5), provisional |
-| Today's Allowance (as a figure label) | jatah harian hari ini | approved 27 Nov 2026 (#155 PR 5), provisional; "jatah harian" is the ruled word for the allowance |
-| Days Remaining | sisa hari | approved 27 Nov 2026 (#155 PR 5), provisional |
+| Today's Allowance (as a figure label) | jatah harian hari ini | approved 27 Nov 2026 (#155 PR 5), provisional; "jatah harian" is the ruled word for the allowance; off the screen since 28 Nov 2026 (the dial reads it as the hero's "of" line, "dari") |
+| Days Remaining | sisa hari | approved 27 Nov 2026 (#155 PR 5), provisional; off the screen as a label since 28 Nov 2026: the dial's ring says "<n> days left", id-ID "sisa <n> hari" (approved 28 Nov 2026, provisional) |
 | Remaining Daily Pool | sisa dana harian | approved 27 Nov 2026 (#155 PR 5), provisional; "dana harian" is the Daily Pool's word |
-| State names: Afloat / Drifting / Taking on water | aman / bocor / nyaris tenggelam | approved 27 Nov 2026 (#155 PR 6, Q-10); "nyaris tenggelam" (nearly sinking), never "tenggelam", which is terminal (VISION §4) |
+| State names: Afloat / Drifting / Taking on water | aman / bocor / nyaris tenggelam | approved 27 Nov 2026 (#155 PR 6, Q-10); "nyaris tenggelam" (nearly sinking), never "tenggelam", which is terminal (VISION §4); read to screen readers only on Home since 28 Nov 2026, where the dial's boat shows the State |
 | *ahead of pace* / *behind pace* / *On pace* | di depan laju / di belakang laju / sesuai laju | approved 27 Nov 2026 (#155 PR 6, Q-10); Buffer Days is not shown, so needs no word |
 | Target / Actual (the chart's two lines, as its legend and table read them) | target / aktual | approved 27 Nov 2026 (#155 PR 8), provisional; "target" is borrowed as it stands |
 | This Period (the chart's section title) | periode anggaran ini | approved 27 Nov 2026 (#155 PR 8), provisional; "periode anggaran" is the Period's word |
 | Date (the chart table's column) | tanggal | approved 27 Nov 2026 (#155 PR 8), provisional |
 | By Category / By Pocket (the Home sections) | per kategori / per kantong | approved 27 Nov 2026 (#155 PR 7), provisional |
-| *of* (an allocation: "of Rp1.500.000") | dari | approved 27 Nov 2026 (#155 PR 7), provisional; off the screen since 28 Nov 2026 (the share figure "<spent> / <allocation> (<percent>)" replaced it) |
+| *of* (an allocation: "of Rp1.500.000") | dari | approved 27 Nov 2026 (#155 PR 7), provisional; off the screen since 28 Nov 2026 (the share figure "<spent> / <allocation> (<percent>)" replaced it); back on the screen as the hero's "of <Today's allowance>" (28 Nov 2026) |
+| *spent* (the dial's ring: "<percent> spent") | terpakai ("<percent> terpakai") | approved 28 Nov 2026 (the dial), provisional |
 | Uncategorised (a Home row) | tanpa kategori | in the UI since the Expenses list (#140); first on Home (#155 PR 7), provisional |
 | Commitments (the Home section) | komitmen | "komitmen" is the Commitment (bucket)'s word; approved 27 Nov 2026 (#155 PR 9), provisional |
 | *paid* ("<amount> paid of <allocation>") / Paid (nothing still due) | dibayar / lunas | approved 27 Nov 2026 (#155 PR 9), provisional; "lunas" is paid in full, used for the one word that stands where an amount would; off the screen since 28 Nov 2026 (the share figure "<spent> / <allocation> (<percent>)" replaced it) |

@@ -66,9 +66,13 @@
   },
   "dashboard": {
     "leftToSpendToday": "Left to spend today",
-    "todaysAllowance": "Today's allowance",
+    "heroOf": "of {{amount}}",
+    "dial": {
+      "daysLeft_one": "{{count}} day left",
+      "daysLeft_other": "{{count}} days left",
+      "spent": "{{percent}} spent"
+    },
     "baseline": "Baseline",
-    "daysRemaining": "Days remaining",
     "remainingDailyPool": "Remaining Daily Pool",
     "state": {
       "afloat": "Afloat",

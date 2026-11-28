@@ -98,6 +98,14 @@
   --destructive: light-dark(#b4453c, #ec8b80);
   --destructive-foreground: oklch(0.985 0 0);
   --scrim: rgb(0 0 0 / 0.1);
+  /* Home's dial (HeroDial): the disc's sky, the sea, its back swell and crest,
+     and the boat's hull, the today marker and its label. PROVISIONAL until
+     the brand session (PRD §9). --marker on --card: light 6.0:1, dark 11:1. */
+  --sky: light-dark(#e9f3fa, #10202a);
+  --sea: light-dark(#1f74ac, #164e73);
+  --sea-back: light-dark(#5aa5d8, #1b5d88);
+  --sea-crest: light-dark(#a9d4f0, #5db2e8);
+  --marker: light-dark(#8a5a14, #e3cfa8);
   /* The top bar's glass (Uruni header-glass): a bright rim on the edge facing
      the content, a soft glow falling from it, and a light ink shadow. Uruni is
      light-only; dark keeps the rim and glow faint, or the bar would wear a

@@ -61,12 +61,12 @@ export function ExpenseForm({
   const storedAmount = editing ? roundMoney(expense.amount, expense.currency) : "";
   const initialAmount = storedAmount.startsWith("-") ? storedAmount.slice(1) : storedAmount;
   const initialRefund = storedAmount.startsWith("-");
-  const initialCategory = editing ? (expense.category_id ?? NO_CATEGORY) : "";
+  // An optional field starts at its "none" on create as on edit, so the two read alike.
+  const initialCategory = editing ? (expense.category_id ?? NO_CATEGORY) : NO_CATEGORY;
 
   const [amount, setAmount] = useState(initialAmount);
   const [refund, setRefund] = useState(initialRefund);
   const [pocketChoice, setPocketChoice] = useState<string | null>(null);
-  // "" is untouched; NO_CATEGORY is a deliberate "none".
   const [category, setCategory] = useState(initialCategory);
   const [description, setDescription] = useState(editing ? (expense.description ?? "") : "");
   const [date, setDate] = useState(editing ? expense.occurred_on : "");

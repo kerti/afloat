@@ -160,3 +160,18 @@
     display: none;
   }
 }
+
+/* Home's dial card: a card that takes glass's light rather than a bevel, a
+   soft highlight at the upper left, a faint inner glow and a card-sized lift
+   (Uruni web/src/index.css hero-glass). Solid, not see-through: over a flat
+   page there is nothing behind it to show. */
+@utility hero-glass {
+  background-image: radial-gradient(
+    120% 80% at 15% 0%,
+    rgb(255 255 255 / 0.18) 0%,
+    rgb(255 255 255 / 0) 55%
+  );
+  box-shadow:
+    inset 0 0 12px rgb(255 255 255 / 0.06),
+    0 8px 28px -6px var(--glass-shadow);
+}

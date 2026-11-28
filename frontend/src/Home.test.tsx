@@ -35,7 +35,19 @@ const signedIn = (dashboard?: Dashboard, mode: "adaptive" | "fixed" = "adaptive"
 
 const hero = async () =>
   within(await screen.findByRole("region", { name: enGB.dashboard.leftToSpendToday }));
+// The supporting figures sit at the card's foot: a dt and its dd.
 const figureOf = (label: string) => screen.getByText(label).closest("div")!;
+
+// A Period of `days` days with Today at `today` (0-based), the target line
+// ending at `pool` and `actual` spent through Today.
+const chartOf = (days: number, today: number, actual: string, pool: string) => ({
+  points: Array.from({ length: days }, (_, i) => ({
+    date: `2026-11-${String(i + 1).padStart(2, "0")}`,
+    target: i === days - 1 ? pool : "0.0000",
+    ...(i < today ? { actual: "0.0000" } : {}),
+    ...(i === today ? { actual, in_progress: true as const } : {}),
+  })),
+});
 
 async function home(state: State, path = "/") {
   server.use(...defaultHandlers(state));
@@ -81,67 +93,129 @@ describe("the hero", () => {
   it("steps its size down for the 16-digit worst case so it never wraps", async () => {
     await home(signedIn(dashboardOf({ left_to_spend_today: "9999999999999999.9999" })));
     const figure = await (await hero()).findByText("Rp9,999,999,999,999,999");
-    expect(figure.className).toContain("text-2xl");
+    expect(figure.className).toContain("text-[4.6cqw]");
     expect(figure.className).toContain("tabular-nums");
   });
 });
 
-describe("Today's allowance and the Baseline", () => {
-  it("are a pair in adaptive mode, each cut toward minus infinity", async () => {
-    await home(signedIn(dashboardOf({ baseline_daily_budget: "100000.9999" })));
-    expect(await screen.findByText("Today's allowance")).toBeInTheDocument();
-    expect(figureOf("Today's allowance")).toHaveTextContent("Rp203,448");
+describe("Today's allowance, under the hero, and the Baseline", () => {
+  it("reads as what the hero is out of, each cut toward minus infinity", async () => {
+    await home(
+      signedIn(
+        dashboardOf({
+          left_to_spend_today: "150000.9999",
+          todays_allowance: "203448.9999",
+          baseline_daily_budget: "100000.9999",
+        }),
+      ),
+    );
+    const of = (await hero()).getByText("of Rp203,448");
+    expect(of.className).toContain("tabular-nums");
+    expect(of.previousElementSibling).toHaveTextContent("Rp150,000");
+    expect(screen.queryByText("Today's allowance")).not.toBeInTheDocument();
     expect(figureOf("Baseline")).toHaveTextContent("Rp100,000");
   });
 
-  it("are still a pair in adaptive mode when the amounts are equal", async () => {
+  it("keeps the Baseline row in adaptive mode when the amounts are equal", async () => {
     await home(signedIn(dashboardOf({ todays_allowance: "100000.0000" })));
-    expect(await screen.findByText("Baseline")).toBeInTheDocument();
-    expect(figureOf("Today's allowance")).toHaveTextContent("Rp100,000");
+    expect((await hero()).getByText("of Rp100,000")).toBeInTheDocument();
     expect(figureOf("Baseline")).toHaveTextContent("Rp100,000");
   });
 
-  it("are the allowance alone in fixed mode, even when the amounts differ", async () => {
+  it("has no Baseline row in fixed mode, even when the amounts differ", async () => {
     await home(signedIn(dashboardOf({ todays_allowance: "100000.0000" }), "fixed"));
-    expect(await screen.findByText("Today's allowance")).toBeInTheDocument();
-    expect(figureOf("Today's allowance")).toHaveTextContent("Rp100,000");
+    expect((await hero()).getByText("of Rp100,000")).toBeInTheDocument();
     // The wire still carries a different baseline; mode, not amounts, decides.
     expect(screen.queryByText("Baseline")).not.toBeInTheDocument();
-    expect(screen.queryByText("Rp100,000", { selector: "dd" })).toBeInTheDocument();
   });
 
-  it("are the allowance alone when fully committed, with no word about the Baseline", async () => {
+  it("has no Baseline row when fully committed, with no word about it", async () => {
     const full = dashboardOf({ todays_allowance: "100000.0000" });
     delete full.trajectory!.baseline_daily_budget;
     await home(signedIn(full));
-    expect(await screen.findByText("Today's allowance")).toBeInTheDocument();
+    expect((await hero()).getByText("of Rp100,000")).toBeInTheDocument();
     expect(screen.queryByText("Baseline")).not.toBeInTheDocument();
     expect(screen.queryByText(/committed|plan|used/i)).not.toBeInTheDocument();
   });
 });
 
-describe("Days remaining and the Remaining Daily Pool", () => {
-  it("show the server's count and pool, the pool half-up where the allowance is cut", async () => {
+describe("the card's foot: the Baseline and the Remaining Daily Pool", () => {
+  it("shows the server's pool, half-up where the allowance is cut", async () => {
     await home(signedIn(dashboardOf({ remaining_daily_pool: "2999999.5000" })));
-    const days = (await screen.findByText("Days remaining")).closest("li")!;
-    expect(days).toHaveTextContent("17");
-    expect(screen.getByText("Remaining Daily Pool").closest("li")).toHaveTextContent("Rp3,000,000");
+    expect(await (await hero()).findByText("Remaining Daily Pool")).toBeInTheDocument();
+    expect(figureOf("Remaining Daily Pool")).toHaveTextContent("Rp3,000,000");
   });
 
-  it("imply no sum in fixed mode: no multiplication and no sentence linking the figures", async () => {
+  it("has the pool alone in fixed mode, with no sum implied", async () => {
     await home(signedIn(dashboardOf(), "fixed"));
-    await screen.findByText("Days remaining");
+    const pool = await screen.findByText("Remaining Daily Pool");
     expect(document.body.textContent).not.toMatch(/[×*]/);
-    // D8's list holds its two figures and nothing that links them.
-    const d8 = screen.getByText("Days remaining").closest("ul")!;
-    expect(within(d8).getAllByRole("listitem")).toHaveLength(2);
+    expect(within(pool.closest("dl")!).getAllByRole("term")).toHaveLength(1);
+  });
+
+  it("is in order, the Baseline first in adaptive mode", async () => {
+    await home(signedIn(dashboardOf()));
+    const pool = await screen.findByText("Remaining Daily Pool");
+    expect(
+      within(pool.closest("dl")!)
+        .getAllByRole("term")
+        .map((d) => d.textContent),
+    ).toEqual(["Baseline", "Remaining Daily Pool"]);
   });
 
   it("shows a negative pool as it is", async () => {
     await home(signedIn(dashboardOf({ remaining_daily_pool: "-1500.0000" })));
-    expect((await screen.findByText("Remaining Daily Pool")).closest("li")).toHaveTextContent(
-      "-Rp1,500",
-    );
+    await screen.findByText("Remaining Daily Pool");
+    expect(figureOf("Remaining Daily Pool")).toHaveTextContent("-Rp1,500");
+  });
+
+  it("has no disclosure and no Days remaining row: the ring says it", async () => {
+    await home(signedIn(dashboardOf()));
+    await screen.findByText("Remaining Daily Pool");
+    expect(screen.queryByRole("button", { name: "Details" })).not.toBeInTheDocument();
+    expect(screen.queryByText("Days remaining")).not.toBeInTheDocument();
+  });
+});
+
+describe('the hero\'s "of" line', () => {
+  it.each(["0.0000", "-45416.0000"])("is left out when Today's allowance is %s", async (a) => {
+    await home(signedIn(dashboardOf({ left_to_spend_today: a, todays_allowance: a })));
+    await screen.findByText("Remaining Daily Pool");
+    expect((await hero()).queryByText(/^of /)).not.toBeInTheDocument();
+  });
+});
+
+describe("the dial's ring", () => {
+  const withChart = (chart: ReturnType<typeof chartOf>, days_remaining: number): Dashboard => ({
+    ...dashboardOf({ days_remaining }),
+    chart,
+  });
+
+  it("says the days left and the share of the Daily Pool spent, toward zero", async () => {
+    await home(signedIn(withChart(chartOf(30, 13, "1999999.9999", "4000000.0000"), 17)));
+    const region = await hero();
+    expect(region.getAllByText("17 days left").length).toBeGreaterThan(0);
+    expect(region.getAllByText("49% spent").length).toBeGreaterThan(0);
+    // once for the eye, curved on the ring, and once for a screen reader
+    expect(region.getByText("17 days left, 49% spent")).toHaveClass("sr-only");
+  });
+
+  it("says one day in the singular, and a share past the whole as it is", async () => {
+    await home(signedIn(withChart(chartOf(30, 29, "4320000.0000", "4000000.0000"), 1)));
+    expect((await hero()).getByText("1 day left, 108% spent")).toBeInTheDocument();
+  });
+
+  it("has no share when there is no pool to read against", async () => {
+    await home(signedIn(withChart(chartOf(30, 13, "0.0000", "0.0000"), 17)));
+    const region = await hero();
+    expect(region.getAllByText("17 days left").length).toBeGreaterThan(0);
+    expect(region.queryByText(/spent/)).not.toBeInTheDocument();
+  });
+
+  it("has no ring labels without a chart", async () => {
+    await home(signedIn(dashboardOf()));
+    await screen.findByText("Remaining Daily Pool");
+    expect(screen.queryByText(/days? left|spent/)).not.toBeInTheDocument();
   });
 });
 
@@ -154,7 +228,7 @@ describe("with no Monthly Budget", () => {
       "/budget",
     );
     expect(screen.queryByRole("region", { name: "Left to spend today" })).not.toBeInTheDocument();
-    expect(screen.queryByText("Days remaining")).not.toBeInTheDocument();
+    expect(screen.queryByText("Remaining Daily Pool")).not.toBeInTheDocument();
   });
 });
 
@@ -247,12 +321,9 @@ describe("in Indonesian", () => {
     await home(state);
     const region = await screen.findByRole("region", { name: idID.dashboard.leftToSpendToday });
     expect(within(region).getByText("Rp203.448")).toBeInTheDocument();
-    expect(figureOf(idID.dashboard.todaysAllowance)).toHaveTextContent("Rp203.448");
+    expect(within(region).getByText("dari Rp203.448")).toBeInTheDocument();
     expect(figureOf(idID.dashboard.baseline)).toHaveTextContent("Rp100.000");
-    expect(screen.getByText(idID.dashboard.remainingDailyPool).closest("li")).toHaveTextContent(
-      "Rp3.458.621",
-    );
-    expect(idID.dashboard.todaysAllowance).toMatch(/jatah harian/i);
+    expect(figureOf(idID.dashboard.remainingDailyPool)).toHaveTextContent("Rp3.458.621");
     expect(idID.dashboard.baseline).toBe("Jatah dasar");
   });
 
@@ -288,7 +359,7 @@ describe("the State (D2): the name and nothing else", () => {
     const full = dashboardOf({ todays_allowance: "100000.0000" });
     delete full.trajectory!.baseline_daily_budget;
     await home(signedIn(full));
-    await screen.findByText("Days remaining");
+    await screen.findByText("Remaining Daily Pool");
     for (const [, word] of STATES) expect(mainText(word)).not.toBeInTheDocument();
     expect(screen.queryByText(/pace/i)).not.toBeInTheDocument();
   });
@@ -305,36 +376,33 @@ describe("the State (D2): the name and nothing else", () => {
     expect(screen.queryByText(/pace/i)).not.toBeInTheDocument();
   });
 
-  it("is the name only: no colour, no gloss, no sentence about the State, no live region", async () => {
+  it("is the name in the sea, uncoloured by verdict, with no sentence and no live region", async () => {
     await home(
       signedIn(dashboardOf({ state: "taking_on_water", trajectory_variance: "-350000.0000" })),
     );
     const word = await screen.findByText("Taking on water", { selector: "main p" });
-    const block = word.parentElement!;
-    for (const el of [word, block]) {
-      expect(el.className).not.toMatch(
-        /attention|destructive|primary|success|red|green|amber|orange|bg-|border/,
-      );
-    }
-    expect(block.querySelector("[aria-live],[role=status],[role=alert],svg,img")).toBeNull();
-    // The name and the pace sentence are the whole block.
-    expect(block.children).toHaveLength(2);
+    expect(word.className).not.toMatch(/attention|destructive|success|red|green|amber|orange/);
     expect(word.textContent).toBe("Taking on water");
+    const region = screen.getByRole("region", { name: "Left to spend today" });
+    expect(region.querySelector("[aria-live],[role=status],[role=alert]")).toBeNull();
+    // The sea is drawing only: hidden from assistive technology.
+    expect(region.querySelector("svg")).toHaveAttribute("aria-hidden", "true");
   });
 
-  it("comes after the supporting figures, beside the numbers and never instead of them", async () => {
+  it("sits in the dial with the figure, beside the numbers and never instead of them", async () => {
     await home(signedIn(dashboardOf({ state: "drifting", trajectory_variance: "-100000.0000" })));
     const word = await screen.findByText("Drifting", { selector: "main p" });
-    const pool = screen.getByText("Remaining Daily Pool");
-    expect(pool.compareDocumentPosition(word) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(screen.getByRole("region", { name: "Left to spend today" })).toBeInTheDocument();
+    const region = screen.getByRole("region", { name: "Left to spend today" });
+    expect(region).toContainElement(word);
+    expect(within(region).getByText("Rp203,448")).toBeInTheDocument();
+    expect(within(region).getByText("Remaining Daily Pool")).toBeInTheDocument();
   });
 });
 
 describe("the pace sentence (D3, R8)", () => {
   const pace = async (variance: string) => {
     await home(signedIn(dashboardOf({ state: "afloat", trajectory_variance: variance })));
-    await screen.findByText("Days remaining");
+    await screen.findByText("Remaining Daily Pool");
   };
 
   it("says ahead of pace for a variance above zero, which is less spent than the target", async () => {
@@ -412,7 +480,7 @@ describe("the D9 audit of the State and the pace", () => {
     "%s says nothing of fault, advice or score, and colours nothing",
     async (state, v) => {
       await home(signedIn(dashboardOf({ state, trajectory_variance: v })));
-      await screen.findByText("Days remaining");
+      await screen.findByText("Remaining Daily Pool");
       const main = document.querySelector("main")!;
       expect(main.textContent).not.toMatch(
         /overspen|over budget|failed|should|must|careful|warning|streak|score|%/i,
@@ -461,7 +529,7 @@ describe("the State and the pace in Indonesian (Q-10, ruled 27 Nov 2026)", () =>
 describe("what Home does not show yet", () => {
   it("has no State or pace without the server's, no chart, and no placeholder lines", async () => {
     await home(signedIn(dashboardOf()));
-    await screen.findByText("Days remaining");
+    await screen.findByText("Remaining Daily Pool");
     for (const word of [
       /Afloat$/,
       /Drifting/,

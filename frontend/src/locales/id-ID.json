@@ -66,9 +66,12 @@
   },
   "dashboard": {
     "leftToSpendToday": "Sisa untuk dibelanjakan hari ini",
-    "todaysAllowance": "Jatah harian hari ini",
+    "heroOf": "dari {{amount}}",
+    "dial": {
+      "daysLeft_other": "sisa {{count}} hari",
+      "spent": "{{percent}} terpakai"
+    },
     "baseline": "Jatah dasar",
-    "daysRemaining": "Sisa hari",
     "remainingDailyPool": "Sisa dana harian",
     "state": {
       "afloat": "Aman",

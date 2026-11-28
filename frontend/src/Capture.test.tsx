@@ -125,6 +125,14 @@ describe("Capture", () => {
     expect(toastMock).toHaveBeenCalledWith("Added -Rp450,000.", expect.anything());
   });
 
+  // PROPOSAL (polish 13): Capture's Category starts at "No Category", as the edit route does.
+  it("starts the Category at No Category, as the edit route shows a stored none", async () => {
+    server.use(...defaultHandlers(signedIn()));
+    renderApp("/capture");
+    await amount();
+    expect(categoryBox()).toHaveTextContent(enGB.capture.noCategory);
+  });
+
   it("offers active Pockets and Categories only, with a way back to no Category", async () => {
     const state = signedIn({
       pockets: [pocket("p-cash", "Cash"), pocket("p-gone", "Gone", false)],

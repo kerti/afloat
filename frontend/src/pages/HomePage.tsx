@@ -1,15 +1,15 @@
 import { useEffect, useState, type ReactNode } from "react";
+import type { TFunction } from "i18next";
 import { Trans, useTranslation } from "react-i18next";
 import { useLocation, useNavigate } from "react-router";
 import type { CategoryFigure, Dashboard, Me, PocketFigure } from "@/api/client";
 import { useDashboard } from "@/api/queries";
 import { ChartCard } from "@/components/ChartCard";
-import { FigurePair } from "@/components/FigurePair";
 import { Badge } from "@/components/Badge";
 import { FigureRow } from "@/components/FigureRow";
 import { ShareBar } from "@/components/ShareBar";
 import { Section } from "@/components/Form";
-import { HeroFigure } from "@/components/HeroFigure";
+import { HeroDial, type DialRing } from "@/components/HeroDial";
 import { ListCard } from "@/components/List";
 import { NoticeCard } from "@/components/NoticeCard";
 import { ErrorState, Loading } from "@/components/states";
@@ -134,43 +134,41 @@ function Figures({
       ? t("dashboard.pace.on")
       : t(`dashboard.pace.${pace.direction}`, { amount: pace.amount })
     : undefined;
-  const allowance = {
-    label: t("dashboard.todaysAllowance"),
-    value: formatAllowance(trajectory.todays_allowance, currency, locale),
-  };
-  // Fixed mode has one allowance, so one figure. In adaptive mode the Baseline
-  // sits beside it, unless there is none (fully committed): then nothing says so.
-  const pair =
-    mode === "adaptive" && trajectory.baseline_daily_budget !== undefined
-      ? [
-          allowance,
-          {
-            label: t("dashboard.baseline"),
-            value: formatAllowance(trajectory.baseline_daily_budget, currency, locale),
-          },
-        ]
-      : [allowance];
+  // Today's Allowance is what the hero is out of, so it sits under it, unless
+  // it is zero or less: "of" nothing, or of a debt, says nothing. The Baseline
+  // (adaptive only, and none while fully committed) and the Remaining Daily
+  // Pool sit at the card's foot; Days remaining is the ring's (ruled 28 Nov
+  // 2026). Fixed mode has no Baseline.
+  const baseline = mode === "adaptive" ? trajectory.baseline_daily_budget : undefined;
+  const figures = [
+    ...(baseline === undefined
+      ? []
+      : [{ label: t("dashboard.baseline"), value: formatAllowance(baseline, currency, locale) }]),
+    {
+      label: t("dashboard.remainingDailyPool"),
+      value: formatMoney(trajectory.remaining_daily_pool, currency, locale),
+    },
+  ];
+  const of =
+    compareMoney(trajectory.todays_allowance, "0") === 1
+      ? t("dashboard.heroOf", {
+          amount: formatAllowance(trajectory.todays_allowance, currency, locale),
+        })
+      : undefined;
   return (
     <>
-      <HeroFigure
+      <HeroDial
         label={t("dashboard.leftToSpendToday")}
         figure={formatAllowance(trajectory.left_to_spend_today, currency, locale)}
+        of={of}
+        state={trajectory.state}
+        stateLabel={
+          trajectory.state === undefined ? undefined : t(`dashboard.state.${trajectory.state}`)
+        }
+        pace={paceSentence}
+        ring={chart && ringOf(chart.points, trajectory.days_remaining, t, locale)}
+        figures={figures}
       />
-      <FigurePair figures={pair} />
-      <ListCard>
-        <FigureRow label={t("dashboard.daysRemaining")}>{trajectory.days_remaining}</FigureRow>
-        <FigureRow label={t("dashboard.remainingDailyPool")}>
-          {formatMoney(trajectory.remaining_daily_pool, currency, locale)}
-        </FigureRow>
-      </ListCard>
-      {(trajectory.state !== undefined || pace) && (
-        <div className="flex flex-col gap-1">
-          {trajectory.state !== undefined && (
-            <BodyText>{t(`dashboard.state.${trajectory.state}`)}</BodyText>
-          )}
-          {paceSentence !== undefined && <MutedText>{paceSentence}</MutedText>}
-        </div>
-      )}
       {chart && (
         <Section id="chart" title={t("dashboard.chart.title")}>
           <ChartCard
@@ -228,6 +226,32 @@ function Figures({
       </Section>
     </>
   );
+}
+
+// The dial's ring, from the chart's points: the Period's length is theirs, the
+// pool is the target line's end and what is spent is Today's actual, so the
+// share is the Daily Pool's, Commitments apart. Worked out here for now; the
+// maintainer means to move it to the server (28 Nov 2026). The percent is
+// whole, toward zero, as a Share's; the arc's length is for drawing only.
+function ringOf(
+  points: NonNullable<Dashboard["chart"]>["points"],
+  daysRemaining: number,
+  t: TFunction,
+  locale: string,
+): DialRing {
+  const pool = points[points.length - 1]!.target;
+  const actual = points.find((p) => p.in_progress)?.actual;
+  const percent = actual === undefined ? null : percentOf(actual, pool);
+  return {
+    days: points.length,
+    daysRemaining,
+    spent: percent === null ? null : Number(actual) / Number(pool),
+    daysLeftLabel: t("dashboard.dial.daysLeft", { count: daysRemaining }),
+    spentLabel:
+      percent === null
+        ? null
+        : t("dashboard.dial.spent", { percent: formatPercent(percent, locale) }),
+  };
 }
 
 // What has gone against what was set aside, as "spent / allocation (pct)", and

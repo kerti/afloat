@@ -78,7 +78,8 @@ describe("By Category", () => {
     expect(rows[2]).toHaveTextContent("Snacks");
     // After the supporting figures, the last thing on Home for now.
     const main = document.querySelector("main")!.textContent!;
-    expect(main.indexOf("Days remaining")).toBeLessThan(main.indexOf("By Category"));
+    expect(main.indexOf("Remaining Daily Pool")).toBeGreaterThanOrEqual(0);
+    expect(main.indexOf("Remaining Daily Pool")).toBeLessThan(main.indexOf("By Category"));
     expect(main.indexOf("By Category")).toBeLessThan(main.indexOf("By Pocket"));
   });
 
@@ -187,7 +188,7 @@ describe("By Pocket", () => {
 
   it("has no detail line: a Pocket has no allocation", async () => {
     await home(dashboardOf({ pockets: [wallet] }));
-    expect(screen.queryByText(/^of /)).not.toBeInTheDocument();
+    expect(section("By Pocket").queryByText(/\//)).not.toBeInTheDocument();
   });
 
   it("wears an inactive Pocket as a muted title and the Inactive badge", async () => {
@@ -235,6 +236,9 @@ describe("both sections", () => {
     // The share bar (ruled 28 Nov 2026) is a picture the figures already say:
     // hidden from assistive technology, its fill the one bg-primary and the
     // share past 100% the one attention colour.
+    // The hero's card is --primary whatever the figures say (ruled 28 Nov 2026):
+    // a surface, not a tone, so it is out of this audit.
+    screen.getByRole("region", { name: "Left to spend today" }).remove();
     for (const bar of main.querySelectorAll("[data-testid=share-bar]")) {
       expect(bar).toHaveAttribute("aria-hidden", "true");
       bar.remove();

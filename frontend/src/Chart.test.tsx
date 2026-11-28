@@ -115,7 +115,7 @@ describe("the chart card", () => {
 
   it("is absent when the server sent no chart, and nothing says so", async () => {
     await home(signedIn(dashboardOf(undefined)));
-    await screen.findByText("Days remaining");
+    await screen.findByText("Remaining Daily Pool");
     expect(
       screen.queryByRole("heading", { name: enGB.dashboard.chart.title }),
     ).not.toBeInTheDocument();

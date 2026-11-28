@@ -1,7 +1,7 @@
-import { CaretRight } from "@phosphor-icons/react";
 import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router";
+import { RowChevron } from "@/components/RowChevron";
 import { SubsectionLabel } from "@/components/Text";
 import { Button } from "@/components/ui/button";
 
@@ -13,16 +13,6 @@ import { Button } from "@/components/ui/button";
 
 const rowLink =
   "flex min-h-11 w-full items-center gap-3 px-3 py-2 text-left hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
-
-function Chevron() {
-  return (
-    <CaretRight
-      aria-hidden="true"
-      weight="regular"
-      className="size-4 shrink-0 text-muted-foreground"
-    />
-  );
-}
 
 export function DayGroup({ heading, children }: { heading: string; children: ReactNode }) {
   return (
@@ -70,7 +60,7 @@ export function ExpenseRow({
       {to !== undefined ? (
         <Link to={to} state={state} aria-label={label} className={rowLink}>
           {body}
-          <Chevron />
+          <RowChevron />
         </Link>
       ) : (
         <button type="button" aria-label={label} onClick={onOpen} className={rowLink}>
@@ -89,7 +79,7 @@ export function FilterRow({ to, children }: { to: string; children: ReactNode })
       <li>
         <Link to={to} className={rowLink}>
           <span className="min-w-0 flex-1">{children}</span>
-          <Chevron />
+          <RowChevron />
         </Link>
       </li>
     </ul>

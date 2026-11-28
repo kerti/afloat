@@ -7,9 +7,19 @@ import { cn } from "@/lib/utils";
 // as Uruni does (web/src/components/SectionLabel.tsx, SubsectionLabel.tsx,
 // github.com/kerti/uruni). `className` is for layout only.
 
-/** The screen title: the one h1 on every screen. */
-export function PageTitle({ className, ...props }: ComponentProps<"h1">) {
-  return <h1 className={cn("text-xl font-semibold", className)} {...props} />;
+/** The screen title: the one h1 on every screen. `visuallyHidden` keeps it for
+ * screen readers on a screen whose tab already names it (Home). */
+export function PageTitle({
+  className,
+  visuallyHidden,
+  ...props
+}: ComponentProps<"h1"> & { visuallyHidden?: boolean }) {
+  return (
+    <h1
+      className={cn(visuallyHidden ? "sr-only" : "text-xl font-semibold", className)}
+      {...props}
+    />
+  );
 }
 
 /** The title that opens a section of a screen. */

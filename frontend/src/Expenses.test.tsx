@@ -256,6 +256,8 @@ describe("Expenses", () => {
 describe("The uncategorised surface", () => {
   const needs = (n: number) => `Needs a category (${n})`;
   const path = () => screen.getByTestId("location").textContent;
+  const filtered = () =>
+    screen.findByRole("heading", { level: 1, name: enGB.expenses.needsCategoryTitle });
   const withBoth = () =>
     signedIn({
       expenses: [
@@ -298,6 +300,7 @@ describe("The uncategorised surface", () => {
 
     await user.click(await list().findByRole("link", { name: needs(2) }));
     await list().findByText(enGB.expenses.uncategorisedFilter);
+    await filtered();
     expect(path()).toBe("/expenses?uncategorised=true");
     expect(state.expenseListQueries).toContain("uncategorised=true");
     expect(list().getByRole("link", { name: enGB.expenses.allExpenses })).toBeInTheDocument();
@@ -320,7 +323,7 @@ describe("The uncategorised surface", () => {
       ),
     );
     renderApp("/expenses?uncategorised=true");
-    await shown();
+    await filtered();
 
     expect(await screen.findByText(enGB.expenses.uncategorisedEmpty)).toBeInTheDocument();
   });
@@ -330,9 +333,13 @@ describe("The uncategorised surface", () => {
     server.use(...defaultHandlers(state));
     const user = userEvent.setup();
     renderApp("/expenses?uncategorised=true");
-    await shown();
+    await filtered();
 
     await user.click(await list().findByRole("link", { name: "Edit Coffee, Rp10,000" }));
+    // Its way back names the filtered view it came from, not the whole list.
+    expect(
+      await screen.findByRole("link", { name: enGB.expenses.needsCategoryTitle }),
+    ).toHaveAttribute("href", "/expenses?uncategorised=true");
     await user.click(await screen.findByRole("combobox", { name: enGB.fields.category }));
     await user.click(await screen.findByRole("option", { name: "Eating out" }));
     await user.click(screen.getByRole("button", { name: enGB.expenses.save }));

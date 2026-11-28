@@ -4,6 +4,7 @@ import type { ApiError, CategoryList, Expense, Me, PocketList } from "@/api/clie
 import { errorMessage } from "@/api/errors";
 import { CheckboxRow } from "@/components/CheckboxRow";
 import { DateField } from "@/components/DateField";
+import { DetailActions, type DetailAction } from "@/components/DetailActions";
 import { Field, Form } from "@/components/Form";
 import { MoneyInput } from "@/components/MoneyInput";
 import { FieldError } from "@/components/Text";
@@ -35,6 +36,7 @@ export function ExpenseForm({
   onClearError,
   onSubmit,
   recordActions,
+  recordError,
 }: {
   me: Me;
   mode: "create" | "edit";
@@ -46,9 +48,10 @@ export function ExpenseForm({
   error: ApiError | null;
   onClearError: () => void;
   onSubmit: (values: ExpenseValues) => void;
-  /** Edit only: the record-level acts (DetailActions), placed between the
-   * fields and Save, as an edit dialog places them above its footer. */
-  recordActions?: ReactNode;
+  /** Edit only: the record-level acts (Delete), on one row with Save below a
+   * hairline, and the failure of one above them. */
+  recordActions?: DetailAction[];
+  recordError?: ReactNode;
 }) {
   const { t } = useTranslation();
   const dayHeading = useDayHeading(me.today);
@@ -138,6 +141,18 @@ export function ExpenseForm({
   const dateMessage = serverMessage("date");
   const descriptionMessage = serverMessage("description");
   const formMessage = error && serverField === null ? errorMessage(t, error) : null;
+
+  const submitButton = (
+    <Button type="submit" className={recordActions ? "min-w-0" : "w-full"} disabled={pending}>
+      {mode === "create"
+        ? pending
+          ? t("capture.adding")
+          : t("capture.add")
+        : pending
+          ? t("expenses.saving")
+          : t("expenses.save")}
+    </Button>
+  );
 
   function submit(e: FormEvent) {
     e.preventDefault();
@@ -276,16 +291,12 @@ export function ExpenseForm({
         {dateMessage && <FieldError id="expense-date-error">{dateMessage}</FieldError>}
       </Field>
       {formMessage && <FieldError>{formMessage}</FieldError>}
-      {recordActions}
-      <Button type="submit" className="w-full" disabled={pending}>
-        {mode === "create"
-          ? pending
-            ? t("capture.adding")
-            : t("capture.add")
-          : pending
-            ? t("expenses.saving")
-            : t("expenses.save")}
-      </Button>
+      {recordError}
+      {recordActions ? (
+        <DetailActions actions={recordActions} primary={submitButton} />
+      ) : (
+        submitButton
+      )}
     </Form>
   );
 }

@@ -217,6 +217,7 @@
       },
       "email": {
         "heading": "Email",
+        "current": "Signed in as {{email}}",
         "newEmail": "New email",
         "currentPassword": "Current password",
         "submit": "Change email",
@@ -327,6 +328,7 @@
     "saving": "Saving…",
     "inactiveOption": "{{name}} (inactive)",
     "needsCategory": "Needs a category ({{count}})",
+    "needsCategoryTitle": "Needs a category",
     "allExpenses": "All Expenses",
     "uncategorisedFilter": "Expenses with no Category.",
     "uncategorisedEmpty": "No Expenses are missing a Category.",

@@ -14,7 +14,7 @@ import { NoticeCard } from "@/components/NoticeCard";
 import { ErrorState, Loading } from "@/components/states";
 import { BodyText, EmptyState, MutedText, PageTitle } from "@/components/Text";
 import { TextLink } from "@/components/TextLink";
-import { formatAllowance, formatMoney } from "@/lib/money";
+import { compareMoney, formatAllowance, formatMoney } from "@/lib/money";
 import { stillDueOf } from "@/lib/commitment";
 import { paceOf } from "@/lib/pace";
 import { routes } from "@/lib/routes";
@@ -36,7 +36,7 @@ function foundedPocket(state: unknown): string | null {
 // the pace sentence are words only (R12), then the chart (D5: the server's
 // points, drawn, with the pace sentence as its name), then Commitments (R16,
 // per Budget Period), then By Category and By Pocket (R15); each is there
-// exactly when the server sent it. The Shell around it carries the app name and sign-out.
+// exactly when the server sent it. The Shell around it carries the app name.
 export function HomePage({ me }: { me: Me }) {
   const { t, i18n } = useTranslation();
   const dashboard = useDashboard();
@@ -54,7 +54,9 @@ export function HomePage({ me }: { me: Me }) {
 
   return (
     <>
-      <PageTitle>{t("home.title")}</PageTitle>
+      {/* The Home tab is lit and the hero says what the screen is, so the
+          title is there for screen readers only (ruled 27 Nov 2026). */}
+      <PageTitle visuallyHidden>{t("home.title")}</PageTitle>
       {pocket !== null && (
         <NoticeCard dismissLabel={t("home.founded.dismiss")} onDismiss={() => setPocket(null)}>
           <BodyText>
@@ -192,7 +194,7 @@ function Figures({
               currency={currency}
               locale={locale}
             />
-            {commitments.items.map((c) => (
+            {commitments.items.filter(shown).map((c) => (
               <CommitmentRow
                 key={c.category_id}
                 label={c.category_display_name}
@@ -276,6 +278,13 @@ function CommitmentRow({
       {status}
     </FigureRow>
   );
+}
+
+// An inactive Commitment with nothing set aside and nothing paid says nothing,
+// so it is left out, as /budget leaves out an inactive Category without an
+// allocation (ruled 27 Nov 2026). The Total still counts every row.
+function shown(c: NonNullable<Dashboard["commitments"]>["items"][number]): boolean {
+  return c.active || compareMoney(c.allocation, "0") !== 0 || compareMoney(c.paid, "0") !== 0;
 }
 
 // A section's rows, or the sentence that says what will appear (T12): the

@@ -25,3 +25,11 @@ export const legacyRedirects = {
   userSettings: "/settings/user",
   pockets: "/pockets",
 } as const;
+
+// Router state an Expense row carries from the uncategorised view, so the edit
+// route's back link leads there rather than to the whole list.
+export const fromUncategorised = { from: "uncategorised" } as const;
+
+export function cameFromUncategorised(state: unknown): boolean {
+  return (state as { from?: unknown } | null)?.from === fromUncategorised.from;
+}

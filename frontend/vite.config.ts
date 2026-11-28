@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
@@ -47,8 +48,33 @@ const pwa = VitePWA({
   },
 });
 
+// The build the header names (Uruni's AppVersion). The SPA is embedded in the
+// Go binary it ships with, so the version can be fixed here at build time:
+// AFLOAT_VERSION when a release sets it, else a tag on HEAD, else "dev" and
+// the short commit, as Uruni shows an untagged build. No git, plain "dev".
+function git(...args: string[]): string | null {
+  try {
+    return execFileSync("git", args, { stdio: ["ignore", "pipe", "ignore"] })
+      .toString()
+      .trim();
+  } catch {
+    return null;
+  }
+}
+
+function appVersion(): string {
+  if (process.env.AFLOAT_VERSION) return process.env.AFLOAT_VERSION;
+  const tag = git("describe", "--tags", "--exact-match");
+  if (tag) return tag;
+  const commit = git("rev-parse", "--short=7", "HEAD");
+  return commit ? `dev (${commit})` : "dev";
+}
+
 export default defineConfig({
   plugins: [react(), tailwindcss(), pwa],
+  define: {
+    __APP_VERSION__: JSON.stringify(appVersion()),
+  },
   resolve: {
     alias: {
       "@": path.resolve(import.meta.dirname, "./src"),

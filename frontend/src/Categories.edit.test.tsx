@@ -438,6 +438,11 @@ describe("Show inactive Categories", () => {
     renderApp("/budget");
     const toggle = await screen.findByRole("checkbox", { name: "Show inactive Categories (2)" });
     expect(toggle).not.toBeChecked();
+    // Under the lists it widens, just above the create action.
+    const daily = screen.getByRole("heading", { level: 2, name: enGB.categories.dailyHeading });
+    const add = screen.getByRole("button", { name: enGB.categories.addHeading });
+    expect(daily.compareDocumentPosition(toggle) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(toggle.compareDocumentPosition(add) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(
       screen.getByRole("button", { name: /^Edit Old rent, .*, inactive$/ }),
     ).toBeInTheDocument();

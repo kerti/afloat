@@ -44,6 +44,14 @@ async function home(state: State, path = "/") {
   return view;
 }
 
+describe("the title", () => {
+  it("is there for screen readers only: the lit tab and the hero say what the screen is", async () => {
+    await home(signedIn());
+    const title = screen.getByRole("heading", { level: 1, name: "Home" });
+    expect(title).toHaveClass("sr-only");
+  });
+});
+
 describe("the hero", () => {
   it("is the server's Left to Spend Today, cut toward minus infinity at the rupiah", async () => {
     await home(signedIn(dashboardOf({ left_to_spend_today: "203448.9999" })));

@@ -215,6 +215,7 @@
       },
       "email": {
         "heading": "Email",
+        "current": "Masuk sebagai {{email}}",
         "newEmail": "Email baru",
         "currentPassword": "Kata sandi saat ini",
         "submit": "Ubah email",
@@ -325,6 +326,7 @@
     "saving": "Menyimpan…",
     "inactiveOption": "{{name}} (nonaktif)",
     "needsCategory": "Perlu kategori ({{count}})",
+    "needsCategoryTitle": "Perlu kategori",
     "allExpenses": "Semua pengeluaran",
     "uncategorisedFilter": "Pengeluaran tanpa kategori.",
     "uncategorisedEmpty": "Semua pengeluaran sudah punya kategori.",

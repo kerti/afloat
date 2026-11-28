@@ -15,14 +15,13 @@ import {
 } from "@/api/queries";
 import { errorMessage } from "@/api/errors";
 import { BackLink } from "@/components/BackLink";
-import { DetailActions } from "@/components/DetailActions";
 import { ExpenseForm } from "@/components/ExpenseForm";
 import { amountUntouched, expenseDiff, type ExpenseValues } from "@/lib/expenseValues";
 import { ErrorState, Loading } from "@/components/states";
 import { FieldError, PageTitle } from "@/components/Text";
 import { formatMoney } from "@/lib/money";
 import { toastError, toastSaved } from "@/lib/plainToast";
-import { routes } from "@/lib/routes";
+import { cameFromUncategorised, routes } from "@/lib/routes";
 import { toastUndoable } from "@/lib/undoToast";
 
 // An Expense is edited on a route, the Capture form in edit mode (#140 R17).
@@ -68,7 +67,11 @@ export function EditExpensePage({ me }: { me: Me }) {
 
   const head = (
     <>
-      <BackLink to={routes.expenses} label={t("expenses.title")} />
+      {cameFromUncategorised(location.state) ? (
+        <BackLink to={routes.uncategorisedExpenses} label={t("expenses.needsCategoryTitle")} />
+      ) : (
+        <BackLink to={routes.expenses} label={t("expenses.title")} />
+      )}
       <PageTitle>{t("expenses.editTitle")}</PageTitle>
     </>
   );
@@ -182,22 +185,16 @@ export function EditExpensePage({ me }: { me: Me }) {
           if (update.error) update.reset();
         }}
         onSubmit={onSubmit}
-        recordActions={
-          <>
-            {deleteErr && <FieldError>{errorMessage(t, deleteErr)}</FieldError>}
-            <DetailActions
-              actions={[
-                {
-                  key: "delete",
-                  label: t("expenses.delete"),
-                  tone: "destructive",
-                  disabled: remove.isPending || update.isPending,
-                  onClick: onDelete,
-                },
-              ]}
-            />
-          </>
-        }
+        recordError={deleteErr && <FieldError>{errorMessage(t, deleteErr)}</FieldError>}
+        recordActions={[
+          {
+            key: "delete",
+            label: t("expenses.delete"),
+            tone: "destructive",
+            disabled: remove.isPending || update.isPending,
+            onClick: onDelete,
+          },
+        ]}
       />
     </>
   );

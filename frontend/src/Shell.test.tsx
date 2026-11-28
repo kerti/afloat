@@ -24,12 +24,15 @@ describe("the Shell", () => {
     const bar = await screen.findByRole("banner");
     expect(bar).toHaveClass("fixed");
     expect(within(bar).getByRole("link", { name: "Afloat" })).toHaveAttribute("href", "/");
-    expect(within(bar).getByRole("button", { name: enGB.shell.signOut })).toBeInTheDocument();
+    // The build under the name; Sign out is not in the bar but ends Settings.
+    expect(within(bar).getByText("dev (test)")).toBeInTheDocument();
+    expect(within(bar).queryByRole("button", { name: enGB.shell.signOut })).not.toBeInTheDocument();
     const tabs = screen.getByRole("navigation", { name: enGB.shell.mainNav });
     expect(tabs).toHaveClass("fixed");
 
     await user.click(await screen.findByRole("link", { name: "Settings" }));
     expect(screen.getByRole("main").firstElementChild).toHaveClass("max-w-xl");
+    expect(await screen.findByRole("button", { name: enGB.shell.signOut })).toBeInTheDocument();
     expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
   });
 
@@ -101,6 +104,41 @@ describe("the Shell", () => {
     );
   });
 
+  it("opens a new screen at its top, and a tap on the tab already showing reloads it", async () => {
+    server.use(...defaultHandlers({ signedIn: true, me: alice }));
+    const scrollTo = vi.spyOn(window, "scrollTo").mockImplementation(() => {});
+    let dashboards = 0;
+    const count = ({ request }: { request: Request }) => {
+      if (new URL(request.url).pathname === "/api/dashboard") dashboards++;
+    };
+    server.events.on("request:start", count);
+    const user = userEvent.setup();
+    renderApp("/");
+    const tabs = within(await screen.findByRole("navigation", { name: enGB.shell.mainNav }));
+    await waitFor(() => expect(dashboards).toBe(1));
+
+    await user.click(tabs.getByRole("link", { name: enGB.shell.tabs.settings }));
+    expect(scrollTo).toHaveBeenCalledWith(0, 0);
+    await user.click(tabs.getByRole("link", { name: enGB.shell.tabs.home }));
+    await waitFor(() => expect(dashboards).toBe(2));
+
+    scrollTo.mockClear();
+    await user.click(tabs.getByRole("link", { name: enGB.shell.tabs.home }));
+    expect(scrollTo).toHaveBeenCalledWith(0, 0);
+    await waitFor(() => expect(dashboards).toBe(3));
+    expect(screen.getByTestId("location").textContent).toBe("/");
+
+    server.events.removeListener("request:start", count);
+    scrollTo.mockRestore();
+  });
+
+  it("paints Capture's label over its raised square's shadow, as bright as the other labels", async () => {
+    server.use(...defaultHandlers({ signedIn: true, me: alice }));
+    renderApp("/");
+    const tabs = within(await screen.findByRole("navigation", { name: enGB.shell.mainNav }));
+    expect(tabs.getByText(enGB.shell.tabs.capture)).toHaveClass("relative");
+  });
+
   it("words the bar in Indonesian", async () => {
     server.use(...defaultHandlers({ signedIn: true, me: { ...alice, locale: "id-ID" } }));
     renderApp("/");
@@ -127,7 +165,7 @@ describe("the Shell", () => {
       ...defaultHandlers({ signedIn: true, me: alice }),
     );
     const user = userEvent.setup();
-    renderApp("/");
+    renderApp("/settings");
 
     await user.click(await screen.findByRole("button", { name: enGB.shell.signOut }));
 

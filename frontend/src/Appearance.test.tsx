@@ -236,6 +236,7 @@ describe("appearance cache", () => {
     const view = renderApp("/");
     await waitFor(() => expect(html()).toHaveAttribute("data-appearance", "dark"));
 
+    await user.click(await screen.findByRole("link", { name: "Settings" }));
     await user.click(await screen.findByRole("button", { name: "Sign out" }));
     await screen.findByRole("button", { name: /Sign in/ });
 

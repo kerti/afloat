@@ -25,7 +25,8 @@ describe("session flow", () => {
 
     expect(await screen.findByRole("heading", { name: "Home" })).toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "Sign out" }));
+    await user.click(screen.getByRole("link", { name: "Settings" }));
+    await user.click(await screen.findByRole("button", { name: "Sign out" }));
     expect(await screen.findByRole("heading", { name: "Sign in" })).toBeInTheDocument();
   });
 
@@ -109,6 +110,7 @@ describe("session flow", () => {
     server.use(...defaultHandlers({ signedIn: true, me: { ...alice, locale: "id-ID" } }));
     const user = userEvent.setup();
     renderApp("/");
+    await user.click(await screen.findByRole("link", { name: "Pengaturan" }));
     await user.click(await screen.findByRole("button", { name: "Keluar" }));
     // jsdom's navigator.languages is en-US, so the browser's choice is en-GB.
     expect(await screen.findByRole("heading", { name: "Sign in" })).toBeInTheDocument();
@@ -123,7 +125,8 @@ describe("session flow", () => {
     // Stands in for the Household data later steps will cache.
     client.setQueryData(["household", "expenses"], [{ id: "x" }]);
 
-    await user.click(screen.getByRole("button", { name: "Sign out" }));
+    await user.click(screen.getByRole("link", { name: "Settings" }));
+    await user.click(await screen.findByRole("button", { name: "Sign out" }));
     await screen.findByRole("heading", { name: "Sign in" });
 
     expect(client.getQueryData(["household", "expenses"])).toBeUndefined();
@@ -216,7 +219,8 @@ describe("session flow", () => {
 
     slow = true;
     void client.invalidateQueries({ queryKey: ["me"] });
-    await user.click(screen.getByRole("button", { name: "Sign out" }));
+    await user.click(screen.getByRole("link", { name: "Settings" }));
+    await user.click(await screen.findByRole("button", { name: "Sign out" }));
     await screen.findByRole("heading", { name: "Sign in" });
 
     await new Promise((r) => setTimeout(r, 300));

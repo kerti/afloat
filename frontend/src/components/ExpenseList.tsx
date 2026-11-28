@@ -38,6 +38,7 @@ export function DayGroup({ heading, children }: { heading: string; children: Rea
  * `label`: the title and the amount ("Edit Rent, Rp3,000,000"). */
 export function ExpenseRow({
   to,
+  state,
   onOpen,
   label,
   title,
@@ -46,6 +47,8 @@ export function ExpenseRow({
   muted,
 }: {
   to?: string;
+  /** Router state for the edit route, read by its back link. */
+  state?: unknown;
   onOpen?: () => void;
   label: string;
   title: string;
@@ -65,7 +68,7 @@ export function ExpenseRow({
   return (
     <li>
       {to !== undefined ? (
-        <Link to={to} aria-label={label} className={rowLink}>
+        <Link to={to} state={state} aria-label={label} className={rowLink}>
           {body}
           <Chevron />
         </Link>

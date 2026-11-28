@@ -48,7 +48,8 @@ tag each, so it has components only. A missing element is proposed first (see Ho
 
 **Text** (`components/Text.tsx`; roles in the table below)
 
-- `PageTitle`: the screen's one `h1`.
+- `PageTitle`: the screen's one `h1`. `visuallyHidden` keeps it for screen readers only, on Home
+  (§ Layout and navigation, Screen title).
 - `SectionTitle`: the `h2` that opens a section.
 - `SubsectionLabel`: the `h3` that labels a stretch inside a section (Settings' You section: Profile,
   Email, Password). One step under `SectionTitle`: small, semibold, muted. `Section` renders it for
@@ -76,6 +77,10 @@ tag each, so it has components only. A missing element is proposed first (see Ho
   glow falling from it. Its colours are the `--glass-rim`, `--glass-glow` and `--glass-shadow`
   tokens in `theme.css`. The light values are Uruni's; the dark values are faint, since Uruni has no
   dark mode. (Uruni `index.css` `header-glass`; ruled 22 Nov.)
+- `AppVersion` (`components/AppVersion.tsx`): the running build, a muted 12px `tabular-nums` line under
+  the "Afloat" link in the top bar: a tag on HEAD, else "dev (abc1234)", fixed at build time by
+  `vite.config.ts` (`AFLOAT_VERSION` overrides it), since the SPA ships inside the binary it names.
+  (Uruni `AppVersion.tsx`, which reads the stamped binary's `/healthz` instead; ruled 27 Nov 2026.)
 - `LogoMark` (`components/LogoMark.tsx`): the mark, `size-7`, left of the "Afloat" link in the top
   bar. It is a second way home for a thumb, but hidden from keyboards and screen readers, since the
   name link beside it already is that. (Uruni `Shell.tsx`, #356.)
@@ -93,7 +98,9 @@ tag each, so it has components only. A missing element is proposed first (see Ho
 - `CheckboxRow` (`components/CheckboxRow.tsx`): a 20px checkbox in a 44px label ("Show inactive …").
   It takes a `className` for layout only: `justify-start` puts it left under a field (Capture's "This
   is a refund", directly under the amount) where it otherwise ends the row at the right.
-  (Uruni direction toggle; ruled 25 Nov 2026, #140 PR 3b.)
+  (Uruni direction toggle; ruled 25 Nov 2026, #140 PR 3b.) On `/budget` "Show inactive Categories"
+  sits under the two Category lists it widens, just above "Add a Category", not between the
+  summary and the Commitments heading, where it read as part of the summary (27 Nov 2026).
 - **The bottom bar** (`Shell`, `styles/index.css`): `bar-glass` (the page's `--card` at 75% over a
   blur, as the top bar's `header-glass`), the Capture tab on a raised rounded square in `fab-glass`
   (`--fab-shadow-near`/`--fab-shadow-far` in `theme.css`). **Always visible**: it does not hide when
@@ -174,8 +181,10 @@ tag each, so it has components only. A missing element is proposed first (see Ho
   file that imports it): the target is `--muted-foreground`, dashed; the actual is `--primary`, solid;
   Today's last stretch (the day that is not over, the server's `in_progress`) is dashed again and ends
   in an open dot. **Line style tells the lines apart, never colour**: no red, no green, no fill, no
-  gradient. A legend names the two lines. Axis text is 12px (the Badge's size). The Y axis counts in
-  the currency's digits with no symbol (`formatMoneyDigits`, the one formatter, on the digits); the X
+  gradient. A legend names the two lines. Axis text is 12px (the Badge's size). The Y axis reads in
+  the currency's symbol and the locale's compact words ("Rp2.4m", "Rp2,4 jt"; `formatMoneyCompact`),
+  so a tick reads at a glance (ruled by the maintainer, 27 Nov 2026, replacing the bare digits); the
+  ticks are the chart's own round numbers, never a server figure, which keep the one formatter; the X
   axis shows the Period's first and last day through `lib/dates.ts`, from the date strings. A tap or
   hover opens a tooltip with the day and the server's two figures. No "day X of Y", no device clock, no
   client arithmetic. **Accessibility rule:** the card is **one `role="img"`** named by the pace
@@ -213,7 +222,7 @@ tag each, so it has components only. A missing element is proposed first (see Ho
   {amount}" ("Edit Lunch, Rp45,000"). `FilterRow` is the one row above the list that narrows it, a
   bordered link ending in a chevron: "Needs a category (N)" on `/expenses`, shown only while N is
   above zero, with no badge, no colour and no prompt (#140 R8). It sets `?uncategorised=true`; that
-  view has a "← All Expenses" `BackLink`, a `MutedText` line ("Expenses with no Category."), the same
+  view is titled "Needs a category" (27 Nov 2026), and has a "← All Expenses" `BackLink`, a `MutedText` line ("Expenses with no Category."), the same
   day-grouped list, an `EmptyState` when nothing is left, and no `FilterRow`. (Confirmed by the maintainer, 25 Nov 2026, for #140 PR 4.) `LoadMore` is a full-width
   outline button that reads "Loading…" while it fetches. Never infinite scroll. (Uruni `web/src/
 screens/Home.tsx` purpose row, `web/src/components/LoadMore.tsx`; ruled 25 Nov 2026, #140 PR 3b; the link and the chevron, confirmed by the maintainer, 25 Nov 2026, for #140 PR 4.)
@@ -249,7 +258,9 @@ screens/Home.tsx` purpose row, `web/src/components/LoadMore.tsx`; ruled 25 Nov 2
   paid passes the allocation. The words follow the amount as the formatter shows it, so a sub-rupiah
   remainder reads "Paid", never "Rp0 still due"; an allocation of zero with nothing paid reads "Paid".
   Under it, the D7 `detail` line reads "Rp1.500.000 paid of Rp2.000.000". An inactive Commitment gets
-  `labelMuted` and the "Inactive" `Badge`. A refund shows as it is ("-Rp50.000 paid of Rp0"), as
+  `labelMuted` and the "Inactive" `Badge`; one with an allocation of zero and nothing paid says nothing and
+  is left out, as `/budget` leaves out an inactive Category without an allocation (the Total still
+  counts it; ruled by the maintainer, 27 Nov 2026). A refund shows as it is ("-Rp50.000 paid of Rp0"), as
   D7 shows "Rp0" (confirmed by the maintainer, 27 Nov 2026). No bar, meter, colour or live region. With no Commitment the
   section keeps its heading over "Your Commitments will appear here." (the Empty rule).
 
@@ -351,7 +362,9 @@ role table follows Uruni `docs/Design-System.md` § Typography.)
     configuration in Settings, operations where the money is). Budget and its Categories are an
     operation and keep their own tab. This sets aside #119's "no settings hub": one sectioned
     screen, not a list of links. Household, Pockets and You are `h2`s; You's Profile, Email and
-    Password are `h3` `SubsectionLabel`s (ruled 24 Nov 2026, #140 PR 1). The Pocket dialogs stay
+    Password are `h3` `SubsectionLabel`s (ruled 24 Nov 2026, #140 PR 1). The Email subsection opens
+    with a `MutedText` naming the address in use ("Signed in as a@example.com"), above the change
+    form (Uruni `Settings/User.tsx`; ruled 27 Nov 2026). The Pocket dialogs stay
     URL-driven on `/settings` (`?new=pocket`, `?edit=pocket:<id>`); the old `/settings/household`,
     `/settings/user` and `/pockets` redirect there, keeping the query string
     (`legacyRedirects` in `lib/routes.ts`).
@@ -366,14 +379,23 @@ role table follows Uruni `docs/Design-System.md` § Typography.)
     maintainer, 26 Nov 2026, #140 R11, PR 5.)
   - A screen that becomes a tab loses its "← Home"; a sub-screen keeps its back link.
   - The top bar is 3.5rem plus the top safe-area inset, in `header-glass` (Catalogue, `Shell`).
-    It holds the "Afloat" link home on the left and Sign out on the right; a failed sign-out is an
-    error toast. (Uruni `Shell.tsx`, without its measured `--shell-header` and banner slot.)
+    It holds the "Afloat" link home on the left with `AppVersion` under it, and nothing on the right.
+    (Uruni `Shell.tsx`, without its measured `--shell-header` and banner slot.)
+  - **Sign out ends Settings**: a full-width outline button after the You section, not in the top
+    bar; a failed sign-out is an error toast. (Ruled by the maintainer, 27 Nov 2026.)
+  - **A new screen opens at its top**: a push or replace to another path scrolls to the top; back
+    and forward leave the scroll alone, and a dialog opening on the same path is not a new screen.
+    **Tapping the tab already showing** scrolls to its top and refetches every query on screen,
+    without navigating (Uruni). A tab's sub-path or filter (`/expenses/:id`, `?uncategorised=true`)
+    is not the tab itself: that tap navigates as usual. (Ruled by the maintainer, 27 Nov 2026.)
   - The session check's Loading and ErrorState render in the auth card, before the Shell, so Sign
     out is never offered on a screen about to redirect to login.
 - **One column, set once in the Shell:** `max-w-xl` (576px), centred. Screens never set their own
   width. Auth screens (login, register, onboarding) are the exception: a `max-w-sm` card. (Uruni.)
-- **Screen title:** one `h1`, 20px (`text-xl font-semibold`), sentence case, on every screen, Home
-  included ("Home", "Beranda"): the top bar's "Afloat" is a link, not a heading. (Uruni.)
+- **Screen title:** one `h1`, 20px (`text-xl font-semibold`), sentence case, on every screen: the top
+  bar's "Afloat" is a link, not a heading. (Uruni.) **Home's is visually hidden** ("Home",
+  "Beranda", `PageTitle visuallyHidden`): the lit tab and the hero already say what the screen is,
+  so it stays for screen readers only. (Ruled by the maintainer, 27 Nov 2026.)
 - **Sub-screen back:** a quiet link, top-left above the title, naming its destination ("← Home"),
   at least 44px tall: a router `Link` with a Phosphor `ArrowLeft` (`regular`), never a button. (Uruni `BackLink`.)
 - **Routes come from one builder module**, `lib/routes.ts`; no path literals in components (an ESLint
@@ -401,8 +423,12 @@ role table follows Uruni `docs/Design-System.md` § Typography.)
   the Refund box ticked, the time is pre-filled, and the date row reads in the list's day-heading
   words. An inactive Pocket or Category the Expense already holds stays in its picker as the
   selected option, worded "{name} (inactive)", while other inactive ones stay hidden (#140 R10); it is
-  not sent unless changed. **Delete** on the edit route sits as a dialog's does: fields, hairline,
-  `DetailActions` [Delete], then [Save] last; never on Save's row. It is immediate, with no confirm:
+  not sent unless changed. **Delete** on the edit route shares Save's row: fields, hairline, then
+  `DetailActions` with Save as its `primary`, [Delete | Save], half width each, Save last. Delete alone
+  full width directly above Save put it where a thumb reaching for Save lands (ruled by the
+  maintainer, 27 Nov 2026, replacing #140 R11's "never on Save's row"; dialogs keep Save in their
+  footer). The back link reads "← Needs a category" and leads there when the row was opened from that
+  view (router state, `fromUncategorised` in `lib/routes.ts`), else "← Expenses". It is immediate, with no confirm:
   it replaces the route with `/expenses` and raises "Deleted Rp25.000." with an 8 s Undo that
   restores it. A record already gone at Delete follows the gone-record rule below. (Ruled by the
   maintainer, 26 Nov 2026, #140 R11, PR 5.) A record gone at Save, or already gone when the route opens (NOT_FOUND

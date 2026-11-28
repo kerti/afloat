@@ -8,7 +8,7 @@ import {
   draftToWire,
   formatAllowance,
   formatMoney,
-  formatMoneyDigits,
+  formatMoneyCompact,
   parseMoney,
   roundMoney,
   currencySymbol,
@@ -239,28 +239,13 @@ describe("compareMoney", () => {
   });
 });
 
-describe("formatMoneyDigits", () => {
-  it("is the money formatter without the currency symbol, on the digits", () => {
-    expect(formatMoneyDigits("9000000.0000", "IDR", "en-GB")).toBe("9,000,000");
-    expect(formatMoneyDigits("9000000.0000", "IDR", "id-ID")).toBe("9.000.000");
-    expect(formatMoneyDigits("-1500", "IDR", "en-GB")).toBe("-1,500");
-    expect(formatMoneyDigits("1234.5", "USD", "en-GB")).toBe("1,234.50");
-    expect(formatMoneyDigits("1234.5", "USD", "id-ID")).toBe("1.234,50");
-  });
-
-  it("is half-up like formatMoney and never prints a negative zero", () => {
-    expect(formatMoneyDigits("0.5", "IDR", "en-GB")).toBe("1");
-    expect(formatMoneyDigits("-0.4", "IDR", "en-GB")).toBe("0");
-  });
-
-  it("holds the 16-digit worst case, which no float can", () => {
-    expect(formatMoneyDigits("9999999999999999.9999", "IDR", "en-GB")).toBe(
-      "10,000,000,000,000,000",
-    );
-    expect(formatMoneyDigits("9007199254740993", "IDR", "en-GB")).toBe("9,007,199,254,740,993");
-  });
-
-  it("gives anything that is not a plain decimal back as given", () => {
-    expect(formatMoneyDigits("1e21", "IDR", "en-GB")).toBe("1e21");
+describe("formatMoneyCompact", () => {
+  it("is the symbol and the locale's compact words, for an axis tick", () => {
+    expect(formatMoneyCompact(2400000, "IDR", "en-GB")).toBe("Rp2.4m");
+    expect(formatMoneyCompact(2400000, "IDR", "id-ID")).toBe("Rp2,4\u00a0jt");
+    expect(formatMoneyCompact(800000, "IDR", "en-GB")).toBe("Rp800k");
+    expect(formatMoneyCompact(0, "IDR", "en-GB")).toBe("Rp0");
+    expect(formatMoneyCompact(-1500, "IDR", "en-GB")).toBe("-Rp1.5k");
+    expect(formatMoneyCompact(1200, "USD", "en-GB")).toBe("USD\u00a01.2k");
   });
 });

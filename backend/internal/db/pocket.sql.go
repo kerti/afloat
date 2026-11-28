@@ -274,7 +274,12 @@ const updatePocket = `-- name: UpdatePocket :one
 UPDATE pockets SET
     pocket_display_name = coalesce($1, pocket_display_name),
     active              = coalesce($2, active),
-    updated_at          = now()
+    updated_at          = CASE WHEN (pocket_display_name, active)
+                                    IS DISTINCT FROM (
+                                        coalesce($1, pocket_display_name),
+                                        coalesce($2, active)
+                                    )
+                               THEN now() ELSE updated_at END
 WHERE id = $3 AND household_id = $4 AND deleted_at IS NULL
 RETURNING id, household_id, pocket_display_name, active, created_at, updated_at, deleted_at
 `
@@ -294,8 +299,9 @@ type UpdatePocketParams struct {
 // the caller answers all three NOT_FOUND. A 23505 on pockets_household_name_idx
 // is a rename into a held name.
 //
-// updated_at is set here because the baseline has no trigger, and from the
-// database's own clock (BOOTSTRAP.md §5.1).
+// updated_at moves only when a column's value does (#137; the row-wise IS DISTINCT FROM
+// as in UpdateExpense), so a {} or a resend of the stored values is a no-op
+// (BOOTSTRAP.md §4), and from the database's own clock (BOOTSTRAP.md §5.1).
 func (q *Queries) UpdatePocket(ctx context.Context, arg UpdatePocketParams) (Pocket, error) {
 	row := q.db.QueryRow(ctx, updatePocket,
 		arg.PocketDisplayName,
